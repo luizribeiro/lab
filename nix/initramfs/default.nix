@@ -41,7 +41,7 @@ in
 
       for cmd in \
         sh mount umount mkdir sleep dmesg switch_root \
-        cat echo ls test readlink poweroff reboot; do
+        cat echo ls test readlink poweroff reboot setsid cttyhack; do
         ln -s busybox "$root/bin/$cmd"
       done
 

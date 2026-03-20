@@ -32,7 +32,14 @@ unsafe extern "C" {
         initramfs: *const c_char,
         cmdline: *const c_char,
     ) -> i32;
-    fn krun_set_console_output(ctx_id: u32, filepath: *const c_char) -> i32;
+    fn krun_set_kernel_console(ctx_id: u32, console_id: *const c_char) -> i32;
+    fn krun_disable_implicit_console(ctx_id: u32) -> i32;
+    fn krun_add_virtio_console_default(
+        ctx_id: u32,
+        input_fd: i32,
+        output_fd: i32,
+        err_fd: i32,
+    ) -> i32;
     fn krun_get_shutdown_eventfd(ctx_id: u32) -> i32;
     fn krun_start_enter(ctx_id: u32) -> i32;
 }
@@ -114,13 +121,26 @@ impl KrunVm<Created> {
 }
 
 impl KrunVm<Configured> {
-    pub(crate) fn set_console_output_stdout(self) -> Result<Self> {
-        let output = CString::new("/dev/stdout").expect("static string without NUL");
+    pub(crate) fn configure_host_tty_console(self) -> Result<Self> {
+        let kernel_console = CString::new("hvc0").expect("static string without NUL");
 
         // SAFETY: pointer valid for duration of call.
         check_rc(
-            unsafe { krun_set_console_output(self.ctx.id, output.as_ptr()) },
-            "failed to set VM console output",
+            unsafe { krun_set_kernel_console(self.ctx.id, kernel_console.as_ptr()) },
+            "failed to set kernel console",
+        )?;
+
+        // SAFETY: disable implicit console so we only have one deterministic
+        // console path for both input and output.
+        check_rc(
+            unsafe { krun_disable_implicit_console(self.ctx.id) },
+            "failed to disable implicit console",
+        )?;
+
+        // SAFETY: pass through host stdio file descriptors for interactive console.
+        check_rc(
+            unsafe { krun_add_virtio_console_default(self.ctx.id, 0, 1, 2) },
+            "failed to attach virtio console to host stdio",
         )?;
 
         Ok(self)

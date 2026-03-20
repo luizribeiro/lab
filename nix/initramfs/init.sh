@@ -5,10 +5,11 @@ export PATH=/bin:/sbin
 
 echo "[capsa-initramfs] booting minimal userspace"
 
-mkdir -p /proc /sys /dev /run
+mkdir -p /proc /sys /dev /dev/pts /run
 mount -t proc proc /proc || true
 mount -t sysfs sysfs /sys || true
 mount -t devtmpfs devtmpfs /dev || true
+mount -t devpts devpts /dev/pts || true
 mount -t tmpfs tmpfs /run || true
 
 # Best effort: load common virtio drivers if modules are present.
@@ -20,8 +21,28 @@ modprobe virtio_console 2>/dev/null || true
 
 # Keep this initramfs minimal and interactive by default.
 # IMPORTANT: PID 1 must not just exit, otherwise Linux panics with
-# "Attempted to kill init". Run a shell, then power off the VM cleanly.
-sh
+# "Attempted to kill init". Prefer hvc0 (virtio console), then fall back.
+TTY_DEV=
+for dev in /dev/hvc0 /dev/ttyS0 /dev/console; do
+  for _ in 1 2 3 4 5; do
+    if [ -c "$dev" ]; then
+      TTY_DEV="$dev"
+      break
+    fi
+    sleep 1
+  done
+  [ -n "$TTY_DEV" ] && break
+done
+
+if [ -n "$TTY_DEV" ]; then
+  exec <"$TTY_DEV" >"$TTY_DEV" 2>&1
+fi
+
+if command -v cttyhack >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1; then
+  setsid cttyhack sh || true
+else
+  sh || true
+fi
 
 echo "[capsa-initramfs] shell exited, powering off VM"
 poweroff -f || reboot -f

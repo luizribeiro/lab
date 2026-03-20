@@ -18,7 +18,7 @@ pub fn start_vm(config: &VmConfig) -> Result<()> {
 
     let vm = ffi::KrunVm::new()?
         .configure(config.vcpus, config.memory_mib)?
-        .set_console_output_stdout()?;
+        .configure_host_tty_console()?;
 
     if let Some(kernel) = &config.kernel {
         let vm = vm.set_kernel(
