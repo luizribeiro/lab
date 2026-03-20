@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{ArgGroup, Parser};
+use clap::{ArgAction, ArgGroup, Parser};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -34,6 +34,10 @@ struct Cli {
     /// VM memory in MiB.
     #[arg(long, default_value_t = 512, value_parser = clap::value_parser!(u32).range(1..))]
     memory_mib: u32,
+
+    /// Increase verbosity (-v: normal logs, -vv: debug logs). Default is quiet.
+    #[arg(short, long, action = ArgAction::Count)]
+    verbose: u8,
 }
 
 fn main() -> Result<()> {
@@ -46,6 +50,7 @@ fn main() -> Result<()> {
         kernel_cmdline: args.kernel_cmdline,
         vcpus: args.vcpus,
         memory_mib: args.memory_mib,
+        verbosity: args.verbose,
     };
 
     capsa::start_vm(&config)

@@ -3,8 +3,6 @@ set -eu
 
 export PATH=/bin:/sbin
 
-echo "[capsa-initramfs] booting minimal userspace"
-
 mkdir -p /proc /sys /dev /run
 mount -t proc proc /proc || true
 mount -t sysfs sysfs /sys || true

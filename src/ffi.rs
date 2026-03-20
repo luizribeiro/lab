@@ -10,7 +10,9 @@ use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
+const KRUN_LOG_LEVEL_ERROR: u32 = 1;
 const KRUN_LOG_LEVEL_INFO: u32 = 3;
+const KRUN_LOG_LEVEL_DEBUG: u32 = 4;
 const KRUN_LOG_STYLE_AUTO: u32 = 0;
 const KRUN_LOG_OPTION_NO_ENV: u32 = 1;
 const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
@@ -44,13 +46,19 @@ unsafe extern "C" {
     fn krun_start_enter(ctx_id: u32) -> i32;
 }
 
-pub(crate) fn init_logging() -> Result<()> {
+pub(crate) fn init_logging(verbosity: u8) -> Result<()> {
+    let level = match verbosity {
+        0 => KRUN_LOG_LEVEL_ERROR,
+        1 => KRUN_LOG_LEVEL_INFO,
+        _ => KRUN_LOG_LEVEL_DEBUG,
+    };
+
     // SAFETY: primitive scalar arguments to libkrun.
     check_rc(
         unsafe {
             krun_init_log(
                 std::io::stderr().as_raw_fd(),
-                KRUN_LOG_LEVEL_INFO,
+                level,
                 KRUN_LOG_STYLE_AUTO,
                 KRUN_LOG_OPTION_NO_ENV,
             )
