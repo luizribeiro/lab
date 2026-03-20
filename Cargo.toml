@@ -1,9 +1,9 @@
 [workspace]
 members = [
   ".",
-  "crates/capsa-core",
-  "crates/capsa-sandbox",
-  "crates/capsa-vmm",
+  "crates/core",
+  "crates/sandbox",
+  "crates/vmm",
 ]
 resolver = "2"
 
@@ -15,5 +15,5 @@ default-run = "capsa"
 
 [dependencies]
 anyhow = "1.0"
-capsa-core = { path = "crates/capsa-core" }
+capsa-core = { path = "crates/core" }
 clap = { version = "4.5", features = ["derive"] }
