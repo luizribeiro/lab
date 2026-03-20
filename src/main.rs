@@ -40,18 +40,21 @@ struct Cli {
     verbose: u8,
 }
 
+impl Cli {
+    fn to_vm_config(&self) -> capsa::VmConfig {
+        capsa::VmConfig {
+            root: self.root.clone(),
+            kernel: self.kernel.clone(),
+            initramfs: self.initramfs.clone(),
+            kernel_cmdline: self.kernel_cmdline.clone(),
+            vcpus: self.vcpus,
+            memory_mib: self.memory_mib,
+            verbosity: self.verbose,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Cli::parse();
-
-    let config = capsa::VmConfig {
-        root: args.root,
-        kernel: args.kernel,
-        initramfs: args.initramfs,
-        kernel_cmdline: args.kernel_cmdline,
-        vcpus: args.vcpus,
-        memory_mib: args.memory_mib,
-        verbosity: args.verbose,
-    };
-
-    capsa::start_vm(&config)
+    args.to_vm_config().start()
 }

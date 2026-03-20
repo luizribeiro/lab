@@ -68,3 +68,20 @@ cargo run -- \
   --vcpus 1 \
   --memory-mib 512
 ```
+
+## Sandboxing
+
+Sandboxing is always enabled. The CLI and library launch a dedicated sandboxed `capsa-vmm` subprocess automatically.
+
+The helper binary is located at `src/bin/capsa-vmm.rs`.
+
+- `cargo build --bins` builds both `capsa` and `capsa-vmm`.
+- Sidecar resolution order is:
+  1. `CAPSA_VMM_PATH`
+  2. sibling `capsa-vmm` next to the current executable
+  3. `capsa-vmm` on `PATH`
+
+Current backend status:
+
+- **macOS**: implemented with `sandbox-exec` + generated Seatbelt profile
+- **Linux**: TODO placeholder for `syd` integration
