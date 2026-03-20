@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
-use super::{SandboxSpec, SandboxedChild};
+use crate::{SandboxSpec, SandboxedChild};
 
 pub fn spawn_with_sandbox_exec(
     program: &Path,

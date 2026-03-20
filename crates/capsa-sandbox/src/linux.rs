@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{SandboxSpec, SandboxedChild};
+use crate::{SandboxSpec, SandboxedChild};
 
 /// TODO: Linux backend via `syd`.
 ///
@@ -10,6 +10,7 @@ use super::{SandboxSpec, SandboxedChild};
 /// 1. Map `SandboxSpec` into a generated `syd` policy.
 /// 2. Spawn `syd` as the supervisor process and exec target program under it.
 /// 3. Add integration tests that validate filesystem and network denials.
+#[allow(dead_code)]
 pub fn spawn_with_syd(
     _program: &Path,
     _args: &[String],

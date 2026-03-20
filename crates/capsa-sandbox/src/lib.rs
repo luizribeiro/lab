@@ -3,8 +3,8 @@ use std::process::{Child, ExitStatus};
 
 use anyhow::Result;
 
-pub mod darwin;
-pub mod linux;
+mod darwin;
+mod linux;
 
 /// Cross-platform sandbox configuration.
 #[derive(Debug, Clone, Default)]

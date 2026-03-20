@@ -63,9 +63,34 @@ name = "capsa"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "capsa-core",
  "clap",
+]
+
+[[package]]
+name = "capsa-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capsa-sandbox",
  "pkg-config",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "capsa-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
+name = "capsa-vmm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capsa-core",
  "serde_json",
 ]
 

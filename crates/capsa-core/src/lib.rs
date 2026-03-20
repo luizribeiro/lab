@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::sandbox;
+mod ffi;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
@@ -25,12 +25,13 @@ impl VmConfig {
         let config_json = serde_json::to_string(self).context("failed to serialize VM config")?;
         let child_args = vec!["--vm-config-json".to_string(), config_json];
 
-        let child = sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec).with_context(|| {
-            format!(
-                "failed to spawn sandboxed VMM process: {}",
-                vmm_exe.display()
-            )
-        })?;
+        let child =
+            capsa_sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec).with_context(|| {
+                format!(
+                    "failed to spawn sandboxed VMM process: {}",
+                    vmm_exe.display()
+                )
+            })?;
 
         let status = child.wait().context("failed to wait on sandboxed child")?;
         if status.success() {
@@ -41,31 +42,10 @@ impl VmConfig {
     }
 }
 
-fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &std::path::Path) -> sandbox::SandboxSpec {
-    let mut spec = sandbox::SandboxSpec::new().allow_network(true);
-
-    spec.read_only_paths.push(vmm_exe.to_path_buf());
-
-    if let Some(root) = &config.root {
-        spec.read_write_paths.push(root.clone());
-    }
-
-    if let Some(kernel) = &config.kernel {
-        spec.read_only_paths.push(kernel.clone());
-    }
-
-    if let Some(initramfs) = &config.initramfs {
-        spec.read_only_paths.push(initramfs.clone());
-    }
-
-    spec
-}
-
-#[doc(hidden)]
 pub fn start_vm(config: &VmConfig) -> Result<()> {
-    crate::ffi::init_logging(config.verbosity)?;
+    ffi::init_logging(config.verbosity)?;
 
-    let vm = crate::ffi::KrunVm::new()?
+    let vm = ffi::KrunVm::new()?
         .configure(config.vcpus, config.memory_mib)?
         .configure_host_tty_console()?;
 
@@ -84,6 +64,26 @@ pub fn start_vm(config: &VmConfig) -> Result<()> {
     }
 
     anyhow::bail!("missing boot source: pass either --root <dir> or --kernel <path>")
+}
+
+fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &std::path::Path) -> capsa_sandbox::SandboxSpec {
+    let mut spec = capsa_sandbox::SandboxSpec::new().allow_network(true);
+
+    spec.read_only_paths.push(vmm_exe.to_path_buf());
+
+    if let Some(root) = &config.root {
+        spec.read_write_paths.push(root.clone());
+    }
+
+    if let Some(kernel) = &config.kernel {
+        spec.read_only_paths.push(kernel.clone());
+    }
+
+    if let Some(initramfs) = &config.initramfs {
+        spec.read_only_paths.push(initramfs.clone());
+    }
+
+    spec
 }
 
 fn resolve_vmm_binary() -> Result<PathBuf> {

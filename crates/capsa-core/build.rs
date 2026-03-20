@@ -6,7 +6,7 @@ fn main() {
     let lib_name = match target_os.as_str() {
         "macos" => "krun-efi",
         "linux" => "krun",
-        other => panic!("unsupported target OS for capsa/libkrun: {other}"),
+        other => panic!("unsupported target OS for capsa-core/libkrun: {other}"),
     };
 
     if let Ok(lib_dir) = env::var("LIBKRUN_LIB_DIR") {

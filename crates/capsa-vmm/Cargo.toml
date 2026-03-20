@@ -1,0 +1,9 @@
+[package]
+name = "capsa-vmm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+capsa-core = { path = "../capsa-core" }
+serde_json = "1.0"

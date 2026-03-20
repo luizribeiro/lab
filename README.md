@@ -73,9 +73,9 @@ cargo run -- \
 
 Sandboxing is always enabled. The CLI and library launch a dedicated sandboxed `capsa-vmm` subprocess automatically.
 
-The helper binary is located at `src/bin/capsa-vmm.rs`.
+The helper binary is located at `crates/capsa-vmm/src/main.rs`.
 
-- `cargo build --bins` builds both `capsa` and `capsa-vmm`.
+- `cargo build --workspace` (or `cargo build --bins`) builds both `capsa` and `capsa-vmm`.
 - Sidecar resolution order is:
   1. `CAPSA_VMM_PATH`
   2. sibling `capsa-vmm` next to the current executable

@@ -11,12 +11,12 @@ fn main() -> Result<()> {
         anyhow::bail!("usage: capsa-vmm --vm-config-json <json>");
     }
 
-    let config: capsa::VmConfig = serde_json::from_str(
+    let config: capsa_core::VmConfig = serde_json::from_str(
         config_json
             .as_deref()
             .expect("checked above: config json is present"),
     )
     .context("failed to parse VM config JSON")?;
 
-    capsa::start_vm(&config)
+    capsa_core::start_vm(&config)
 }
