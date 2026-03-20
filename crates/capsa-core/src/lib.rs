@@ -42,6 +42,7 @@ impl VmConfig {
     }
 }
 
+#[doc(hidden)]
 pub fn start_vm(config: &VmConfig) -> Result<()> {
     ffi::init_logging(config.verbosity)?;
 
