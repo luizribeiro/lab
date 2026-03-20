@@ -123,19 +123,40 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
 }
 
 fn effective_kernel_cmdline(config: &VmConfig) -> Option<String> {
-    let defaults = match config.verbosity {
-        0 => "quiet loglevel=0",
-        1 => "",
-        _ => "ignore_loglevel loglevel=7",
-    };
+    let mut cmdline = KernelCmdline::new();
 
-    let user_cmdline = config.kernel_cmdline.as_deref().unwrap_or("").trim();
-    let cmdline = match (defaults.is_empty(), user_cmdline.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => defaults.to_string(),
-        (true, false) => user_cmdline.to_string(),
-        (false, false) => format!("{defaults} {user_cmdline}"),
-    };
+    match config.verbosity {
+        0 => cmdline.push_segment("quiet loglevel=0"),
+        1 => {}
+        _ => cmdline.push_segment("ignore_loglevel loglevel=7"),
+    }
 
-    Some(cmdline)
+    if let Some(user_cmdline) = config.kernel_cmdline.as_deref() {
+        cmdline.push_segment(user_cmdline);
+    }
+
+    Some(cmdline.render())
+}
+
+#[derive(Debug, Default)]
+struct KernelCmdline {
+    segments: Vec<String>,
+}
+
+impl KernelCmdline {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push_segment(&mut self, segment: &str) {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.segments.push(trimmed.to_string());
+    }
+
+    fn render(self) -> String {
+        self.segments.join(" ")
+    }
 }
