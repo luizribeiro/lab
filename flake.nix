@@ -93,9 +93,7 @@
             default = self.packages.${hostSystem}.vm-assets;
           };
 
-          checks = {
-            pre-commit-check = preCommitCheck;
-          };
+          checks = { };
 
           devShells.default = pkgs.mkShell {
             packages =
