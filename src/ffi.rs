@@ -19,7 +19,6 @@ const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 
-#[link(name = "krun-efi")]
 unsafe extern "C" {
     fn krun_create_ctx() -> i32;
     fn krun_free_ctx(ctx_id: u32) -> i32;

@@ -107,32 +107,20 @@
                 pkg-config
               ])
               ++ preCommitCheck.enabledPackages
-              # Linux links directly against nixpkgs libkrun in the dev shell.
               ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.libkrun ]
-              # Darwin uses krunkit's libkrun-efi runtime and graphics deps.
               ++ lib.optionals pkgs.stdenv.isDarwin [
-                pkgs.krunkit
+                pkgs."libkrun-efi"
                 pkgs.libepoxy
                 pkgs.virglrenderer
               ];
 
             shellHook = lib.concatStringsSep "\n" [
               preCommitCheck.shellHook
+              (lib.optionalString pkgs.stdenv.isLinux ''
+                export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs.libkrun}/lib}"
+              '')
               (lib.optionalString pkgs.stdenv.isDarwin ''
-                _capsa_krun_efi_store_path="$(nix-store -q --references ${pkgs.krunkit} | grep 'libkrun-efi-' | head -n1)"
-                if [ -n "$_capsa_krun_efi_store_path" ]; then
-                  _capsa_krun_efi_libdir="$_capsa_krun_efi_store_path/lib"
-                  _capsa_krun_efi_dylib="$(ls "$_capsa_krun_efi_libdir"/libkrun-efi*.dylib 2>/dev/null | head -n1)"
-
-                  if [ -n "$_capsa_krun_efi_dylib" ] && [ -z "''${CAPSA_LIBKRUN_DYLIB:-}" ]; then
-                    export CAPSA_LIBKRUN_DYLIB="$_capsa_krun_efi_dylib"
-                  fi
-
-                  export DYLD_LIBRARY_PATH="$_capsa_krun_efi_libdir:''${DYLD_LIBRARY_PATH:-}"
-                  export LIBRARY_PATH="$_capsa_krun_efi_libdir:''${LIBRARY_PATH:-}"
-                  export RUSTFLAGS="-L native=$_capsa_krun_efi_libdir -C link-arg=-Wl,-rpath,$_capsa_krun_efi_libdir ''${RUSTFLAGS:-}"
-                fi
-                unset _capsa_krun_efi_store_path _capsa_krun_efi_libdir _capsa_krun_efi_dylib
+                export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs."libkrun-efi"}/lib}"
               '')
             ];
           };
