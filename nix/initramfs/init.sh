@@ -5,10 +5,11 @@ export PATH=/bin:/sbin
 
 echo "[capsa-initramfs] booting minimal userspace"
 
-mkdir -p /proc /sys /dev /dev/pts /run
+mkdir -p /proc /sys /dev /run
 mount -t proc proc /proc || true
 mount -t sysfs sysfs /sys || true
 mount -t devtmpfs devtmpfs /dev || true
+mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts || true
 mount -t tmpfs tmpfs /run || true
 
@@ -38,14 +39,11 @@ if [ -n "$TTY_DEV" ]; then
   exec <"$TTY_DEV" >"$TTY_DEV" 2>&1
 fi
 
+set +e
 if command -v cttyhack >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1; then
-  setsid cttyhack sh || true
+  setsid cttyhack sh
 else
-  sh || true
+  sh
 fi
 
-echo "[capsa-initramfs] shell exited, powering off VM"
-poweroff -f || reboot -f
-
-# Fallback: keep PID 1 alive if shutdown syscall isn't available.
-while true; do sleep 3600; done
+exec poweroff -f
