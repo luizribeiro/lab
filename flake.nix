@@ -4,9 +4,10 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    git-hooks.url = "github:cachix/git-hooks.nix";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
+  outputs = { self, nixpkgs, flake-utils, git-hooks, ... }:
     flake-utils.lib.eachSystem [
       "aarch64-darwin"
       "aarch64-linux"
@@ -14,7 +15,7 @@
     ]
       (hostSystem:
         let
-          lib = nixpkgs.lib;
+          inherit (nixpkgs) lib;
           pkgs = import nixpkgs { system = hostSystem; };
 
           guestSystem =
@@ -52,7 +53,17 @@
 
           kernelImage = "${guestNixos.config.system.build.kernel}/${guestNixos.config.system.boot.loader.kernelFile}";
           initramfsImage = initramfsLib.mkInitramfs {
-            modulesTree = guestNixos.config.system.modulesTree;
+            inherit (guestNixos.config.system) modulesTree;
+          };
+
+          preCommitCheck = git-hooks.lib.${hostSystem}.run {
+            src = ./.;
+            hooks = {
+              rustfmt.enable = true;
+              nixpkgs-fmt.enable = true;
+              statix.enable = true;
+              deadnix.enable = true;
+            };
           };
         in
         {
@@ -72,6 +83,10 @@
             default = self.packages.${hostSystem}.vm-assets;
           };
 
+          checks = {
+            pre-commit-check = preCommitCheck;
+          };
+
           devShells.default = pkgs.mkShell {
             packages =
               (with pkgs; [
@@ -81,6 +96,7 @@
                 clippy
                 pkg-config
               ])
+              ++ preCommitCheck.enabledPackages
               # Linux links directly against nixpkgs libkrun in the dev shell.
               ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.libkrun ]
               # Darwin uses krunkit's libkrun-efi runtime and graphics deps.
@@ -90,22 +106,25 @@
                 pkgs.virglrenderer
               ];
 
-            shellHook = lib.optionalString pkgs.stdenv.isDarwin ''
-              _capsa_krun_efi_store_path="$(nix-store -q --references ${pkgs.krunkit} | grep 'libkrun-efi-' | head -n1)"
-              if [ -n "$_capsa_krun_efi_store_path" ]; then
-                _capsa_krun_efi_libdir="$_capsa_krun_efi_store_path/lib"
-                _capsa_krun_efi_dylib="$(ls "$_capsa_krun_efi_libdir"/libkrun-efi*.dylib 2>/dev/null | head -n1)"
+            shellHook = lib.concatStringsSep "\n" [
+              preCommitCheck.shellHook
+              (lib.optionalString pkgs.stdenv.isDarwin ''
+                _capsa_krun_efi_store_path="$(nix-store -q --references ${pkgs.krunkit} | grep 'libkrun-efi-' | head -n1)"
+                if [ -n "$_capsa_krun_efi_store_path" ]; then
+                  _capsa_krun_efi_libdir="$_capsa_krun_efi_store_path/lib"
+                  _capsa_krun_efi_dylib="$(ls "$_capsa_krun_efi_libdir"/libkrun-efi*.dylib 2>/dev/null | head -n1)"
 
-                if [ -n "$_capsa_krun_efi_dylib" ] && [ -z "''${CAPSA_LIBKRUN_DYLIB:-}" ]; then
-                  export CAPSA_LIBKRUN_DYLIB="$_capsa_krun_efi_dylib"
+                  if [ -n "$_capsa_krun_efi_dylib" ] && [ -z "''${CAPSA_LIBKRUN_DYLIB:-}" ]; then
+                    export CAPSA_LIBKRUN_DYLIB="$_capsa_krun_efi_dylib"
+                  fi
+
+                  export DYLD_LIBRARY_PATH="$_capsa_krun_efi_libdir:''${DYLD_LIBRARY_PATH:-}"
+                  export LIBRARY_PATH="$_capsa_krun_efi_libdir:''${LIBRARY_PATH:-}"
+                  export RUSTFLAGS="-L native=$_capsa_krun_efi_libdir -C link-arg=-Wl,-rpath,$_capsa_krun_efi_libdir ''${RUSTFLAGS:-}"
                 fi
-
-                export DYLD_LIBRARY_PATH="$_capsa_krun_efi_libdir:''${DYLD_LIBRARY_PATH:-}"
-                export LIBRARY_PATH="$_capsa_krun_efi_libdir:''${LIBRARY_PATH:-}"
-                export RUSTFLAGS="-L native=$_capsa_krun_efi_libdir -C link-arg=-Wl,-rpath,$_capsa_krun_efi_libdir ''${RUSTFLAGS:-}"
-              fi
-              unset _capsa_krun_efi_store_path _capsa_krun_efi_libdir _capsa_krun_efi_dylib
-            '';
+                unset _capsa_krun_efi_store_path _capsa_krun_efi_libdir _capsa_krun_efi_dylib
+              '')
+            ];
           };
 
           formatter = pkgs.nixpkgs-fmt;
