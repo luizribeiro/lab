@@ -77,7 +77,7 @@
                 pkg-config
               ])
               ++ preCommitCheck.enabledPackages
-              ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.libkrun ]
+              ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.libkrun pkgs.sydbox ]
               ++ lib.optionals pkgs.stdenv.isDarwin [
                 pkgs."libkrun-efi"
                 pkgs.libepoxy

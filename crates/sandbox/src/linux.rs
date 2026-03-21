@@ -1,23 +1,259 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 
 use crate::{SandboxSpec, SandboxedChild};
 
-/// Linux sandbox backend.
+/// Linux sandbox backend via `syd`.
 ///
-/// Until `syd` integration lands, this is a compatibility fallback that
-/// launches the target process directly (without sandbox enforcement).
+/// This backend is fail-closed by default. Set `CAPSA_SANDBOX=off` to disable
+/// sandboxing explicitly (for local debugging only).
 pub fn spawn_with_syd(
     program: &Path,
     args: &[String],
-    _spec: &SandboxSpec,
+    spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
-    eprintln!(
-        "warning: Linux sandbox backend is not implemented yet; running capsa-vmm without sandbox"
-    );
+    if sandbox_disabled() {
+        eprintln!("warning: Linux sandbox disabled via CAPSA_SANDBOX=off; running capsa-vmm without sandbox");
+        return spawn_direct(program, args);
+    }
 
+    let syd = find_in_path("syd").ok_or_else(|| {
+        anyhow::anyhow!(
+            "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`) or set CAPSA_SANDBOX=off to disable sandboxing"
+        )
+    })?;
+
+    spawn_with_syd_binary(&syd, program, args, spec)
+}
+
+fn spawn_with_syd_binary(
+    syd: &Path,
+    program: &Path,
+    args: &[String],
+    spec: &SandboxSpec,
+) -> Result<SandboxedChild> {
+    let mut command = Command::new(syd);
+
+    for rule in syd_rules(program, spec) {
+        command.arg("-m").arg(rule);
+    }
+
+    command.arg("--").arg(program).args(args);
+
+    let child = command.spawn().with_context(|| {
+        format!(
+            "failed to spawn `syd` ({}) for program {}",
+            syd.display(),
+            program.display()
+        )
+    })?;
+
+    Ok(SandboxedChild::new(child, vec![]))
+}
+
+fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
+    // Keep policy focused on path-based controls. We enable read+exec checks,
+    // but keep fs/ioctl domains off for now.
+    let mut rules = vec![
+        "sandbox/read,stat:on".to_string(),
+        "sandbox/exec:on".to_string(),
+        "sandbox/fs:off".to_string(),
+        "sandbox/ioctl:off".to_string(),
+        "sandbox/write,create,truncate,delete:off".to_string(),
+    ];
+
+    if !spec.allow_network {
+        rules.push("sandbox/net:on".to_string());
+    }
+
+    let mut read_paths = Vec::new();
+    let mut exec_paths = Vec::new();
+
+    for candidate in path_candidates(program) {
+        push_with_ancestors(&mut read_paths, &candidate);
+        push_unique(&mut exec_paths, candidate);
+    }
+
+    for path in &spec.read_only_paths {
+        for candidate in path_candidates(path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
+    }
+
+    for path in &spec.read_write_paths {
+        for candidate in path_candidates(path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
+    }
+
+    for dylib in linked_dylibs(program) {
+        for candidate in path_candidates(&dylib) {
+            push_with_ancestors(&mut read_paths, &candidate);
+            push_unique(&mut exec_paths, candidate);
+        }
+    }
+
+    for path in [
+        PathBuf::from("/proc/self/maps"),
+        PathBuf::from("/etc/ld.so.cache"),
+        PathBuf::from("/etc/ld.so.preload"),
+    ] {
+        for candidate in path_candidates(&path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
+    }
+
+    for path in stdio_tty_paths() {
+        for candidate in path_candidates(&path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
+    }
+
+    for path in read_paths {
+        add_allow_rule(&mut rules, "allow/read,stat", &path);
+    }
+
+    for path in exec_paths {
+        add_allow_rule(&mut rules, "allow/exec", &path);
+    }
+
+    if !spec.read_write_paths.is_empty() {
+        rules.push("sandbox/write,create,truncate,delete:on".to_string());
+
+        let mut write_paths = vec![
+            PathBuf::from("/tmp"),
+            PathBuf::from("/var/tmp"),
+            PathBuf::from("/dev/kvm"),
+        ];
+        write_paths.extend(spec.read_write_paths.iter().cloned());
+
+        for path in write_paths {
+            for candidate in path_candidates(&path) {
+                add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+            }
+        }
+    }
+
+    rules
+}
+
+fn add_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
+    let escaped = escape_syd_path(path);
+    rules.push(format!("{prefix}+{escaped}"));
+    rules.push(format!("{prefix}+{escaped}/***"));
+}
+
+fn linked_dylibs(binary: &Path) -> Vec<PathBuf> {
+    let output = match Command::new("ldd").arg(binary).output() {
+        Ok(out) if out.status.success() => out,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut libs = Vec::new();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+
+        if let Some((_, right)) = trimmed.split_once("=>") {
+            if let Some(path) = right
+                .split_whitespace()
+                .next()
+                .filter(|p| p.starts_with('/'))
+            {
+                push_unique(&mut libs, PathBuf::from(path));
+            }
+            continue;
+        }
+
+        if let Some(path) = trimmed
+            .split_whitespace()
+            .next()
+            .filter(|p| p.starts_with('/'))
+        {
+            push_unique(&mut libs, PathBuf::from(path));
+        }
+    }
+
+    libs
+}
+
+fn stdio_tty_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+
+    for fd in [0, 1, 2] {
+        let fd_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+        if let Ok(target) = std::fs::canonicalize(&fd_path) {
+            if target.starts_with("/dev/") {
+                push_unique(&mut out, target);
+            }
+        }
+    }
+
+    out
+}
+
+fn path_candidates(path: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(path)
+    } else {
+        path.to_path_buf()
+    };
+
+    push_unique(&mut out, absolute.clone());
+
+    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+        push_unique(&mut out, canonical);
+    }
+
+    out
+}
+
+fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
+    for ancestor in path.ancestors() {
+        push_unique(paths, ancestor.to_path_buf());
+    }
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|p| p == &path) {
+        paths.push(path);
+    }
+}
+
+fn escape_syd_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace(':', "\\:")
+        .replace(',', "\\,")
+}
+
+fn find_in_path(binary_name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(binary_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn sandbox_disabled() -> bool {
+    matches!(
+        std::env::var("CAPSA_SANDBOX").as_deref(),
+        Ok("off") | Ok("0") | Ok("false")
+    )
+}
+
+fn spawn_direct(program: &Path, args: &[String]) -> Result<SandboxedChild> {
     let child = Command::new(program)
         .args(args)
         .spawn()

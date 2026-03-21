@@ -59,6 +59,9 @@ pkgs.rustPlatform.buildRustPackage {
     set -euo pipefail
 
     export CAPSA_VMM_PATH="$out/libexec/capsa/capsa-vmm"
+    ${lib.optionalString pkgs.stdenv.isLinux ''
+    export PATH="${lib.makeBinPath [ pkgs.sydbox ]}:$PATH"
+    ''}
     exec "$out/libexec/capsa/capsa" "\$@"
     EOF
 

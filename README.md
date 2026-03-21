@@ -26,7 +26,7 @@ nix develop
 
 The shell includes Rust tooling and exports `LIBKRUN_LIB_DIR` automatically:
 
-- Linux → `${libkrun}/lib`
+- Linux → `${libkrun}/lib` (and includes `syd` on `PATH`)
 - macOS → `${libkrun-efi}/lib`
 
 ## Nix packages
@@ -128,4 +128,4 @@ The helper binary is located at `crates/vmm/src/main.rs`.
 Current backend status:
 
 - **macOS**: implemented with `sandbox-exec` + generated Seatbelt profile
-- **Linux**: TODO placeholder for `syd` integration
+- **Linux**: `syd` integration (fail-closed). `syd` must be available on `PATH`; set `CAPSA_SANDBOX=off` to disable sandboxing explicitly.

@@ -70,7 +70,7 @@ impl Drop for SandboxedChild {
 /// Spawn `program` with `args` inside the platform sandbox.
 ///
 /// - macOS: seatbelt profile via `sandbox-exec`
-/// - Linux: temporary direct spawn fallback (planned `syd` backend)
+/// - Linux: `syd` backend (fail-closed by default; opt-out via `CAPSA_SANDBOX=off`)
 #[cfg(target_os = "macos")]
 pub fn spawn_sandboxed(
     program: &Path,
