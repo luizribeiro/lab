@@ -49,10 +49,14 @@
               deadnix.enable = true;
             };
           };
+
+          checks = import ./nix/checks {
+            inherit vmLib;
+          };
         in
         {
           lib = {
-            inherit (vmLib) mkVMAssets mkVM;
+            inherit (vmLib) mkVMAssets mkVM mkVMCheck;
           };
 
           packages = {
@@ -65,7 +69,7 @@
             default = self.packages.${hostSystem}.capsa;
           };
 
-          checks = { };
+          inherit checks;
 
           devShells.default = pkgs.mkShell {
             packages =

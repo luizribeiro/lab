@@ -99,7 +99,61 @@ let
           "$@"
       '';
     };
+
+  mkVMCheck =
+    { name ? "capsa"
+    , guestSystem ? defaultGuestSystem
+    , modules ? [ ]
+    , specialArgs ? { }
+    , vm ? { }
+    , timeout ? 60
+    , expectProgram
+    }:
+    let
+      assets = mkVMAssets {
+        inherit name guestSystem modules specialArgs vm;
+      };
+      capsaCmd = "${capsaPackage}/bin/capsa";
+    in
+    pkgs.runCommand "${assets.name}-vm-check"
+      {
+        nativeBuildInputs = [ pkgs.expect pkgs.coreutils ];
+      }
+      ''
+        set -euo pipefail
+
+        cat > vm-check.expect <<'EOF'
+        #!${pkgs.expect}/bin/expect
+        set timeout ${toString timeout}
+
+        set capsa "${capsaCmd}"
+        set kernel "${assets.kernelImage}"
+        set initramfs "${assets.initramfsImage}"
+        set kernel_cmdline {${assets.vmConfig.kernelCmdline}}
+
+        spawn $capsa \
+          --kernel $kernel \
+          --initramfs $initramfs \
+          --kernel-cmdline $kernel_cmdline \
+          --vcpus ${toString assets.vmConfig.vcpus} \
+          --memory-mib ${toString assets.vmConfig.memoryMiB}
+
+        ${expectProgram}
+
+        set wait_result [wait]
+        set status [lindex $wait_result 3]
+        if {$status != 0} {
+          puts "ERROR: capsa exited with status $status"
+          exit 1
+        }
+        EOF
+
+        chmod +x vm-check.expect
+        ./vm-check.expect
+
+        touch $out
+      '';
 in
 {
-  inherit defaultGuestSystem defaultGuestModule mkVMAssets mkVM;
+  inherit defaultGuestSystem defaultGuestModule mkVMAssets mkVM mkVMCheck;
 }

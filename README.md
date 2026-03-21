@@ -55,6 +55,7 @@ The flake exposes:
 
 - `lib.mkVM` → runnable package (`nix run` target)
 - `lib.mkVMAssets` → VM assets/spec (`kernelImage`, `initramfsImage`, `vmAssets`)
+- `lib.mkVMCheck` → expect-driven VM check derivation (`nix flake check`)
 
 Define custom VMs in a NixOS-like style:
 
@@ -129,3 +130,15 @@ Current backend status:
 
 - **macOS**: implemented with `sandbox-exec` + generated Seatbelt profile
 - **Linux**: `syd` integration (fail-closed). `syd` must be available on `PATH`; set `CAPSA_SANDBOX=off` to disable sandboxing explicitly.
+
+VM smoke checks:
+
+```bash
+# Rust integration test
+cargo test -p capsa-cli --test vm_smoke -- --nocapture
+
+# Nix check (same boot/TTY/exit lifecycle)
+nix flake check --print-build-logs
+```
+
+The smoke tests boot a VM, check interactive TTY I/O, send `exit`, and verify the process terminates. On Linux this runs with `syd` (required by default).
