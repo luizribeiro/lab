@@ -119,20 +119,18 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
         add_allow_rule(&mut rules, "allow/exec", &path);
     }
 
-    if !spec.read_write_paths.is_empty() {
-        rules.push("sandbox/write,create,truncate,delete:on".to_string());
+    rules.push("sandbox/write,create,truncate,delete:on".to_string());
 
-        let mut write_paths = vec![
-            PathBuf::from("/tmp"),
-            PathBuf::from("/var/tmp"),
-            PathBuf::from("/dev/kvm"),
-        ];
-        write_paths.extend(spec.read_write_paths.iter().cloned());
+    let mut write_paths = vec![
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+        PathBuf::from("/dev/kvm"),
+    ];
+    write_paths.extend(spec.read_write_paths.iter().cloned());
 
-        for path in write_paths {
-            for candidate in path_candidates(&path) {
-                add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
-            }
+    for path in write_paths {
+        for candidate in path_candidates(&path) {
+            add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
         }
     }
 
@@ -142,7 +140,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
 fn add_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
     let escaped = escape_syd_path(path);
     rules.push(format!("{prefix}+{escaped}"));
-    rules.push(format!("{prefix}+{escaped}/***"));
+
+    if path.is_dir() {
+        rules.push(format!("{prefix}+{escaped}/***"));
+    }
 }
 
 fn linked_dylibs(binary: &Path) -> Vec<PathBuf> {
@@ -217,6 +218,9 @@ fn path_candidates(path: &Path) -> Vec<PathBuf> {
 
 fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
     for ancestor in path.ancestors() {
+        if ancestor == Path::new("/") {
+            break;
+        }
         push_unique(paths, ancestor.to_path_buf());
     }
 }
