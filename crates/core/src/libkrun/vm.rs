@@ -9,9 +9,7 @@ use super::error::{check_rc, os_error_from_neg_errno};
 use super::ffi;
 use crate::boot::kernel_format::{detect_kernel_image_format, KernelImageFormat};
 
-#[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 
 pub(crate) fn init_logging(verbosity: u8) -> Result<()> {
@@ -200,15 +198,6 @@ fn map_kernel_image_format(format: KernelImageFormat) -> u32 {
     }
 }
 
-#[cfg(unix)]
 fn path_to_cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|e| anyhow!(e))
-}
-
-#[cfg(not(unix))]
-fn path_to_cstring(path: &Path) -> Result<CString> {
-    let s = path
-        .to_str()
-        .ok_or_else(|| anyhow!("path is not valid UTF-8 on this platform"))?;
-    CString::new(s).map_err(|e| anyhow!(e))
 }
