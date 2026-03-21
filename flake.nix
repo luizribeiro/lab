@@ -18,43 +18,17 @@
           inherit (nixpkgs) lib;
           pkgs = import nixpkgs { system = hostSystem; };
 
-          guestSystem =
-            if lib.hasPrefix "aarch64" hostSystem then
-              "aarch64-linux"
-            else if lib.hasPrefix "x86_64" hostSystem then
-              "x86_64-linux"
-            else
-              throw "Unsupported host system: ${hostSystem}";
-
-          initramfsLib = import ./nix/initramfs {
-            inherit lib;
-            pkgs = import nixpkgs { system = guestSystem; };
+          capsaPackage = import ./nix/package.nix {
+            inherit lib pkgs;
+            src = ./.;
           };
 
-          guestNixos = lib.nixosSystem {
-            system = guestSystem;
-            modules = [
-              ({ modulesPath, ... }: {
-                imports = [ "${modulesPath}/profiles/minimal.nix" ];
-
-                boot.loader.grub.enable = false;
-                boot.loader.systemd-boot.enable = false;
-
-                fileSystems."/" = {
-                  device = "none";
-                  fsType = "tmpfs";
-                };
-
-                networking.hostName = "capsa";
-                system.stateVersion = "25.11";
-              })
-            ];
+          vmLib = import ./nix/vm {
+            inherit lib pkgs nixpkgs hostSystem capsaPackage;
           };
 
-          kernelImage = "${guestNixos.config.system.build.kernel}/${guestNixos.config.system.boot.loader.kernelFile}";
-          initramfsImage = initramfsLib.mkInitramfs {
-            inherit (guestNixos.config.system) modulesTree;
-          };
+          defaultVmAssets = vmLib.mkVMAssets { name = "capsa"; };
+          defaultVm = vmLib.mkVM { name = "capsa"; };
 
           preCommitCheck = git-hooks.lib.${hostSystem}.run {
             src = ./.;
@@ -77,20 +51,18 @@
           };
         in
         {
+          lib = {
+            inherit (vmLib) mkVMAssets mkVM;
+          };
+
           packages = {
-            vm-kernel = pkgs.runCommand "capsa-vmlinuz" { } ''
-              cp ${kernelImage} $out
-            '';
+            capsa = capsaPackage;
 
-            vm-initramfs = initramfsImage;
+            vm-assets = defaultVmAssets.vmAssets;
 
-            vm-assets = pkgs.runCommand "capsa-vm-assets" { } ''
-              mkdir -p $out
-              cp ${kernelImage} $out/vmlinuz
-              cp ${initramfsImage} $out/initramfs.cpio.lz4
-            '';
+            vm = defaultVm;
 
-            default = self.packages.${hostSystem}.vm-assets;
+            default = self.packages.${hostSystem}.capsa;
           };
 
           checks = { };

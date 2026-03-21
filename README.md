@@ -29,24 +29,68 @@ The shell includes Rust tooling and exports `LIBKRUN_LIB_DIR` automatically:
 - Linux → `${libkrun}/lib`
 - macOS → `${libkrun-efi}/lib`
 
-## Building VM assets (kernel + initramfs)
+## Nix packages
 
-The flake exposes a minimal guest kernel/initramfs:
+The flake exposes:
 
-- `.#vm-kernel`
-- `.#vm-initramfs`
-- `.#vm-assets` (directory containing both)
+- `.#capsa` (CLI package; sidecar stays private under `libexec`)
+- `.#vm-assets` (kernel + initramfs for the default VM)
+- `.#vm` (run script for the default VM built via `mkVM`)
 
-Build both assets:
+Build default VM assets:
 
 ```bash
 nix build .#vm-assets
 ```
 
-This creates `./result/` with:
+Run the default VM directly:
 
-- `./result/vmlinuz`
-- `./result/initramfs.cpio.lz4`
+```bash
+nix run .#vm
+```
+
+## Defining custom VMs with Nix modules
+
+The flake exposes:
+
+- `lib.mkVM` → runnable package (`nix run` target)
+- `lib.mkVMAssets` → VM assets/spec (`kernelImage`, `initramfsImage`, `vmAssets`)
+
+Define custom VMs in a NixOS-like style:
+
+```nix
+# in another flake
+let
+  vmArgs = {
+    name = "demo";
+    modules = [
+      ({ ... }: {
+        networking.hostName = "demo";
+      })
+    ];
+    vm = {
+      vcpus = 2;
+      memoryMiB = 1024;
+      kernelCmdline = "console=hvc0 rdinit=/init";
+    };
+  };
+
+  capsaVm = capsa.lib.${system}.mkVM vmArgs;
+  capsaVmAssets = capsa.lib.${system}.mkVMAssets vmArgs;
+in {
+  packages.${system}.demo-vm = capsaVm;
+  packages.${system}.demo-vm-assets = capsaVmAssets.vmAssets;
+}
+```
+
+`mkVMAssets` is useful when you want to run with Cargo directly:
+
+```bash
+cargo run -- \
+  --kernel "${capsaVmAssets.kernelImage}" \
+  --initramfs "${capsaVmAssets.initramfsImage}" \
+  --kernel-cmdline "console=hvc0 rdinit=/init"
+```
 
 ## Running
 
