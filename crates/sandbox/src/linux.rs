@@ -7,21 +7,15 @@ use crate::{SandboxSpec, SandboxedChild};
 
 /// Linux sandbox backend via `syd`.
 ///
-/// This backend is fail-closed by default. Set `CAPSA_SANDBOX=off` to disable
-/// sandboxing explicitly (for local debugging only).
+/// This backend is fail-closed by default.
 pub fn spawn_with_syd(
     program: &Path,
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
-    if sandbox_disabled() {
-        eprintln!("warning: Linux sandbox disabled via CAPSA_SANDBOX=off; running capsa-vmm without sandbox");
-        return spawn_direct(program, args);
-    }
-
     let syd = find_in_path("syd").ok_or_else(|| {
         anyhow::anyhow!(
-            "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`) or set CAPSA_SANDBOX=off to disable sandboxing"
+            "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`) or set CAPSA_DISABLE_SANDBOX=1 to disable sandboxing"
         )
     })?;
 
@@ -295,20 +289,4 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn sandbox_disabled() -> bool {
-    matches!(
-        std::env::var("CAPSA_SANDBOX").as_deref(),
-        Ok("off") | Ok("0") | Ok("false")
-    )
-}
-
-fn spawn_direct(program: &Path, args: &[String]) -> Result<SandboxedChild> {
-    let child = Command::new(program)
-        .args(args)
-        .spawn()
-        .with_context(|| format!("failed to spawn {}", program.display()))?;
-
-    Ok(SandboxedChild::new(child, vec![]))
 }

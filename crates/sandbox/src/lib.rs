@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 #[cfg(target_os = "macos")]
 mod darwin;
@@ -70,13 +70,20 @@ impl Drop for SandboxedChild {
 /// Spawn `program` with `args` inside the platform sandbox.
 ///
 /// - macOS: seatbelt profile via `sandbox-exec`
-/// - Linux: `syd` backend (fail-closed by default; opt-out via `CAPSA_SANDBOX=off`)
+/// - Linux: `syd` backend (fail-closed by default)
+///
+/// Set `CAPSA_DISABLE_SANDBOX=1` (or `true`/`yes`/`on`) to bypass sandboxing.
 #[cfg(target_os = "macos")]
 pub fn spawn_sandboxed(
     program: &Path,
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
+    if sandbox_disabled() {
+        eprintln!("warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox");
+        return spawn_direct(program, args);
+    }
+
     darwin::spawn_with_sandbox_exec(program, args, spec)
 }
 
@@ -86,6 +93,11 @@ pub fn spawn_sandboxed(
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
+    if sandbox_disabled() {
+        eprintln!("warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox");
+        return spawn_direct(program, args);
+    }
+
     linux::spawn_with_syd(program, args, spec)
 }
 
@@ -96,4 +108,20 @@ pub fn spawn_sandboxed(
     _spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
     anyhow::bail!("sandboxing is not implemented for this platform")
+}
+
+fn sandbox_disabled() -> bool {
+    matches!(
+        std::env::var("CAPSA_DISABLE_SANDBOX").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+    )
+}
+
+fn spawn_direct(program: &Path, args: &[String]) -> Result<SandboxedChild> {
+    let child = Command::new(program)
+        .args(args)
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", program.display()))?;
+
+    Ok(SandboxedChild::new(child, vec![]))
 }

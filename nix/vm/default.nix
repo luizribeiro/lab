@@ -114,6 +114,12 @@ let
         inherit name guestSystem modules specialArgs vm;
       };
       capsaCmd = "${capsaPackage}/bin/capsa";
+      expectSandboxEnv = lib.optionalString pkgs.stdenv.isDarwin ''
+        # Nix already runs this check inside a macOS sandbox; launching a nested
+        # seatbelt sandbox via `sandbox-exec` fails with EPERM (sandbox_apply).
+        # Disable capsa's inner sandbox for this check environment.
+        set env(CAPSA_DISABLE_SANDBOX) 1
+      '';
     in
     pkgs.runCommand "${assets.name}-vm-check"
       {
@@ -130,7 +136,7 @@ let
         set kernel "${assets.kernelImage}"
         set initramfs "${assets.initramfsImage}"
         set kernel_cmdline {${assets.vmConfig.kernelCmdline}}
-
+        ${expectSandboxEnv}
         spawn $capsa \
           --kernel $kernel \
           --initramfs $initramfs \

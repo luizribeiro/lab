@@ -129,7 +129,9 @@ The helper binary is located at `crates/vmm/src/main.rs`.
 Current backend status:
 
 - **macOS**: implemented with `sandbox-exec` + generated Seatbelt profile
-- **Linux**: `syd` integration (fail-closed). `syd` must be available on `PATH`; set `CAPSA_SANDBOX=off` to disable sandboxing explicitly.
+- **Linux**: `syd` integration (fail-closed). `syd` must be available on `PATH`.
+
+Set `CAPSA_DISABLE_SANDBOX=1` (or `true`/`yes`/`on`) to disable sandboxing explicitly on supported platforms (for local debugging only).
 
 VM smoke checks:
 
