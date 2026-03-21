@@ -20,7 +20,7 @@ pub fn spawn_with_sandbox_exec(
     let profile = render_seatbelt_profile(&effective);
     let profile_path = write_temp_profile(&profile)?;
 
-    let child = Command::new("sandbox-exec")
+    let child = Command::new("/usr/bin/sandbox-exec")
         .arg("-f")
         .arg(&profile_path)
         .arg(program)
