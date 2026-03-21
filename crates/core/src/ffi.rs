@@ -1,4 +1,6 @@
 use std::ffi::{c_char, CString};
+use std::fs::File;
+use std::io::Read;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::ptr;
@@ -15,6 +17,9 @@ const KRUN_LOG_LEVEL_INFO: u32 = 3;
 const KRUN_LOG_LEVEL_DEBUG: u32 = 4;
 const KRUN_LOG_STYLE_AUTO: u32 = 0;
 const KRUN_LOG_OPTION_NO_ENV: u32 = 1;
+const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
+const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
+const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
 const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
@@ -159,9 +164,8 @@ impl KrunVm<Configured> {
         initramfs: Option<&Path>,
         kernel_cmdline: Option<&str>,
     ) -> Result<KrunVm<BootConfigured>> {
-        // TODO: detect kernel format from file contents (magic bytes) instead of
-        // hard-coding ZSTD. This currently matches our Nix-built vm-assets.
-        let kernel_format = KRUN_KERNEL_FORMAT_IMAGE_ZSTD;
+        let kernel_format = detect_kernel_format(kernel)
+            .with_context(|| format!("failed to detect kernel format for {}", kernel.display()))?;
         let kernel = path_to_cstring(kernel).context("kernel path contains NUL")?;
         let initramfs = initramfs
             .map(|path| path_to_cstring(path).context("initramfs path contains NUL"))
@@ -226,6 +230,26 @@ fn check_rc(rc: i32, context: &str) -> Result<()> {
         bail!("{context}: {}", os_error_from_neg_errno(rc));
     }
     Ok(())
+}
+
+fn detect_kernel_format(kernel: &Path) -> Result<u32> {
+    let mut file = File::open(kernel)?;
+    let mut buf = [0u8; 4];
+    let n = file.read(&mut buf)?;
+
+    if n >= 4 && buf == [0x28, 0xB5, 0x2F, 0xFD] {
+        return Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD);
+    }
+
+    if n >= 2 && buf[..2] == [0x1F, 0x8B] {
+        return Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ);
+    }
+
+    if n >= 3 && buf[..3] == [b'B', b'Z', b'h'] {
+        return Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2);
+    }
+
+    Ok(KRUN_KERNEL_FORMAT_RAW)
 }
 
 #[cfg(unix)]
