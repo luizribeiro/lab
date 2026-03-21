@@ -18,6 +18,7 @@ const KRUN_LOG_LEVEL_DEBUG: u32 = 4;
 const KRUN_LOG_STYLE_AUTO: u32 = 0;
 const KRUN_LOG_OPTION_NO_ENV: u32 = 1;
 const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
+const KRUN_KERNEL_FORMAT_ELF: u32 = 1;
 const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
 const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
 const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
@@ -233,23 +234,57 @@ fn check_rc(rc: i32, context: &str) -> Result<()> {
 }
 
 fn detect_kernel_format(kernel: &Path) -> Result<u32> {
-    let mut file = File::open(kernel)?;
-    let mut buf = [0u8; 4];
-    let n = file.read(&mut buf)?;
+    // Read enough bytes to also detect embedded compressed payloads in wrapped
+    // kernel images (e.g. x86_64 bzImage that starts with an MZ header).
+    const MAX_PROBE_BYTES: usize = 2 * 1024 * 1024;
 
-    if n >= 4 && buf == [0x28, 0xB5, 0x2F, 0xFD] {
+    let mut file = File::open(kernel)?;
+    let mut buf = vec![0u8; MAX_PROBE_BYTES];
+    let n = file.read(&mut buf)?;
+    buf.truncate(n);
+
+    if starts_with_magic(&buf, &[0x7F, b'E', b'L', b'F']) {
+        return Ok(KRUN_KERNEL_FORMAT_ELF);
+    }
+
+    if starts_with_magic(&buf, &[0x28, 0xB5, 0x2F, 0xFD]) {
         return Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD);
     }
 
-    if n >= 2 && buf[..2] == [0x1F, 0x8B] {
+    if starts_with_magic(&buf, &[0x1F, 0x8B]) {
         return Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ);
     }
 
-    if n >= 3 && buf[..3] == [b'B', b'Z', b'h'] {
+    if starts_with_magic(&buf, b"BZh") {
         return Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2);
     }
 
+    // PE/COFF-wrapped kernels often carry a compressed payload later in the
+    // image. Detect the embedded stream and choose the corresponding libkrun
+    // image format.
+    if starts_with_magic(&buf, b"MZ") {
+        if contains_magic(&buf, &[0x28, 0xB5, 0x2F, 0xFD]) {
+            return Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD);
+        }
+
+        if contains_magic(&buf, &[0x1F, 0x8B]) {
+            return Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ);
+        }
+
+        if contains_magic(&buf, b"BZh") {
+            return Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2);
+        }
+    }
+
     Ok(KRUN_KERNEL_FORMAT_RAW)
+}
+
+fn starts_with_magic(buf: &[u8], magic: &[u8]) -> bool {
+    buf.len() >= magic.len() && &buf[..magic.len()] == magic
+}
+
+fn contains_magic(buf: &[u8], magic: &[u8]) -> bool {
+    !magic.is_empty() && buf.windows(magic.len()).any(|window| window == magic)
 }
 
 #[cfg(unix)]
