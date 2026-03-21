@@ -4,24 +4,35 @@
     name = "capsa";
     timeout = 60;
     expectProgram = ''
-      expect {
-        -re {~ # } {}
-        timeout { puts "ERROR: timed out waiting for VM prompt"; exit 1 }
-        eof { puts "ERROR: capsa exited before prompt"; exit 1 }
-      }
+      vm_run "echo TTY_OK" {TTY_OK}
+      vm_exit
+    '';
+  };
 
-      send -- "echo TTY_OK\r"
-      expect {
-        -re {TTY_OK} {}
-        timeout { puts "ERROR: did not observe TTY echo marker"; exit 1 }
-        eof { puts "ERROR: capsa exited while checking tty"; exit 1 }
-      }
+  vm-shell-basics = vmLib.mkVMCheck {
+    name = "capsa-shell-basics";
+    timeout = 60;
+    expectProgram = ''
+      vm_run {/bin/busybox uname -s} {Linux}
+      vm_run {test -c /dev/console; echo CONSOLE_RC:$?} {CONSOLE_RC:0}
+      vm_run {false; echo FALSE_RC:$?} {FALSE_RC:1}
+      vm_run {cat /proc/meminfo} {MemTotal:}
+      vm_exit
+    '';
+  };
 
-      send -- "exit\r"
-      expect {
-        eof {}
-        timeout { puts "ERROR: timed out waiting for VM shutdown after exit"; exit 1 }
-      }
+  vm-stateful-session = vmLib.mkVMCheck {
+    name = "capsa-stateful-session";
+    timeout = 60;
+    expectProgram = ''
+      vm_run {x=41}
+      vm_run {x=$((x+1))}
+      vm_run {echo X:$x} {X:42}
+
+      vm_run {echo hello >/run/capsa-smoke}
+      vm_run {cat /run/capsa-smoke} {hello}
+      vm_run {/bin/busybox grep -q '^MemTotal:' /proc/meminfo; echo MEMINFO_RC:$?} {MEMINFO_RC:0}
+      vm_exit
     '';
   };
 }

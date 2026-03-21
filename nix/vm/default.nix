@@ -144,6 +144,45 @@ let
           --vcpus ${toString assets.vmConfig.vcpus} \
           --memory-mib ${toString assets.vmConfig.memoryMiB}
 
+        set vm_prompt_re {~ # }
+
+        proc fail {message} {
+          puts "ERROR: $message"
+          exit 1
+        }
+
+        proc vm_expect {pattern timeout_err eof_err} {
+          expect {
+            -re $pattern {}
+            timeout { fail $timeout_err }
+            eof { fail $eof_err }
+          }
+        }
+
+        proc vm_prompt {} {
+          vm_expect $::vm_prompt_re "timed out waiting for VM prompt" "capsa exited before prompt"
+        }
+
+        # Minimal check API:
+        #   vm_run <command> ?expected_regex?
+        #   vm_exit
+        proc vm_run {line {pattern ""}} {
+          vm_prompt
+          send -- "$line\r"
+          if {$pattern ne ""} {
+            vm_expect $pattern "did not observe expected output for: $line" "capsa exited while running: $line"
+          }
+        }
+
+        proc vm_exit {} {
+          vm_prompt
+          send -- "exit\r"
+          expect {
+            eof {}
+            timeout { fail "timed out waiting for VM shutdown after exit" }
+          }
+        }
+
         ${expectProgram}
 
         set wait_result [wait]
