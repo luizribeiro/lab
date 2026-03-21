@@ -54,18 +54,65 @@ fn spawn_with_syd_binary(
 }
 
 fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
-    // Keep policy focused on path-based controls. We enable read+exec checks,
-    // but keep fs/ioctl domains off for now.
+    // Keep policy focused on path-based controls plus fs/ioctl allowlists.
     let mut rules = vec![
         "sandbox/read,stat:on".to_string(),
         "sandbox/exec:on".to_string(),
-        "sandbox/fs:off".to_string(),
-        "sandbox/ioctl:off".to_string(),
+        "sandbox/fs:on".to_string(),
+        "sandbox/ioctl:on".to_string(),
         "sandbox/write,create,truncate,delete:off".to_string(),
     ];
 
     if !spec.allow_network {
         rules.push("sandbox/net:on".to_string());
+    }
+
+    // Allow common filesystem types touched by capsa-vmm and host runtime.
+    for fs in ["ext", "tmpfs", "proc", "sysfs", "cgroup"] {
+        rules.push(format!("allow/fs+{fs}"));
+    }
+
+    // Allow terminal ioctls and the KVM ioctls used by libkrun's VMM path.
+    for ioctl in [
+        "TCGETS",
+        "TCGETS2",
+        "TCSETS",
+        "TCSETS2",
+        "TCSETSW",
+        "TCSETSF",
+        "TIOCGWINSZ",
+        "TIOCSWINSZ",
+        "FIONREAD",
+        "KVM_GET_API_VERSION",
+        "KVM_CHECK_EXTENSION",
+        "KVM_GET_VCPU_MMAP_SIZE",
+        "KVM_CREATE_VM",
+        "KVM_CREATE_VCPU",
+        "KVM_SET_TSS_ADDR",
+        "KVM_CREATE_IRQCHIP",
+        "KVM_CREATE_PIT2",
+        "KVM_IOEVENTFD",
+        "KVM_IRQFD",
+        "KVM_SET_USER_MEMORY_REGION",
+        "KVM_SET_CPUID2",
+        "KVM_GET_SUPPORTED_CPUID",
+        "KVM_GET_MSR_INDEX_LIST",
+        "KVM_SET_MSRS",
+        "KVM_GET_MSRS",
+        "KVM_SET_REGS",
+        "KVM_GET_REGS",
+        "KVM_SET_SREGS",
+        "KVM_GET_SREGS",
+        "KVM_SET_FPU",
+        "KVM_GET_FPU",
+        "KVM_GET_LAPIC",
+        "KVM_SET_LAPIC",
+        "KVM_SET_SIGNAL_MASK",
+        "KVM_SET_GSI_ROUTING",
+        "KVM_SET_CLOCK",
+        "KVM_RUN",
+    ] {
+        rules.push(format!("allow/ioctl+{ioctl}"));
     }
 
     let mut read_paths = Vec::new();
