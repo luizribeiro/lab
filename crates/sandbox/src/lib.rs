@@ -3,7 +3,9 @@ use std::process::{Child, ExitStatus};
 
 use anyhow::Result;
 
+#[cfg(target_os = "macos")]
 mod darwin;
+#[cfg(target_os = "linux")]
 mod linux;
 
 /// Cross-platform sandbox configuration.
@@ -68,7 +70,7 @@ impl Drop for SandboxedChild {
 /// Spawn `program` with `args` inside the platform sandbox.
 ///
 /// - macOS: seatbelt profile via `sandbox-exec`
-/// - Linux: TODO (planned `syd` backend)
+/// - Linux: temporary direct spawn fallback (planned `syd` backend)
 #[cfg(target_os = "macos")]
 pub fn spawn_sandboxed(
     program: &Path,

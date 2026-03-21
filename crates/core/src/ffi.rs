@@ -15,7 +15,7 @@ const KRUN_LOG_LEVEL_INFO: u32 = 3;
 const KRUN_LOG_LEVEL_DEBUG: u32 = 4;
 const KRUN_LOG_STYLE_AUTO: u32 = 0;
 const KRUN_LOG_OPTION_NO_ENV: u32 = 1;
-const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
+const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 
@@ -159,6 +159,9 @@ impl KrunVm<Configured> {
         initramfs: Option<&Path>,
         kernel_cmdline: Option<&str>,
     ) -> Result<KrunVm<BootConfigured>> {
+        // TODO: detect kernel format from file contents (magic bytes) instead of
+        // hard-coding ZSTD. This currently matches our Nix-built vm-assets.
+        let kernel_format = KRUN_KERNEL_FORMAT_IMAGE_ZSTD;
         let kernel = path_to_cstring(kernel).context("kernel path contains NUL")?;
         let initramfs = initramfs
             .map(|path| path_to_cstring(path).context("initramfs path contains NUL"))
@@ -173,7 +176,7 @@ impl KrunVm<Configured> {
                 krun_set_kernel(
                     self.ctx.id,
                     kernel.as_ptr(),
-                    KRUN_KERNEL_FORMAT_RAW,
+                    kernel_format,
                     initramfs_ptr,
                     cmdline.as_ptr(),
                 )

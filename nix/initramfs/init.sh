@@ -44,4 +44,17 @@ else
   sh
 fi
 
-exec poweroff -f
+# Interactive shell has exited (e.g. `exit` or Ctrl+D).
+#
+# We intentionally do *not* use `poweroff -f` here: in this Linux+libkrun
+# setup it can leave the host-side VMM process hanging even though the guest
+# shell is gone. Reboot/reset paths are observed reliably by libkrun, so use
+# those first, then SysRq as a last resort.
+sync || true
+reboot -f -n || reboot -f || {
+  [ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
+}
+
+# Fail loudly if we are still running as PID 1 after all shutdown attempts.
+# This triggers the usual Linux "Attempted to kill init" panic.
+exit 1

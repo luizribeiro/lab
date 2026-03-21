@@ -1,20 +1,27 @@
 use std::path::Path;
+use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{SandboxSpec, SandboxedChild};
 
-/// TODO: Linux backend via `syd`.
+/// Linux sandbox backend.
 ///
-/// Planned approach:
-/// 1. Map `SandboxSpec` into a generated `syd` policy.
-/// 2. Spawn `syd` as the supervisor process and exec target program under it.
-/// 3. Add integration tests that validate filesystem and network denials.
-#[allow(dead_code)]
+/// Until `syd` integration lands, this is a compatibility fallback that
+/// launches the target process directly (without sandbox enforcement).
 pub fn spawn_with_syd(
-    _program: &Path,
-    _args: &[String],
+    program: &Path,
+    args: &[String],
     _spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
-    anyhow::bail!("Linux sandbox backend is not implemented yet (TODO: syd integration)")
+    eprintln!(
+        "warning: Linux sandbox backend is not implemented yet; running capsa-vmm without sandbox"
+    );
+
+    let child = Command::new(program)
+        .args(args)
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", program.display()))?;
+
+    Ok(SandboxedChild::new(child, vec![]))
 }
