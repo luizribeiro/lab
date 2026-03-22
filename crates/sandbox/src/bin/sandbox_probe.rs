@@ -1,7 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -114,11 +113,7 @@ fn can_write_temp() -> Result<(), String> {
     ));
 
     let mut options = OpenOptions::new();
-    options.create_new(true).write(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
+    options.create_new(true).write(true).mode(0o600);
 
     let mut file = options.open(&path).map_err(|e| e.to_string())?;
 
