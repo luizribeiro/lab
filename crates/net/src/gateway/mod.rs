@@ -14,6 +14,7 @@ use crate::frame::{
     frame_channel, smoltcp_now, spawn_frame_io_tasks, EthernetFrameIO, FrameReceiver,
 };
 use crate::nat::NatTable;
+use crate::policy::PolicyChecker;
 
 pub use self::config::GatewayStackConfig;
 use self::device::SmoltcpDevice;
@@ -55,6 +56,7 @@ pub struct GatewayStack {
     pub(super) tcp_manager: TcpManager,
     pub(super) tcp_host_rx: tokio::sync::mpsc::Receiver<TcpHostEvent>,
     pub(super) tcp_host_tx: tokio::sync::mpsc::Sender<TcpHostEvent>,
+    pub(super) policy_checker: Option<PolicyChecker>,
     pub(super) start_time: std::time::Instant,
     /// Channel for receiving frames from the I/O task (bounded for backpressure).
     pub(super) rx_from_guest: FrameReceiver,
@@ -128,10 +130,15 @@ impl GatewayStack {
         let (dns_response_tx, dns_response_rx) = tokio::sync::mpsc::channel(MAX_DNS_QUERIES);
         let dns = DnsDispatcher {
             proxy: dns_proxy,
-            cache: dns_cache,
+            cache: dns_cache.clone(),
             response_tx: dns_response_tx,
             semaphore: Arc::new(Semaphore::new(MAX_DNS_QUERIES)),
         };
+
+        let policy_checker = config
+            .policy
+            .clone()
+            .map(|policy| PolicyChecker::new(policy, dns_cache));
 
         let tcp_manager = TcpManager::new();
         let (tcp_host_tx, tcp_host_rx) =
@@ -151,6 +158,7 @@ impl GatewayStack {
             tcp_manager,
             tcp_host_rx,
             tcp_host_tx,
+            policy_checker,
             start_time,
             rx_from_guest,
             io_tasks: Mutex::new(Some(io_task_handles)),

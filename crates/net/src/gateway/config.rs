@@ -1,3 +1,5 @@
+use crate::policy::NetworkPolicy;
+
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -58,6 +60,8 @@ pub struct GatewayStackConfig {
     pub dhcp_range_end: Ipv4Addr,
     /// MAC address for the gateway interface
     pub gateway_mac: [u8; 6],
+    /// Optional outbound network policy enforced by the gateway.
+    pub policy: Option<NetworkPolicy>,
 }
 
 impl Default for GatewayStackConfig {
@@ -68,6 +72,7 @@ impl Default for GatewayStackConfig {
             dhcp_range_start: Ipv4Addr::new(10, 0, 2, 15),
             dhcp_range_end: Ipv4Addr::new(10, 0, 2, 254),
             gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
+            policy: None,
         }
     }
 }
