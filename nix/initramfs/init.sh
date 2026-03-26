@@ -18,7 +18,7 @@ modprobe virtio_blk 2>/dev/null || true
 modprobe virtio_net 2>/dev/null || true
 modprobe virtio_console 2>/dev/null || true
 
-# Auto-configure networking on boot when a NIC is present (e.g. `capsa --net`).
+# Auto-configure networking on boot when a NIC is present (e.g. `capsa --allow-host *`).
 # Keep output quiet by default; only print details on verbose boots.
 is_verbose_boot() {
   cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
