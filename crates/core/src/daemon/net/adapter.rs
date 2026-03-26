@@ -1,0 +1,392 @@
+use std::collections::HashSet;
+use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{bail, ensure, Context, Result};
+
+use crate::daemon::constants::NETD_READY_FD;
+use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonReadiness, DaemonSpawnSpec};
+
+use super::{args::encode_launch_spec_args, spec::NetLaunchSpec};
+
+const READY_SIGNAL: u8 = b'R';
+const MIN_REMAP_SOURCE_FD: i32 = 1000;
+
+pub struct NetDaemonAdapter;
+
+#[derive(Debug)]
+pub struct NetDaemonHandoff {
+    host_fds: Vec<OwnedFd>,
+    readiness_reader: Option<OwnedFd>,
+    readiness_writer: Option<OwnedFd>,
+}
+
+impl NetDaemonHandoff {
+    pub fn new(
+        host_fds: Vec<OwnedFd>,
+        readiness_reader: OwnedFd,
+        readiness_writer: OwnedFd,
+    ) -> Result<Self> {
+        let mut normalized_host_fds = Vec::with_capacity(host_fds.len());
+        for host_fd in host_fds {
+            normalized_host_fds.push(duplicate_fd_for_remap(&host_fd)?);
+        }
+
+        Ok(Self {
+            host_fds: normalized_host_fds,
+            readiness_reader: Some(readiness_reader),
+            readiness_writer: Some(duplicate_fd_for_remap(&readiness_writer)?),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct NetDaemonReadiness {
+    ready_pipe_reader: OwnedFd,
+}
+
+impl DaemonReadiness for NetDaemonReadiness {
+    fn wait_ready(self, timeout: Duration) -> Result<()> {
+        let timeout_millis = timeout
+            .as_millis()
+            .min(i32::MAX as u128)
+            .try_into()
+            .expect("timeout clamped to i32::MAX");
+
+        let mut poll_fd = libc::pollfd {
+            fd: self.ready_pipe_reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+
+        loop {
+            // SAFETY: `poll_fd` points to valid memory for one `pollfd` entry.
+            let rc = unsafe { libc::poll(&mut poll_fd as *mut libc::pollfd, 1, timeout_millis) };
+            if rc == 0 {
+                bail!("timed out waiting for net daemon readiness signal");
+            }
+            if rc < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(err).context("poll on net daemon readiness pipe failed");
+            }
+            break;
+        }
+
+        if (poll_fd.revents & libc::POLLIN) == 0 {
+            bail!(
+                "net daemon readiness pipe became readable without readiness byte (revents={})",
+                poll_fd.revents
+            );
+        }
+
+        let mut ready_file = std::fs::File::from(self.ready_pipe_reader);
+        let mut signal = [0u8; 1];
+        ready_file
+            .read_exact(&mut signal)
+            .context("failed reading net daemon readiness byte")?;
+
+        ensure!(
+            signal[0] == READY_SIGNAL,
+            "invalid net daemon readiness byte: expected {:?}, got {:?}",
+            READY_SIGNAL,
+            signal[0]
+        );
+
+        Ok(())
+    }
+}
+
+impl DaemonAdapter for NetDaemonAdapter {
+    type Spec = NetLaunchSpec;
+    type Handoff = NetDaemonHandoff;
+    type Ready = NetDaemonReadiness;
+
+    fn binary_info() -> DaemonBinaryInfo {
+        DaemonBinaryInfo {
+            daemon_name: "net",
+            binary_name: "capsa-netd",
+            env_override: "CAPSA_NETD_PATH",
+        }
+    }
+
+    fn spawn_spec(
+        spec: &Self::Spec,
+        handoff: &Self::Handoff,
+        binary_path: &Path,
+    ) -> Result<DaemonSpawnSpec> {
+        ensure!(
+            spec.interfaces.len() == handoff.host_fds.len(),
+            "net handoff host fd count ({}) must match interface count ({})",
+            handoff.host_fds.len(),
+            spec.interfaces.len()
+        );
+
+        let readiness_writer = handoff
+            .readiness_writer
+            .as_ref()
+            .context("missing net daemon readiness writer fd")?;
+
+        let mut fd_remaps = spec
+            .interfaces
+            .iter()
+            .zip(&handoff.host_fds)
+            .map(|(interface, host_fd)| capsa_sandbox::FdRemap {
+                source_fd: host_fd.as_raw_fd(),
+                target_fd: interface.host_fd,
+            })
+            .collect::<Vec<_>>();
+
+        fd_remaps.push(capsa_sandbox::FdRemap {
+            source_fd: readiness_writer.as_raw_fd(),
+            target_fd: NETD_READY_FD,
+        });
+
+        validate_fd_remaps(&fd_remaps)?;
+
+        let mut sandbox = capsa_sandbox::SandboxSpec::new().allow_network(true);
+        sandbox.read_only_paths.push(binary_path.to_path_buf());
+        sandbox
+            .read_only_paths
+            .push(std::path::PathBuf::from("/etc/resolv.conf"));
+
+        Ok(DaemonSpawnSpec {
+            args: encode_launch_spec_args(spec)?,
+            sandbox,
+            fd_remaps,
+        })
+    }
+
+    fn readiness(_spec: &Self::Spec, handoff: &mut Self::Handoff) -> Result<Self::Ready> {
+        let ready_pipe_reader = handoff
+            .readiness_reader
+            .take()
+            .context("missing net daemon readiness reader fd")?;
+
+        Ok(NetDaemonReadiness { ready_pipe_reader })
+    }
+
+    fn on_spawned(_spec: &Self::Spec, handoff: &mut Self::Handoff) -> Result<()> {
+        handoff.host_fds.clear();
+        handoff.readiness_writer.take();
+        Ok(())
+    }
+
+    fn on_spawn_failed(_spec: &Self::Spec, _handoff: Self::Handoff) -> Result<()> {
+        Ok(())
+    }
+
+    fn on_shutdown(_spec: &Self::Spec, _handoff: Self::Handoff) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
+    // SAFETY: `fcntl(F_DUPFD_CLOEXEC, ..)` duplicates a valid owned fd and
+    // returns a new fd number owned by this process.
+    let duplicated =
+        unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, MIN_REMAP_SOURCE_FD) };
+
+    if duplicated < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to duplicate net handoff fd");
+    }
+
+    // SAFETY: `duplicated` is a newly created fd from `fcntl` above.
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
+}
+
+fn validate_fd_remaps(remaps: &[capsa_sandbox::FdRemap]) -> Result<()> {
+    let mut seen_sources = HashSet::new();
+    let mut seen_targets = HashSet::new();
+
+    for remap in remaps {
+        ensure!(
+            seen_sources.insert(remap.source_fd),
+            "duplicate source fd in remaps"
+        );
+        ensure!(
+            seen_targets.insert(remap.target_fd),
+            "duplicate target fd in remaps"
+        );
+    }
+
+    for source in &seen_sources {
+        ensure!(
+            !seen_targets.contains(source),
+            "overlapping source/target fd {} in remaps",
+            source
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+    use std::os::unix::net::UnixDatagram;
+
+    use crate::daemon::constants::NETD_READY_FD;
+    use crate::daemon::traits::{DaemonAdapter, DaemonReadiness};
+
+    use super::{NetDaemonAdapter, NetDaemonHandoff, NetDaemonReadiness};
+
+    fn sample_host_fd() -> OwnedFd {
+        let (left, _right) = UnixDatagram::pair().expect("socketpair should succeed");
+        left.into()
+    }
+
+    fn pipe() -> (OwnedFd, OwnedFd) {
+        let mut fds = [0; 2];
+        // SAFETY: `fds` points to valid memory for two fds.
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0, "pipe creation should succeed");
+
+        // SAFETY: pipe created valid read and write fds.
+        let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        // SAFETY: pipe created valid read and write fds.
+        let writer = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        (reader, writer)
+    }
+
+    fn sample_spec() -> crate::daemon::net::spec::NetLaunchSpec {
+        crate::daemon::net::spec::NetLaunchSpec {
+            interfaces: vec![crate::daemon::net::spec::NetInterfaceSpec {
+                host_fd: 200,
+                mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
+                policy: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn netd_sandbox_enables_network_and_includes_resolver_path() {
+        let spec = sample_spec();
+        let (ready_r, ready_w) = pipe();
+        let handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
+            .expect("handoff should build");
+
+        let spawn_spec =
+            NetDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-netd"))
+                .expect("spawn spec should build");
+
+        assert!(spawn_spec.sandbox.allow_network);
+        assert!(spawn_spec
+            .sandbox
+            .read_only_paths
+            .contains(&std::path::PathBuf::from("/tmp/capsa-netd")));
+        assert!(spawn_spec
+            .sandbox
+            .read_only_paths
+            .contains(&std::path::PathBuf::from("/etc/resolv.conf")));
+    }
+
+    #[test]
+    fn netd_fd_remaps_include_readiness_fd_and_no_overlap() {
+        let spec = sample_spec();
+        let (ready_r, ready_w) = pipe();
+        let handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
+            .expect("handoff should build");
+
+        let spawn_spec =
+            NetDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-netd"))
+                .expect("spawn spec should build");
+
+        assert_eq!(spawn_spec.fd_remaps.len(), 2);
+        assert!(spawn_spec
+            .fd_remaps
+            .iter()
+            .any(|remap| remap.target_fd == NETD_READY_FD));
+
+        let mut targets = std::collections::HashSet::new();
+        for remap in &spawn_spec.fd_remaps {
+            assert!(targets.insert(remap.target_fd));
+            assert_ne!(remap.source_fd, remap.target_fd);
+        }
+
+        assert_eq!(spawn_spec.args[0], "--launch-spec-json");
+    }
+
+    #[test]
+    fn handoff_normalizes_source_fds_away_from_reserved_targets() {
+        let host = sample_host_fd();
+        let host_fd = host.as_raw_fd();
+        let (ready_r, ready_w) = pipe();
+        let ready_w_fd = ready_w.as_raw_fd();
+        let handoff =
+            NetDaemonHandoff::new(vec![host], ready_r, ready_w).expect("handoff should build");
+
+        let spawn_spec = NetDaemonAdapter::spawn_spec(
+            &sample_spec(),
+            &handoff,
+            std::path::Path::new("/tmp/capsa-netd"),
+        )
+        .expect("spawn spec should build");
+
+        assert!(spawn_spec
+            .fd_remaps
+            .iter()
+            .all(|remap| remap.source_fd != host_fd && remap.source_fd != ready_w_fd));
+    }
+
+    #[test]
+    fn readiness_waiter_accepts_exact_ready_byte() {
+        let (ready_r, ready_w) = pipe();
+        let mut writer = std::fs::File::from(ready_w);
+        writer
+            .write_all(b"R")
+            .expect("write ready byte should succeed");
+        drop(writer);
+
+        NetDaemonReadiness {
+            ready_pipe_reader: ready_r,
+        }
+        .wait_ready(std::time::Duration::from_secs(1))
+        .expect("ready byte should be accepted");
+    }
+
+    #[test]
+    fn readiness_waiter_rejects_wrong_byte() {
+        let (ready_r, ready_w) = pipe();
+        let mut writer = std::fs::File::from(ready_w);
+        writer
+            .write_all(b"X")
+            .expect("write wrong byte should succeed");
+        drop(writer);
+
+        let err = NetDaemonReadiness {
+            ready_pipe_reader: ready_r,
+        }
+        .wait_ready(std::time::Duration::from_secs(1))
+        .expect_err("wrong byte must fail");
+
+        assert!(err
+            .to_string()
+            .contains("invalid net daemon readiness byte"));
+    }
+
+    #[test]
+    fn readiness_waiter_times_out_without_signal() {
+        let (ready_r, ready_w) = pipe();
+        let leaked_writer_fd = ready_w.into_raw_fd();
+
+        let err = NetDaemonReadiness {
+            ready_pipe_reader: ready_r,
+        }
+        .wait_ready(std::time::Duration::from_millis(10))
+        .expect_err("missing signal should timeout");
+
+        // SAFETY: close intentionally leaked writer fd used for timeout scenario.
+        let _ = unsafe { libc::close(leaked_writer_fd) };
+
+        assert!(err
+            .to_string()
+            .contains("timed out waiting for net daemon readiness signal"));
+    }
+}
