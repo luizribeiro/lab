@@ -1,18 +1,23 @@
+mod interface_plan;
+
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
 
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
-use std::os::unix::net::UnixDatagram;
+use std::os::fd::OwnedFd;
 
-use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, VirtualSwitch};
+use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, VirtualSwitch};
 
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
 use crate::{
-    daemon::{constants::VMM_NET_FD_START, resolve::resolve_daemon_binary},
-    ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec,
+    daemon::resolve::resolve_daemon_binary, ResolvedNetworkInterface, VmConfig,
+    VmNetworkInterfaceConfig, VmmLaunchSpec,
+};
+
+use self::interface_plan::{
+    build_interface_plan, resolved_interfaces_for_plan, vmm_fd_remaps_for_plan,
 };
 
 impl VmConfig {
@@ -150,37 +155,36 @@ impl NetworkRuntime {
             "network runtime requires at least one interface"
         );
 
-        let mut resolved_interfaces = Vec::with_capacity(interfaces.len());
-        let mut fd_remaps = Vec::with_capacity(interfaces.len());
-        let mut guest_fds = Vec::with_capacity(interfaces.len());
-        let mut bridge_tasks = Vec::with_capacity(interfaces.len());
-        let mut gateway_tasks = Vec::with_capacity(interfaces.len());
+        let plan = build_interface_plan(interfaces)?;
+        debug_assert_eq!(
+            plan.interfaces.len(),
+            plan.interfaces
+                .iter()
+                .map(|iface| iface.netd_host_target_fd)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            "planned netd host target fds must be unique"
+        );
+        let resolved_interfaces = resolved_interfaces_for_plan(&plan.interfaces);
+        let fd_remaps = vmm_fd_remaps_for_plan(&plan.interfaces);
+        let mut guest_fds = Vec::with_capacity(plan.interfaces.len());
+        let mut bridge_tasks = Vec::with_capacity(plan.interfaces.len());
+        let mut gateway_tasks = Vec::with_capacity(plan.interfaces.len());
 
-        for (index, interface) in interfaces.iter().enumerate() {
+        for planned_interface in plan.interfaces {
             let switch = VirtualSwitch::new();
             let vm_port = switch.create_port().await;
             let gateway_port = switch.create_port().await;
 
-            let (host_fd, guest_fd) = create_unix_dgram_socketpair()
-                .with_context(|| format!("failed to create socketpair for interface {index}"))?;
-
-            let guest_target_fd = VMM_NET_FD_START + index as i32;
-            let mac = resolve_interface_mac(index, interface)?;
-            let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
-            let gateway_config = gateway_config_for_interface(interface);
+            let bridge_task =
+                tokio::spawn(
+                    async move { bridge_to_switch(planned_interface.host_fd, vm_port).await },
+                );
+            let gateway_config = gateway_config_for_policy(planned_interface.policy);
             let gateway = GatewayStack::new(gateway_port, gateway_config).await;
             let gateway_task = tokio::spawn(async move { gateway.run().await });
 
-            fd_remaps.push(capsa_sandbox::FdRemap {
-                source_fd: guest_fd.as_raw_fd(),
-                target_fd: guest_target_fd,
-            });
-
-            resolved_interfaces.push(ResolvedNetworkInterface {
-                mac,
-                guest_fd: guest_target_fd,
-            });
-            guest_fds.push(guest_fd);
+            guest_fds.push(planned_interface.guest_fd);
             bridge_tasks.push(bridge_task);
             gateway_tasks.push(gateway_task);
         }
@@ -213,67 +217,11 @@ impl NetworkRuntime {
     }
 }
 
-fn create_unix_dgram_socketpair() -> Result<(OwnedFd, OwnedFd)> {
-    let (left, right) =
-        UnixDatagram::pair().context("failed to create unix datagram socketpair")?;
-
-    let left_raw = left.into_raw_fd();
-    let right_raw = right.into_raw_fd();
-
-    // SAFETY: `left_raw` and `right_raw` come from `into_raw_fd`, transferring
-    // ownership to the newly created `OwnedFd`s.
-    let left_owned = unsafe { OwnedFd::from_raw_fd(left_raw) };
-    // SAFETY: same as above for the second socket endpoint.
-    let right_owned = unsafe { OwnedFd::from_raw_fd(right_raw) };
-
-    Ok((left_owned, right_owned))
-}
-
-fn resolve_interface_mac(index: usize, interface: &VmNetworkInterfaceConfig) -> Result<[u8; 6]> {
-    match interface.mac {
-        Some(mac) => {
-            ensure!(mac != [0; 6], "interface {index}: MAC address is all zeros");
-            Ok(mac)
-        }
-        None => Ok(generate_mac(index)),
-    }
-}
-
-fn effective_interface_policy(interface: &VmNetworkInterfaceConfig) -> NetworkPolicy {
-    interface
-        .policy
-        .clone()
-        .unwrap_or_else(NetworkPolicy::deny_all)
-}
-
-fn gateway_config_for_interface(interface: &VmNetworkInterfaceConfig) -> GatewayStackConfig {
+fn gateway_config_for_policy(policy: capsa_net::NetworkPolicy) -> GatewayStackConfig {
     GatewayStackConfig {
-        policy: Some(effective_interface_policy(interface)),
+        policy: Some(policy),
         ..GatewayStackConfig::default()
     }
-}
-
-fn generate_mac(index: usize) -> [u8; 6] {
-    let mut seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    seed ^= (std::process::id() as u128) << 32;
-    seed ^= index as u128;
-
-    let mut mac = [0u8; 6];
-    mac[0] = 0x02; // locally administered, unicast
-    mac[1] = ((seed >> 8) & 0xff) as u8;
-    mac[2] = ((seed >> 16) & 0xff) as u8;
-    mac[3] = ((seed >> 24) & 0xff) as u8;
-    mac[4] = ((seed >> 32) & 0xff) as u8;
-    mac[5] = ((seed >> 40) & 0xff) as u8;
-
-    if mac == [0u8; 6] {
-        mac[5] = 1;
-    }
-
-    mac
 }
 
 fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
@@ -302,7 +250,7 @@ fn resolve_vmm_binary() -> Result<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_interface_policy, gateway_config_for_interface, vm_sandbox_spec};
+    use super::{gateway_config_for_policy, vm_sandbox_spec};
     use crate::{VmConfig, VmNetworkInterfaceConfig};
     use capsa_net::{DomainPattern, NetworkPolicy};
 
@@ -459,38 +407,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_interface_policy_falls_back_to_deny_all() {
-        let interface = VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-        };
-
-        assert_eq!(
-            effective_interface_policy(&interface),
-            NetworkPolicy::deny_all()
-        );
-    }
-
-    #[test]
-    fn explicit_interface_policy_is_preserved() {
-        let explicit_policy = NetworkPolicy::deny_all()
-            .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
-        let interface = VmNetworkInterfaceConfig {
-            mac: None,
-            policy: Some(explicit_policy.clone()),
-        };
-
-        assert_eq!(effective_interface_policy(&interface), explicit_policy);
-    }
-
-    #[test]
     fn gateway_config_defaults_missing_interface_policy_to_deny_all() {
-        let interface = VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-        };
-
-        let gateway_config = gateway_config_for_interface(&interface);
+        let gateway_config = gateway_config_for_policy(NetworkPolicy::deny_all());
 
         assert_eq!(gateway_config.policy, Some(NetworkPolicy::deny_all()));
     }
@@ -499,12 +417,8 @@ mod tests {
     fn gateway_config_preserves_explicit_interface_policy() {
         let explicit_policy = NetworkPolicy::deny_all()
             .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
-        let interface = VmNetworkInterfaceConfig {
-            mac: None,
-            policy: Some(explicit_policy.clone()),
-        };
 
-        let gateway_config = gateway_config_for_interface(&interface);
+        let gateway_config = gateway_config_for_policy(explicit_policy.clone());
 
         assert_eq!(gateway_config.policy, Some(explicit_policy));
     }
