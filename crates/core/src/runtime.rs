@@ -189,9 +189,10 @@ mod tests {
     #[test]
     fn validate_vmm_launch_spec_rejects_negative_guest_fd() {
         let mut config = base_vm_config();
-        config
-            .interfaces
-            .push(VmNetworkInterfaceConfig { mac: None });
+        config.interfaces.push(VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        });
 
         let resolved = vec![ResolvedNetworkInterface {
             mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
@@ -205,12 +206,14 @@ mod tests {
     #[test]
     fn validate_vmm_launch_spec_rejects_duplicate_guest_fd() {
         let mut config = base_vm_config();
-        config
-            .interfaces
-            .push(VmNetworkInterfaceConfig { mac: None });
-        config
-            .interfaces
-            .push(VmNetworkInterfaceConfig { mac: None });
+        config.interfaces.push(VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        });
+        config.interfaces.push(VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        });
 
         let resolved = vec![
             ResolvedNetworkInterface {
@@ -232,9 +235,10 @@ mod tests {
     #[test]
     fn validate_vmm_launch_spec_rejects_all_zero_mac() {
         let mut config = base_vm_config();
-        config
-            .interfaces
-            .push(VmNetworkInterfaceConfig { mac: None });
+        config.interfaces.push(VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        });
 
         let resolved = vec![ResolvedNetworkInterface {
             mac: [0, 0, 0, 0, 0, 0],
@@ -250,9 +254,10 @@ mod tests {
     #[test]
     fn validate_vmm_launch_spec_accepts_consistent_data() {
         let mut config = base_vm_config();
-        config
-            .interfaces
-            .push(VmNetworkInterfaceConfig { mac: None });
+        config.interfaces.push(VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        });
 
         let resolved = vec![ResolvedNetworkInterface {
             mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],

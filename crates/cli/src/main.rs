@@ -55,7 +55,10 @@ impl Cli {
             memory_mib: self.memory_mib,
             verbosity: self.verbose,
             interfaces: if self.net {
-                vec![capsa::VmNetworkInterfaceConfig { mac: None }]
+                vec![capsa::VmNetworkInterfaceConfig {
+                    mac: None,
+                    policy: None,
+                }]
             } else {
                 vec![]
             },
@@ -83,6 +86,7 @@ mod tests {
 
         assert_eq!(config.interfaces.len(), 1);
         assert_eq!(config.interfaces[0].mac, None);
+        assert_eq!(config.interfaces[0].policy, None);
     }
 
     #[test]

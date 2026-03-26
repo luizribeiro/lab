@@ -1,6 +1,7 @@
 use crate::dns::DnsCache;
 use crate::frame::parse::parse_ipv4_frame;
 
+use serde::{Deserialize, Serialize};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -56,6 +57,32 @@ impl DomainPattern {
             }
         }
     }
+
+    fn as_host_pattern(&self) -> String {
+        match self {
+            DomainPattern::Exact(host) => host.clone(),
+            DomainPattern::Wildcard(suffix) => format!("*.{suffix}"),
+        }
+    }
+}
+
+impl Serialize for DomainPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.as_host_pattern())
+    }
+}
+
+impl<'de> Deserialize<'de> for DomainPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        DomainPattern::parse(&raw).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,27 +124,27 @@ impl fmt::Display for DomainPatternParseError {
 
 impl std::error::Error for DomainPatternParseError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyAction {
     Allow,
     Deny,
     Log,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchCriteria {
     Any,
     Domain(DomainPattern),
     All(Vec<MatchCriteria>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyRule {
     pub action: PolicyAction,
     pub criteria: MatchCriteria,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkPolicy {
     pub default_action: PolicyAction,
     pub rules: Vec<PolicyRule>,

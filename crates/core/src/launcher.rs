@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 
-use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, VirtualSwitch};
+use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, VirtualSwitch};
 
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
@@ -165,9 +165,9 @@ impl NetworkRuntime {
 
             let guest_target_fd = FIRST_GUEST_NET_FD + index as i32;
             let mac = resolve_interface_mac(index, interface)?;
-
             let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
-            let gateway = GatewayStack::new(gateway_port, GatewayStackConfig::default()).await;
+            let gateway_config = gateway_config_for_interface(interface);
+            let gateway = GatewayStack::new(gateway_port, gateway_config).await;
             let gateway_task = tokio::spawn(async move { gateway.run().await });
 
             fd_remaps.push(capsa_sandbox::FdRemap {
@@ -235,6 +235,20 @@ fn resolve_interface_mac(index: usize, interface: &VmNetworkInterfaceConfig) -> 
             Ok(mac)
         }
         None => Ok(generate_mac(index)),
+    }
+}
+
+fn effective_interface_policy(interface: &VmNetworkInterfaceConfig) -> NetworkPolicy {
+    interface
+        .policy
+        .clone()
+        .unwrap_or_else(NetworkPolicy::deny_all)
+}
+
+fn gateway_config_for_interface(interface: &VmNetworkInterfaceConfig) -> GatewayStackConfig {
+    GatewayStackConfig {
+        policy: Some(effective_interface_policy(interface)),
+        ..GatewayStackConfig::default()
     }
 }
 
@@ -318,8 +332,9 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::vm_sandbox_spec;
-    use crate::{VmNetworkInterfaceConfig, VmConfig};
+    use super::{effective_interface_policy, gateway_config_for_interface, vm_sandbox_spec};
+    use crate::{VmConfig, VmNetworkInterfaceConfig};
+    use capsa_net::{DomainPattern, NetworkPolicy};
 
     fn sample_config() -> VmConfig {
         VmConfig {
@@ -346,8 +361,14 @@ mod tests {
     fn start_rejects_multiple_interfaces_before_spawning_sidecar() {
         let mut config = sample_config();
         config.interfaces = vec![
-            VmNetworkInterfaceConfig { mac: None },
-            VmNetworkInterfaceConfig { mac: None },
+            VmNetworkInterfaceConfig {
+                mac: None,
+                policy: None,
+            },
+            VmNetworkInterfaceConfig {
+                mac: None,
+                policy: None,
+            },
         ];
 
         let err = config.start().expect_err("start should fail validation");
@@ -358,7 +379,10 @@ mod tests {
 
     #[test]
     fn network_runtime_starts_and_stops_cleanly() {
-        let interfaces = vec![VmNetworkInterfaceConfig { mac: None }];
+        let interfaces = vec![VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        }];
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -381,7 +405,10 @@ mod tests {
     #[test]
     fn network_runtime_preserves_explicit_mac() {
         let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
-        let interfaces = vec![VmNetworkInterfaceConfig { mac: Some(mac) }];
+        let interfaces = vec![VmNetworkInterfaceConfig {
+            mac: Some(mac),
+            policy: None,
+        }];
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -401,7 +428,10 @@ mod tests {
 
     #[test]
     fn network_runtime_rejects_all_zero_mac() {
-        let interfaces = vec![VmNetworkInterfaceConfig { mac: Some([0; 6]) }];
+        let interfaces = vec![VmNetworkInterfaceConfig {
+            mac: Some([0; 6]),
+            policy: None,
+        }];
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -416,7 +446,10 @@ mod tests {
 
     #[test]
     fn network_runtime_starts_bridge_task() {
-        let interfaces = vec![VmNetworkInterfaceConfig { mac: None }];
+        let interfaces = vec![VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        }];
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -441,7 +474,10 @@ mod tests {
 
     #[test]
     fn release_guest_fds_drops_launcher_copy_after_spawn() {
-        let interfaces = vec![VmNetworkInterfaceConfig { mac: None }];
+        let interfaces = vec![VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        }];
         let mut ctx = super::NetworkRuntimeContext::start(&interfaces)
             .expect("network runtime context should start");
 
@@ -450,5 +486,56 @@ mod tests {
         assert!(ctx.network.guest_fds.is_empty());
 
         ctx.shutdown().expect("network runtime should shut down");
+    }
+
+    #[test]
+    fn missing_interface_policy_falls_back_to_deny_all() {
+        let interface = VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        };
+
+        assert_eq!(
+            effective_interface_policy(&interface),
+            NetworkPolicy::deny_all()
+        );
+    }
+
+    #[test]
+    fn explicit_interface_policy_is_preserved() {
+        let explicit_policy = NetworkPolicy::deny_all()
+            .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
+        let interface = VmNetworkInterfaceConfig {
+            mac: None,
+            policy: Some(explicit_policy.clone()),
+        };
+
+        assert_eq!(effective_interface_policy(&interface), explicit_policy);
+    }
+
+    #[test]
+    fn gateway_config_defaults_missing_interface_policy_to_deny_all() {
+        let interface = VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        };
+
+        let gateway_config = gateway_config_for_interface(&interface);
+
+        assert_eq!(gateway_config.policy, Some(NetworkPolicy::deny_all()));
+    }
+
+    #[test]
+    fn gateway_config_preserves_explicit_interface_policy() {
+        let explicit_policy = NetworkPolicy::deny_all()
+            .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
+        let interface = VmNetworkInterfaceConfig {
+            mac: None,
+            policy: Some(explicit_policy.clone()),
+        };
+
+        let gateway_config = gateway_config_for_interface(&interface);
+
+        assert_eq!(gateway_config.policy, Some(explicit_policy));
     }
 }

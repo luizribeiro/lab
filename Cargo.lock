@@ -136,6 +136,7 @@ dependencies = [
  "libc",
  "nix",
  "resolv-conf",
+ "serde",
  "smoltcp",
  "socket2 0.5.10",
  "tokio",
