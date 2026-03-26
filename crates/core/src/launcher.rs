@@ -228,7 +228,7 @@ fn create_unix_dgram_socketpair() -> Result<(OwnedFd, OwnedFd)> {
     Ok((left_owned, right_owned))
 }
 
-fn resolve_interface_mac(index: usize, interface: &NetworkInterfaceConfig) -> Result<[u8; 6]> {
+fn resolve_interface_mac(index: usize, interface: &VmNetworkInterfaceConfig) -> Result<[u8; 6]> {
     match interface.mac {
         Some(mac) => {
             ensure!(mac != [0; 6], "interface {index}: MAC address is all zeros");
@@ -319,7 +319,7 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::vm_sandbox_spec;
-    use crate::{NetworkInterfaceConfig, VmConfig};
+    use crate::{VmNetworkInterfaceConfig, VmConfig};
 
     fn sample_config() -> VmConfig {
         VmConfig {
@@ -346,8 +346,8 @@ mod tests {
     fn start_rejects_multiple_interfaces_before_spawning_sidecar() {
         let mut config = sample_config();
         config.interfaces = vec![
-            NetworkInterfaceConfig { mac: None },
-            NetworkInterfaceConfig { mac: None },
+            VmNetworkInterfaceConfig { mac: None },
+            VmNetworkInterfaceConfig { mac: None },
         ];
 
         let err = config.start().expect_err("start should fail validation");
