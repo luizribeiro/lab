@@ -4,6 +4,7 @@ members = [
   "crates/cli",
   "crates/core",
   "crates/net",
+  "crates/netd",
   "crates/sandbox",
   "crates/vmm",
 ]

@@ -146,6 +146,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsa-netd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capsa-core",
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "capsa-sandbox"
 version = "0.1.0"
 dependencies = [
