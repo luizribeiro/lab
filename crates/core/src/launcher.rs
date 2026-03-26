@@ -12,8 +12,8 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
 use crate::{
-    daemon::resolve::resolve_daemon_binary, ResolvedNetworkInterface, VmConfig,
-    VmNetworkInterfaceConfig, VmmLaunchSpec,
+    daemon::{resolve::resolve_daemon_binary, vmm::args::encode_launch_spec_args},
+    ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec,
 };
 
 use self::interface_plan::{
@@ -45,9 +45,7 @@ impl VmConfig {
                 .unwrap_or_default(),
         };
 
-        let launch_spec_json =
-            serde_json::to_string(&launch_spec).context("failed to serialize VMM launch spec")?;
-        let child_args = vec!["--launch-spec-json".to_string(), launch_spec_json];
+        let child_args = encode_launch_spec_args(&launch_spec)?;
 
         let child = {
             if let Some(runtime) = network_runtime.as_ref() {

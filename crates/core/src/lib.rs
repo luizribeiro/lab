@@ -1,6 +1,6 @@
 mod boot;
 mod config;
-mod daemon;
+pub mod daemon;
 mod launcher;
 mod libkrun;
 mod runtime;

@@ -131,7 +131,7 @@ impl KernelCmdline {
 #[cfg(test)]
 mod tests {
     use super::{effective_kernel_cmdline, network_call_params, validate_vmm_launch_spec};
-    use crate::{ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig};
+    use crate::{daemon::vmm::spec::ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig};
 
     fn base_vm_config() -> VmConfig {
         VmConfig {
