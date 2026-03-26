@@ -61,10 +61,30 @@ impl SandboxedChild {
         }
     }
 
-    pub fn wait(mut self) -> std::io::Result<ExitStatus> {
-        let status = self.child.wait();
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        let status = self.child.try_wait()?;
+        if status.is_some() {
+            self.cleanup_now();
+        }
+        Ok(status)
+    }
+
+    /// Sends a kill signal to the child process.
+    ///
+    /// This does not reap the child. Call `wait_blocking()` (or `try_wait()` until
+    /// it returns `Some`) to avoid leaving a zombie process.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
+
+    pub fn wait_blocking(&mut self) -> std::io::Result<ExitStatus> {
+        let status = self.child.wait()?;
         self.cleanup_now();
-        status
+        Ok(status)
+    }
+
+    pub fn wait(mut self) -> std::io::Result<ExitStatus> {
+        self.wait_blocking()
     }
 
     fn cleanup_now(&mut self) {
@@ -81,6 +101,7 @@ impl SandboxedChild {
 
 impl Drop for SandboxedChild {
     fn drop(&mut self) {
+        let _ = self.child.try_wait();
         self.cleanup_now();
     }
 }
@@ -272,6 +293,7 @@ mod tests {
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::path::Path;
+    use std::process::Command;
 
     use super::{spawn_direct_with_fds, validate_fd_remaps, FdRemap};
 
@@ -396,6 +418,145 @@ mod tests {
 
         let status = child.wait().expect("failed waiting for child");
         assert!(status.success());
+    }
+
+    #[test]
+    fn try_wait_returns_none_while_child_running() {
+        let mut child = spawn_sleep_child(5, vec![]);
+
+        let status = child.try_wait().expect("try_wait should succeed");
+        assert!(status.is_none(), "child should still be running");
+
+        child.kill().expect("kill should succeed");
+        let _ = child.wait_blocking().expect("wait_blocking should succeed");
+    }
+
+    #[test]
+    fn try_wait_returns_some_and_cleans_up_paths() {
+        let temp = tempfile::tempdir().expect("failed to create temp dir");
+        let cleanup_file = temp.path().join("cleanup-on-try-wait");
+        std::fs::write(&cleanup_file, b"x").expect("failed to create cleanup file");
+
+        let mut child = spawn_quick_exit_child(vec![cleanup_file.clone()]);
+
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("try_wait should succeed") {
+                break status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        assert!(status.success(), "child should exit successfully");
+        assert!(
+            !cleanup_file.exists(),
+            "cleanup file should be removed once try_wait observes exit"
+        );
+    }
+
+    #[test]
+    fn kill_then_wait_blocking_reaps_child() {
+        let mut child = spawn_sleep_child(30, vec![]);
+
+        child.kill().expect("kill should succeed");
+        let status = child
+            .wait_blocking()
+            .expect("wait_blocking should reap killed child");
+        assert!(
+            !status.success(),
+            "killed child should not exit successfully"
+        );
+    }
+
+    #[test]
+    fn cleanup_paths_are_removed_after_wait_blocking() {
+        let temp = tempfile::tempdir().expect("failed to create temp dir");
+        let cleanup_file = temp.path().join("cleanup.file");
+        let cleanup_dir = temp.path().join("cleanup-dir");
+
+        std::fs::write(&cleanup_file, b"x").expect("failed to create cleanup file");
+        std::fs::create_dir_all(&cleanup_dir).expect("failed to create cleanup dir");
+
+        let mut child = spawn_quick_exit_child(vec![cleanup_file.clone(), cleanup_dir.clone()]);
+        let status = child.wait_blocking().expect("wait_blocking should succeed");
+        assert!(status.success(), "child should exit successfully");
+
+        assert!(!cleanup_file.exists(), "cleanup file should be removed");
+        assert!(!cleanup_dir.exists(), "cleanup dir should be removed");
+    }
+
+    #[test]
+    fn cleanup_paths_are_removed_on_drop_after_try_wait_or_kill() {
+        let temp = tempfile::tempdir().expect("failed to create temp dir");
+
+        let try_wait_path = temp.path().join("cleanup-after-try-wait");
+        std::fs::write(&try_wait_path, b"x").expect("failed to create cleanup file");
+        let try_wait_pid = {
+            let mut child = spawn_sleep_child(30, vec![try_wait_path.clone()]);
+            let status = child.try_wait().expect("try_wait should succeed");
+            assert!(status.is_none(), "child should still be running");
+            let pid = child.child.id() as libc::pid_t;
+            drop(child);
+            pid
+        };
+        assert!(
+            !try_wait_path.exists(),
+            "cleanup file should be removed when child is dropped after try_wait"
+        );
+
+        // SAFETY: pid comes from a child process spawned in this test process.
+        let kill_rc = unsafe { libc::kill(try_wait_pid, libc::SIGKILL) };
+        assert_eq!(
+            kill_rc, 0,
+            "kill should succeed after dropping child handle"
+        );
+        // SAFETY: pid comes from a child process spawned in this test process.
+        let wait_rc = unsafe { libc::waitpid(try_wait_pid, std::ptr::null_mut(), 0) };
+        assert_eq!(
+            wait_rc, try_wait_pid,
+            "waitpid should reap child dropped after try_wait"
+        );
+
+        let kill_path = temp.path().join("cleanup-after-kill");
+        std::fs::write(&kill_path, b"x").expect("failed to create cleanup file");
+        let pid = {
+            let mut child = spawn_sleep_child(30, vec![kill_path.clone()]);
+            child.kill().expect("kill should succeed");
+            let pid = child.child.id() as libc::pid_t;
+            drop(child);
+            pid
+        };
+
+        assert!(
+            !kill_path.exists(),
+            "cleanup file should be removed when child is dropped after kill"
+        );
+
+        // SAFETY: pid comes from a child process spawned in this test process.
+        let rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        assert_eq!(rc, pid, "waitpid should reap killed child after drop");
+    }
+
+    fn spawn_sleep_child(
+        seconds: u64,
+        cleanup_paths: Vec<std::path::PathBuf>,
+    ) -> super::SandboxedChild {
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("sleep {seconds}"))
+            .spawn()
+            .expect("failed to spawn sleep child");
+
+        super::SandboxedChild::new(child, cleanup_paths)
+    }
+
+    fn spawn_quick_exit_child(cleanup_paths: Vec<std::path::PathBuf>) -> super::SandboxedChild {
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("failed to spawn quick-exit child");
+
+        super::SandboxedChild::new(child, cleanup_paths)
     }
 
     fn create_pipe() -> (OwnedFd, std::fs::File) {
