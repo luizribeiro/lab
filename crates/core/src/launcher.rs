@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
 
@@ -10,9 +10,10 @@ use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolic
 use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
-use crate::{ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec};
-
-const FIRST_GUEST_NET_FD: i32 = 100;
+use crate::{
+    daemon::{constants::VMM_NET_FD_START, resolve::resolve_daemon_binary},
+    ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec,
+};
 
 impl VmConfig {
     /// Start the VM in the sandboxed sidecar process.
@@ -163,7 +164,7 @@ impl NetworkRuntime {
             let (host_fd, guest_fd) = create_unix_dgram_socketpair()
                 .with_context(|| format!("failed to create socketpair for interface {index}"))?;
 
-            let guest_target_fd = FIRST_GUEST_NET_FD + index as i32;
+            let guest_target_fd = VMM_NET_FD_START + index as i32;
             let mac = resolve_interface_mac(index, interface)?;
             let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
             let gateway_config = gateway_config_for_interface(interface);
@@ -295,39 +296,8 @@ fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxS
     spec
 }
 
-fn resolve_vmm_binary() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("CAPSA_VMM_PATH") {
-        let candidate = PathBuf::from(path);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        let sibling = current_exe.with_file_name("capsa-vmm");
-        if sibling.exists() {
-            return Ok(sibling);
-        }
-    }
-
-    if let Some(in_path) = find_in_path("capsa-vmm") {
-        return Ok(in_path);
-    }
-
-    anyhow::bail!(
-        "unable to locate capsa-vmm sidecar. Build/install it (e.g. `cargo build --bins`) and optionally set CAPSA_VMM_PATH"
-    )
-}
-
-fn find_in_path(binary_name: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(binary_name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+fn resolve_vmm_binary() -> Result<std::path::PathBuf> {
+    resolve_daemon_binary("capsa-vmm", "CAPSA_VMM_PATH")
 }
 
 #[cfg(test)]
