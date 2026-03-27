@@ -15,5 +15,7 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+tokio.workspace = true
 fittings = { path = "../fittings" }
 trybuild = "1"

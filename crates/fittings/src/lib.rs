@@ -1,5 +1,8 @@
 pub const FITTINGS_PROTOCOL_VERSION: &str = "1";
 
+pub use async_trait;
+pub use serde_json;
+
 pub use fittings_core as core;
 pub use fittings_server as server;
 pub use fittings_spawn as spawn;
