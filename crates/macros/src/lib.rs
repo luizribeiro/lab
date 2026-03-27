@@ -1,6 +1,15 @@
-//! Compile-test harness crate for fittings proc macros.
+use proc_macro::TokenStream;
 
-/// Small helper used by compile tests to ensure fixtures resolve this crate.
-pub fn ui_helper(value: u32) -> u32 {
-    value
+mod expand;
+mod parse;
+
+#[proc_macro_attribute]
+pub fn service(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr_tokens = proc_macro2::TokenStream::from(attr);
+    let item_tokens = proc_macro2::TokenStream::from(item);
+
+    match parse::parse_service(attr_tokens, item_tokens) {
+        Ok(parsed) => expand::expand_service(parsed).into(),
+        Err(error) => error.to_compile_error().into(),
+    }
 }

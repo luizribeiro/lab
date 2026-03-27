@@ -1,4 +1,4 @@
 #[fittings::service]
-trait MinimalService {}
+struct NotATrait;
 
 fn main() {}

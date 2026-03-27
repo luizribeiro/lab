@@ -1,4 +1,4 @@
 #[fittings::service]
-trait MinimalService {}
+fn not_a_trait() {}
 
 fn main() {}

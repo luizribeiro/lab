@@ -1,0 +1,5 @@
+error: `#[fittings::service]` does not accept arguments
+ --> tests/ui/fail/on_attr_args.rs:1:21
+  |
+1 | #[fittings::service(name = "hello")]
+  |                     ^^^^

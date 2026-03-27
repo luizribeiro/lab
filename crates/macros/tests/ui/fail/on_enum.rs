@@ -1,4 +1,6 @@
 #[fittings::service]
-trait MinimalService {}
+enum NotATrait {
+    A,
+}
 
 fn main() {}

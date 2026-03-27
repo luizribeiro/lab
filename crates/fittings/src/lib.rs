@@ -13,6 +13,7 @@ pub use fittings_core::{
     service::Service,
     transport::{Connector, Listener, Transport},
 };
+pub use fittings_macros::service;
 pub use fittings_server::{MethodRouter, RouterService, Server};
 pub use fittings_spawn::{
     detect_mode, parse_server_config, validate_service_schema, ConfigError, MethodSchema,

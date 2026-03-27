@@ -30,6 +30,7 @@ name = "fittings"
 version = "0.1.0"
 dependencies = [
  "fittings-core",
+ "fittings-macros",
  "fittings-server",
  "fittings-spawn",
  "fittings-transport",
@@ -50,6 +51,10 @@ dependencies = [
 name = "fittings-macros"
 version = "0.1.0"
 dependencies = [
+ "fittings",
+ "proc-macro2",
+ "quote",
+ "syn",
  "trybuild",
 ]
 

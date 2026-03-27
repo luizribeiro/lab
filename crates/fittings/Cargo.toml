@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 fittings-core = { path = "../core" }
+fittings-macros = { path = "../macros" }
 fittings-server = { path = "../server" }
 fittings-spawn = { path = "../spawn" }
 fittings-transport = { path = "../transport" }
