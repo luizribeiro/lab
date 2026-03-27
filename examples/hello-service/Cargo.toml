@@ -11,3 +11,7 @@ async-trait.workspace = true
 fittings = { path = "../../crates/fittings" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "spawn_smoke"
+path = "../../tests/spawn_smoke.rs"
