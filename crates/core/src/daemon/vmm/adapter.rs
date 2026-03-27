@@ -69,6 +69,7 @@ impl DaemonAdapter for VmmDaemonAdapter {
             args,
             sandbox: vmm_sandbox_spec(&spec.vm_config, binary_path),
             fd_remaps,
+            stdin_null: false,
         })
     }
 
@@ -199,6 +200,7 @@ mod tests {
             VmmDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-vmm"))
                 .expect("spawn spec should build");
 
+        assert!(!spawn_spec.stdin_null);
         assert_eq!(spawn_spec.fd_remaps.len(), 1);
         assert_eq!(spawn_spec.fd_remaps[0].target_fd, 100);
         assert_ne!(spawn_spec.fd_remaps[0].source_fd, 100);

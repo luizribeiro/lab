@@ -16,6 +16,8 @@ pub struct DaemonSpawnSpec {
     pub args: Vec<String>,
     pub sandbox: SandboxSpec,
     pub fd_remaps: Vec<FdRemap>,
+    /// When true, daemon stdin is detached from caller TTY (`/dev/null`).
+    pub stdin_null: bool,
 }
 
 pub trait DaemonReadiness {

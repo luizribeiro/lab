@@ -32,6 +32,7 @@ pub(crate) trait SpawnBackend: Send + Sync + 'static {
         args: &[String],
         sandbox: &capsa_sandbox::SandboxSpec,
         fd_remaps: &[capsa_sandbox::FdRemap],
+        stdin_null: bool,
     ) -> Result<capsa_sandbox::SandboxedChild>;
 }
 
@@ -45,8 +46,9 @@ impl SpawnBackend for SandboxedSpawnBackend {
         args: &[String],
         sandbox: &capsa_sandbox::SandboxSpec,
         fd_remaps: &[capsa_sandbox::FdRemap],
+        stdin_null: bool,
     ) -> Result<capsa_sandbox::SandboxedChild> {
-        capsa_sandbox::spawn_sandboxed_with_fds(program, args, sandbox, fd_remaps)
+        capsa_sandbox::spawn_sandboxed_with_fds(program, args, sandbox, fd_remaps, stdin_null)
             .with_context(|| format!("failed to spawn daemon binary {}", program.display()))
     }
 }
@@ -142,6 +144,7 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
                 &spawn_spec.args,
                 &spawn_spec.sandbox,
                 &spawn_spec.fd_remaps,
+                spawn_spec.stdin_null,
             )
             .with_context(|| format!("failed to spawn {} daemon", binary_info.daemon_name));
 
@@ -419,13 +422,14 @@ mod tests {
             args: &[String],
             sandbox: &capsa_sandbox::SandboxSpec,
             fd_remaps: &[capsa_sandbox::FdRemap],
+            stdin_null: bool,
         ) -> Result<capsa_sandbox::SandboxedChild> {
             match self.mode {
                 BackendMode::SpawnError => anyhow::bail!("backend spawn error"),
-                BackendMode::SpawnSleep => {
-                    capsa_sandbox::spawn_sandboxed_with_fds(program, args, sandbox, fd_remaps)
-                        .context("fake backend failed to spawn")
-                }
+                BackendMode::SpawnSleep => capsa_sandbox::spawn_sandboxed_with_fds(
+                    program, args, sandbox, fd_remaps, stdin_null,
+                )
+                .context("fake backend failed to spawn"),
             }
         }
     }
@@ -527,6 +531,7 @@ mod tests {
                 args: vec!["-c".into(), "while true; do :; done".into()],
                 sandbox: capsa_sandbox::SandboxSpec::default(),
                 fd_remaps: vec![],
+                stdin_null: false,
             })
         }
 

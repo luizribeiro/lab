@@ -13,6 +13,12 @@ use super::{args::encode_launch_spec_args, spec::NetLaunchSpec};
 
 const READY_SIGNAL: u8 = b'R';
 const MIN_REMAP_SOURCE_FD: i32 = 1000;
+const NETD_RUNTIME_READ_PATHS: &[&str] = &[
+    "/etc/resolv.conf",
+    "/proc/self/cgroup",
+    "/proc/stat",
+    "/sys/devices/system/cpu/online",
+];
 
 pub struct NetDaemonAdapter;
 
@@ -152,12 +158,13 @@ impl DaemonAdapter for NetDaemonAdapter {
         sandbox.read_only_paths.push(binary_path.to_path_buf());
         sandbox
             .read_only_paths
-            .push(std::path::PathBuf::from("/etc/resolv.conf"));
+            .extend(NETD_RUNTIME_READ_PATHS.iter().map(std::path::PathBuf::from));
 
         Ok(DaemonSpawnSpec {
             args: encode_launch_spec_args(spec)?,
             sandbox,
             fd_remaps,
+            stdin_null: true,
         })
     }
 
@@ -266,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn netd_sandbox_enables_network_and_includes_resolver_path() {
+    fn netd_sandbox_enables_network_and_includes_runtime_read_paths() {
         let spec = sample_spec();
         let (ready_r, ready_w) = pipe();
         let handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
@@ -281,10 +288,17 @@ mod tests {
             .sandbox
             .read_only_paths
             .contains(&std::path::PathBuf::from("/tmp/capsa-netd")));
-        assert!(spawn_spec
-            .sandbox
-            .read_only_paths
-            .contains(&std::path::PathBuf::from("/etc/resolv.conf")));
+        for required_path in [
+            "/etc/resolv.conf",
+            "/proc/self/cgroup",
+            "/proc/stat",
+            "/sys/devices/system/cpu/online",
+        ] {
+            assert!(spawn_spec
+                .sandbox
+                .read_only_paths
+                .contains(&std::path::PathBuf::from(required_path)));
+        }
     }
 
     #[test]
@@ -298,6 +312,7 @@ mod tests {
             NetDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-netd"))
                 .expect("spawn spec should build");
 
+        assert!(spawn_spec.stdin_null);
         assert_eq!(spawn_spec.fd_remaps.len(), 2);
         assert!(spawn_spec
             .fd_remaps

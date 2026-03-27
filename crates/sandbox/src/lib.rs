@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 
 use anyhow::{ensure, Context, Result};
 
@@ -118,7 +118,7 @@ pub fn spawn_sandboxed(
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
-    spawn_sandboxed_with_fds(program, args, spec, &[])
+    spawn_sandboxed_with_fds(program, args, spec, &[], false)
 }
 
 #[cfg(target_os = "linux")]
@@ -127,7 +127,7 @@ pub fn spawn_sandboxed(
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
-    spawn_sandboxed_with_fds(program, args, spec, &[])
+    spawn_sandboxed_with_fds(program, args, spec, &[], false)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -145,15 +145,16 @@ pub fn spawn_sandboxed_with_fds(
     args: &[String],
     spec: &SandboxSpec,
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     validate_fd_remaps(fd_remaps)?;
 
     if sandbox_disabled() {
         eprintln!("warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox");
-        return spawn_direct_with_fds(program, args, fd_remaps);
+        return spawn_direct_with_fds(program, args, fd_remaps, stdin_null);
     }
 
-    darwin::spawn_with_sandbox_exec(program, args, spec, fd_remaps)
+    darwin::spawn_with_sandbox_exec(program, args, spec, fd_remaps, stdin_null)
 }
 
 #[cfg(target_os = "linux")]
@@ -162,15 +163,16 @@ pub fn spawn_sandboxed_with_fds(
     args: &[String],
     spec: &SandboxSpec,
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     validate_fd_remaps(fd_remaps)?;
 
     if sandbox_disabled() {
         eprintln!("warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox");
-        return spawn_direct_with_fds(program, args, fd_remaps);
+        return spawn_direct_with_fds(program, args, fd_remaps, stdin_null);
     }
 
-    linux::spawn_with_syd(program, args, spec, fd_remaps)
+    linux::spawn_with_syd(program, args, spec, fd_remaps, stdin_null)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -179,6 +181,7 @@ pub fn spawn_sandboxed_with_fds(
     _args: &[String],
     _spec: &SandboxSpec,
     _fd_remaps: &[FdRemap],
+    _stdin_null: bool,
 ) -> Result<SandboxedChild> {
     anyhow::bail!("sandboxing is not implemented for this platform")
 }
@@ -276,9 +279,13 @@ fn spawn_direct_with_fds(
     program: &Path,
     args: &[String],
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     let mut command = Command::new(program);
     command.args(args);
+    if stdin_null {
+        command.stdin(Stdio::null());
+    }
     configure_fd_remaps(&mut command, fd_remaps);
 
     let child = command
@@ -413,6 +420,7 @@ mod tests {
                 source_fd: read_end.as_raw_fd(),
                 target_fd: 101,
             }],
+            false,
         )
         .expect("failed to spawn child");
 

@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -19,6 +19,7 @@ pub fn spawn_with_sandbox_exec(
     args: &[String],
     spec: &SandboxSpec,
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     let private_tmp = create_private_tmp_dir()?;
 
@@ -27,6 +28,9 @@ pub fn spawn_with_sandbox_exec(
     let profile_path = write_temp_profile(&profile)?;
 
     let mut command = Command::new("/usr/bin/sandbox-exec");
+    if stdin_null {
+        command.stdin(Stdio::null());
+    }
     command
         .arg("-f")
         .arg(&profile_path)

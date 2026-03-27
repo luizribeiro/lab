@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
@@ -13,6 +13,7 @@ pub fn spawn_with_syd(
     args: &[String],
     spec: &SandboxSpec,
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     let syd = find_in_path("syd").ok_or_else(|| {
         anyhow::anyhow!(
@@ -20,7 +21,7 @@ pub fn spawn_with_syd(
         )
     })?;
 
-    spawn_with_syd_binary(&syd, program, args, spec, fd_remaps)
+    spawn_with_syd_binary(&syd, program, args, spec, fd_remaps, stdin_null)
 }
 
 fn spawn_with_syd_binary(
@@ -29,9 +30,13 @@ fn spawn_with_syd_binary(
     args: &[String],
     spec: &SandboxSpec,
     fd_remaps: &[FdRemap],
+    stdin_null: bool,
 ) -> Result<SandboxedChild> {
     let private_tmp = create_private_tmp_dir()?;
     let mut command = Command::new(syd);
+    if stdin_null {
+        command.stdin(Stdio::null());
+    }
 
     for rule in syd_rules(program, spec, &private_tmp) {
         command.arg("-m").arg(rule);
