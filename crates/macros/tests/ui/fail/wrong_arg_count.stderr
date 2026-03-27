@@ -1,0 +1,5 @@
+error: service methods must have signature `async fn name(&self, params: P) -> Result<R, FittingsError>`
+ --> tests/ui/fail/wrong_arg_count.rs:3:20
+  |
+3 |     async fn hello(&self) -> Result<(), fittings::FittingsError>;
+  |                    ^

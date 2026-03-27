@@ -1,0 +1,5 @@
+error: service methods must be declared as `async fn`
+ --> tests/ui/fail/non_async_method.rs:3:5
+  |
+3 |     fn hello(&self, params: ()) -> Result<(), fittings::FittingsError>;
+  |     ^^

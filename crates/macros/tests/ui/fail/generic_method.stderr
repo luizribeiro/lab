@@ -1,0 +1,5 @@
+error: service methods cannot declare generic parameters
+ --> tests/ui/fail/generic_method.rs:3:19
+  |
+3 |     async fn hello<T>(&self, params: T) -> Result<(), fittings::FittingsError>;
+  |                   ^

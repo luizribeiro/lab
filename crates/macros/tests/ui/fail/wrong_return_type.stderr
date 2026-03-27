@@ -1,0 +1,5 @@
+error: service methods must return `Result<R, FittingsError>`
+ --> tests/ui/fail/wrong_return_type.rs:3:42
+  |
+3 |     async fn hello(&self, params: ()) -> ();
+  |                                          ^^
