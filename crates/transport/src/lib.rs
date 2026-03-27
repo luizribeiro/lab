@@ -1,4 +1,5 @@
 pub mod stdio;
+pub mod tcp;
 
 pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 

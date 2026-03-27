@@ -25,7 +25,10 @@ pub use fittings_spawn::{
     detect_mode, parse_server_config, validate_service_schema, ConfigError, MethodSchema,
     RunOutcome, SchemaValidationError, ServiceSchema, SpawnMode, SpawnModeError, SpawnRunner,
 };
-pub use fittings_transport::stdio::{from_process_stdio, StdioTransport};
+pub use fittings_transport::{
+    stdio::{from_process_stdio, StdioTransport},
+    tcp::{accept_one, connect_to_address, TcpConnector, TcpTransport},
+};
 pub use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError, WireEncodeError},
     error_map::{from_error_envelope, to_error_envelope},

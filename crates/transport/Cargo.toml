@@ -9,4 +9,4 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 fittings-core = { path = "../core" }
-tokio = { workspace = true, features = ["io-std"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "net"] }
