@@ -49,6 +49,16 @@ dependencies = [
 [[package]]
 name = "fittings-spawn"
 version = "0.1.0"
+dependencies = [
+ "fittings-core",
+ "fittings-server",
+ "fittings-transport",
+ "fittings-wire",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "fittings-testkit"
