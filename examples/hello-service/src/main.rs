@@ -1,5 +1,6 @@
 use std::process;
 
+use clap::{error::ErrorKind, Parser};
 use fittings::{accept_one, FittingsError, RouterService, RunOutcome, Server, SpawnRunner};
 use hello_api::{
     hello_service_schema, into_hello_service_router, HelloParams, HelloResult, HelloService,
@@ -8,15 +9,16 @@ use hello_api::{
 use tokio::net::TcpListener;
 
 const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:7000";
-const NORMAL_USAGE: &str = "Usage: hello-service [--bind <addr>]\n\
-Runs a single-connection TCP server in normal mode.\n\
-Default bind address: 127.0.0.1:7000\n\
-Set FITTINGS=1 to use schema/serve stdio mode.";
 
-#[derive(Debug, PartialEq, Eq)]
-enum NormalArgs {
-    Run { bind_address: String },
-    Help,
+#[derive(Debug, Parser)]
+#[command(
+    name = "hello-service",
+    about = "Hello service. Normal mode runs a single-connection TCP server.",
+    after_help = "Set FITTINGS=1 to use schema/serve stdio mode."
+)]
+struct NormalCli {
+    #[arg(long = "bind", default_value = DEFAULT_BIND_ADDRESS)]
+    bind_address: String,
 }
 
 struct HelloServiceImpl;
@@ -33,44 +35,25 @@ impl HelloService for HelloServiceImpl {
     }
 }
 
-fn parse_normal_args(args: &[String]) -> Result<NormalArgs, String> {
-    let mut bind_address = DEFAULT_BIND_ADDRESS.to_string();
-
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--bind" => {
-                let value = iter
-                    .next()
-                    .ok_or_else(|| format!("--bind requires an address\n{NORMAL_USAGE}"))?;
-                bind_address = value.clone();
-            }
-            "-h" | "--help" => return Ok(NormalArgs::Help),
-            flag if flag.starts_with('-') => {
-                return Err(format!("unknown flag: {flag}\n{NORMAL_USAGE}"));
-            }
-            value => {
-                return Err(format!("unexpected argument: {value}\n{NORMAL_USAGE}"));
-            }
-        }
-    }
-
-    Ok(NormalArgs::Run { bind_address })
-}
-
 async fn run_normal_mode(args: &[String]) -> Result<(), String> {
-    let parsed = parse_normal_args(args)?;
-    let bind_address = match parsed {
-        NormalArgs::Help => {
-            println!("{NORMAL_USAGE}");
+    let argv = std::iter::once("hello-service".to_string()).chain(args.iter().cloned());
+    let cli = match NormalCli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            print!("{error}");
             return Ok(());
         }
-        NormalArgs::Run { bind_address } => bind_address,
+        Err(error) => return Err(error.to_string()),
     };
 
-    let listener = TcpListener::bind(&bind_address)
+    let listener = TcpListener::bind(&cli.bind_address)
         .await
-        .map_err(|error| format!("failed to bind {bind_address}: {error}"))?;
+        .map_err(|error| format!("failed to bind {}: {error}", cli.bind_address))?;
     println!(
         "hello-service listening on {} (single connection)",
         listener
@@ -115,9 +98,9 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_normal_args, HelloServiceImpl, NormalArgs, DEFAULT_BIND_ADDRESS, NORMAL_USAGE,
-    };
+    use clap::Parser;
+
+    use super::{HelloServiceImpl, NormalCli, DEFAULT_BIND_ADDRESS};
     use fittings::{FittingsError, MethodRouter};
     use hello_api::{
         hello_service_schema, into_hello_service_router, HelloParams, HelloService, PingParams,
@@ -125,50 +108,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parse_normal_args_defaults_bind_address() {
-        let parsed = parse_normal_args(&[]).expect("args should parse");
-        assert!(matches!(
-            parsed,
-            NormalArgs::Run { bind_address } if bind_address == DEFAULT_BIND_ADDRESS
-        ));
+    fn normal_cli_defaults_bind_address() {
+        let cli = NormalCli::parse_from(["hello-service"]);
+        assert_eq!(cli.bind_address, DEFAULT_BIND_ADDRESS);
     }
 
     #[test]
-    fn parse_normal_args_accepts_bind_address() {
-        let parsed = parse_normal_args(&["--bind".to_string(), "127.0.0.1:0".to_string()])
-            .expect("args should parse");
-
-        assert!(matches!(
-            parsed,
-            NormalArgs::Run { bind_address } if bind_address == "127.0.0.1:0"
-        ));
+    fn normal_cli_accepts_bind_address() {
+        let cli = NormalCli::parse_from(["hello-service", "--bind", "127.0.0.1:0"]);
+        assert_eq!(cli.bind_address, "127.0.0.1:0");
     }
 
     #[test]
-    fn parse_normal_args_supports_help() {
-        let parsed = parse_normal_args(&["--help".to_string()]).expect("help should parse");
-        assert!(matches!(parsed, NormalArgs::Help));
-    }
-
-    #[test]
-    fn parse_normal_args_rejects_missing_bind_value_with_usage() {
-        let error = parse_normal_args(&["--bind".to_string()]).expect_err("should fail");
-        assert!(error.contains("--bind requires an address"));
-        assert!(error.contains(NORMAL_USAGE));
-    }
-
-    #[test]
-    fn parse_normal_args_rejects_unknown_flag_with_usage() {
-        let error = parse_normal_args(&["--unknown".to_string()]).expect_err("should fail");
-        assert!(error.contains("unknown flag"));
-        assert!(error.contains(NORMAL_USAGE));
-    }
-
-    #[test]
-    fn parse_normal_args_rejects_unexpected_positional_argument() {
-        let error = parse_normal_args(&["Ada".to_string()]).expect_err("should fail");
-        assert!(error.contains("unexpected argument"));
-        assert!(error.contains(NORMAL_USAGE));
+    fn normal_cli_rejects_unknown_flag() {
+        let err = NormalCli::try_parse_from(["hello-service", "--unknown"]).expect_err("fail");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[tokio::test]
