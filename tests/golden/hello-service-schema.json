@@ -1,0 +1,75 @@
+{
+  "name": "hello-service",
+  "methods": [
+    {
+      "name": "hello",
+      "description": "Greets the provided name",
+      "params_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "HelloParams",
+        "type": "object"
+      },
+      "result_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "HelloResult",
+        "type": "object"
+      }
+    },
+    {
+      "name": "ping",
+      "description": "Health check",
+      "params_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "title": "PingParams",
+        "type": "object"
+      },
+      "result_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PingResult",
+        "type": "object"
+      }
+    }
+  ],
+  "config_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "log_level": {
+        "enum": [
+          "trace",
+          "debug",
+          "info",
+          "warn",
+          "error"
+        ],
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}

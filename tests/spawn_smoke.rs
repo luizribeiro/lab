@@ -1,6 +1,8 @@
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use fittings::{validate_service_schema, FittingsError};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,6 +23,33 @@ trait SpawnHelloClientService {
         &self,
         params: SpawnHelloParams,
     ) -> Result<SpawnHelloResult, fittings::FittingsError>;
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct MissingNameParams {}
+
+#[fittings::service]
+trait SpawnHelloInvalidParamsClientService {
+    async fn hello(
+        &self,
+        params: MissingNameParams,
+    ) -> Result<SpawnHelloResult, fittings::FittingsError>;
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct MissingMethodParams {}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct MissingMethodResult {
+    ok: bool,
+}
+
+#[fittings::service]
+trait SpawnHelloUnknownMethodClientService {
+    async fn missing(
+        &self,
+        params: MissingMethodParams,
+    ) -> Result<MissingMethodResult, fittings::FittingsError>;
 }
 
 fn hello_service_bin() -> &'static str {
@@ -93,17 +122,64 @@ async fn generated_typed_client_spawn_with_config_roundtrip_succeeds() {
     assert_eq!(result.message, "Hello, Grace!");
 }
 
+#[tokio::test]
+async fn generated_typed_client_surfaces_service_side_invalid_params() {
+    let client = SpawnHelloInvalidParamsClientServiceClient::spawn(hello_service_bin())
+        .await
+        .expect("spawned generated client should connect");
+
+    let error = client
+        .hello(MissingNameParams {})
+        .await
+        .expect_err("service should reject params shape");
+
+    assert!(matches!(
+        error,
+        FittingsError::InvalidParams(message) if message.contains("name")
+    ));
+}
+
+#[tokio::test]
+async fn generated_typed_client_surfaces_unknown_method_errors() {
+    let client = SpawnHelloUnknownMethodClientServiceClient::spawn(hello_service_bin())
+        .await
+        .expect("spawned generated client should connect");
+
+    let error = client
+        .missing(MissingMethodParams {})
+        .await
+        .expect_err("service should reject unknown method");
+
+    assert!(matches!(
+        error,
+        FittingsError::MethodNotFound(message) if message == "missing"
+    ));
+}
+
 #[test]
-fn fittings_schema_emits_valid_schema_json() {
+fn fittings_schema_matches_golden_and_is_rfc_compatible() {
     let output = run_fittings_command(&["schema"], None);
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
 
-    let schema: Value = serde_json::from_slice(&output.stdout).expect("valid schema JSON");
-    assert!(schema.is_object());
-    assert_eq!(schema["name"], "hello-service");
-    assert!(schema["methods"].is_array());
+    let schema_value: Value = serde_json::from_slice(&output.stdout).expect("valid schema JSON");
+    let schema: fittings::ServiceSchema =
+        serde_json::from_value(schema_value.clone()).expect("schema should decode");
+    validate_service_schema(&schema).expect("schema should satisfy RFC constraints");
+
+    let fixture_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/hello-service-schema.json");
+    let fixture_text = std::fs::read_to_string(&fixture_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read schema fixture `{}`: {error}",
+            fixture_path.display()
+        )
+    });
+    let fixture_value: Value =
+        serde_json::from_str(&fixture_text).expect("schema fixture must be valid JSON");
+
+    assert_eq!(schema_value, fixture_value);
 }
 
 #[test]
