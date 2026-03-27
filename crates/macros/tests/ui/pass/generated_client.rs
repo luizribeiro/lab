@@ -48,7 +48,7 @@ fn main() {
     let _spawn_with_config_future =
         HelloServiceClient::spawn_with_config("hello-service", fittings::serde_json::json!({}));
     let _hello = HelloServiceClient::<DummyConnector>::hello;
-    let _run_main = run_hello_service_main::<DummyServiceImpl>;
+    let _main_future = DummyServiceImpl.main();
 }
 
 struct DummyServiceImpl;

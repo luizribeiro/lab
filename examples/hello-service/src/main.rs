@@ -1,9 +1,7 @@
 use std::process;
 
 use fittings::FittingsError;
-use hello_api::{
-    run_hello_service_main, HelloParams, HelloResult, HelloService, PingParams, PingResult,
-};
+use hello_api::{HelloParams, HelloResult, HelloService, PingParams, PingResult};
 
 struct HelloServiceImpl;
 
@@ -21,7 +19,7 @@ impl HelloService for HelloServiceImpl {
 
 #[tokio::main]
 async fn main() {
-    process::exit(run_hello_service_main(HelloServiceImpl).await);
+    process::exit(HelloServiceImpl.main().await);
 }
 
 #[cfg(test)]
