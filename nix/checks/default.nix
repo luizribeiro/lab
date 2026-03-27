@@ -7,6 +7,12 @@ let
   };
   netIsolation = import ../tests/net-isolation.nix { inherit vmLib; };
   netDhcp = import ../tests/net-dhcp.nix { inherit vmLib pkgs; };
+  daemonNoNetworkFastPath = import ../tests/daemon-no-network-fast-path.nix {
+    inherit vmLib pkgs capsaPackage;
+  };
+  daemonNetdSpawnFailure = import ../tests/daemon-netd-spawn-failure.nix {
+    inherit vmLib pkgs capsaPackage;
+  };
 in
 {
   package-artifacts = pkgs.runCommand "capsa-package-artifacts" { } ''
@@ -78,6 +84,8 @@ in
 
   vm-net-isolation = netIsolation;
   vm-net-dhcp = netDhcp;
+  vm-daemon-no-network-fast-path = daemonNoNetworkFastPath;
+  vm-daemon-netd-spawn-failure = daemonNetdSpawnFailure;
 }
 
 
