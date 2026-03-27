@@ -1,12 +1,13 @@
 use fittings::{FittingsError, MethodRouter};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct DoubleParams {
     value: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct DoubleResult {
     doubled: i32,
 }
@@ -77,15 +78,15 @@ async fn generated_router_maps_decode_errors_to_invalid_params() {
     assert!(matches!(error, FittingsError::InvalidParams(_)));
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct UnitParams;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct AckResult {
     ok: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, JsonSchema)]
 struct UnserializableResult;
 
 impl Serialize for UnserializableResult {

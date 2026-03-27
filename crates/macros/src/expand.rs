@@ -1,7 +1,8 @@
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::{
-    parse_quote, FnArg, ItemTrait, PatType, ReturnType, TraitItem, TraitItemFn, Type, TypePath,
+    parse_quote, Attribute, Expr, ExprLit, FnArg, ItemTrait, Lit, Meta, PatType, ReturnType,
+    TraitItem, TraitItemFn, Type, TypePath,
 };
 
 use crate::parse::ServiceInput;
@@ -19,6 +20,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
                 ident: method.sig.ident.clone(),
                 params_type: method_params_type(method),
                 result_ok_type: method_result_ok_type(method),
+                description: method_description(method),
             }),
             _ => None,
         })
@@ -28,7 +30,36 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
 
     let router_ident = format_ident!("{}Router", trait_ident);
     let trait_snake = to_snake_case(&trait_ident.to_string());
+    let service_name = to_kebab_case(&trait_ident.to_string());
+    let schema_fn_ident = format_ident!("{}_schema", trait_snake, span = Span::call_site());
     let constructor_ident = format_ident!("into_{}_router", trait_snake, span = Span::call_site());
+
+    let method_schema_items = methods.iter().map(|method| {
+        let method_name = method.ident.to_string();
+        let params_type = &method.params_type;
+        let result_type = &method.result_ok_type;
+
+        let description_expr = if let Some(description) = &method.description {
+            quote! { Some(::std::string::String::from(#description)) }
+        } else {
+            quote! { None }
+        };
+
+        quote! {
+            ::fittings::MethodSchema {
+                name: ::std::string::String::from(#method_name),
+                description: #description_expr,
+                params_schema: Some(
+                    ::fittings::serde_json::to_value(::fittings::schemars::schema_for!(#params_type))
+                        .expect("generated service schema: params schema should serialize"),
+                ),
+                result_schema: Some(
+                    ::fittings::serde_json::to_value(::fittings::schemars::schema_for!(#result_type))
+                        .expect("generated service schema: result schema should serialize"),
+                ),
+            }
+        }
+    });
 
     let dispatch_arms = methods.iter().map(|method| {
         let method_ident = &method.ident;
@@ -60,6 +91,23 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
 
     quote! {
         #trait_item
+
+        #trait_vis fn #schema_fn_ident() -> ::fittings::ServiceSchema {
+            ::fittings::ServiceSchema {
+                name: ::std::string::String::from(#service_name),
+                methods: vec![#(#method_schema_items,)*],
+                config_schema: Some(::fittings::serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "log_level": {
+                            "type": "string",
+                            "enum": ["trace", "debug", "info", "warn", "error"]
+                        }
+                    },
+                    "additionalProperties": false
+                })),
+            }
+        }
 
         #trait_vis struct #router_ident<I> {
             inner: I,
@@ -96,6 +144,7 @@ struct MethodInfo {
     ident: syn::Ident,
     params_type: Type,
     result_ok_type: Type,
+    description: Option<String>,
 }
 
 fn rewrite_trait_methods_as_send_futures(trait_item: &mut ItemTrait) {
@@ -169,6 +218,48 @@ fn method_result_ok_type(method: &TraitItemFn) -> Type {
     }
 }
 
+fn method_description(method: &TraitItemFn) -> Option<String> {
+    extract_doc_comment(&method.attrs)
+}
+
+fn extract_doc_comment(attrs: &[Attribute]) -> Option<String> {
+    let mut lines = Vec::new();
+
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+
+        let Meta::NameValue(name_value) = &attr.meta else {
+            continue;
+        };
+
+        let Expr::Lit(ExprLit {
+            lit: Lit::Str(value),
+            ..
+        }) = &name_value.value
+        else {
+            continue;
+        };
+
+        lines.push(value.value().trim().to_string());
+    }
+
+    while lines.first().is_some_and(|line| line.is_empty()) {
+        lines.remove(0);
+    }
+
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
 fn to_snake_case(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut prev_is_lower_or_digit = false;
@@ -191,4 +282,8 @@ fn to_snake_case(input: &str) -> String {
     }
 
     output
+}
+
+fn to_kebab_case(input: &str) -> String {
+    to_snake_case(input).replace('_', "-")
 }

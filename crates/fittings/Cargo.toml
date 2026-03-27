@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 fittings-core = { path = "../core" }
 fittings-macros = { path = "../macros" }
 fittings-server = { path = "../server" }
