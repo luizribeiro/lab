@@ -1,14 +1,16 @@
 use std::process;
 
-use fittings::ProcessConnector;
+use fittings::TcpConnector;
 use hello_api::{HelloParams, HelloServiceClient};
 
-const DEFAULT_SERVICE_BIN: &str = "hello-service";
-const USAGE: &str = "Usage: hello-client [--service-bin <path>] [name]";
+const DEFAULT_SERVICE_ADDRESS: &str = "127.0.0.1:7000";
+const SERVICE_ADDRESS_ENV: &str = "HELLO_SERVICE_ADDR";
+const USAGE: &str = "Usage: hello-client [--addr <host:port>] [name]\n\
+Defaults: addr=127.0.0.1:7000, name=world";
 
 #[derive(Debug, PartialEq, Eq)]
 struct Cli {
-    service_bin: Option<String>,
+    service_address: Option<String>,
     name: String,
 }
 
@@ -19,20 +21,20 @@ enum ParseArgs {
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseArgs, String> {
-    let mut service_bin = None;
+    let mut service_address = None;
     let mut name = None;
 
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--service-bin" => {
+            "--addr" => {
                 let value = args
                     .next()
-                    .ok_or_else(|| "--service-bin requires a value".to_string())?;
-                if service_bin.is_some() {
-                    return Err(format!("--service-bin may only be provided once\n{USAGE}"));
+                    .ok_or_else(|| format!("--addr requires a value\n{USAGE}"))?;
+                if service_address.is_some() {
+                    return Err(format!("--addr may only be provided once\n{USAGE}"));
                 }
-                service_bin = Some(value);
+                service_address = Some(value);
             }
             "-h" | "--help" => return Ok(ParseArgs::Help),
             flag if flag.starts_with('-') => {
@@ -48,22 +50,32 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ParseArgs, Strin
     }
 
     Ok(ParseArgs::Run(Cli {
-        service_bin,
+        service_address,
         name: name.unwrap_or_else(|| "world".to_string()),
     }))
 }
 
-fn resolve_service_bin(service_bin_arg: Option<String>, service_bin_env: Option<String>) -> String {
-    service_bin_arg
-        .or(service_bin_env)
-        .unwrap_or_else(|| DEFAULT_SERVICE_BIN.to_string())
+fn resolve_service_address(
+    service_address_arg: Option<String>,
+    service_address_env: Option<String>,
+) -> String {
+    service_address_arg
+        .or(service_address_env)
+        .unwrap_or_else(|| DEFAULT_SERVICE_ADDRESS.to_string())
+}
+
+fn resolve_service_address_from_lookup(
+    service_address_arg: Option<String>,
+    env_lookup: impl FnOnce(&str) -> Option<String>,
+) -> String {
+    resolve_service_address(service_address_arg, env_lookup(SERVICE_ADDRESS_ENV))
 }
 
 async fn request_hello_message(
-    service_bin: String,
+    service_address: String,
     name: String,
 ) -> Result<String, fittings::FittingsError> {
-    let client = HelloServiceClient::connect(ProcessConnector::new(&service_bin)).await?;
+    let client = HelloServiceClient::connect(TcpConnector::new(service_address)).await?;
     let result = client.hello(HelloParams { name }).await?;
     Ok(result.message)
 }
@@ -80,8 +92,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let service_bin = resolve_service_bin(cli.service_bin, std::env::var("HELLO_SERVICE_BIN").ok());
-    let message = request_hello_message(service_bin, cli.name).await?;
+    let service_address =
+        resolve_service_address_from_lookup(cli.service_address, |key| std::env::var(key).ok());
+    let message = request_hello_message(service_address, cli.name).await?;
 
     println!("{message}");
     Ok(())
@@ -97,23 +110,26 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::{
-        fs,
-        os::unix::fs::PermissionsExt,
-        path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
+    use fittings::{accept_one, FittingsError, RouterService, Server};
+    use hello_api::{
+        into_hello_service_router, HelloParams, HelloResult, HelloService, PingParams, PingResult,
+    };
+    use tokio::{
+        net::TcpListener,
+        time::{timeout, Duration},
     };
 
     use super::{
-        parse_args, request_hello_message, resolve_service_bin, Cli, ParseArgs, DEFAULT_SERVICE_BIN,
+        parse_args, request_hello_message, resolve_service_address,
+        resolve_service_address_from_lookup, Cli, ParseArgs, DEFAULT_SERVICE_ADDRESS,
+        SERVICE_ADDRESS_ENV,
     };
 
     #[test]
-    fn parse_args_accepts_service_bin_and_name() {
+    fn parse_args_accepts_addr_and_name() {
         let parsed = parse_args(vec![
-            "--service-bin".to_string(),
-            "/tmp/hello-service".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1:9000".to_string(),
             "Ada".to_string(),
         ])
         .expect("args should parse");
@@ -121,9 +137,9 @@ mod tests {
         assert!(matches!(
             parsed,
             ParseArgs::Run(Cli {
-                service_bin: Some(path),
+                service_address: Some(address),
                 name,
-            }) if path == "/tmp/hello-service" && name == "Ada"
+            }) if address == "127.0.0.1:9000" && name == "Ada"
         ));
     }
 
@@ -133,25 +149,25 @@ mod tests {
         assert!(matches!(
             parsed,
             ParseArgs::Run(Cli {
-                service_bin: None,
+                service_address: None,
                 name,
             }) if name == "world"
         ));
     }
 
     #[test]
-    fn parse_args_rejects_missing_service_bin_value() {
-        let error = parse_args(vec!["--service-bin".to_string()]).expect_err("should fail");
+    fn parse_args_rejects_missing_addr_value() {
+        let error = parse_args(vec!["--addr".to_string()]).expect_err("should fail");
         assert!(error.contains("requires a value"));
     }
 
     #[test]
-    fn parse_args_rejects_duplicate_service_bin_flags() {
+    fn parse_args_rejects_duplicate_addr_flags() {
         let error = parse_args(vec![
-            "--service-bin".to_string(),
-            "a".to_string(),
-            "--service-bin".to_string(),
-            "b".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1:1".to_string(),
+            "--addr".to_string(),
+            "127.0.0.1:2".to_string(),
         ])
         .expect_err("should fail");
         assert!(error.contains("only be provided once"));
@@ -180,69 +196,90 @@ mod tests {
     }
 
     #[test]
-    fn resolve_service_bin_prefers_cli_arg_then_env_then_default() {
-        let from_cli = resolve_service_bin(
-            Some("/tmp/from-cli".to_string()),
-            Some("/tmp/from-env".to_string()),
+    fn resolve_service_address_prefers_cli_arg_then_env_then_default() {
+        let from_cli = resolve_service_address(
+            Some("127.0.0.1:9000".to_string()),
+            Some("127.0.0.1:9001".to_string()),
         );
-        assert_eq!(from_cli, "/tmp/from-cli");
+        assert_eq!(from_cli, "127.0.0.1:9000");
 
-        let from_env = resolve_service_bin(None, Some("/tmp/from-env".to_string()));
-        assert_eq!(from_env, "/tmp/from-env");
+        let from_env = resolve_service_address(None, Some("127.0.0.1:9001".to_string()));
+        assert_eq!(from_env, "127.0.0.1:9001");
 
-        let from_default = resolve_service_bin(None, None);
-        assert_eq!(from_default, DEFAULT_SERVICE_BIN);
+        let from_default = resolve_service_address(None, None);
+        assert_eq!(from_default, DEFAULT_SERVICE_ADDRESS);
     }
 
-    #[cfg(unix)]
-    fn unique_path(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "hello-client-{name}-{}-{nanos}",
-            std::process::id()
-        ))
+    #[test]
+    fn resolve_service_address_from_lookup_uses_expected_env_var_name() {
+        let resolved = resolve_service_address_from_lookup(None, |key| {
+            assert_eq!(key, SERVICE_ADDRESS_ENV);
+            Some("127.0.0.1:9002".to_string())
+        });
+
+        assert_eq!(resolved, "127.0.0.1:9002");
     }
 
-    #[cfg(unix)]
-    fn write_executable_script(path: &Path, content: &str) {
-        fs::write(path, content).expect("write script fixture");
-        let mut perms = fs::metadata(path)
-            .expect("read script metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("set executable permissions");
+    struct TestHelloService;
+
+    impl HelloService for TestHelloService {
+        async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError> {
+            Ok(HelloResult {
+                message: format!("Hello, {}!", params.name),
+            })
+        }
+
+        async fn ping(&self, _params: PingParams) -> Result<PingResult, FittingsError> {
+            Ok(PingResult { ok: true })
+        }
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn request_hello_message_uses_connector_based_client_flow() {
-        let script_path = unique_path("echo-server.py");
-        write_executable_script(
-            &script_path,
-            r#"#!/usr/bin/env python3
-import json
-import sys
+    async fn request_hello_message_uses_tcp_connector_based_client_flow() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let address = listener
+            .local_addr()
+            .expect("read listener address")
+            .to_string();
 
-line = sys.stdin.readline()
-req = json.loads(line)
-name = req["params"]["name"]
-resp = {"id": req["id"], "result": {"message": f"Hello, {name}!"}, "metadata": {}}
-sys.stdout.write(json.dumps(resp) + "\n")
-sys.stdout.flush()
-"#,
-        );
+        let server_task = tokio::spawn(async move {
+            let transport = accept_one(&listener, 1_048_576)
+                .await
+                .expect("accept connection");
+            let service = RouterService::new(into_hello_service_router(TestHelloService));
+            Server::new(service, transport)
+                .serve()
+                .await
+                .expect("serve request");
+        });
 
-        let message = request_hello_message(
-            script_path.to_string_lossy().into_owned(),
-            "Ada".to_string(),
-        )
-        .await
-        .expect("request should succeed");
+        let message = request_hello_message(address, "Ada".to_string())
+            .await
+            .expect("request should succeed");
         assert_eq!(message, "Hello, Ada!");
 
-        fs::remove_file(script_path).expect("remove script fixture");
+        timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("server task should finish in time")
+            .expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn request_hello_message_returns_error_when_address_is_unreachable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let unreachable_address = listener
+            .local_addr()
+            .expect("read listener address")
+            .to_string();
+        drop(listener);
+
+        let error = request_hello_message(unreachable_address, "Ada".to_string())
+            .await
+            .expect_err("request should fail");
+        assert!(matches!(error, FittingsError::Transport(_)));
     }
 }
