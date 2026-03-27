@@ -85,6 +85,7 @@ name = "fittings-macros"
 version = "0.1.0"
 dependencies = [
  "fittings",
+ "fittings-testkit",
  "proc-macro2",
  "quote",
  "schemars",

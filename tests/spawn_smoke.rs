@@ -1,7 +1,27 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SpawnHelloParams {
+    name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SpawnHelloResult {
+    message: String,
+}
+
+#[fittings::service]
+trait SpawnHelloClientService {
+    async fn hello(
+        &self,
+        params: SpawnHelloParams,
+    ) -> Result<SpawnHelloResult, fittings::FittingsError>;
+}
 
 fn hello_service_bin() -> &'static str {
     env!("CARGO_BIN_EXE_hello-service")
@@ -36,6 +56,41 @@ fn parse_single_response(stdout: &[u8]) -> Value {
     let line = lines.next().expect("expected one response line");
     assert!(lines.next().is_none(), "expected exactly one response line");
     serde_json::from_str(line).expect("response line should be valid json")
+}
+
+#[tokio::test]
+async fn generated_typed_client_spawn_roundtrip_succeeds() {
+    let client = SpawnHelloClientServiceClient::spawn(hello_service_bin())
+        .await
+        .expect("spawned generated client should connect");
+
+    let result = client
+        .hello(SpawnHelloParams {
+            name: "Ada".to_string(),
+        })
+        .await
+        .expect("typed hello call should succeed");
+
+    assert_eq!(result.message, "Hello, Ada!");
+}
+
+#[tokio::test]
+async fn generated_typed_client_spawn_with_config_roundtrip_succeeds() {
+    let client = SpawnHelloClientServiceClient::spawn_with_config(
+        hello_service_bin(),
+        serde_json::json!({"log_level": "info"}),
+    )
+    .await
+    .expect("spawned generated client should connect with config");
+
+    let result = client
+        .hello(SpawnHelloParams {
+            name: "Grace".to_string(),
+        })
+        .await
+        .expect("typed hello call should succeed");
+
+    assert_eq!(result.message, "Hello, Grace!");
 }
 
 #[test]

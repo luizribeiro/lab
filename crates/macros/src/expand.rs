@@ -29,6 +29,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
     rewrite_trait_methods_as_send_futures(&mut trait_item);
 
     let router_ident = format_ident!("{}Router", trait_ident);
+    let client_ident = format_ident!("{}Client", trait_ident);
     let trait_snake = to_snake_case(&trait_ident.to_string());
     let service_name = to_kebab_case(&trait_ident.to_string());
     let schema_fn_ident = format_ident!("{}_schema", trait_snake, span = Span::call_site());
@@ -89,6 +90,38 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
         }
     });
 
+    let client_methods = methods.iter().map(|method| {
+        let method_ident = &method.ident;
+        let method_name = method_ident.to_string();
+        let params_type = &method.params_type;
+        let result_type = &method.result_ok_type;
+
+        quote! {
+            pub async fn #method_ident(
+                &self,
+                params: #params_type,
+            ) -> Result<#result_type, ::fittings::FittingsError> {
+                let encoded_params = ::fittings::serde_json::to_value(params).map_err(|error| {
+                    ::fittings::FittingsError::invalid_params(format!(
+                        "failed to encode params for method `{}`: {}",
+                        #method_name,
+                        error
+                    ))
+                })?;
+
+                let raw_result = self.inner.call(#method_name, encoded_params).await?;
+
+                ::fittings::serde_json::from_value(raw_result).map_err(|error| {
+                    ::fittings::FittingsError::internal(format!(
+                        "failed to decode result for method `{}`: {}",
+                        #method_name,
+                        error
+                    ))
+                })
+            }
+        }
+    });
+
     quote! {
         #trait_item
 
@@ -136,6 +169,40 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
             I: #trait_ident + Send + Sync,
         {
             #router_ident { inner }
+        }
+
+        #trait_vis struct #client_ident<C>
+        where
+            C: ::fittings::Connector + Send + Sync + 'static,
+        {
+            inner: ::fittings::Client<C>,
+        }
+
+        impl<C> #client_ident<C>
+        where
+            C: ::fittings::Connector + Send + Sync + 'static,
+        {
+            pub async fn connect(connector: C) -> Result<Self, ::fittings::FittingsError> {
+                let inner = ::fittings::Client::connect(connector).await?;
+                Ok(Self { inner })
+            }
+
+            #(#client_methods)*
+        }
+
+        impl #client_ident<::fittings::ProcessConnector> {
+            pub async fn spawn(
+                command: impl ::core::convert::AsRef<::std::ffi::OsStr>,
+            ) -> Result<Self, ::fittings::FittingsError> {
+                Self::connect(::fittings::ProcessConnector::new(command)).await
+            }
+
+            pub async fn spawn_with_config(
+                command: impl ::core::convert::AsRef<::std::ffi::OsStr>,
+                config: ::fittings::serde_json::Value,
+            ) -> Result<Self, ::fittings::FittingsError> {
+                Self::connect(::fittings::ProcessConnector::new(command).with_config_json(config)).await
+            }
         }
     }
 }
