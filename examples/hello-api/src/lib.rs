@@ -55,6 +55,6 @@ mod tests {
         assert_eq!(schema.name, "hello-service");
 
         let _router = into_hello_service_router(StubHelloService);
-        let _maybe_client: Option<HelloServiceClient<fittings::ProcessConnector>> = None;
+        let _maybe_client: Option<HelloServiceClient<fittings::SubprocessConnector>> = None;
     }
 }

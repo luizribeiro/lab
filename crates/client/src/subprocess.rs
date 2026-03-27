@@ -15,13 +15,13 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 const DEFAULT_MAX_FRAME_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Clone)]
-pub struct ProcessConnector {
+pub struct SubprocessConnector {
     command: OsString,
     config_json: Option<Value>,
     max_frame_bytes: usize,
 }
 
-impl ProcessConnector {
+impl SubprocessConnector {
     pub fn new(command: impl AsRef<OsStr>) -> Self {
         Self {
             command: command.as_ref().to_os_string(),
@@ -35,7 +35,7 @@ impl ProcessConnector {
         self
     }
 
-    pub async fn connect(self) -> Result<ProcessTransport, FittingsError> {
+    pub async fn connect(self) -> Result<SubprocessTransport, FittingsError> {
         let mut command = Command::new(&self.command);
         command
             .env("FITTINGS", "1")
@@ -47,25 +47,27 @@ impl ProcessConnector {
 
         if let Some(config) = self.config_json {
             let config_arg = serde_json::to_string(&config).map_err(|error| {
-                FittingsError::internal(format!("failed to encode process config as JSON: {error}"))
+                FittingsError::internal(format!(
+                    "failed to encode subprocess config as JSON: {error}"
+                ))
             })?;
             command.arg(config_arg);
         }
 
         let mut child = command.spawn().map_err(|error| {
-            FittingsError::transport(format!("failed to spawn process: {error}"))
+            FittingsError::transport(format!("failed to spawn subprocess: {error}"))
         })?;
 
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| FittingsError::internal("spawned process missing piped stdout"))?;
+            .ok_or_else(|| FittingsError::internal("spawned subprocess missing piped stdout"))?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| FittingsError::internal("spawned process missing piped stdin"))?;
+            .ok_or_else(|| FittingsError::internal("spawned subprocess missing piped stdin"))?;
 
-        Ok(ProcessTransport::new(
+        Ok(SubprocessTransport::new(
             child,
             StdioTransport::new(stdout, stdin, self.max_frame_bytes),
         ))
@@ -73,20 +75,20 @@ impl ProcessConnector {
 }
 
 #[async_trait]
-impl Connector for ProcessConnector {
-    type Connection = ProcessTransport;
+impl Connector for SubprocessConnector {
+    type Connection = SubprocessTransport;
 
     async fn connect(&self) -> Result<Self::Connection, FittingsError> {
-        ProcessConnector::connect(self.clone()).await
+        SubprocessConnector::connect(self.clone()).await
     }
 }
 
-pub struct ProcessTransport {
+pub struct SubprocessTransport {
     child: Option<Child>,
     io: StdioTransport<ChildStdout, ChildStdin>,
 }
 
-impl ProcessTransport {
+impl SubprocessTransport {
     fn new(child: Child, io: StdioTransport<ChildStdout, ChildStdin>) -> Self {
         Self {
             child: Some(child),
@@ -95,7 +97,7 @@ impl ProcessTransport {
     }
 }
 
-impl Drop for ProcessTransport {
+impl Drop for SubprocessTransport {
     fn drop(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
@@ -114,7 +116,7 @@ impl Drop for ProcessTransport {
 }
 
 #[async_trait]
-impl Transport for ProcessTransport {
+impl Transport for SubprocessTransport {
     async fn send(&mut self, frame: &[u8]) -> Result<(), FittingsError> {
         self.io.send(frame).await.map_err(normalize_send_error)
     }
@@ -126,7 +128,7 @@ impl Transport for ProcessTransport {
 
 fn normalize_send_error(error: FittingsError) -> FittingsError {
     match error {
-        FittingsError::Transport(_) => FittingsError::transport("child process stdin closed"),
+        FittingsError::Transport(_) => FittingsError::transport("child subprocess stdin closed"),
         other => other,
     }
 }
@@ -134,7 +136,7 @@ fn normalize_send_error(error: FittingsError) -> FittingsError {
 fn normalize_recv_error(error: FittingsError) -> FittingsError {
     match error {
         FittingsError::Transport(message) if message == "end of input" => {
-            FittingsError::transport("child process stdout closed")
+            FittingsError::transport("child subprocess stdout closed")
         }
         other => other,
     }
@@ -154,7 +156,7 @@ mod tests {
 
     use crate::Client;
 
-    use super::ProcessConnector;
+    use super::SubprocessConnector;
 
     fn unique_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -174,8 +176,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_connector_roundtrips_request_response_over_stdio() {
-        let script_path = unique_path("process-echo");
+    async fn subprocess_connector_roundtrips_request_response_over_stdio() {
+        let script_path = unique_path("subprocess-echo");
         write_executable_script(
             &script_path,
             r#"#!/bin/sh
@@ -190,7 +192,7 @@ printf '{"id":"1","result":{"ok":true},"error":null,"metadata":{}}\n'
 "#,
         );
 
-        let client = Client::connect(ProcessConnector::new(&script_path))
+        let client = Client::connect(SubprocessConnector::new(&script_path))
             .await
             .expect("client should connect");
 
@@ -204,8 +206,8 @@ printf '{"id":"1","result":{"ok":true},"error":null,"metadata":{}}\n'
     }
 
     #[tokio::test]
-    async fn process_connector_maps_child_exit_to_deterministic_transport_error() {
-        let script_path = unique_path("process-exit");
+    async fn subprocess_connector_maps_child_exit_to_deterministic_transport_error() {
+        let script_path = unique_path("subprocess-exit");
         write_executable_script(
             &script_path,
             r#"#!/bin/sh
@@ -219,7 +221,7 @@ exit 0
 "#,
         );
 
-        let client = Client::connect(ProcessConnector::new(&script_path))
+        let client = Client::connect(SubprocessConnector::new(&script_path))
             .await
             .expect("client should connect");
 
@@ -231,17 +233,17 @@ exit 0
         assert!(matches!(
             error,
             FittingsError::Transport(message)
-                if message == "child process stdin closed"
-                    || message == "child process stdout closed"
+                if message == "child subprocess stdin closed"
+                    || message == "child subprocess stdout closed"
         ));
 
         let _ = fs::remove_file(script_path);
     }
 
     #[tokio::test]
-    async fn dropping_process_transport_kills_child_process() {
-        let script_path = unique_path("process-lifecycle");
-        let pid_file = unique_path("process-lifecycle-pid");
+    async fn dropping_subprocess_transport_kills_child_subprocess() {
+        let script_path = unique_path("subprocess-lifecycle");
+        let pid_file = unique_path("subprocess-lifecycle-pid");
         let pid_file_escaped = pid_file.to_string_lossy().replace('"', "\\\"");
 
         write_executable_script(
@@ -252,10 +254,10 @@ exit 0
             ),
         );
 
-        let transport = ProcessConnector::new(&script_path)
+        let transport = SubprocessConnector::new(&script_path)
             .connect()
             .await
-            .expect("connector should spawn process");
+            .expect("connector should spawn subprocess");
 
         let pid = loop {
             if let Ok(text) = fs::read_to_string(&pid_file) {
@@ -283,16 +285,16 @@ exit 0
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        assert!(!alive, "child process should be terminated after drop");
+        assert!(!alive, "child subprocess should be terminated after drop");
 
         let _ = fs::remove_file(script_path);
         let _ = fs::remove_file(pid_file);
     }
 
     #[tokio::test]
-    async fn process_connector_passes_config_json_as_single_positional_argument() {
-        let script_path = unique_path("process-config");
-        let args_file = unique_path("process-config-args");
+    async fn subprocess_connector_passes_config_json_as_single_positional_argument() {
+        let script_path = unique_path("subprocess-config");
+        let args_file = unique_path("subprocess-config-args");
         let args_file_escaped = args_file.to_string_lossy().replace('"', "\\\"");
 
         write_executable_script(
@@ -306,11 +308,11 @@ exit 0
         let config = json!({"name": "Ada", "nested": {"x": 1}});
         let expected_config = serde_json::to_string(&config).expect("serialize config");
 
-        let transport = ProcessConnector::new(&script_path)
+        let transport = SubprocessConnector::new(&script_path)
             .with_config_json(config)
             .connect()
             .await
-            .expect("connector should spawn process");
+            .expect("connector should spawn subprocess");
 
         let mut args = None;
         for _ in 0..20 {

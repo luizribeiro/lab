@@ -258,18 +258,18 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
             #(#client_methods)*
         }
 
-        impl #client_ident<::fittings::ProcessConnector> {
+        impl #client_ident<::fittings::SubprocessConnector> {
             pub async fn spawn(
                 command: impl ::core::convert::AsRef<::std::ffi::OsStr>,
             ) -> Result<Self, ::fittings::FittingsError> {
-                Self::connect(::fittings::ProcessConnector::new(command)).await
+                Self::connect(::fittings::SubprocessConnector::new(command)).await
             }
 
             pub async fn spawn_with_config(
                 command: impl ::core::convert::AsRef<::std::ffi::OsStr>,
                 config: ::fittings::serde_json::Value,
             ) -> Result<Self, ::fittings::FittingsError> {
-                Self::connect(::fittings::ProcessConnector::new(command).with_config_json(config)).await
+                Self::connect(::fittings::SubprocessConnector::new(command).with_config_json(config)).await
             }
         }
     }

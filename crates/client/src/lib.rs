@@ -1,6 +1,12 @@
-mod process;
+mod subprocess;
 
-pub use process::{ProcessConnector, ProcessTransport};
+pub use subprocess::{SubprocessConnector, SubprocessTransport};
+
+#[deprecated(note = "Use SubprocessConnector instead.")]
+pub type ProcessConnector = SubprocessConnector;
+
+#[deprecated(note = "Use SubprocessTransport instead.")]
+pub type ProcessTransport = SubprocessTransport;
 
 use std::{
     collections::HashMap,
