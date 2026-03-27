@@ -2,9 +2,11 @@ use std::collections::HashSet;
 
 use anyhow::{ensure, Result};
 
-use crate::{libkrun, ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
+use capsa_core::{ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
 
-#[doc(hidden)]
+mod boot;
+mod libkrun;
+
 pub fn start_vm(spec: &VmmLaunchSpec) -> Result<()> {
     let config = &spec.vm_config;
     let resolved_interfaces = &spec.resolved_interfaces;
@@ -131,7 +133,7 @@ impl KernelCmdline {
 #[cfg(test)]
 mod tests {
     use super::{effective_kernel_cmdline, network_call_params, validate_vmm_launch_spec};
-    use crate::{daemon::vmm::spec::ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig};
+    use capsa_core::{ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig};
 
     fn base_vm_config() -> VmConfig {
         VmConfig {
