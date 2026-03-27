@@ -7,3 +7,6 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
+fittings-core = { path = "../core" }
+tokio = { workspace = true, features = ["io-std"] }
