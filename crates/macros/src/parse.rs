@@ -146,43 +146,50 @@ fn validate_method_signature(method: &TraitItemFn) -> syn::Result<()> {
         ));
     };
 
-    if result_args.args.len() != 2 {
-        return Err(Error::new(
-            result_args.span(),
-            "service methods must return `Result<R, FittingsError>`",
-        ));
-    }
+    match result_args.args.len() {
+        1 => {
+            // Allow `Result<T>` aliases with default error type parameters,
+            // e.g. `fittings::Result<T>`.
+        }
+        2 => {
+            let error_arg = result_args
+                .args
+                .iter()
+                .nth(1)
+                .expect("Result with two generic arguments has an error argument");
 
-    let error_arg = result_args
-        .args
-        .iter()
-        .nth(1)
-        .expect("Result with two generic arguments has an error argument");
+            let GenericArgument::Type(Type::Path(error_type_path)) = error_arg else {
+                return Err(Error::new(
+                    error_arg.span(),
+                    "service method error type must be `FittingsError`",
+                ));
+            };
 
-    let GenericArgument::Type(Type::Path(error_type_path)) = error_arg else {
-        return Err(Error::new(
-            error_arg.span(),
-            "service method error type must be `FittingsError`",
-        ));
-    };
+            let Some(error_ident) = error_type_path
+                .path
+                .segments
+                .last()
+                .map(|segment| &segment.ident)
+            else {
+                return Err(Error::new(
+                    error_arg.span(),
+                    "service method error type must be `FittingsError`",
+                ));
+            };
 
-    let Some(error_ident) = error_type_path
-        .path
-        .segments
-        .last()
-        .map(|segment| &segment.ident)
-    else {
-        return Err(Error::new(
-            error_arg.span(),
-            "service method error type must be `FittingsError`",
-        ));
-    };
-
-    if error_ident != "FittingsError" {
-        return Err(Error::new(
-            error_arg.span(),
-            "service method error type must be `FittingsError`",
-        ));
+            if error_ident != "FittingsError" {
+                return Err(Error::new(
+                    error_arg.span(),
+                    "service method error type must be `FittingsError`",
+                ));
+            }
+        }
+        _ => {
+            return Err(Error::new(
+                result_args.span(),
+                "service methods must return `Result<R, FittingsError>` or `fittings::Result<R>`",
+            ));
+        }
     }
 
     Ok(())

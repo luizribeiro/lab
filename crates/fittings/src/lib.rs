@@ -1,5 +1,7 @@
 pub const FITTINGS_PROTOCOL_VERSION: &str = "1";
 
+pub type Result<T, E = FittingsError> = std::result::Result<T, E>;
+
 pub use async_trait;
 pub use schemars;
 pub use serde_json;

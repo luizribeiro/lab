@@ -1,18 +1,18 @@
 use std::process;
 
-use fittings::FittingsError;
+use fittings::Result;
 use hello_api::{HelloParams, HelloResult, HelloService, PingParams, PingResult};
 
 struct HelloServiceImpl;
 
 impl HelloService for HelloServiceImpl {
-    async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError> {
+    async fn hello(&self, params: HelloParams) -> Result<HelloResult> {
         Ok(HelloResult {
             message: format!("Hello, {}!", params.name),
         })
     }
 
-    async fn ping(&self, _params: PingParams) -> Result<PingResult, FittingsError> {
+    async fn ping(&self, _params: PingParams) -> Result<PingResult> {
         Ok(PingResult { ok: true })
     }
 }
@@ -49,7 +49,7 @@ mod tests {
     impl Connector for OneShotConnector {
         type Connection = MemoryTransport;
 
-        async fn connect(&self) -> Result<Self::Connection, fittings::FittingsError> {
+        async fn connect(&self) -> fittings::Result<Self::Connection> {
             self.transport
                 .lock()
                 .await
