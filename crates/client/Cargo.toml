@@ -7,13 +7,14 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 fittings-core = { path = "../core" }
+fittings-transport = { path = "../transport" }
 fittings-wire = { path = "../wire" }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
-async-trait.workspace = true
 fittings-testkit = { path = "../testkit" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }

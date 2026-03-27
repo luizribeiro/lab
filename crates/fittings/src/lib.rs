@@ -11,7 +11,7 @@ pub use fittings_spawn as spawn;
 pub use fittings_transport as transport;
 pub use fittings_wire as wire;
 
-pub use fittings_client::Client;
+pub use fittings_client::{Client, ProcessConnector, ProcessTransport};
 pub use fittings_core::{
     error::FittingsError,
     message::{Metadata, Request, Response, ServiceError},

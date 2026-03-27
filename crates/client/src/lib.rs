@@ -1,3 +1,7 @@
+mod process;
+
+pub use process::{ProcessConnector, ProcessTransport};
+
 use std::{
     collections::HashMap,
     marker::PhantomData,
