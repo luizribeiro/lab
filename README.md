@@ -1,146 +1,151 @@
-# capsa
+# capsa (Rust crate API)
 
-`capsa` starts a microVM using `libkrun`.
+This README documents the **public API surface of the `capsa` Rust crate**.
 
-## Native dependencies
+> Scope note: this document intentionally focuses on Rust API exports only.
+> Runtime architecture, daemon internals, CLI behavior, Nix packaging, and sandbox implementation details are out of scope here.
 
-This project links to a platform-specific native library:
+---
 
-- **Linux**: `libkrun` (`-lkrun`)
-- **macOS**: `libkrun-efi` (`-lkrun-efi`)
+## What `capsa` exposes
 
-At build time, `build.rs` resolves the native library in this order:
+`capsa` is currently a small façade crate. It re-exports selected public types from `capsa-core` (which itself re-exports policy types from `capsa-net`).
 
-1. `LIBKRUN_LIB_DIR` (if set)
-2. `pkg-config`
+At crate root, these items are public:
 
-If detection fails, the build prints a clear error with the expected library name.
-
-## Nix development
-
-Use the provided flake dev shell:
-
-```bash
-nix develop
+```rust
+pub use capsa::{
+    DomainPattern,
+    DomainPatternParseError,
+    MatchCriteria,
+    NetworkPolicy,
+    PolicyAction,
+    PolicyRule,
+    VmConfig,
+    VmNetworkInterfaceConfig,
+};
 ```
 
-The shell includes Rust tooling and exports `LIBKRUN_LIB_DIR` automatically:
+---
 
-- Linux → `${libkrun}/lib` (and includes `syd` on `PATH`)
-- macOS → `${libkrun-efi}/lib`
+## API reference (current)
 
-## Nix packages
+## VM configuration
 
-The flake exposes:
+### `VmConfig`
+User-facing VM configuration struct.
 
-- `.#capsa` (CLI package; sidecar stays private under `libexec`)
-- `.#vm-assets` (kernel + initramfs for the default VM)
-- `.#vm` (run script for the default VM built via `mkVM`)
+Fields:
+- `root: Option<PathBuf>`
+- `kernel: Option<PathBuf>`
+- `initramfs: Option<PathBuf>`
+- `kernel_cmdline: Option<String>`
+- `vcpus: u8`
+- `memory_mib: u32`
+- `verbosity: u8`
+- `interfaces: Vec<VmNetworkInterfaceConfig>`
 
-Build default VM assets:
+Methods:
+- `validate(&self) -> anyhow::Result<()>`
 
-```bash
-nix build .#vm-assets
+### `VmNetworkInterfaceConfig`
+User-facing network interface configuration.
+
+Fields:
+- `mac: Option<[u8; 6]>` (auto-generated when omitted)
+- `policy: Option<NetworkPolicy>` (runtime defaults to deny-all when omitted)
+
+---
+
+## Network policy DSL
+
+### `NetworkPolicy`
+Policy document with default action + ordered rules.
+
+Fields:
+- `default_action: PolicyAction`
+- `rules: Vec<PolicyRule>`
+
+Common constructors/helpers:
+- `NetworkPolicy::deny_all()`
+- `NetworkPolicy::allow_all()`
+- `policy.allow_domain(DomainPattern)`
+- `NetworkPolicy::from_allowed_hosts(iter)`
+
+### `PolicyRule`
+A single rule entry.
+
+Fields:
+- `action: PolicyAction`
+- `criteria: MatchCriteria`
+
+### `PolicyAction`
+Rule/default action enum:
+- `Allow`
+- `Deny`
+- `Log`
+
+### `MatchCriteria`
+Match expression enum:
+- `Any`
+- `Domain(DomainPattern)`
+- `All(Vec<MatchCriteria>)`
+
+### `DomainPattern`
+Domain matcher enum:
+- `Exact(String)`
+- `Wildcard(String)`
+
+Methods:
+- `DomainPattern::parse(&str) -> Result<DomainPattern, DomainPatternParseError>`
+- `matches(&self, domain: &str) -> bool`
+
+### `DomainPatternParseError`
+Error enum returned when parsing invalid domain patterns.
+
+---
+
+## What is intentionally *not* in `capsa` public API
+
+The following are **not** exported by the `capsa` crate:
+- daemon supervisor/adapters
+- daemon launch spec internals (`VmmLaunchSpec`, `ResolvedNetworkInterface`, etc.)
+- internal launcher/orchestration modules
+- VMM/netd runtime entrypoints
+
+Those remain internal to lower-level crates.
+
+---
+
+## Minimal usage example
+
+```rust
+use capsa::{DomainPattern, NetworkPolicy, VmConfig, VmNetworkInterfaceConfig};
+
+let policy = NetworkPolicy::deny_all()
+    .allow_domain(DomainPattern::parse("api.example.com")?);
+
+let vm = VmConfig {
+    root: None,
+    kernel: Some("/path/to/vmlinuz".into()),
+    initramfs: Some("/path/to/initramfs.cpio".into()),
+    kernel_cmdline: Some("console=hvc0".into()),
+    vcpus: 1,
+    memory_mib: 512,
+    verbosity: 0,
+    interfaces: vec![VmNetworkInterfaceConfig {
+        mac: None,
+        policy: Some(policy),
+    }],
+};
+
+vm.validate()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Run the default VM directly:
+---
 
-```bash
-nix run .#vm
-```
+## Compatibility expectations
 
-## Defining custom VMs with Nix modules
-
-The flake exposes:
-
-- `lib.mkVM` → runnable package (`nix run` target)
-- `lib.mkVMAssets` → VM assets/spec (`kernelImage`, `initramfsImage`, `vmAssets`)
-- `lib.mkVMCheck` → expect-driven VM check derivation (`nix flake check`)
-
-Define custom VMs in a NixOS-like style:
-
-```nix
-# in another flake
-let
-  vmArgs = {
-    name = "demo";
-    modules = [
-      ({ ... }: {
-        networking.hostName = "demo";
-      })
-    ];
-    vm = {
-      vcpus = 2;
-      memoryMiB = 1024;
-      kernelCmdline = "console=hvc0 rdinit=/init";
-    };
-  };
-
-  capsaVm = capsa.lib.${system}.mkVM vmArgs;
-  capsaVmAssets = capsa.lib.${system}.mkVMAssets vmArgs;
-in {
-  packages.${system}.demo-vm = capsaVm;
-  packages.${system}.demo-vm-assets = capsaVmAssets.vmAssets;
-}
-```
-
-`mkVMAssets` is useful when you want to run with Cargo directly:
-
-```bash
-cargo run -- \
-  --kernel "${capsaVmAssets.kernelImage}" \
-  --initramfs "${capsaVmAssets.initramfsImage}" \
-  --kernel-cmdline "console=hvc0 rdinit=/init"
-```
-
-## Running
-
-```bash
-cargo run -- --help
-```
-
-You must provide a boot source:
-
-- `--kernel <path>` (optionally with `--initramfs` and `--kernel-cmdline`), or
-- `--root <dir>`
-
-Example using the Nix-built assets:
-
-```bash
-cargo run -- \
-  --kernel ./result/vmlinuz \
-  --initramfs ./result/initramfs.cpio.lz4 \
-  --vcpus 1 \
-  --memory-mib 512
-```
-
-## Sandboxing
-
-Sandboxing is always enabled. The CLI and library launch a dedicated sandboxed `capsa-vmm` subprocess automatically.
-
-The helper binary is located at `crates/vmm/src/main.rs`.
-
-- `cargo build --workspace` (or `cargo build --bins`) builds both `capsa` and `capsa-vmm`.
-- Sidecar resolution order is:
-  1. `CAPSA_VMM_PATH`
-  2. sibling `capsa-vmm` next to the current executable
-  3. `capsa-vmm` on `PATH`
-
-Current backend status:
-
-- **macOS**: implemented with `sandbox-exec` + generated Seatbelt profile
-- **Linux**: `syd` integration (fail-closed). `syd` must be available on `PATH`.
-
-Set `CAPSA_DISABLE_SANDBOX=1` (or `true`/`yes`/`on`) to disable sandboxing explicitly on supported platforms (for local debugging only).
-
-VM smoke checks:
-
-```bash
-# Rust integration test
-cargo test -p capsa-cli --test vm_smoke -- --nocapture
-
-# Nix check (same boot/TTY/exit lifecycle)
-nix flake check --print-build-logs
-```
-
-The smoke tests boot a VM, check interactive TTY I/O, send `exit`, and verify the process terminates. On Linux this runs with `syd` (required by default).
+- Items listed above are the intended user-facing surface of `capsa`.
+- Everything else should be treated as internal implementation detail unless explicitly re-exported here.
