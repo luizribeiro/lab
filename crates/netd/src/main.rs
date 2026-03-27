@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 
 use capsa_core::daemon::constants::NETD_READY_FD;
-use capsa_core::daemon::net::args::parse_launch_spec_args;
+use capsa_core::daemon::launch_spec_args::parse_launch_spec_args;
+use capsa_core::daemon::net::spec::NetLaunchSpec;
 
 mod runtime;
 
@@ -10,7 +11,7 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let launch_spec = parse_launch_spec_args(args)?;
+    let launch_spec: NetLaunchSpec = parse_launch_spec_args(args)?;
     launch_spec
         .validate()
         .context("invalid net daemon launch spec")?;
@@ -42,10 +43,7 @@ mod tests {
     fn argument_parsing_failure_path() {
         let err = run(vec!["--bad-flag".to_string()], -1)
             .expect_err("invalid args should fail before runtime startup");
-        assert_eq!(
-            err.to_string(),
-            "usage: capsa-netd --launch-spec-json <json>"
-        );
+        assert_eq!(err.to_string(), "usage: --launch-spec-json <json>");
     }
 
     #[test]
@@ -56,9 +54,7 @@ mod tests {
         )
         .expect_err("malformed launch spec json should fail");
 
-        assert!(err
-            .to_string()
-            .contains("failed to parse net daemon launch spec JSON"));
+        assert!(err.to_string().contains("failed to parse launch spec JSON"));
     }
 
     #[test]

@@ -5,7 +5,9 @@ use anyhow::{ensure, Context, Result};
 
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonSpawnSpec, NoReadiness};
 
-use super::{args::encode_launch_spec_args, spec::VmmLaunchSpec};
+use crate::daemon::launch_spec_args::encode_launch_spec_args;
+
+use super::spec::VmmLaunchSpec;
 
 const MIN_REMAP_SOURCE_FD: i32 = 1000;
 

@@ -9,7 +9,9 @@ use anyhow::{bail, ensure, Context, Result};
 use crate::daemon::constants::NETD_READY_FD;
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonReadiness, DaemonSpawnSpec};
 
-use super::{args::encode_launch_spec_args, spec::NetLaunchSpec};
+use crate::daemon::launch_spec_args::encode_launch_spec_args;
+
+use super::spec::NetLaunchSpec;
 
 const READY_SIGNAL: u8 = b'R';
 const MIN_REMAP_SOURCE_FD: i32 = 1000;
