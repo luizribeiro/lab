@@ -12,7 +12,14 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::task::JoinHandle;
 
 use crate::{
-    daemon::{resolve::resolve_daemon_binary, vmm::args::encode_launch_spec_args},
+    daemon::{
+        resolve::resolve_daemon_binary,
+        supervisor::DaemonSupervisor,
+        vmm::{
+            adapter::{VmmDaemonAdapter, VmmDaemonHandoff},
+            args::encode_launch_spec_args,
+        },
+    },
     ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec,
 };
 
@@ -25,17 +32,17 @@ impl VmConfig {
     pub fn start(&self) -> Result<()> {
         self.validate().context("invalid VM configuration")?;
 
+        if self.interfaces.is_empty() {
+            return start_without_network_via_supervisor(self);
+        }
+
         let vmm_exe = resolve_vmm_binary()?;
         let spec = vm_sandbox_spec(self, &vmm_exe);
 
-        let mut network_runtime = if self.interfaces.is_empty() {
-            None
-        } else {
-            Some(
-                NetworkRuntimeContext::start(&self.interfaces)
-                    .context("failed to start network runtime")?,
-            )
-        };
+        let mut network_runtime = Some(
+            NetworkRuntimeContext::start(&self.interfaces)
+                .context("failed to start network runtime")?,
+        );
 
         let launch_spec = VmmLaunchSpec {
             vm_config: self.clone(),
@@ -47,18 +54,15 @@ impl VmConfig {
 
         let child_args = encode_launch_spec_args(&launch_spec)?;
 
-        let child = {
-            if let Some(runtime) = network_runtime.as_ref() {
-                capsa_sandbox::spawn_sandboxed_with_fds(
-                    &vmm_exe,
-                    &child_args,
-                    &spec,
-                    runtime.fd_remaps(),
-                )
-            } else {
-                capsa_sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec)
-            }
-        }
+        let child = capsa_sandbox::spawn_sandboxed_with_fds(
+            &vmm_exe,
+            &child_args,
+            &spec,
+            network_runtime
+                .as_ref()
+                .expect("network runtime must exist for networked start")
+                .fd_remaps(),
+        )
         .with_context(|| {
             format!(
                 "failed to spawn sandboxed VMM process: {}",
@@ -99,6 +103,28 @@ impl VmConfig {
 
         anyhow::bail!("sandboxed VMM process exited with status {status}")
     }
+}
+
+fn start_without_network_via_supervisor(config: &VmConfig) -> Result<()> {
+    let launch_spec = VmmLaunchSpec {
+        vm_config: config.clone(),
+        resolved_interfaces: vec![],
+    };
+    let handoff = VmmDaemonHandoff::new(vec![]).context("failed to prepare VMM handoff")?;
+
+    let supervisor = DaemonSupervisor::default();
+    let mut vmm = supervisor
+        .spawn::<VmmDaemonAdapter>(launch_spec, handoff)
+        .context("failed to spawn sandboxed VMM process")?;
+
+    let status = vmm
+        .wait_blocking()
+        .context("failed to wait on sandboxed child")?;
+    if status.success() {
+        return Ok(());
+    }
+
+    anyhow::bail!("sandboxed VMM process exited with status {status}")
 }
 
 #[derive(Debug)]
@@ -251,6 +277,63 @@ mod tests {
     use super::{gateway_config_for_policy, vm_sandbox_spec};
     use crate::{VmConfig, VmNetworkInterfaceConfig};
     use capsa_net::{DomainPattern, NetworkPolicy};
+    use std::path::{Path, PathBuf};
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::test_env_lock()
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+
+        fn set_raw(key: &'static str, value: &str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(old) = self.old.take() {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn make_temp_file(prefix: &str, contents: &[u8]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be after epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, contents).expect("temp file should be written");
+        path
+    }
+
+    fn find_binary_in_path(name: &str) -> PathBuf {
+        for dir in std::env::split_paths(&std::env::var_os("PATH").expect("PATH should be set")) {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+
+        panic!("binary `{name}` should be available in PATH for tests");
+    }
 
     fn sample_config() -> VmConfig {
         VmConfig {
@@ -291,6 +374,58 @@ mod tests {
         let rendered = format!("{err:#}");
         assert!(rendered.contains("invalid VM configuration"));
         assert!(rendered.contains("multiple network interfaces are not supported yet"));
+    }
+
+    #[test]
+    fn no_network_start_via_supervisor_succeeds_when_vmm_exits_zero() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_true = find_binary_in_path("true");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+
+        let config = sample_config();
+        config
+            .start()
+            .expect("no-network start should succeed for zero exit");
+    }
+
+    #[test]
+    fn no_network_start_reports_vmm_spawn_failure() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let non_executable = make_temp_file("capsa-vmm-non-executable", b"not executable");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+
+        let config = sample_config();
+        let err = config
+            .start()
+            .expect_err("no-network start should fail when VMM cannot be spawned");
+
+        let _ = std::fs::remove_file(non_executable);
+
+        assert!(format!("{err:#}").contains("failed to spawn sandboxed VMM process"));
+    }
+
+    #[test]
+    fn no_network_start_propagates_vmm_non_zero_exit_status() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_false = find_binary_in_path("false");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_false);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+
+        let config = sample_config();
+        let err = config
+            .start()
+            .expect_err("no-network start should fail for non-zero VMM exit");
+        let rendered = format!("{err:#}");
+
+        assert!(rendered.contains("sandboxed VMM process exited with status"));
     }
 
     #[test]

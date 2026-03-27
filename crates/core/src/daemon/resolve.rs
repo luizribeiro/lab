@@ -41,11 +41,9 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
 mod tests {
     use super::resolve_daemon_binary;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        crate::test_env_lock()
     }
 
     struct EnvVarGuard {
