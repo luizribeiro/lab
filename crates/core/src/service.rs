@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::{
@@ -8,6 +10,16 @@ use crate::{
 #[async_trait]
 pub trait Service: Send + Sync {
     async fn call(&self, req: Request) -> Result<Response, FittingsError>;
+}
+
+#[async_trait]
+impl<T> Service for Arc<T>
+where
+    T: Service + ?Sized,
+{
+    async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+        (**self).call(req).await
+    }
 }
 
 #[cfg(test)]

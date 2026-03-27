@@ -212,7 +212,7 @@ fn fittings_schema_output_does_not_include_normal_mode_banner() {
 }
 
 #[test]
-fn serve_tcp_transport_serves_one_connection_without_fittings_env() {
+fn serve_tcp_transport_once_serves_one_connection_without_fittings_env() {
     let mut command = Command::new(hello_service_bin());
     command
         .env_remove("FITTINGS")
@@ -221,6 +221,7 @@ fn serve_tcp_transport_serves_one_connection_without_fittings_env() {
         .arg("tcp")
         .arg("--addr")
         .arg("127.0.0.1:0")
+        .arg("--once")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -282,6 +283,66 @@ fn serve_tcp_transport_serves_one_connection_without_fittings_env() {
         "no extra stdout expected"
     );
     assert!(output.stderr.is_empty(), "stderr must be empty");
+}
+
+#[test]
+fn serve_tcp_transport_default_accepts_multiple_connections() {
+    let mut command = Command::new(hello_service_bin());
+    command
+        .env_remove("FITTINGS")
+        .arg("serve")
+        .arg("--transport")
+        .arg("tcp")
+        .arg("--addr")
+        .arg("127.0.0.1:0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .expect("spawn hello-service in serve tcp mode");
+
+    let mut listening_line = String::new();
+    {
+        let stdout = child.stdout.as_mut().expect("stdout should be piped");
+        let mut reader = BufReader::new(stdout);
+        reader
+            .read_line(&mut listening_line)
+            .expect("serve tcp mode should print listening line");
+        assert!(listening_line.contains("hello-service listening on"));
+    }
+
+    let address = listening_line
+        .trim_end()
+        .strip_prefix("hello-service listening on ")
+        .expect("listening line should include bind address")
+        .to_string();
+
+    for (id, name) in [("1", "Ada"), ("2", "Grace")] {
+        let mut stream = connect_with_retry(&address, 30, Duration::from_millis(20));
+        let request = format!(
+            "{{\"id\":\"{id}\",\"method\":\"hello\",\"params\":{{\"name\":\"{name}\"}},\"metadata\":{{}}}}\n"
+        );
+        stream.write_all(request.as_bytes()).expect("write request");
+
+        let mut response_line = String::new();
+        {
+            let mut reader = BufReader::new(&mut stream);
+            reader
+                .read_line(&mut response_line)
+                .expect("read response line");
+        }
+
+        let response: Value =
+            serde_json::from_str(response_line.trim_end()).expect("valid json response");
+        assert_eq!(response["id"], id);
+        assert_eq!(response["result"]["message"], format!("Hello, {name}!"));
+    }
+
+    child.kill().expect("kill multi-connection server");
+    let output = child.wait_with_output().expect("collect child output");
+    assert!(!output.status.success());
 }
 
 #[test]

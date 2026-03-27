@@ -1,12 +1,13 @@
 use std::{future::Future, io::Write};
 
 use fittings_core::{error::FittingsError, service::Service};
-use fittings_server::Server;
+use fittings_server::{serve_listener, Server};
 use fittings_transport::{
     stdio::from_process_stdio,
-    tcp::{accept_one, TcpTransport},
+    tcp::{accept_one, TcpConnectionListener, TcpTransport},
 };
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use crate::{
@@ -149,16 +150,24 @@ impl SpawnRunner {
                                 error
                             ))
                         })?;
-                        println!(
-                            "{} listening on {} (single connection)",
-                            service_name, local_addr
-                        );
 
-                        let transport: TcpTransport =
-                            accept_one(&listener, max_frame_bytes).await?;
-                        let server =
-                            Server::new(service, transport).with_max_in_flight(max_in_flight);
-                        server.serve().await
+                        if options.once {
+                            println!(
+                                "{} listening on {} (single connection)",
+                                service_name, local_addr
+                            );
+
+                            let transport: TcpTransport =
+                                accept_one(&listener, max_frame_bytes).await?;
+                            let server =
+                                Server::new(service, transport).with_max_in_flight(max_in_flight);
+                            server.serve().await
+                        } else {
+                            println!("{} listening on {}", service_name, local_addr);
+                            let listener =
+                                TcpConnectionListener::from_listener(listener, max_frame_bytes);
+                            serve_listener(Arc::new(service), listener, max_in_flight).await
+                        }
                     }
                 }
             },

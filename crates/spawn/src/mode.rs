@@ -12,6 +12,7 @@ pub enum ServeTransport {
 pub struct ServeOptions {
     pub transport: ServeTransport,
     pub address: String,
+    pub once: bool,
     pub config_json: Option<String>,
 }
 
@@ -61,6 +62,7 @@ fn parse_serve_args(args: &[String]) -> Result<ServeOptions, SpawnModeError> {
     let mut address = DEFAULT_TCP_ADDRESS.to_string();
     let mut config_json: Option<String> = None;
     let mut explicit_address = false;
+    let mut once = false;
 
     let mut index = 0;
     while index < args.len() {
@@ -104,6 +106,9 @@ fn parse_serve_args(args: &[String]) -> Result<ServeOptions, SpawnModeError> {
                 }
                 config_json = Some(value.clone());
             }
+            "--once" => {
+                once = true;
+            }
             other if other.starts_with('-') => {
                 return Err(SpawnModeError::Usage(usage(
                     format!("unknown option `{other}`").as_str(),
@@ -127,16 +132,23 @@ fn parse_serve_args(args: &[String]) -> Result<ServeOptions, SpawnModeError> {
         )));
     }
 
+    if once && !matches!(transport, ServeTransport::Tcp) {
+        return Err(SpawnModeError::Usage(usage(
+            "`--once` is only valid with `--transport tcp`",
+        )));
+    }
+
     Ok(ServeOptions {
         transport,
         address,
+        once,
         config_json,
     })
 }
 
 fn usage(reason: &str) -> String {
     format!(
-        "{reason}. Usage: <bin> schema | <bin> serve [--transport stdio|tcp] [--addr <host:port>] [--config <json>]"
+        "{reason}. Usage: <bin> schema | <bin> serve [--transport stdio|tcp] [--addr <host:port>] [--once] [--config <json>]"
     )
 }
 
@@ -160,6 +172,7 @@ mod tests {
             SpawnMode::Serve(ServeOptions {
                 transport: ServeTransport::Stdio,
                 address: "127.0.0.1:7000".to_string(),
+                once: false,
                 config_json: None,
             })
         );
@@ -170,6 +183,7 @@ mod tests {
             SpawnMode::Serve(ServeOptions {
                 transport: ServeTransport::Stdio,
                 address: "127.0.0.1:7000".to_string(),
+                once: false,
                 config_json: Some("{\"log_level\":\"debug\"}".to_string()),
             })
         );
@@ -191,6 +205,7 @@ mod tests {
             SpawnMode::Serve(ServeOptions {
                 transport: ServeTransport::Tcp,
                 address: "127.0.0.1:8123".to_string(),
+                once: false,
                 config_json: Some("{\"log_level\":\"info\"}".to_string()),
             })
         );
@@ -228,6 +243,12 @@ mod tests {
             .expect_err("must fail");
         assert!(
             matches!(addr_without_tcp, SpawnModeError::Usage(message) if message.contains("only valid with"))
+        );
+
+        let once_without_tcp =
+            detect_mode(Some("1"), &args(&["serve", "--once"])).expect_err("must fail");
+        assert!(
+            matches!(once_without_tcp, SpawnModeError::Usage(message) if message.contains("only valid with"))
         );
     }
 }

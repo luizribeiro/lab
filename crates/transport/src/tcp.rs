@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use fittings_core::{
     error::FittingsError,
-    transport::{Connector, Transport},
+    transport::{Connector, Listener, Transport},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
@@ -78,6 +78,46 @@ impl Connector for TcpConnector {
     }
 }
 
+pub struct TcpConnectionListener {
+    listener: TcpListener,
+    max_frame_bytes: usize,
+}
+
+impl TcpConnectionListener {
+    pub async fn bind(address: &str, max_frame_bytes: usize) -> Result<Self, FittingsError> {
+        let listener = TcpListener::bind(address)
+            .await
+            .map_err(|err| FittingsError::transport(err.to_string()))?;
+
+        Ok(Self {
+            listener,
+            max_frame_bytes,
+        })
+    }
+
+    pub fn from_listener(listener: TcpListener, max_frame_bytes: usize) -> Self {
+        Self {
+            listener,
+            max_frame_bytes,
+        }
+    }
+
+    pub fn local_addr(&self) -> Result<std::net::SocketAddr, FittingsError> {
+        self.listener
+            .local_addr()
+            .map_err(|err| FittingsError::transport(err.to_string()))
+    }
+}
+
+#[async_trait]
+impl Listener for TcpConnectionListener {
+    type Connection = TcpTransport;
+
+    async fn accept(&self) -> Result<Self::Connection, FittingsError> {
+        accept_one(&self.listener, self.max_frame_bytes).await
+    }
+}
+
 #[async_trait]
 impl Transport for TcpTransport {
     async fn send(&mut self, frame: &[u8]) -> Result<(), FittingsError> {
@@ -131,10 +171,12 @@ impl Transport for TcpTransport {
 
 #[cfg(test)]
 mod tests {
-    use fittings_core::transport::{Connector, Transport};
+    use fittings_core::transport::{Connector, Listener, Transport};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{accept_one, connect_to_address, TcpConnector, TcpTransport};
+    use super::{
+        accept_one, connect_to_address, TcpConnectionListener, TcpConnector, TcpTransport,
+    };
 
     #[tokio::test]
     async fn connector_connects_and_roundtrips_frames() {
@@ -166,6 +208,39 @@ mod tests {
         let frame = client_transport.recv().await.expect("receive response");
 
         assert_eq!(frame, b"pong\n");
+        server.await.expect("server task should finish");
+    }
+
+    #[tokio::test]
+    async fn listener_accepts_multiple_connections() {
+        let listener = TcpConnectionListener::bind("127.0.0.1:0", 1024)
+            .await
+            .expect("bind listener");
+        let address = listener.local_addr().expect("listener address");
+
+        let server = tokio::spawn(async move {
+            let mut first = listener.accept().await.expect("accept first");
+            let mut second = listener.accept().await.expect("accept second");
+
+            first.send(b"one\n").await.expect("send first");
+            second.send(b"two\n").await.expect("send second");
+        });
+
+        let mut c1 = TcpStream::connect(address).await.expect("connect first");
+        let mut c2 = TcpStream::connect(address).await.expect("connect second");
+
+        let mut buf1 = [0_u8; 4];
+        let mut buf2 = [0_u8; 4];
+        tokio::io::AsyncReadExt::read_exact(&mut c1, &mut buf1)
+            .await
+            .expect("read first");
+        tokio::io::AsyncReadExt::read_exact(&mut c2, &mut buf2)
+            .await
+            .expect("read second");
+
+        assert_eq!(&buf1, b"one\n");
+        assert_eq!(&buf2, b"two\n");
+
         server.await.expect("server task should finish");
     }
 

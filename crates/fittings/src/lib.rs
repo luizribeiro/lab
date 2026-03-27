@@ -29,7 +29,7 @@ pub use fittings_spawn::{
 };
 pub use fittings_transport::{
     stdio::{from_process_stdio, StdioTransport},
-    tcp::{accept_one, connect_to_address, TcpConnector, TcpTransport},
+    tcp::{accept_one, connect_to_address, TcpConnectionListener, TcpConnector, TcpTransport},
 };
 pub use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError, WireEncodeError},
