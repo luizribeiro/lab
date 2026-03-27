@@ -36,6 +36,52 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
     let constructor_ident = format_ident!("into_{}_router", trait_snake, span = Span::call_site());
 
     trait_item.items.push(parse_quote! {
+        fn into_service(self) -> ::fittings::RouterService<#router_ident<Self>>
+        where
+            Self: Sized + Send + Sync + 'static,
+        {
+            ::fittings::RouterService::new(#constructor_ident(self))
+        }
+    });
+
+    trait_item.items.push(parse_quote! {
+        fn serve_transport<T>(
+            self,
+            transport: T,
+        ) -> impl ::core::future::Future<Output = Result<(), ::fittings::FittingsError>> + Send
+        where
+            Self: Sized + Send + Sync + 'static,
+            T: ::fittings::Transport + Sync + 'static,
+        {
+            async move { ::fittings::Server::new(self.into_service(), transport).serve().await }
+        }
+    });
+
+    trait_item.items.push(parse_quote! {
+        fn listen_tcp(
+            self,
+            address: impl ::core::convert::AsRef<str> + Send + 'static,
+        ) -> impl ::core::future::Future<Output = Result<(), ::fittings::FittingsError>> + Send
+        where
+            Self: Sized + Send + Sync + 'static,
+        {
+            async move {
+                let listener = ::fittings::tokio::net::TcpListener::bind(address.as_ref())
+                    .await
+                    .map_err(|error| {
+                        ::fittings::FittingsError::transport(format!(
+                            "failed to bind TCP listener on {}: {}",
+                            address.as_ref(),
+                            error
+                        ))
+                    })?;
+                let transport = ::fittings::accept_one(&listener, 1_048_576).await?;
+                self.serve_transport(transport).await
+            }
+        }
+    });
+
+    trait_item.items.push(parse_quote! {
         fn main(self) -> impl ::core::future::Future<Output = i32> + Send
         where
             Self: Sized + Send + Sync + 'static,
@@ -46,9 +92,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
                 let runner = ::fittings::SpawnRunner::new(#schema_fn_ident());
 
                 let outcome = runner
-                    .run_with_stdio_service(env_fittings.as_deref(), &args, move |_config| {
-                        ::fittings::RouterService::new(#constructor_ident(self))
-                    })
+                    .run_with_stdio_service(env_fittings.as_deref(), &args, move |_config| self.into_service())
                     .await;
 
                 match outcome {

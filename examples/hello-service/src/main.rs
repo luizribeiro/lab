@@ -26,9 +26,9 @@ async fn main() {
 mod tests {
     use std::sync::Arc;
 
-    use fittings::{async_trait::async_trait, Connector, RouterService, Server};
+    use fittings::{async_trait::async_trait, Connector};
     use fittings_testkit::memory_transport::MemoryTransport;
-    use hello_api::{into_hello_service_router, HelloParams, HelloServiceClient, PingParams};
+    use hello_api::{HelloParams, HelloService, HelloServiceClient, PingParams};
     use tokio::sync::Mutex;
 
     use super::HelloServiceImpl;
@@ -62,9 +62,8 @@ mod tests {
     async fn service_methods_can_be_tested_in_memory_through_generated_client() {
         let (client_transport, server_transport) = MemoryTransport::pair(16);
 
-        let service = RouterService::new(into_hello_service_router(HelloServiceImpl));
-        let server = Server::new(service, server_transport);
-        let server_task = tokio::spawn(async move { server.serve().await });
+        let server_task =
+            tokio::spawn(async move { HelloServiceImpl.serve_transport(server_transport).await });
 
         let client = HelloServiceClient::connect(OneShotConnector::new(client_transport))
             .await

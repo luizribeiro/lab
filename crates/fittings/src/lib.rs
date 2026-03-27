@@ -3,6 +3,7 @@ pub const FITTINGS_PROTOCOL_VERSION: &str = "1";
 pub use async_trait;
 pub use schemars;
 pub use serde_json;
+pub use tokio;
 
 pub use fittings_client as client;
 pub use fittings_core as core;
