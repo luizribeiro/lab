@@ -1,11 +1,5 @@
-pub const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
-
-#[cfg(test)]
-mod tests {
-    use super::CRATE_NAME;
-
-    #[test]
-    fn smoke_compiles() {
-        assert_eq!(CRATE_NAME, "fittings-core");
-    }
-}
+pub mod error;
+pub mod message;
+pub mod middleware;
+pub mod service;
+pub mod transport;
