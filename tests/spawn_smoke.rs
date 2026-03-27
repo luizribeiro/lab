@@ -1,6 +1,9 @@
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use fittings::{validate_service_schema, FittingsError};
 use hello_api::{HelloParams, HelloResult, HelloServiceClient};
@@ -68,6 +71,34 @@ fn parse_single_response(stdout: &[u8]) -> Value {
     let line = lines.next().expect("expected one response line");
     assert!(lines.next().is_none(), "expected exactly one response line");
     serde_json::from_str(line).expect("response line should be valid json")
+}
+
+fn wait_for_child_exit(mut child: Child, timeout: Duration) -> Output {
+    let start = Instant::now();
+
+    loop {
+        if child.try_wait().expect("check child status").is_some() {
+            return child.wait_with_output().expect("collect child output");
+        }
+
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            panic!("child did not exit within {timeout:?}");
+        }
+
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn connect_with_retry(address: &str, attempts: usize, delay: Duration) -> TcpStream {
+    for _ in 0..attempts {
+        if let Ok(stream) = TcpStream::connect(address) {
+            return stream;
+        }
+        thread::sleep(delay);
+    }
+
+    panic!("failed to connect to {address} after {attempts} attempts");
 }
 
 #[tokio::test]
@@ -163,6 +194,83 @@ fn fittings_schema_matches_golden_and_is_rfc_compatible() {
         serde_json::from_str(&fixture_text).expect("schema fixture must be valid JSON");
 
     assert_eq!(schema_value, fixture_value);
+}
+
+#[test]
+fn fittings_schema_output_does_not_include_normal_mode_banner() {
+    let output = run_fittings_command(&["schema"], None);
+    assert!(output.status.success());
+
+    let stdout_text = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(!stdout_text.contains("hello-service listening on"));
+}
+
+#[test]
+fn normal_mode_tcp_server_serves_one_connection() {
+    let mut command = Command::new(hello_service_bin());
+    command
+        .env_remove("FITTINGS")
+        .arg("--bind")
+        .arg("127.0.0.1:0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command.spawn().expect("spawn hello-service in normal mode");
+
+    let mut listening_line = String::new();
+    {
+        let stdout = child.stdout.as_mut().expect("stdout should be piped");
+        let mut reader = BufReader::new(stdout);
+        reader
+            .read_line(&mut listening_line)
+            .expect("normal mode should print listening line");
+        assert!(listening_line.contains("hello-service listening on"));
+    }
+
+    let address = listening_line
+        .trim_end()
+        .strip_prefix("hello-service listening on ")
+        .and_then(|rest| rest.strip_suffix(" (single connection)"))
+        .expect("listening line should include bind address")
+        .to_string();
+
+    let mut stream = connect_with_retry(&address, 30, Duration::from_millis(20));
+    stream
+        .write_all(
+            br#"{"id":"1","method":"hello","params":{"name":"Ada"},"metadata":{}}
+"#,
+        )
+        .expect("write request");
+
+    let mut response_line = String::new();
+    {
+        let mut reader = BufReader::new(&mut stream);
+        reader
+            .read_line(&mut response_line)
+            .expect("read response line");
+    }
+    assert!(!response_line.is_empty(), "response line should be present");
+
+    let response: Value =
+        serde_json::from_str(response_line.trim_end()).expect("valid json response");
+    assert_eq!(response["id"], "1");
+    assert_eq!(response["result"]["message"], "Hello, Ada!");
+
+    drop(stream);
+
+    let output = wait_for_child_exit(child, Duration::from_secs(2));
+    assert!(
+        output.status.success(),
+        "normal-mode server should exit cleanly"
+    );
+
+    let remaining_stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(
+        remaining_stdout.trim().is_empty(),
+        "no extra stdout expected"
+    );
+    assert!(output.stderr.is_empty(), "stderr must be empty");
 }
 
 #[test]

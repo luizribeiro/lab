@@ -9,7 +9,7 @@ workspace = true
 [dependencies]
 fittings = { path = "../../crates/fittings" }
 hello-api = { path = "../hello-api" }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
 
 [dev-dependencies]
 schemars.workspace = true
