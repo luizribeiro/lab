@@ -19,6 +19,8 @@ pkgs.rustPlatform.buildRustPackage {
     "capsa-cli"
     "-p"
     "capsa-vmm"
+    "-p"
+    "capsa-netd"
   ];
 
   doCheck = false;
@@ -53,12 +55,14 @@ pkgs.rustPlatform.buildRustPackage {
 
     cp "$release_dir/capsa" $out/libexec/capsa/capsa
     cp "$release_dir/capsa-vmm" $out/libexec/capsa/capsa-vmm
+    cp "$release_dir/capsa-netd" $out/libexec/capsa/capsa-netd
 
     cat > $out/bin/capsa <<EOF
     #!${pkgs.runtimeShell}
     set -euo pipefail
 
     export CAPSA_VMM_PATH="$out/libexec/capsa/capsa-vmm"
+    export CAPSA_NETD_PATH="$out/libexec/capsa/capsa-netd"
     ${lib.optionalString pkgs.stdenv.isLinux ''
     export PATH="${lib.makeBinPath [ pkgs.sydbox ]}:$PATH"
     ''}
@@ -69,7 +73,8 @@ pkgs.rustPlatform.buildRustPackage {
   '';
 
   postFixup = lib.optionalString pkgs.stdenv.isDarwin ''
-    /usr/bin/codesign --force --sign - --entitlements ${entitlements} $out/libexec/capsa/capsa
+    /usr/bin/codesign --force --sign - $out/libexec/capsa/capsa
+    /usr/bin/codesign --force --sign - $out/libexec/capsa/capsa-netd
     /usr/bin/codesign --force --sign - --entitlements ${entitlements} $out/libexec/capsa/capsa-vmm
   '';
 }

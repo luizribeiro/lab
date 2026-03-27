@@ -1,9 +1,28 @@
 { vmLib, pkgs }:
 let
+  capsaPackage = import ../package.nix {
+    inherit (pkgs) lib;
+    inherit pkgs;
+    src = ../..;
+  };
   netIsolation = import ../tests/net-isolation.nix { inherit vmLib; };
   netDhcp = import ../tests/net-dhcp.nix { inherit vmLib pkgs; };
 in
 {
+  package-artifacts = pkgs.runCommand "capsa-package-artifacts" { } ''
+    set -euo pipefail
+
+    test -x ${capsaPackage}/bin/capsa
+    test -x ${capsaPackage}/libexec/capsa/capsa
+    test -x ${capsaPackage}/libexec/capsa/capsa-vmm
+    test -x ${capsaPackage}/libexec/capsa/capsa-netd
+
+    grep -F 'export CAPSA_VMM_PATH="${capsaPackage}/libexec/capsa/capsa-vmm"' ${capsaPackage}/bin/capsa >/dev/null
+    grep -F 'export CAPSA_NETD_PATH="${capsaPackage}/libexec/capsa/capsa-netd"' ${capsaPackage}/bin/capsa >/dev/null
+
+    touch $out
+  '';
+
   vm-smoke = vmLib.mkVMCheck {
     name = "capsa";
     expectProgram = ''
