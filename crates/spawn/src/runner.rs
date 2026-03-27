@@ -2,12 +2,16 @@ use std::{future::Future, io::Write};
 
 use fittings_core::{error::FittingsError, service::Service};
 use fittings_server::Server;
-use fittings_transport::stdio::from_process_stdio;
+use fittings_transport::{
+    stdio::from_process_stdio,
+    tcp::{accept_one, TcpTransport},
+};
 use serde_json::Value;
+use tokio::net::TcpListener;
 
 use crate::{
     config::parse_server_config,
-    mode::{detect_mode, SpawnMode, SpawnModeError},
+    mode::{detect_mode, ServeOptions, ServeTransport, SpawnMode, SpawnModeError},
     schema::{validate_service_schema, ServiceSchema},
 };
 
@@ -53,7 +57,7 @@ impl SpawnRunner {
         serve: S,
     ) -> RunOutcome
     where
-        S: FnOnce(Option<Value>) -> Fut,
+        S: FnOnce(ServeOptions, Option<Value>) -> Fut,
         Fut: Future<Output = Result<(), FittingsError>>,
         WOut: Write,
         WErr: Write,
@@ -66,15 +70,12 @@ impl SpawnRunner {
             }
         };
 
-        if matches!(mode, SpawnMode::Schema | SpawnMode::Serve { .. }) {
-            if let Err(error) = validate_service_schema(&self.schema) {
-                let _ = writeln!(stderr, "invalid service schema: {error}");
-                return RunOutcome::Exit(1);
-            }
+        if let Err(error) = validate_service_schema(&self.schema) {
+            let _ = writeln!(stderr, "invalid service schema: {error}");
+            return RunOutcome::Exit(1);
         }
 
         match mode {
-            SpawnMode::Normal => RunOutcome::Normal,
             SpawnMode::Schema => {
                 if emit_schema(stdout, &self.schema, stderr) {
                     RunOutcome::Exit(0)
@@ -82,8 +83,9 @@ impl SpawnRunner {
                     RunOutcome::Exit(1)
                 }
             }
-            SpawnMode::Serve { config_json } => {
-                let config = match parse_server_config(config_json.as_deref(), &self.schema) {
+            SpawnMode::Serve(options) => {
+                let config = match parse_server_config(options.config_json.as_deref(), &self.schema)
+                {
                     Ok(config) => config,
                     Err(error) => {
                         let _ = writeln!(stderr, "{error}");
@@ -91,7 +93,7 @@ impl SpawnRunner {
                     }
                 };
 
-                match serve(config).await {
+                match serve(options, config).await {
                     Ok(()) => RunOutcome::Exit(0),
                     Err(error) => {
                         let _ = writeln!(stderr, "serve failed: {error}");
@@ -116,17 +118,49 @@ impl SpawnRunner {
         let mut stderr = std::io::stderr();
         let max_in_flight = self.max_in_flight;
         let max_frame_bytes = self.max_frame_bytes;
+        let service_name = self.schema.name.clone();
 
         self.run_with(
             env_fittings,
             args,
             &mut stdout,
             &mut stderr,
-            move |config| async move {
+            move |options, config| async move {
                 let service = make_service(config);
-                let transport = from_process_stdio(max_frame_bytes);
-                let server = Server::new(service, transport).with_max_in_flight(max_in_flight);
-                server.serve().await
+                match options.transport {
+                    ServeTransport::Stdio => {
+                        let transport = from_process_stdio(max_frame_bytes);
+                        let server =
+                            Server::new(service, transport).with_max_in_flight(max_in_flight);
+                        server.serve().await
+                    }
+                    ServeTransport::Tcp => {
+                        let listener =
+                            TcpListener::bind(&options.address).await.map_err(|error| {
+                                FittingsError::transport(format!(
+                                    "failed to bind TCP listener on {}: {}",
+                                    options.address, error
+                                ))
+                            })?;
+
+                        let local_addr = listener.local_addr().map_err(|error| {
+                            FittingsError::transport(format!(
+                                "failed to read local TCP listener address: {}",
+                                error
+                            ))
+                        })?;
+                        println!(
+                            "{} listening on {} (single connection)",
+                            service_name, local_addr
+                        );
+
+                        let transport: TcpTransport =
+                            accept_one(&listener, max_frame_bytes).await?;
+                        let server =
+                            Server::new(service, transport).with_max_in_flight(max_in_flight);
+                        server.serve().await
+                    }
+                }
             },
         )
         .await
@@ -188,40 +222,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn normal_mode_returns_without_invoking_spawn_paths() {
-        let invalid_schema = ServiceSchema {
-            name: " ".to_string(),
-            methods: vec![],
-            config_schema: None,
-        };
-        let runner = SpawnRunner::new(invalid_schema);
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        let outcome = runner
-            .run_with(None, &args(&[]), &mut stdout, &mut stderr, |_| async {
-                panic!("serve callback must not run in normal mode");
-            })
-            .await;
-
-        assert_eq!(outcome, RunOutcome::Normal);
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
-    }
-
-    #[tokio::test]
-    async fn schema_mode_writes_only_stdout_and_exits_zero() {
+    async fn schema_mode_writes_only_stdout_and_exits_zero_without_fittings_env() {
         let runner = SpawnRunner::new(schema());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         let outcome = runner
             .run_with(
-                Some("1"),
+                None,
                 &args(&["schema"]),
                 &mut stdout,
                 &mut stderr,
-                |_| async { Ok(()) },
+                |_, _| async { Ok(()) },
             )
             .await;
 
@@ -234,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_mode_parses_config_and_invokes_callback() {
+    async fn stdio_serve_mode_parses_config_and_invokes_callback() {
         let runner = SpawnRunner::new(schema());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -247,9 +259,13 @@ mod tests {
                 &args(&["serve", "{\"log_level\":\"debug\"}"]),
                 &mut stdout,
                 &mut stderr,
-                move |config| {
+                move |options, config| {
                     invoked_clone.store(true, Ordering::SeqCst);
                     async move {
+                        assert!(matches!(
+                            options.transport,
+                            crate::mode::ServeTransport::Stdio
+                        ));
                         assert_eq!(config, Some(json!({"log_level": "debug"})));
                         Ok(())
                     }
@@ -261,6 +277,43 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         assert!(invoked.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn tcp_serve_mode_parses_transport_flags() {
+        let runner = SpawnRunner::new(schema());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let outcome = runner
+            .run_with(
+                Some("1"),
+                &args(&[
+                    "serve",
+                    "--transport",
+                    "tcp",
+                    "--addr",
+                    "127.0.0.1:8123",
+                    "--config",
+                    "{\"log_level\":\"info\"}",
+                ]),
+                &mut stdout,
+                &mut stderr,
+                |options, config| async move {
+                    assert!(matches!(
+                        options.transport,
+                        crate::mode::ServeTransport::Tcp
+                    ));
+                    assert_eq!(options.address, "127.0.0.1:8123");
+                    assert_eq!(config, Some(json!({"log_level": "info"})));
+                    Ok(())
+                },
+            )
+            .await;
+
+        assert_eq!(outcome, RunOutcome::Exit(0));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[tokio::test]
@@ -277,7 +330,7 @@ mod tests {
                 &args(&["serve", "{"]),
                 &mut stdout,
                 &mut stderr,
-                move |_| {
+                move |_, _| {
                     invoked_clone.store(true, Ordering::SeqCst);
                     async { Ok(()) }
                 },
@@ -297,9 +350,13 @@ mod tests {
         let mut stderr = Vec::new();
 
         let missing_command = runner
-            .run_with(Some("1"), &args(&[]), &mut stdout, &mut stderr, |_| async {
-                Ok(())
-            })
+            .run_with(
+                Some("1"),
+                &args(&[]),
+                &mut stdout,
+                &mut stderr,
+                |_, _| async { Ok(()) },
+            )
             .await;
 
         assert_eq!(missing_command, RunOutcome::Exit(1));
@@ -315,7 +372,7 @@ mod tests {
                 &args(&["schema"]),
                 &mut stdout,
                 &mut stderr,
-                |_| async { Ok(()) },
+                |_, _| async { Ok(()) },
             )
             .await;
 
@@ -336,7 +393,7 @@ mod tests {
                 &args(&["serve"]),
                 &mut stdout,
                 &mut stderr,
-                |_| async { Err(fittings_core::error::FittingsError::internal("boom")) },
+                |_, _| async { Err(fittings_core::error::FittingsError::internal("boom")) },
             )
             .await;
 

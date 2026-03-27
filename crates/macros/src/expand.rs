@@ -34,6 +34,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
     let service_name = to_kebab_case(&trait_ident.to_string());
     let schema_fn_ident = format_ident!("{}_schema", trait_snake, span = Span::call_site());
     let constructor_ident = format_ident!("into_{}_router", trait_snake, span = Span::call_site());
+    let run_main_ident = format_ident!("run_{}_main", trait_snake, span = Span::call_site());
 
     let method_schema_items = methods.iter().map(|method| {
         let method_name = method.ident.to_string();
@@ -169,6 +170,26 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
             I: #trait_ident + Send + Sync,
         {
             #router_ident { inner }
+        }
+
+        #trait_vis async fn #run_main_ident<I>(service: I) -> i32
+        where
+            I: #trait_ident + Send + Sync + 'static,
+        {
+            let args: ::std::vec::Vec<::std::string::String> = ::std::env::args().skip(1).collect();
+            let env_fittings = ::std::env::var("FITTINGS").ok();
+            let runner = ::fittings::SpawnRunner::new(#schema_fn_ident());
+
+            let outcome = runner
+                .run_with_stdio_service(env_fittings.as_deref(), &args, move |_config| {
+                    ::fittings::RouterService::new(#constructor_ident(service))
+                })
+                .await;
+
+            match outcome {
+                ::fittings::RunOutcome::Exit(code) => code,
+                ::fittings::RunOutcome::Normal => 1,
+            }
         }
 
         #trait_vis struct #client_ident<C>

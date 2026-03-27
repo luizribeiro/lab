@@ -377,7 +377,6 @@ dependencies = [
 name = "hello-service"
 version = "0.1.0"
 dependencies = [
- "clap",
  "fittings",
  "hello-api",
  "schemars",

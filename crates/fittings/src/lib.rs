@@ -23,7 +23,8 @@ pub use fittings_macros::service;
 pub use fittings_server::{MethodRouter, RouterService, Server};
 pub use fittings_spawn::{
     detect_mode, parse_server_config, validate_service_schema, ConfigError, MethodSchema,
-    RunOutcome, SchemaValidationError, ServiceSchema, SpawnMode, SpawnModeError, SpawnRunner,
+    RunOutcome, SchemaValidationError, ServeOptions, ServeTransport, ServiceSchema, SpawnMode,
+    SpawnModeError, SpawnRunner,
 };
 pub use fittings_transport::{
     stdio::{from_process_stdio, StdioTransport},

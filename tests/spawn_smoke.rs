@@ -42,10 +42,16 @@ fn hello_service_bin() -> &'static str {
     env!("CARGO_BIN_EXE_hello-service")
 }
 
-fn run_fittings_command(args: &[&str], stdin_payload: Option<&[u8]>) -> Output {
+fn run_service_command(
+    args: &[&str],
+    stdin_payload: Option<&[u8]>,
+    fittings_env: Option<&str>,
+) -> Output {
     let mut command = Command::new(hello_service_bin());
+    if let Some(version) = fittings_env {
+        command.env("FITTINGS", version);
+    }
     command
-        .env("FITTINGS", "1")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -172,7 +178,7 @@ async fn generated_typed_client_surfaces_unknown_method_errors() {
 
 #[test]
 fn fittings_schema_matches_golden_and_is_rfc_compatible() {
-    let output = run_fittings_command(&["schema"], None);
+    let output = run_service_command(&["schema"], None, None);
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
@@ -198,7 +204,7 @@ fn fittings_schema_matches_golden_and_is_rfc_compatible() {
 
 #[test]
 fn fittings_schema_output_does_not_include_normal_mode_banner() {
-    let output = run_fittings_command(&["schema"], None);
+    let output = run_service_command(&["schema"], None, None);
     assert!(output.status.success());
 
     let stdout_text = String::from_utf8(output.stdout).expect("stdout should be utf-8");
@@ -206,17 +212,22 @@ fn fittings_schema_output_does_not_include_normal_mode_banner() {
 }
 
 #[test]
-fn normal_mode_tcp_server_serves_one_connection() {
+fn serve_tcp_transport_serves_one_connection_without_fittings_env() {
     let mut command = Command::new(hello_service_bin());
     command
         .env_remove("FITTINGS")
-        .arg("--bind")
+        .arg("serve")
+        .arg("--transport")
+        .arg("tcp")
+        .arg("--addr")
         .arg("127.0.0.1:0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = command.spawn().expect("spawn hello-service in normal mode");
+    let mut child = command
+        .spawn()
+        .expect("spawn hello-service in serve tcp mode");
 
     let mut listening_line = String::new();
     {
@@ -224,7 +235,7 @@ fn normal_mode_tcp_server_serves_one_connection() {
         let mut reader = BufReader::new(stdout);
         reader
             .read_line(&mut listening_line)
-            .expect("normal mode should print listening line");
+            .expect("serve tcp mode should print listening line");
         assert!(listening_line.contains("hello-service listening on"));
     }
 
@@ -262,7 +273,7 @@ fn normal_mode_tcp_server_serves_one_connection() {
     let output = wait_for_child_exit(child, Duration::from_secs(2));
     assert!(
         output.status.success(),
-        "normal-mode server should exit cleanly"
+        "serve tcp mode should exit cleanly"
     );
 
     let remaining_stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
@@ -277,7 +288,7 @@ fn normal_mode_tcp_server_serves_one_connection() {
 fn fittings_serve_handles_success_request() {
     let request = br#"{"id":"1","method":"hello","params":{"name":"Ada"},"metadata":{}}
 "#;
-    let output = run_fittings_command(&["serve"], Some(request));
+    let output = run_service_command(&["serve"], Some(request), None);
 
     assert!(output.status.success(), "serve should exit cleanly");
     assert!(output.stderr.is_empty(), "stderr must be empty");
@@ -290,7 +301,7 @@ fn fittings_serve_handles_success_request() {
 
 #[test]
 fn malformed_request_maps_to_parse_error_code() {
-    let output = run_fittings_command(&["serve"], Some(b"{bad json\n"));
+    let output = run_service_command(&["serve"], Some(b"{bad json\n"), None);
 
     assert!(
         output.status.success(),
@@ -306,7 +317,7 @@ fn malformed_request_maps_to_parse_error_code() {
 fn unknown_method_maps_to_method_not_found_code() {
     let request = br#"{"id":"404","method":"nope","params":{},"metadata":{}}
 "#;
-    let output = run_fittings_command(&["serve"], Some(request));
+    let output = run_service_command(&["serve"], Some(request), None);
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
@@ -318,13 +329,13 @@ fn unknown_method_maps_to_method_not_found_code() {
 
 #[test]
 fn schema_and_serve_arity_errors_return_usage_and_non_zero_exit() {
-    let schema_extra = run_fittings_command(&["schema", "extra"], None);
+    let schema_extra = run_service_command(&["schema", "extra"], None, None);
     assert!(!schema_extra.status.success());
     let schema_stderr = String::from_utf8(schema_extra.stderr).expect("stderr should be utf-8");
     assert!(schema_stderr.contains("Usage:"));
     assert!(schema_extra.stdout.is_empty());
 
-    let serve_extra = run_fittings_command(&["serve", "{}", "extra"], None);
+    let serve_extra = run_service_command(&["serve", "{}", "extra"], None, None);
     assert!(!serve_extra.status.success());
     let serve_stderr = String::from_utf8(serve_extra.stderr).expect("stderr should be utf-8");
     assert!(serve_stderr.contains("Usage:"));
@@ -333,7 +344,7 @@ fn schema_and_serve_arity_errors_return_usage_and_non_zero_exit() {
 
 #[test]
 fn partial_eof_is_deterministic_transport_failure() {
-    let output = run_fittings_command(&["serve"], Some(b"{\"id\":\"1\""));
+    let output = run_service_command(&["serve"], Some(b"{\"id\":\"1\""), None);
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "protocol stdout must stay empty");
@@ -347,7 +358,7 @@ fn oversized_frame_is_deterministic_transport_failure() {
     let mut oversized = vec![b'a'; 1_048_577];
     oversized.push(b'\n');
 
-    let output = run_fittings_command(&["serve"], Some(&oversized));
+    let output = run_service_command(&["serve"], Some(&oversized), None);
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "protocol stdout must stay empty");
