@@ -3,27 +3,10 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use fittings::{validate_service_schema, FittingsError};
+use hello_api::{HelloParams, HelloResult, HelloServiceClient};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-struct SpawnHelloParams {
-    name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-struct SpawnHelloResult {
-    message: String,
-}
-
-#[fittings::service]
-trait SpawnHelloClientService {
-    async fn hello(
-        &self,
-        params: SpawnHelloParams,
-    ) -> Result<SpawnHelloResult, fittings::FittingsError>;
-}
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct MissingNameParams {}
@@ -33,7 +16,7 @@ trait SpawnHelloInvalidParamsClientService {
     async fn hello(
         &self,
         params: MissingNameParams,
-    ) -> Result<SpawnHelloResult, fittings::FittingsError>;
+    ) -> Result<HelloResult, fittings::FittingsError>;
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -89,12 +72,12 @@ fn parse_single_response(stdout: &[u8]) -> Value {
 
 #[tokio::test]
 async fn generated_typed_client_spawn_roundtrip_succeeds() {
-    let client = SpawnHelloClientServiceClient::spawn(hello_service_bin())
+    let client = HelloServiceClient::spawn(hello_service_bin())
         .await
         .expect("spawned generated client should connect");
 
     let result = client
-        .hello(SpawnHelloParams {
+        .hello(HelloParams {
             name: "Ada".to_string(),
         })
         .await
@@ -105,7 +88,7 @@ async fn generated_typed_client_spawn_roundtrip_succeeds() {
 
 #[tokio::test]
 async fn generated_typed_client_spawn_with_config_roundtrip_succeeds() {
-    let client = SpawnHelloClientServiceClient::spawn_with_config(
+    let client = HelloServiceClient::spawn_with_config(
         hello_service_bin(),
         serde_json::json!({"log_level": "info"}),
     )
@@ -113,7 +96,7 @@ async fn generated_typed_client_spawn_with_config_roundtrip_succeeds() {
     .expect("spawned generated client should connect with config");
 
     let result = client
-        .hello(SpawnHelloParams {
+        .hello(HelloParams {
             name: "Grace".to_string(),
         })
         .await
