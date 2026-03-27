@@ -10,3 +10,8 @@ workspace = true
 fittings = { path = "../../crates/fittings" }
 schemars.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+fittings-testkit = { path = "../../crates/testkit" }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
