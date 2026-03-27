@@ -4,12 +4,14 @@ pub use async_trait;
 pub use schemars;
 pub use serde_json;
 
+pub use fittings_client as client;
 pub use fittings_core as core;
 pub use fittings_server as server;
 pub use fittings_spawn as spawn;
 pub use fittings_transport as transport;
 pub use fittings_wire as wire;
 
+pub use fittings_client::Client;
 pub use fittings_core::{
     error::FittingsError,
     message::{Metadata, Request, Response, ServiceError},
@@ -26,7 +28,7 @@ pub use fittings_spawn::{
 pub use fittings_transport::stdio::{from_process_stdio, StdioTransport};
 pub use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError, WireEncodeError},
-    error_map::to_error_envelope,
+    error_map::{from_error_envelope, to_error_envelope},
     types::{ErrorEnvelope, RequestEnvelope, ResponseEnvelope},
 };
 

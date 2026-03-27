@@ -36,6 +36,7 @@ name = "fittings"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "fittings-client",
  "fittings-core",
  "fittings-macros",
  "fittings-server",
@@ -44,6 +45,18 @@ dependencies = [
  "fittings-wire",
  "schemars",
  "serde_json",
+]
+
+[[package]]
+name = "fittings-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fittings-core",
+ "fittings-testkit",
+ "fittings-wire",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

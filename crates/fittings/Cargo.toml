@@ -10,6 +10,7 @@ workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
+fittings-client = { path = "../client" }
 fittings-core = { path = "../core" }
 fittings-macros = { path = "../macros" }
 fittings-server = { path = "../server" }

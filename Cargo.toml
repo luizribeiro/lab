@@ -8,6 +8,7 @@ members = [
     "crates/fittings",
     "crates/testkit",
     "crates/macros",
+    "crates/client",
     "examples/hello-service",
 ]
 resolver = "2"

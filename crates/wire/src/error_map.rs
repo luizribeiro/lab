@@ -57,13 +57,54 @@ pub fn to_error_envelope(id: String, err: FittingsError) -> ResponseEnvelope {
     ResponseEnvelope::error(id, error, Metadata::default())
 }
 
+pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
+    match error {
+        ErrorEnvelope {
+            code: PARSE_ERROR_CODE,
+            message,
+            ..
+        } => FittingsError::parse_error(message),
+        ErrorEnvelope {
+            code: INVALID_REQUEST_CODE,
+            message,
+            ..
+        } => FittingsError::invalid_request(message),
+        ErrorEnvelope {
+            code: METHOD_NOT_FOUND_CODE,
+            message,
+            ..
+        } => FittingsError::method_not_found(message),
+        ErrorEnvelope {
+            code: INVALID_PARAMS_CODE,
+            message,
+            ..
+        } => FittingsError::invalid_params(message),
+        ErrorEnvelope {
+            code: INTERNAL_ERROR_CODE,
+            message,
+            ..
+        } => FittingsError::internal(message),
+        ErrorEnvelope {
+            code,
+            message,
+            data,
+        } if ServiceError::is_valid_code_value(code) => FittingsError::service(ServiceError {
+            code,
+            message,
+            data,
+        }),
+        ErrorEnvelope { message, .. } => FittingsError::internal(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use fittings_core::{error::FittingsError, message::ServiceError};
 
-    use super::to_error_envelope;
+    use super::{from_error_envelope, to_error_envelope};
+    use crate::types::ErrorEnvelope;
 
     #[test]
     fn maps_each_error_family_to_expected_code() {
@@ -121,5 +162,83 @@ mod tests {
         assert_eq!(error.code, 7);
         assert_eq!(error.message, "domain error");
         assert_eq!(error.data, Some(json!({"detail": "x"})));
+    }
+
+    #[test]
+    fn reverse_mapping_table_is_deterministic() {
+        let parse = from_error_envelope(ErrorEnvelope {
+            code: -32700,
+            message: "bad json".to_string(),
+            data: Some(json!({"ignored": true})),
+        });
+        assert!(matches!(parse, FittingsError::ParseError(message) if message == "bad json"));
+
+        let invalid_request = from_error_envelope(ErrorEnvelope {
+            code: -32600,
+            message: "bad request".to_string(),
+            data: None,
+        });
+        assert!(matches!(
+            invalid_request,
+            FittingsError::InvalidRequest(message) if message == "bad request"
+        ));
+
+        let method_not_found = from_error_envelope(ErrorEnvelope {
+            code: -32601,
+            message: "missing".to_string(),
+            data: None,
+        });
+        assert!(matches!(
+            method_not_found,
+            FittingsError::MethodNotFound(message) if message == "missing"
+        ));
+
+        let invalid_params = from_error_envelope(ErrorEnvelope {
+            code: -32602,
+            message: "bad params".to_string(),
+            data: None,
+        });
+        assert!(matches!(
+            invalid_params,
+            FittingsError::InvalidParams(message) if message == "bad params"
+        ));
+
+        let internal = from_error_envelope(ErrorEnvelope {
+            code: -32603,
+            message: "internal".to_string(),
+            data: None,
+        });
+        assert!(matches!(internal, FittingsError::Internal(message) if message == "internal"));
+
+        let service = from_error_envelope(ErrorEnvelope {
+            code: 42,
+            message: "domain".to_string(),
+            data: Some(json!({"detail": "x"})),
+        });
+        assert!(matches!(
+            service,
+            FittingsError::Service(ServiceError { code: 42, message, data })
+                if message == "domain" && data == Some(json!({"detail": "x"}))
+        ));
+
+        let unknown_negative = from_error_envelope(ErrorEnvelope {
+            code: -32000,
+            message: "unknown negative".to_string(),
+            data: None,
+        });
+        assert!(matches!(
+            unknown_negative,
+            FittingsError::Internal(message) if message == "unknown negative"
+        ));
+
+        let unknown_positive = from_error_envelope(ErrorEnvelope {
+            code: 1000,
+            message: "unknown positive".to_string(),
+            data: Some(json!({"ignored": true})),
+        });
+        assert!(matches!(
+            unknown_positive,
+            FittingsError::Internal(message) if message == "unknown positive"
+        ));
     }
 }
