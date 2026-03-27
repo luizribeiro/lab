@@ -9,6 +9,7 @@ members = [
     "crates/testkit",
     "crates/macros",
     "crates/client",
+    "examples/hello-api",
     "examples/hello-service",
 ]
 resolver = "2"

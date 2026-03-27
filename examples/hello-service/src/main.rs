@@ -1,37 +1,10 @@
 use std::process;
 
 use fittings::{FittingsError, RouterService, RunOutcome, SpawnRunner};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct HelloParams {
-    name: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-struct HelloResult {
-    message: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct PingParams {}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-struct PingResult {
-    ok: bool,
-}
-
-#[fittings::service]
-trait HelloService {
-    /// Greets the provided name
-    async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError>;
-
-    /// Health check
-    async fn ping(&self, params: PingParams) -> Result<PingResult, FittingsError>;
-}
+use hello_api::{
+    hello_service_schema, into_hello_service_router, HelloParams, HelloResult, HelloService,
+    PingParams, PingResult,
+};
 
 struct HelloServiceImpl;
 
@@ -72,11 +45,11 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        hello_service_schema, into_hello_service_router, HelloParams, HelloService,
-        HelloServiceImpl, PingParams,
-    };
+    use super::HelloServiceImpl;
     use fittings::{FittingsError, MethodRouter};
+    use hello_api::{
+        hello_service_schema, into_hello_service_router, HelloParams, HelloService, PingParams,
+    };
     use serde_json::json;
 
     #[tokio::test]
