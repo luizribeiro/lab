@@ -46,6 +46,12 @@ version = "0.1.0"
 [[package]]
 name = "fittings-wire"
 version = "0.1.0"
+dependencies = [
+ "fittings-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "itoa"
