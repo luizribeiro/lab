@@ -83,7 +83,9 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "trace/force_cloexec:on".to_string(),
     ];
 
-    if !spec.allow_network {
+    if spec.allow_network {
+        rules.push("sandbox/net:off".to_string());
+    } else {
         rules.push("sandbox/net:on".to_string());
         rules.push("default/net:deny".to_string());
     }

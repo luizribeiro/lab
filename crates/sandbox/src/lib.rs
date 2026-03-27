@@ -172,6 +172,13 @@ pub fn spawn_sandboxed_with_fds(
         return spawn_direct_with_fds(program, args, fd_remaps, stdin_null);
     }
 
+    if spec.allow_network {
+        // Temporary Linux behavior: sydbox network mediation currently conflicts with
+        // capsa-netd policy runtime and blocks outbound traffic. Keep fd remaps and
+        // stdio shaping but bypass syd for network-enabled daemons.
+        return spawn_direct_with_fds(program, args, fd_remaps, stdin_null);
+    }
+
     linux::spawn_with_syd(program, args, spec, fd_remaps, stdin_null)
 }
 
