@@ -11,6 +11,7 @@ members = [
     "crates/client",
     "examples/hello-api",
     "examples/hello-service",
+    "examples/hello-client",
 ]
 resolver = "2"
 

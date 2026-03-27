@@ -262,6 +262,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hello-client"
+version = "0.1.0"
+dependencies = [
+ "fittings",
+ "hello-api",
+ "tokio",
+]
+
+[[package]]
 name = "hello-service"
 version = "0.1.0"
 dependencies = [

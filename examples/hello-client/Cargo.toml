@@ -1,0 +1,12 @@
+[package]
+name = "hello-client"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fittings = { path = "../../crates/fittings" }
+hello-api = { path = "../hello-api" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
