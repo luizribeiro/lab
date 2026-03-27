@@ -1,34 +1,31 @@
 mod interface_plan;
 
-use std::path::Path;
+use std::os::fd::{FromRawFd, OwnedFd};
+use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
-
-use std::os::fd::OwnedFd;
-
-use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, VirtualSwitch};
-
-use tokio::runtime::{Builder, Runtime};
-use tokio::task::JoinHandle;
+use anyhow::{bail, Context, Result};
 
 use crate::{
     daemon::{
-        resolve::resolve_daemon_binary,
+        net::{
+            adapter::{NetDaemonAdapter, NetDaemonHandoff},
+            spec::{NetInterfaceSpec, NetLaunchSpec},
+        },
         supervisor::DaemonSupervisor,
         vmm::{
             adapter::{VmmDaemonAdapter, VmmDaemonHandoff},
-            args::encode_launch_spec_args,
+            spec::VmmLaunchSpec,
         },
     },
-    ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig, VmmLaunchSpec,
+    VmConfig,
 };
 
-use self::interface_plan::{
-    build_interface_plan, resolved_interfaces_for_plan, vmm_fd_remaps_for_plan,
-};
+use self::interface_plan::{build_interface_plan, resolved_interfaces_for_plan};
+
+const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 impl VmConfig {
-    /// Start the VM in the sandboxed sidecar process.
+    /// Start the VM in sandboxed daemon processes.
     pub fn start(&self) -> Result<()> {
         self.validate().context("invalid VM configuration")?;
 
@@ -36,72 +33,7 @@ impl VmConfig {
             return start_without_network_via_supervisor(self);
         }
 
-        let vmm_exe = resolve_vmm_binary()?;
-        let spec = vm_sandbox_spec(self, &vmm_exe);
-
-        let mut network_runtime = Some(
-            NetworkRuntimeContext::start(&self.interfaces)
-                .context("failed to start network runtime")?,
-        );
-
-        let launch_spec = VmmLaunchSpec {
-            vm_config: self.clone(),
-            resolved_interfaces: network_runtime
-                .as_ref()
-                .map(NetworkRuntimeContext::resolved_interfaces)
-                .unwrap_or_default(),
-        };
-
-        let child_args = encode_launch_spec_args(&launch_spec)?;
-
-        let child = capsa_sandbox::spawn_sandboxed_with_fds(
-            &vmm_exe,
-            &child_args,
-            &spec,
-            network_runtime
-                .as_ref()
-                .expect("network runtime must exist for networked start")
-                .fd_remaps(),
-        )
-        .with_context(|| {
-            format!(
-                "failed to spawn sandboxed VMM process: {}",
-                vmm_exe.display()
-            )
-        });
-
-        let child = match child {
-            Ok(child) => child,
-            Err(err) => {
-                if let Some(runtime) = network_runtime.take() {
-                    runtime
-                        .shutdown()
-                        .context("failed to shutdown network runtime after spawn failure")?;
-                }
-                return Err(err);
-            }
-        };
-
-        if let Some(runtime) = network_runtime.as_mut() {
-            // Once spawn returns, child pre-exec fd remapping has already run.
-            // We can drop the launcher-owned guest endpoints immediately.
-            runtime.release_guest_fds_after_spawn();
-        }
-
-        let wait_result = child.wait().context("failed to wait on sandboxed child");
-
-        if let Some(runtime) = network_runtime.take() {
-            runtime
-                .shutdown()
-                .context("failed to shutdown network runtime")?;
-        }
-
-        let status = wait_result?;
-        if status.success() {
-            return Ok(());
-        }
-
-        anyhow::bail!("sandboxed VMM process exited with status {status}")
+        start_with_network_via_supervisor(self)
     }
 }
 
@@ -124,160 +56,125 @@ fn start_without_network_via_supervisor(config: &VmConfig) -> Result<()> {
         return Ok(());
     }
 
-    anyhow::bail!("sandboxed VMM process exited with status {status}")
+    bail!("sandboxed VMM process exited with status {status}")
 }
 
-#[derive(Debug)]
-struct NetworkRuntimeContext {
-    runtime: Runtime,
-    network: NetworkRuntime,
-}
+fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
+    let plan = build_interface_plan(&config.interfaces)
+        .context("failed to build network interface plan for daemon startup")?;
 
-impl NetworkRuntimeContext {
-    fn start(interfaces: &[VmNetworkInterfaceConfig]) -> Result<Self> {
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("failed to build tokio runtime for networking")?;
-        let network = runtime
-            .block_on(NetworkRuntime::start(interfaces))
-            .context("failed to initialize network runtime")?;
+    let vmm_launch_spec = VmmLaunchSpec {
+        vm_config: config.clone(),
+        resolved_interfaces: resolved_interfaces_for_plan(&plan.interfaces),
+    };
 
-        Ok(Self { runtime, network })
+    let net_launch_spec = NetLaunchSpec {
+        interfaces: plan
+            .interfaces
+            .iter()
+            .map(|iface| NetInterfaceSpec {
+                host_fd: iface.netd_host_target_fd,
+                mac: iface.mac,
+                policy: Some(iface.policy.clone()),
+            })
+            .collect(),
+    };
+
+    let mut host_fds = Vec::with_capacity(plan.interfaces.len());
+    let mut guest_fds = Vec::with_capacity(plan.interfaces.len());
+    for iface in plan.interfaces {
+        host_fds.push(iface.host_fd);
+        guest_fds.push(iface.guest_fd);
     }
 
-    fn resolved_interfaces(&self) -> Vec<ResolvedNetworkInterface> {
-        self.network.resolved_interfaces.clone()
-    }
+    let (ready_reader, ready_writer) =
+        create_pipe().context("failed to create netd readiness pipe")?;
+    let net_handoff = NetDaemonHandoff::new(host_fds, ready_reader, ready_writer)
+        .context("failed to prepare net daemon handoff")?;
+    let vmm_handoff = VmmDaemonHandoff::new(guest_fds).context("failed to prepare VMM handoff")?;
 
-    fn fd_remaps(&self) -> &[capsa_sandbox::FdRemap] {
-        &self.network.fd_remaps
-    }
+    let supervisor = DaemonSupervisor::default();
 
-    fn release_guest_fds_after_spawn(&mut self) {
-        self.network.guest_fds.clear();
-    }
+    let mut netd = supervisor
+        .spawn::<NetDaemonAdapter>(net_launch_spec, net_handoff)
+        .context("failed to spawn network daemon")?;
 
-    fn shutdown(self) -> Result<()> {
-        self.runtime.block_on(self.network.shutdown())
-    }
-}
-
-#[derive(Debug)]
-struct NetworkRuntime {
-    resolved_interfaces: Vec<ResolvedNetworkInterface>,
-    fd_remaps: Vec<capsa_sandbox::FdRemap>,
-    guest_fds: Vec<OwnedFd>,
-    bridge_tasks: Vec<JoinHandle<std::io::Result<()>>>,
-    gateway_tasks: Vec<JoinHandle<std::io::Result<()>>>,
-}
-
-impl NetworkRuntime {
-    async fn start(interfaces: &[VmNetworkInterfaceConfig]) -> Result<Self> {
-        ensure!(
-            !interfaces.is_empty(),
-            "network runtime requires at least one interface"
-        );
-
-        let plan = build_interface_plan(interfaces)?;
-        debug_assert_eq!(
-            plan.interfaces.len(),
-            plan.interfaces
-                .iter()
-                .map(|iface| iface.netd_host_target_fd)
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-            "planned netd host target fds must be unique"
-        );
-        let resolved_interfaces = resolved_interfaces_for_plan(&plan.interfaces);
-        let fd_remaps = vmm_fd_remaps_for_plan(&plan.interfaces);
-        let mut guest_fds = Vec::with_capacity(plan.interfaces.len());
-        let mut bridge_tasks = Vec::with_capacity(plan.interfaces.len());
-        let mut gateway_tasks = Vec::with_capacity(plan.interfaces.len());
-
-        for planned_interface in plan.interfaces {
-            let switch = VirtualSwitch::new();
-            let vm_port = switch.create_port().await;
-            let gateway_port = switch.create_port().await;
-
-            let bridge_task =
-                tokio::spawn(
-                    async move { bridge_to_switch(planned_interface.host_fd, vm_port).await },
+    let mut vmm = match supervisor.spawn::<VmmDaemonAdapter>(vmm_launch_spec, vmm_handoff) {
+        Ok(vmm) => vmm,
+        Err(primary_error) => {
+            let mut error = primary_error.context("failed to spawn sandboxed VMM process");
+            if let Err(cleanup_error) = netd.shutdown() {
+                error = attach_cleanup_error(
+                    error,
+                    cleanup_error
+                        .context("failed to shutdown network daemon after VMM spawn failure"),
                 );
-            let gateway_config = gateway_config_for_policy(planned_interface.policy);
-            let gateway = GatewayStack::new(gateway_port, gateway_config).await;
-            let gateway_task = tokio::spawn(async move { gateway.run().await });
+            }
+            return Err(error);
+        }
+    };
 
-            guest_fds.push(planned_interface.guest_fd);
-            bridge_tasks.push(bridge_task);
-            gateway_tasks.push(gateway_task);
+    loop {
+        if let Some(status) = vmm.try_wait().context("failed to poll VMM daemon")? {
+            let shutdown_result = netd.shutdown();
+            if status.success() {
+                return shutdown_result.context("failed to shutdown network daemon after VMM exit");
+            }
+
+            let mut error = anyhow::anyhow!("sandboxed VMM process exited with status {status}");
+            if let Err(cleanup_error) = shutdown_result {
+                error = attach_cleanup_error(
+                    error,
+                    cleanup_error.context("failed to shutdown network daemon after VMM exit"),
+                );
+            }
+            return Err(error);
         }
 
-        Ok(Self {
-            resolved_interfaces,
-            fd_remaps,
-            guest_fds,
-            bridge_tasks,
-            gateway_tasks,
-        })
-    }
-
-    async fn shutdown(self) -> Result<()> {
-        for handle in &self.bridge_tasks {
-            handle.abort();
-        }
-        for handle in &self.gateway_tasks {
-            handle.abort();
+        if let Some(status) = netd.try_wait().context("failed to poll network daemon")? {
+            let mut error = anyhow::anyhow!(
+                "network daemon exited unexpectedly while VMM was running with status {status}"
+            );
+            if let Err(cleanup_error) = vmm.shutdown() {
+                error = attach_cleanup_error(
+                    error,
+                    cleanup_error.context("failed to shutdown VMM after network daemon exit"),
+                );
+            }
+            return Err(error);
         }
 
-        for handle in self.bridge_tasks {
-            let _ = handle.await;
-        }
-        for handle in self.gateway_tasks {
-            let _ = handle.await;
-        }
-
-        Ok(())
+        std::thread::sleep(MONITOR_POLL_INTERVAL);
     }
 }
 
-fn gateway_config_for_policy(policy: capsa_net::NetworkPolicy) -> GatewayStackConfig {
-    GatewayStackConfig {
-        policy: Some(policy),
-        ..GatewayStackConfig::default()
+fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0; 2];
+    // SAFETY: `fds` points to storage for exactly two fds.
+    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to create readiness pipe");
     }
+
+    // SAFETY: `pipe` initialized both fds on success and ownership moves into `OwnedFd`.
+    let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: same as above for write end.
+    let writer = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+    Ok((reader, writer))
 }
 
-fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
-    let mut spec = capsa_sandbox::SandboxSpec::new().allow_network(false);
-
-    spec.read_only_paths.push(vmm_exe.to_path_buf());
-
-    if let Some(root) = &config.root {
-        spec.read_write_paths.push(root.clone());
-    }
-
-    if let Some(kernel) = &config.kernel {
-        spec.read_only_paths.push(kernel.clone());
-    }
-
-    if let Some(initramfs) = &config.initramfs {
-        spec.read_only_paths.push(initramfs.clone());
-    }
-
-    spec
-}
-
-fn resolve_vmm_binary() -> Result<std::path::PathBuf> {
-    resolve_daemon_binary("capsa-vmm", "CAPSA_VMM_PATH")
+fn attach_cleanup_error(primary: anyhow::Error, cleanup: anyhow::Error) -> anyhow::Error {
+    primary.context(format!("cleanup error: {cleanup:#}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{gateway_config_for_policy, vm_sandbox_spec};
+    use super::MONITOR_POLL_INTERVAL;
     use crate::{VmConfig, VmNetworkInterfaceConfig};
-    use capsa_net::{DomainPattern, NetworkPolicy};
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
     fn env_lock() -> &'static std::sync::Mutex<()> {
         crate::test_env_lock()
     }
@@ -312,16 +209,36 @@ mod tests {
     }
 
     fn make_temp_file(prefix: &str, contents: &[u8]) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
+        let path = unique_temp_path(prefix);
+        std::fs::write(&path, contents).expect("temp file should be written");
+        path
+    }
+
+    fn make_temp_executable_script(prefix: &str, body: &str) -> PathBuf {
+        let path = unique_temp_path(prefix);
+        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n"))
+            .expect("script file should be written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path)
+                .expect("script metadata should be readable")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).expect("script should be executable");
+        }
+        path
+    }
+
+    fn unique_temp_path(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
             "{prefix}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time should be after epoch")
                 .as_nanos()
-        ));
-        std::fs::write(&path, contents).expect("temp file should be written");
-        path
+        ))
     }
 
     fn find_binary_in_path(name: &str) -> PathBuf {
@@ -348,12 +265,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn vm_sandbox_spec_disables_network_without_interfaces() {
-        let config = sample_config();
-        let spec = vm_sandbox_spec(&config, std::path::Path::new("/tmp/capsa-vmm"));
+    fn sample_networked_config() -> VmConfig {
+        let mut config = sample_config();
+        config.interfaces = vec![VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+        }];
+        config
+    }
 
-        assert!(!spec.allow_network);
+    fn read_pid_file_with_timeout(path: &Path, timeout: Duration) -> u32 {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                return raw
+                    .trim()
+                    .parse::<u32>()
+                    .expect("pid file should contain a valid pid");
+            }
+            if Instant::now() >= deadline {
+                panic!("pid file {} did not appear in time", path.display());
+            }
+            std::thread::sleep(MONITOR_POLL_INTERVAL);
+        }
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        // SAFETY: `kill(pid, 0)` does not send a signal and is used purely for existence checks.
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+
+        let err = std::io::Error::last_os_error();
+        matches!(err.raw_os_error(), Some(libc::EPERM))
+    }
+
+    fn wait_for_process_exit(pid: u32, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return;
+            }
+            std::thread::sleep(MONITOR_POLL_INTERVAL);
+        }
+        panic!("process {pid} should have exited within {timeout:?}");
     }
 
     #[test]
@@ -389,6 +345,22 @@ mod tests {
         config
             .start()
             .expect("no-network start should succeed for zero exit");
+    }
+
+    #[test]
+    fn no_network_start_does_not_require_netd_binary() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_true = find_binary_in_path("true");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
+        let _netd_guard =
+            EnvVarGuard::set_path("CAPSA_NETD_PATH", Path::new("/definitely/missing/netd"));
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+
+        sample_config()
+            .start()
+            .expect("no-network path should not try to spawn netd");
     }
 
     #[test]
@@ -429,130 +401,122 @@ mod tests {
     }
 
     #[test]
-    fn network_runtime_starts_and_stops_cleanly() {
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-        }];
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+    fn network_start_aborts_when_netd_readiness_times_out() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let netd =
+            make_temp_executable_script("capsa-netd-timeout", "while true; do sleep 1; done");
+        let vmm = find_binary_in_path("true");
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
-        let mut network = runtime
-            .block_on(super::NetworkRuntime::start(&interfaces))
-            .expect("network runtime should start");
+        let err = sample_networked_config()
+            .start()
+            .expect_err("startup should fail if netd does not signal readiness");
 
-        assert_eq!(network.resolved_interfaces.len(), 1);
-        assert_eq!(network.fd_remaps.len(), 1);
-        assert_eq!(network.guest_fds.len(), 1);
+        let _ = std::fs::remove_file(netd);
 
-        network.guest_fds.clear();
-        runtime
-            .block_on(network.shutdown())
-            .expect("network runtime should shut down");
+        assert!(format!("{err:#}").contains("timed out waiting for net daemon readiness signal"));
     }
 
     #[test]
-    fn network_runtime_preserves_explicit_mac() {
-        let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: Some(mac),
-            policy: None,
-        }];
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+    fn network_start_vmm_spawn_failure_tears_down_netd() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let netd_pid_file = unique_temp_path("capsa-netd-pid");
+        let netd = make_temp_executable_script(
+            "capsa-netd-ready-loop",
+            &format!(
+                "echo $$ > '{}'\nprintf 'R' >&30\nwhile true; do sleep 1; done",
+                netd_pid_file.display()
+            ),
+        );
+        let non_executable_vmm = make_temp_file("capsa-vmm-non-executable", b"not executable");
 
-        let mut network = runtime
-            .block_on(super::NetworkRuntime::start(&interfaces))
-            .expect("network runtime should start");
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable_vmm);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
-        assert_eq!(network.resolved_interfaces[0].mac, mac);
+        let err = sample_networked_config()
+            .start()
+            .expect_err("VMM spawn failure should fail startup");
 
-        network.guest_fds.clear();
-        runtime
-            .block_on(network.shutdown())
-            .expect("network runtime should shut down");
+        let netd_pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
+        wait_for_process_exit(netd_pid, Duration::from_secs(4));
+
+        let _ = std::fs::remove_file(netd_pid_file);
+        let _ = std::fs::remove_file(netd);
+        let _ = std::fs::remove_file(non_executable_vmm);
+
+        assert!(format!("{err:#}").contains("failed to spawn sandboxed VMM process"));
     }
 
     #[test]
-    fn network_runtime_rejects_all_zero_mac() {
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: Some([0; 6]),
-            policy: None,
-        }];
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+    fn network_start_netd_runtime_exit_tears_down_vmm() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_pid_file = unique_temp_path("capsa-vmm-pid");
+        let vmm = make_temp_executable_script(
+            "capsa-vmm-loop",
+            &format!(
+                "echo $$ > '{}'\nwhile true; do sleep 1; done",
+                vmm_pid_file.display()
+            ),
+        );
+        let netd = make_temp_executable_script(
+            "capsa-netd-ready-then-exit",
+            "printf 'R' >&30\nsleep 0.2\nexit 42",
+        );
 
-        let err = runtime
-            .block_on(super::NetworkRuntime::start(&interfaces))
-            .expect_err("all-zero MAC should be rejected");
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
-        assert!(err.to_string().contains("MAC address is all zeros"));
+        let err = sample_networked_config()
+            .start()
+            .expect_err("net daemon runtime exit should fail launcher");
+
+        let vmm_pid = read_pid_file_with_timeout(&vmm_pid_file, Duration::from_secs(2));
+        wait_for_process_exit(vmm_pid, Duration::from_secs(4));
+
+        let _ = std::fs::remove_file(vmm_pid_file);
+        let _ = std::fs::remove_file(vmm);
+        let _ = std::fs::remove_file(netd);
+
+        assert!(format!("{err:#}").contains("network daemon exited unexpectedly"));
     }
 
     #[test]
-    fn network_runtime_starts_bridge_task() {
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-        }];
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("runtime should build");
+    fn network_start_vmm_exit_tears_down_netd() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let netd_pid_file = unique_temp_path("capsa-netd-pid");
+        let netd = make_temp_executable_script(
+            "capsa-netd-ready-loop",
+            &format!(
+                "echo $$ > '{}'\nprintf 'R' >&30\nwhile true; do sleep 1; done",
+                netd_pid_file.display()
+            ),
+        );
+        let vmm = find_binary_in_path("true");
 
-        let mut network = runtime
-            .block_on(super::NetworkRuntime::start(&interfaces))
-            .expect("network runtime should start");
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
+        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
-        runtime.block_on(async {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        });
+        sample_networked_config()
+            .start()
+            .expect("VMM zero exit should propagate success");
 
-        assert_eq!(network.bridge_tasks.len(), 1);
-        assert!(!network.bridge_tasks[0].is_finished());
+        let netd_pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
+        wait_for_process_exit(netd_pid, Duration::from_secs(4));
 
-        network.guest_fds.clear();
-        runtime
-            .block_on(network.shutdown())
-            .expect("network runtime should shut down");
-    }
-
-    #[test]
-    fn release_guest_fds_drops_launcher_copy_after_spawn() {
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-        }];
-        let mut ctx = super::NetworkRuntimeContext::start(&interfaces)
-            .expect("network runtime context should start");
-
-        assert_eq!(ctx.network.guest_fds.len(), 1);
-        ctx.release_guest_fds_after_spawn();
-        assert!(ctx.network.guest_fds.is_empty());
-
-        ctx.shutdown().expect("network runtime should shut down");
-    }
-
-    #[test]
-    fn gateway_config_defaults_missing_interface_policy_to_deny_all() {
-        let gateway_config = gateway_config_for_policy(NetworkPolicy::deny_all());
-
-        assert_eq!(gateway_config.policy, Some(NetworkPolicy::deny_all()));
-    }
-
-    #[test]
-    fn gateway_config_preserves_explicit_interface_policy() {
-        let explicit_policy = NetworkPolicy::deny_all()
-            .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
-
-        let gateway_config = gateway_config_for_policy(explicit_policy.clone());
-
-        assert_eq!(gateway_config.policy, Some(explicit_policy));
+        let _ = std::fs::remove_file(netd_pid_file);
+        let _ = std::fs::remove_file(netd);
     }
 }
