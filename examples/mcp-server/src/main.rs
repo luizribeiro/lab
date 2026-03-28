@@ -120,6 +120,34 @@ fn register_long_running_demo_tool(registry: &mut ToolRegistry) -> Result<()> {
     )
 }
 
+fn register_progress_demo_tool(registry: &mut ToolRegistry) -> Result<()> {
+    registry.register(
+        "progress_demo",
+        "Long-running tool that emits notifications/progress when requested",
+        json!({
+            "type": "object",
+            "additionalProperties": false
+        }),
+        |_arguments, context| {
+            let total_steps = 3;
+            for step in 1..=total_steps {
+                if context.cancellation().is_cancelled() {
+                    return Err(FittingsError::invalid_request("tool call cancelled"));
+                }
+
+                context.emit_progress(
+                    step as f64,
+                    Some(total_steps as f64),
+                    Some(format!("progress step {step}/{total_steps}")),
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+
+            Ok(ToolsCallResult::text("progress demo completed"))
+        },
+    )
+}
+
 fn build_service() -> McpServiceImpl {
     let mut registry = ToolRegistry::new();
     register_echo_tool(&mut registry).expect("example tool registration should succeed");
@@ -128,6 +156,7 @@ fn build_service() -> McpServiceImpl {
         .expect("example tool registration should succeed");
     register_long_running_demo_tool(&mut registry)
         .expect("example tool registration should succeed");
+    register_progress_demo_tool(&mut registry).expect("example tool registration should succeed");
     McpServiceImpl::new(registry)
 }
 
@@ -171,7 +200,13 @@ mod tests {
         let tool_names: Vec<_> = listed.tools.iter().map(|tool| tool.name.as_str()).collect();
         assert_eq!(
             tool_names,
-            vec!["add", "add_with_details", "echo", "long_running_demo"]
+            vec![
+                "add",
+                "add_with_details",
+                "echo",
+                "long_running_demo",
+                "progress_demo"
+            ]
         );
     }
 

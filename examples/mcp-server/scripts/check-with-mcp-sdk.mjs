@@ -49,6 +49,10 @@ async function main() {
       toolNames.includes("add_with_details"),
       "expected `add_with_details` tool",
     );
+    assert(
+      toolNames.includes("progress_demo"),
+      "expected `progress_demo` tool",
+    );
 
     const echo = await client.callTool({
       name: "echo",

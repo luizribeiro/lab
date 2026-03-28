@@ -101,6 +101,17 @@ pub struct CancelledNotificationParams {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressNotificationParams {
+    pub progress_token: Value,
+    pub progress: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolContent {
@@ -168,18 +179,63 @@ impl CancellationToken {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ProgressContext {
+    token: Value,
+    notifications: Arc<Mutex<Vec<ServerNotification>>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallContext {
     cancellation: CancellationToken,
+    progress: Option<ProgressContext>,
 }
 
 impl ToolCallContext {
     pub fn new(cancellation: CancellationToken) -> Self {
-        Self { cancellation }
+        Self {
+            cancellation,
+            progress: None,
+        }
+    }
+
+    pub fn with_progress(
+        mut self,
+        progress_token: Option<Value>,
+        notifications: Arc<Mutex<Vec<ServerNotification>>>,
+    ) -> Self {
+        self.progress = progress_token.map(|token| ProgressContext {
+            token,
+            notifications,
+        });
+        self
     }
 
     pub fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
+    }
+
+    pub fn emit_progress(&self, progress: f64, total: Option<f64>, message: Option<String>) {
+        let Some(progress_context) = &self.progress else {
+            return;
+        };
+
+        let params = fittings::serde_json::to_value(ProgressNotificationParams {
+            progress_token: progress_context.token.clone(),
+            progress,
+            total,
+            message,
+        })
+        .expect("progress notification params should serialize");
+
+        progress_context
+            .notifications
+            .lock()
+            .expect("pending notifications mutex should not be poisoned")
+            .push(ServerNotification {
+                method: "notifications/progress".to_string(),
+                params,
+            });
     }
 }
 
@@ -332,7 +388,8 @@ pub struct McpServiceImpl {
     registry: Mutex<ToolRegistry>,
     lifecycle: Mutex<SessionLifecycle>,
     list_changed_enabled: bool,
-    pending_notifications: Mutex<Vec<ServerNotification>>,
+    progress_notifications_enabled: Mutex<bool>,
+    pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
 }
 
 impl McpServiceImpl {
@@ -341,7 +398,8 @@ impl McpServiceImpl {
             registry: Mutex::new(registry),
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
             list_changed_enabled: false,
-            pending_notifications: Mutex::new(Vec::new()),
+            progress_notifications_enabled: Mutex::new(false),
+            pending_notifications: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -382,6 +440,21 @@ impl McpServiceImpl {
             });
     }
 
+    fn set_progress_notifications_enabled(&self, enabled: bool) {
+        let mut state = self
+            .progress_notifications_enabled
+            .lock()
+            .expect("progress notification capability mutex should not be poisoned");
+        *state = enabled;
+    }
+
+    fn progress_notifications_enabled(&self) -> bool {
+        *self
+            .progress_notifications_enabled
+            .lock()
+            .expect("progress notification capability mutex should not be poisoned")
+    }
+
     async fn call_tool_with_context(
         &self,
         params: ToolsCallParams,
@@ -392,6 +465,14 @@ impl McpServiceImpl {
                 "`arguments` must be a JSON object",
             ));
         }
+
+        let progress_token = if self.progress_notifications_enabled() {
+            extract_progress_token(params.meta.as_ref())
+        } else {
+            None
+        };
+        let context =
+            context.with_progress(progress_token, Arc::clone(&self.pending_notifications));
 
         let handler = {
             let registry = self
@@ -421,6 +502,9 @@ impl Default for McpServiceImpl {
 
 impl McpService for McpServiceImpl {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let progress_enabled = client_supports_progress_notifications(params.capabilities.as_ref());
+        self.set_progress_notifications_enabled(progress_enabled);
+
         {
             let mut lifecycle = self
                 .lifecycle
@@ -509,6 +593,8 @@ pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
         CancellationToken,
     )>::new();
     let mut in_flight = HashMap::<fittings::wire::types::JsonRpcId, CancellationToken>::new();
+    let mut notifications_tick = tokio::time::interval(std::time::Duration::from_millis(25));
+    notifications_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         if input_closed && workers.is_empty() {
@@ -520,6 +606,8 @@ pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
                 match maybe_joined {
                     Some(Ok((id, result, cancellation))) => {
                         in_flight.remove(&id);
+
+                        send_pending_notifications(&mut transport, &service).await?;
 
                         if !cancellation.is_cancelled() {
                             let response = match result {
@@ -538,6 +626,9 @@ pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
                     }
                     None => {}
                 }
+            }
+            _ = notifications_tick.tick(), if !workers.is_empty() => {
+                send_pending_notifications(&mut transport, &service).await?;
             }
             recv_result = transport.recv(), if !input_closed => {
                 match recv_result {
@@ -610,6 +701,37 @@ pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
                 }
             }
         }
+    }
+}
+
+fn client_supports_progress_notifications(capabilities: Option<&Value>) -> bool {
+    let Some(capabilities) = capabilities else {
+        return false;
+    };
+
+    capabilities
+        .get("experimental")
+        .and_then(Value::as_object)
+        .and_then(|experimental| {
+            experimental
+                .get("progressNotifications")
+                .and_then(Value::as_bool)
+                .or_else(|| {
+                    experimental
+                        .get("notifications/progress")
+                        .and_then(Value::as_bool)
+                })
+        })
+        .unwrap_or(false)
+}
+
+fn extract_progress_token(meta: Option<&Value>) -> Option<Value> {
+    let meta = meta?.as_object()?;
+    let token = meta.get("progressToken")?;
+    if token.is_string() || token.is_number() {
+        Some(token.clone())
+    } else {
+        None
     }
 }
 

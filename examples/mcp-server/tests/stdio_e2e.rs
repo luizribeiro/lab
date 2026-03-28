@@ -152,11 +152,12 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     let tools = list["result"]["tools"]
         .as_array()
         .expect("tools/list result should include tools array");
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 5);
     assert_eq!(tools[0]["name"], "add");
     assert_eq!(tools[1]["name"], "add_with_details");
     assert_eq!(tools[2]["name"], "echo");
     assert_eq!(tools[3]["name"], "long_running_demo");
+    assert_eq!(tools[4]["name"], "progress_demo");
 
     let call = response_by_id(&responses, "call-1");
     assert_success_response_envelope(call, json!("call-1"));
@@ -297,6 +298,7 @@ fn stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list
             "add_with_details",
             "echo",
             "long_running_demo",
+            "progress_demo",
             "runtime_tool"
         ]
     );
@@ -335,6 +337,82 @@ fn stdio_e2e_long_running_tool_call_can_be_cancelled() {
     let echo = response_by_id(&frames, "echo-after-cancel");
     assert_success_response_envelope(echo, json!("echo-after-cancel"));
     assert_eq!(echo["result"]["content"][0]["text"], "still responsive");
+}
+
+#[test]
+fn stdio_e2e_progress_notifications_are_emitted_before_final_response_when_enabled() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"},\"capabilities\":{\"experimental\":{\"progressNotifications\":true}}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"progress-call-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"progress_demo\",\"arguments\":{},\"_meta\":{\"progressToken\":\"progress-1\"}}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+    assert_success_response_envelope(response_by_id(&frames, "init-1"), json!("init-1"));
+
+    let progress_frames: Vec<_> = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, frame)| {
+            frame.get("id").is_none() && frame["method"] == "notifications/progress"
+        })
+        .collect();
+    assert_eq!(progress_frames.len(), 3);
+
+    for (index, (_, frame)) in progress_frames.iter().enumerate() {
+        let expected_progress = (index + 1) as f64;
+        assert_eq!(frame["jsonrpc"], "2.0");
+        assert_eq!(frame["params"]["progressToken"], json!("progress-1"));
+        assert_eq!(frame["params"]["progress"], json!(expected_progress));
+        assert_eq!(frame["params"]["total"], json!(3.0));
+    }
+
+    let response = response_by_id(&frames, "progress-call-1");
+    assert_success_response_envelope(response, json!("progress-call-1"));
+    assert_eq!(
+        response["result"]["content"][0]["text"],
+        "progress demo completed"
+    );
+
+    let response_index = frames
+        .iter()
+        .position(|frame| frame["id"] == "progress-call-1")
+        .expect("progress call response should exist");
+    assert!(
+        progress_frames
+            .iter()
+            .all(|(index, _)| *index < response_index),
+        "all progress notifications must be emitted before final response"
+    );
+}
+
+#[test]
+fn stdio_e2e_progress_notifications_are_not_emitted_without_client_capability() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"},\"capabilities\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"progress-call-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"progress_demo\",\"arguments\":{},\"_meta\":{\"progressToken\":\"progress-1\"}}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+    assert_eq!(notification_count(&frames, "notifications/progress"), 0);
+
+    let response = response_by_id(&frames, "progress-call-1");
+    assert_success_response_envelope(response, json!("progress-call-1"));
+    assert_eq!(
+        response["result"]["content"][0]["text"],
+        "progress demo completed"
+    );
 }
 
 #[test]
@@ -417,6 +495,7 @@ fn stdio_e2e_runtime_registry_mutation_errors_do_not_emit_list_changed_notificat
             "add_with_details",
             "echo",
             "long_running_demo",
+            "progress_demo",
             "runtime_tool"
         ]
     );
