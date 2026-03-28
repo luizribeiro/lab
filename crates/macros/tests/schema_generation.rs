@@ -25,6 +25,7 @@ struct PingResult {
 #[fittings::service]
 trait GreetingService {
     /// Greets a person by name.
+    #[fittings::method(name = "tools/hello")]
     async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError>;
 
     async fn ping(&self, params: PingParams) -> Result<PingResult, FittingsError>;
@@ -36,7 +37,7 @@ fn generated_schema_uses_expected_service_name_and_methods() {
 
     assert_eq!(schema.name, "greeting-service");
     assert_eq!(schema.methods.len(), 2);
-    assert_eq!(schema.methods[0].name, "hello");
+    assert_eq!(schema.methods[0].name, "tools/hello");
     assert_eq!(
         schema.methods[0].description.as_deref(),
         Some("Greets a person by name.")
@@ -76,7 +77,7 @@ fn generated_schema_json_shape_is_stable() {
     let value = fittings::serde_json::to_value(schema).expect("schema should serialize");
 
     assert_eq!(value["name"], "greeting-service");
-    assert_eq!(value["methods"][0]["name"], "hello");
+    assert_eq!(value["methods"][0]["name"], "tools/hello");
     assert_eq!(
         value["methods"][0]["description"],
         "Greets a person by name."

@@ -8,7 +8,10 @@ use syn::{
 use crate::parse::ServiceInput;
 
 pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
-    let mut trait_item = input.trait_item;
+    let ServiceInput {
+        mut trait_item,
+        method_wire_names,
+    } = input;
     let trait_ident = trait_item.ident.clone();
     let trait_vis = trait_item.vis.clone();
 
@@ -16,12 +19,21 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
         .items
         .iter()
         .filter_map(|item| match item {
-            TraitItem::Fn(method) => Some(MethodInfo {
-                ident: method.sig.ident.clone(),
-                params_type: method_params_type(method),
-                result_ok_type: method_result_ok_type(method),
-                description: method_description(method),
-            }),
+            TraitItem::Fn(method) => {
+                let method_name = method.sig.ident.to_string();
+                let wire_name = method_wire_names
+                    .get(&method_name)
+                    .cloned()
+                    .unwrap_or(method_name);
+
+                Some(MethodInfo {
+                    ident: method.sig.ident.clone(),
+                    wire_name,
+                    params_type: method_params_type(method),
+                    result_ok_type: method_result_ok_type(method),
+                    description: method_description(method),
+                })
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -104,7 +116,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
     });
 
     let method_schema_items = methods.iter().map(|method| {
-        let method_name = method.ident.to_string();
+        let method_name = &method.wire_name;
         let params_type = &method.params_type;
         let result_type = &method.result_ok_type;
 
@@ -132,7 +144,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
 
     let dispatch_arms = methods.iter().map(|method| {
         let method_ident = &method.ident;
-        let method_name = method_ident.to_string();
+        let method_name = &method.wire_name;
         let params_type = &method.params_type;
         let result_type = &method.result_ok_type;
 
@@ -160,7 +172,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
 
     let client_methods = methods.iter().map(|method| {
         let method_ident = &method.ident;
-        let method_name = method_ident.to_string();
+        let method_name = &method.wire_name;
         let params_type = &method.params_type;
         let result_type = &method.result_ok_type;
 
@@ -277,6 +289,7 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
 
 struct MethodInfo {
     ident: syn::Ident,
+    wire_name: String,
     params_type: Type,
     result_ok_type: Type,
     description: Option<String>,

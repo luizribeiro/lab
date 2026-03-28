@@ -19,6 +19,7 @@ struct AddResult {
 
 #[fittings::service]
 trait MathClientService {
+    #[fittings::method(name = "math/add")]
     async fn add(&self, params: AddParams) -> Result<AddResult, FittingsError>;
 }
 
@@ -81,7 +82,7 @@ async fn generated_typed_client_roundtrips_method_calls() {
         let request: fittings::RequestEnvelope = fittings::serde_json::from_slice(&request_frame)
             .expect("request envelope should decode");
 
-        assert_eq!(request.method, "add");
+        assert_eq!(request.method, "math/add");
         assert_eq!(
             request.params,
             Some(fittings::serde_json::json!({"left": 20, "right": 22}))
@@ -142,7 +143,7 @@ async fn generated_typed_client_maps_result_decode_failures_to_internal_error() 
     assert!(matches!(
         error,
         FittingsError::Internal(message)
-            if message.contains("failed to decode result for method `add`")
+            if message.contains("failed to decode result for method `math/add`")
     ));
 
     server.await.expect("server task should join");

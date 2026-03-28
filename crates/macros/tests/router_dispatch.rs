@@ -14,6 +14,7 @@ struct DoubleResult {
 
 #[fittings::service]
 trait CalculatorService {
+    #[fittings::method(name = "math/double")]
     async fn double(&self, params: DoubleParams) -> Result<DoubleResult, FittingsError>;
 }
 
@@ -33,7 +34,7 @@ async fn generated_router_dispatches_known_method() {
 
     let result = router
         .route(
-            "double",
+            "math/double",
             fittings::serde_json::json!({"value": 21}),
             fittings::Metadata::default(),
         )
@@ -49,7 +50,7 @@ async fn generated_router_rejects_unknown_method() {
 
     let error = router
         .route(
-            "missing",
+            "double",
             fittings::serde_json::json!({}),
             fittings::Metadata::default(),
         )
@@ -58,7 +59,7 @@ async fn generated_router_rejects_unknown_method() {
 
     assert!(matches!(
         error,
-        FittingsError::MethodNotFound(message) if message == "missing"
+        FittingsError::MethodNotFound(message) if message == "double"
     ));
 }
 
@@ -68,7 +69,7 @@ async fn generated_router_maps_decode_errors_to_invalid_params() {
 
     let error = router
         .route(
-            "double",
+            "math/double",
             fittings::serde_json::json!({"value": "oops"}),
             fittings::Metadata::default(),
         )

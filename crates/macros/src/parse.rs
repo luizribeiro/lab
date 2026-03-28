@@ -1,11 +1,14 @@
+use std::collections::BTreeMap;
+
 use proc_macro2::TokenStream;
 use syn::{
-    spanned::Spanned, Error, FnArg, GenericArgument, Item, ItemTrait, PathArguments, ReturnType,
-    TraitItem, TraitItemFn, Type,
+    spanned::Spanned, Error, FnArg, GenericArgument, Item, ItemTrait, Path, PathArguments,
+    ReturnType, TraitItem, TraitItemFn, Type,
 };
 
 pub(crate) struct ServiceInput {
     pub(crate) trait_item: ItemTrait,
+    pub(crate) method_wire_names: BTreeMap<String, String>,
 }
 
 pub(crate) fn parse_service(attr: TokenStream, item: TokenStream) -> syn::Result<ServiceInput> {
@@ -17,7 +20,7 @@ pub(crate) fn parse_service(attr: TokenStream, item: TokenStream) -> syn::Result
     }
 
     let parsed_item: Item = syn::parse2(item)?;
-    let trait_item = match parsed_item {
+    let mut trait_item = match parsed_item {
         Item::Trait(item_trait) => item_trait,
         other => {
             return Err(Error::new(
@@ -27,17 +30,22 @@ pub(crate) fn parse_service(attr: TokenStream, item: TokenStream) -> syn::Result
         }
     };
 
-    validate_service_trait(&trait_item)?;
+    let method_wire_names = validate_service_trait(&mut trait_item)?;
 
-    Ok(ServiceInput { trait_item })
+    Ok(ServiceInput {
+        trait_item,
+        method_wire_names,
+    })
 }
 
-fn validate_service_trait(trait_item: &ItemTrait) -> syn::Result<()> {
+fn validate_service_trait(trait_item: &mut ItemTrait) -> syn::Result<BTreeMap<String, String>> {
     let mut errors: Option<Error> = None;
+    let mut method_wire_names = BTreeMap::new();
+    let mut wire_to_method = BTreeMap::new();
 
-    for item in &trait_item.items {
+    for item in &mut trait_item.items {
         let result = match item {
-            TraitItem::Fn(method) => validate_method_signature(method),
+            TraitItem::Fn(method) => validate_service_method(method),
             TraitItem::Type(assoc_type) => Err(Error::new(
                 assoc_type.span(),
                 "service traits cannot declare associated types",
@@ -46,14 +54,41 @@ fn validate_service_trait(trait_item: &ItemTrait) -> syn::Result<()> {
                 assoc_const.span(),
                 "service traits cannot declare associated consts",
             )),
-            _ => Ok(()),
+            _ => Ok(None),
         };
 
-        if let Err(error) = result {
-            if let Some(existing) = &mut errors {
-                existing.combine(error);
-            } else {
-                errors = Some(error);
+        match result {
+            Ok(Some(wire_name)) => {
+                let method_name = item_method_name(item)
+                    .expect("method name should be present when validate_service_method succeeds");
+
+                if let Some(existing) =
+                    wire_to_method.insert(wire_name.clone(), method_name.clone())
+                {
+                    let duplicate_error = Error::new(
+                        item.span(),
+                        format!(
+                            "duplicate service wire method name `{}`; already used by `{}`",
+                            wire_name, existing
+                        ),
+                    );
+
+                    if let Some(current) = &mut errors {
+                        current.combine(duplicate_error);
+                    } else {
+                        errors = Some(duplicate_error);
+                    }
+                }
+
+                method_wire_names.insert(method_name, wire_name);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if let Some(existing) = &mut errors {
+                    existing.combine(error);
+                } else {
+                    errors = Some(error);
+                }
             }
         }
     }
@@ -61,8 +96,83 @@ fn validate_service_trait(trait_item: &ItemTrait) -> syn::Result<()> {
     if let Some(error) = errors {
         Err(error)
     } else {
-        Ok(())
+        Ok(method_wire_names)
     }
+}
+
+fn item_method_name(item: &TraitItem) -> Option<String> {
+    match item {
+        TraitItem::Fn(method) => Some(method.sig.ident.to_string()),
+        _ => None,
+    }
+}
+
+fn validate_service_method(method: &mut TraitItemFn) -> syn::Result<Option<String>> {
+    let wire_name = extract_wire_name_override(method)?;
+    validate_method_signature(method)?;
+    Ok(Some(
+        wire_name.unwrap_or_else(|| method.sig.ident.to_string()),
+    ))
+}
+
+fn extract_wire_name_override(method: &mut TraitItemFn) -> syn::Result<Option<String>> {
+    let mut wire_name: Option<String> = None;
+    let mut retained_attrs = Vec::with_capacity(method.attrs.len());
+
+    for attr in method.attrs.drain(..) {
+        if !is_fittings_method_attr(attr.path()) {
+            retained_attrs.push(attr);
+            continue;
+        }
+
+        if wire_name.is_some() {
+            return Err(Error::new(
+                attr.span(),
+                "duplicate `#[fittings::method(...)]` attribute",
+            ));
+        }
+
+        let mut parsed_name: Option<syn::LitStr> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                if parsed_name.is_some() {
+                    return Err(meta.error("duplicate `name` argument"));
+                }
+
+                parsed_name = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+
+            Err(meta.error("unsupported `fittings::method` argument; expected `name = \"...\"`"))
+        })?;
+
+        let Some(name_lit) = parsed_name else {
+            return Err(Error::new(
+                attr.span(),
+                "`#[fittings::method(...)]` requires `name = \"...\"`",
+            ));
+        };
+
+        let parsed_wire_name = name_lit.value();
+        if parsed_wire_name.is_empty() {
+            return Err(Error::new(
+                name_lit.span(),
+                "method wire name cannot be empty",
+            ));
+        }
+
+        wire_name = Some(parsed_wire_name);
+    }
+
+    method.attrs = retained_attrs;
+
+    Ok(wire_name)
+}
+
+fn is_fittings_method_attr(path: &Path) -> bool {
+    path.segments.len() == 2
+        && path.segments[0].ident == "fittings"
+        && path.segments[1].ident == "method"
 }
 
 fn validate_method_signature(method: &TraitItemFn) -> syn::Result<()> {
