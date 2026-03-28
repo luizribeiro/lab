@@ -1,5 +1,8 @@
 use std::env;
 use std::process;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
@@ -19,7 +22,7 @@ fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
             "required": ["message"],
             "additionalProperties": false
         }),
-        |arguments| {
+        |arguments, _context| {
             let message = arguments
                 .get("message")
                 .and_then(Value::as_str)
@@ -45,7 +48,7 @@ fn register_add_tool(registry: &mut ToolRegistry) -> Result<()> {
             "required": ["a", "b"],
             "additionalProperties": false
         }),
-        |arguments| {
+        |arguments, _context| {
             let a = arguments
                 .get("a")
                 .and_then(Value::as_f64)
@@ -73,7 +76,7 @@ fn register_add_with_details_tool(registry: &mut ToolRegistry) -> Result<()> {
             "required": ["a", "b"],
             "additionalProperties": false
         }),
-        |arguments| {
+        |arguments, _context| {
             let a = arguments
                 .get("a")
                 .and_then(Value::as_f64)
@@ -96,11 +99,34 @@ fn register_add_with_details_tool(registry: &mut ToolRegistry) -> Result<()> {
     )
 }
 
+fn register_long_running_demo_tool(registry: &mut ToolRegistry) -> Result<()> {
+    registry.register(
+        "long_running_demo",
+        "Long-running tool that supports notifications/cancelled",
+        json!({
+            "type": "object",
+            "additionalProperties": false
+        }),
+        |_arguments, context| {
+            for _ in 0..60 {
+                if context.cancellation().is_cancelled() {
+                    return Err(FittingsError::invalid_request("tool call cancelled"));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+
+            Ok(ToolsCallResult::text("long running completed"))
+        },
+    )
+}
+
 fn build_service() -> McpServiceImpl {
     let mut registry = ToolRegistry::new();
     register_echo_tool(&mut registry).expect("example tool registration should succeed");
     register_add_tool(&mut registry).expect("example tool registration should succeed");
     register_add_with_details_tool(&mut registry)
+        .expect("example tool registration should succeed");
+    register_long_running_demo_tool(&mut registry)
         .expect("example tool registration should succeed");
     McpServiceImpl::new(registry)
 }
@@ -112,8 +138,8 @@ async fn main() {
         env::var("FITTINGS").is_ok() && matches!(args.first(), Some(arg) if arg == "serve");
 
     if is_stdio_serve {
-        let service = build_service().with_tools_list_changed(true);
-        let exit_code = match serve_stdio(&service).await {
+        let service = Arc::new(build_service().with_tools_list_changed(true));
+        let exit_code = match serve_stdio(service).await {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("mcp-server serve error: {error}");
@@ -143,7 +169,10 @@ mod tests {
             .expect("tools/list should succeed");
 
         let tool_names: Vec<_> = listed.tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(tool_names, vec!["add", "add_with_details", "echo"]);
+        assert_eq!(
+            tool_names,
+            vec!["add", "add_with_details", "echo", "long_running_demo"]
+        );
     }
 
     #[tokio::test]

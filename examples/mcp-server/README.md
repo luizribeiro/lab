@@ -23,6 +23,8 @@ This is **not** because the server is implemented in JS.
 
 The server is still Rust. The JS script exists only to test interoperability against a **real MCP client implementation** (`@modelcontextprotocol/sdk`).
 
+The example tools include `echo`, `add`, `add_with_details`, and `long_running_demo` (used to demonstrate `notifications/cancelled`).
+
 That gives a stronger signal than testing with only our own Rust-side harnesses.
 
 ## Running the server

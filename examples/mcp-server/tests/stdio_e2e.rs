@@ -152,10 +152,11 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     let tools = list["result"]["tools"]
         .as_array()
         .expect("tools/list result should include tools array");
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 4);
     assert_eq!(tools[0]["name"], "add");
     assert_eq!(tools[1]["name"], "add_with_details");
     assert_eq!(tools[2]["name"], "echo");
+    assert_eq!(tools[3]["name"], "long_running_demo");
 
     let call = response_by_id(&responses, "call-1");
     assert_success_response_envelope(call, json!("call-1"));
@@ -291,12 +292,80 @@ fn stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list
         .collect();
     assert_eq!(
         names,
-        vec!["add", "add_with_details", "echo", "runtime_tool"]
+        vec![
+            "add",
+            "add_with_details",
+            "echo",
+            "long_running_demo",
+            "runtime_tool"
+        ]
     );
 
     let call = response_by_id(&frames, "call-2");
     assert_success_response_envelope(call, json!("call-2"));
     assert_eq!(call["result"]["content"][0]["text"], "hello runtime");
+}
+
+#[test]
+fn stdio_e2e_long_running_tool_call_can_be_cancelled() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"long-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"long_running_demo\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"long-1\",\"reason\":\"client no longer needs this result\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"echo-after-cancel\",\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"still responsive\"}}}\n"
+    );
+
+    let started = Instant::now();
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "cancelled call should terminate quickly"
+    );
+
+    assert!(
+        frames.iter().all(|frame| frame["id"] != "long-1"),
+        "cancelled request should not produce a response"
+    );
+
+    let echo = response_by_id(&frames, "echo-after-cancel");
+    assert_success_response_envelope(echo, json!("echo-after-cancel"));
+    assert_eq!(echo["result"]["content"][0]["text"], "still responsive");
+}
+
+#[test]
+fn stdio_e2e_duplicate_in_flight_request_ids_are_rejected() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"dup-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"long_running_demo\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"dup-1\",\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"dup-1\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"echo-after-dup\",\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"ok\"}}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+
+    let duplicate = response_by_id(&frames, "dup-1");
+    assert_error_response_envelope(duplicate, json!("dup-1"));
+    assert_eq!(duplicate["error"]["code"], -32600);
+
+    let echo = response_by_id(&frames, "echo-after-dup");
+    assert_success_response_envelope(echo, json!("echo-after-dup"));
+    assert_eq!(echo["result"]["content"][0]["text"], "ok");
+
+    assert_eq!(
+        frames.iter().filter(|frame| frame["id"] == "dup-1").count(),
+        1,
+        "request id should map to at most one response"
+    );
 }
 
 #[test]
@@ -343,6 +412,12 @@ fn stdio_e2e_runtime_registry_mutation_errors_do_not_emit_list_changed_notificat
         .collect();
     assert_eq!(
         names,
-        vec!["add", "add_with_details", "echo", "runtime_tool"]
+        vec![
+            "add",
+            "add_with_details",
+            "echo",
+            "long_running_demo",
+            "runtime_tool"
+        ]
     );
 }

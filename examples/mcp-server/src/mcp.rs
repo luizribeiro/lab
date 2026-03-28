@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result, Transport};
@@ -91,6 +92,15 @@ pub struct ToolsRegisterResult {
     pub tool: Tool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelledNotificationParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<fittings::wire::types::JsonRpcId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolContent {
@@ -135,7 +145,45 @@ impl ToolsCallResult {
     }
 }
 
-type ToolHandler = Box<dyn Fn(Value) -> Result<ToolsCallResult> + Send + Sync>;
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+    reason: Arc<Mutex<Option<String>>>,
+}
+
+impl CancellationToken {
+    pub fn cancel(&self, reason: Option<String>) {
+        self.cancelled.store(true, Ordering::Release);
+        let mut cancellation_reason = self
+            .reason
+            .lock()
+            .expect("cancellation reason mutex should not be poisoned");
+        if cancellation_reason.is_none() {
+            *cancellation_reason = reason;
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ToolCallContext {
+    cancellation: CancellationToken,
+}
+
+impl ToolCallContext {
+    pub fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+
+    pub fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+}
+
+type ToolHandler = Arc<dyn Fn(Value, &ToolCallContext) -> Result<ToolsCallResult> + Send + Sync>;
 
 struct RegisteredTool {
     tool: Tool,
@@ -160,7 +208,7 @@ impl ToolRegistry {
         handler: F,
     ) -> Result<()>
     where
-        F: Fn(Value) -> Result<ToolsCallResult> + Send + Sync + 'static,
+        F: Fn(Value, &ToolCallContext) -> Result<ToolsCallResult> + Send + Sync + 'static,
     {
         let name = name.into();
         if self.tools.contains_key(&name) {
@@ -177,7 +225,7 @@ impl ToolRegistry {
                     description: Some(description.into()),
                     input_schema,
                 },
-                handler: Box::new(handler),
+                handler: Arc::new(handler),
             },
         );
 
@@ -201,7 +249,7 @@ impl ToolRegistry {
                 "type": "object",
                 "additionalProperties": false
             }),
-            move |_arguments| Ok(ToolsCallResult::text(response_text.clone())),
+            move |_arguments, _context| Ok(ToolsCallResult::text(response_text.clone())),
         )?;
 
         let tool = self
@@ -220,18 +268,27 @@ impl ToolRegistry {
             .collect()
     }
 
-    pub fn execute(&self, params: ToolsCallParams) -> Result<ToolsCallResult> {
-        let entry = self.tools.get(&params.name).ok_or_else(|| {
-            FittingsError::method_not_found(format!("unknown tool `{}`", params.name))
-        })?;
+    fn handler_for(&self, name: &str) -> Result<ToolHandler> {
+        self.tools
+            .get(name)
+            .map(|entry| Arc::clone(&entry.handler))
+            .ok_or_else(|| FittingsError::method_not_found(format!("unknown tool `{name}`")))
+    }
 
+    #[cfg(test)]
+    pub fn execute(
+        &self,
+        params: ToolsCallParams,
+        context: &ToolCallContext,
+    ) -> Result<ToolsCallResult> {
         if !params.arguments.is_object() {
             return Err(FittingsError::invalid_params(
                 "`arguments` must be a JSON object",
             ));
         }
 
-        (entry.handler)(params.arguments)
+        let handler = self.handler_for(&params.name)?;
+        handler(params.arguments, context)
     }
 }
 
@@ -325,6 +382,28 @@ impl McpServiceImpl {
             });
     }
 
+    async fn call_tool_with_context(
+        &self,
+        params: ToolsCallParams,
+        context: ToolCallContext,
+    ) -> Result<ToolsCallResult> {
+        if !params.arguments.is_object() {
+            return Err(FittingsError::invalid_params(
+                "`arguments` must be a JSON object",
+            ));
+        }
+
+        let handler = {
+            let registry = self
+                .registry
+                .lock()
+                .expect("tool registry mutex should not be poisoned");
+            registry.handler_for(&params.name)?
+        };
+
+        handler(params.arguments, &context)
+    }
+
     #[cfg(test)]
     fn lifecycle_state(&self) -> SessionLifecycle {
         *self
@@ -394,11 +473,8 @@ impl McpService for McpServiceImpl {
     }
 
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult> {
-        let registry = self
-            .registry
-            .lock()
-            .expect("tool registry mutex should not be poisoned");
-        registry.execute(params)
+        self.call_tool_with_context(params, ToolCallContext::default())
+            .await
     }
 
     async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
@@ -424,60 +500,170 @@ impl McpService for McpServiceImpl {
     }
 }
 
-pub async fn serve_stdio(service: &McpServiceImpl) -> Result<()> {
+pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
     let mut transport = fittings::from_process_stdio(1_048_576);
+    let mut input_closed = false;
+    let mut workers = tokio::task::JoinSet::<(
+        fittings::wire::types::JsonRpcId,
+        Result<Value>,
+        CancellationToken,
+    )>::new();
+    let mut in_flight = HashMap::<fittings::wire::types::JsonRpcId, CancellationToken>::new();
 
     loop {
-        let frame = match transport.recv().await {
-            Ok(frame) => frame,
-            Err(error) if is_graceful_eof(&error) => return Ok(()),
-            Err(error) => return Err(error),
-        };
-
-        if let Some(response) = dispatch_request_frame(service, &frame).await {
-            let encoded = fittings::encode_response_line(&response).map_err(|error| {
-                FittingsError::internal(format!("failed to encode response frame: {error}"))
-            })?;
-            transport.send(&encoded).await?;
+        if input_closed && workers.is_empty() {
+            return Ok(());
         }
 
-        for notification in service.drain_notifications() {
-            let frame = fittings::RequestEnvelope::notification(
-                notification.method,
-                Some(notification.params),
-            );
-            let mut encoded = fittings::serde_json::to_vec(&frame).map_err(|error| {
-                FittingsError::internal(format!("failed to encode notification frame: {error}"))
-            })?;
-            encoded.push(b'\n');
-            transport.send(&encoded).await?;
+        tokio::select! {
+            maybe_joined = workers.join_next(), if !workers.is_empty() => {
+                match maybe_joined {
+                    Some(Ok((id, result, cancellation))) => {
+                        in_flight.remove(&id);
+
+                        if !cancellation.is_cancelled() {
+                            let response = match result {
+                                Ok(value) => fittings::ResponseEnvelope::success(id, value),
+                                Err(error) => fittings::to_error_envelope(id, error),
+                            };
+                            send_response(&mut transport, &response).await?;
+                        }
+
+                        send_pending_notifications(&mut transport, &service).await?;
+                    }
+                    Some(Err(error)) => {
+                        return Err(FittingsError::internal(format!(
+                            "failed to join request worker: {error}"
+                        )));
+                    }
+                    None => {}
+                }
+            }
+            recv_result = transport.recv(), if !input_closed => {
+                match recv_result {
+                    Ok(frame) => {
+                        let request = match fittings::decode_request_line(&frame) {
+                            Ok(request) => request,
+                            Err(error) => {
+                                let (id, err) = map_decode_error(error);
+                                let response = fittings::to_error_envelope(id, err);
+                                send_response(&mut transport, &response).await?;
+                                continue;
+                            }
+                        };
+
+                        if request.method == "notifications/cancelled" && request.id.is_none() {
+                            handle_cancellation_notification(
+                                request.params.unwrap_or(Value::Null),
+                                &in_flight,
+                            );
+                            continue;
+                        }
+
+                        if let Some(id) = request.id {
+                            if in_flight.contains_key(&id) {
+                                let response = fittings::to_error_envelope(
+                                    id,
+                                    FittingsError::invalid_request("duplicate in-flight request id"),
+                                );
+                                send_response(&mut transport, &response).await?;
+                                continue;
+                            }
+
+                            if request.method == "tools/call" {
+                                let method = request.method;
+                                let params = request.params.unwrap_or(Value::Null);
+                                let cancellation = CancellationToken::default();
+                                in_flight.insert(id.clone(), cancellation.clone());
+
+                                let service = Arc::clone(&service);
+                                workers.spawn(async move {
+                                    let context = ToolCallContext::new(cancellation.clone());
+                                    let result = dispatch_method(&service, &method, params, context).await;
+                                    (id, result, cancellation)
+                                });
+                                continue;
+                            }
+
+                            let params = request.params.unwrap_or(Value::Null);
+                            let context = ToolCallContext::default();
+                            let result =
+                                dispatch_method(&service, &request.method, params, context).await;
+                            let response = match result {
+                                Ok(value) => fittings::ResponseEnvelope::success(id, value),
+                                Err(error) => fittings::to_error_envelope(id, error),
+                            };
+                            send_response(&mut transport, &response).await?;
+                            send_pending_notifications(&mut transport, &service).await?;
+                            continue;
+                        }
+
+                        let params = request.params.unwrap_or(Value::Null);
+                        let context = ToolCallContext::default();
+                        let _ = dispatch_method(&service, &request.method, params, context).await;
+                        send_pending_notifications(&mut transport, &service).await?;
+                    }
+                    Err(error) if is_graceful_eof(&error) => {
+                        input_closed = true;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         }
     }
 }
 
-async fn dispatch_request_frame(
-    service: &McpServiceImpl,
-    frame: &[u8],
-) -> Option<fittings::ResponseEnvelope> {
-    let request = match fittings::decode_request_line(frame) {
-        Ok(request) => request,
-        Err(error) => {
-            let (id, err) = map_decode_error(error);
-            return Some(fittings::to_error_envelope(id, err));
-        }
+fn handle_cancellation_notification(
+    params: Value,
+    in_flight: &HashMap<fittings::wire::types::JsonRpcId, CancellationToken>,
+) {
+    let Ok(notification) = fittings::serde_json::from_value::<CancelledNotificationParams>(params)
+    else {
+        return;
     };
 
-    let params = request.params.unwrap_or(Value::Null);
-    let result = dispatch_method(service, &request.method, params).await;
+    let Some(request_id) = notification.request_id else {
+        return;
+    };
 
-    match (request.id, result) {
-        (Some(id), Ok(value)) => Some(fittings::ResponseEnvelope::success(id, value)),
-        (Some(id), Err(error)) => Some(fittings::to_error_envelope(id, error)),
-        (None, _) => None,
+    if let Some(token) = in_flight.get(&request_id) {
+        token.cancel(notification.reason);
     }
 }
 
-async fn dispatch_method(service: &McpServiceImpl, method: &str, params: Value) -> Result<Value> {
+async fn send_pending_notifications(
+    transport: &mut impl Transport,
+    service: &McpServiceImpl,
+) -> Result<()> {
+    for notification in service.drain_notifications() {
+        let frame =
+            fittings::RequestEnvelope::notification(notification.method, Some(notification.params));
+        let mut encoded = fittings::serde_json::to_vec(&frame).map_err(|error| {
+            FittingsError::internal(format!("failed to encode notification frame: {error}"))
+        })?;
+        encoded.push(b'\n');
+        transport.send(&encoded).await?;
+    }
+
+    Ok(())
+}
+
+async fn send_response(
+    transport: &mut impl Transport,
+    response: &fittings::ResponseEnvelope,
+) -> Result<()> {
+    let encoded = fittings::encode_response_line(response).map_err(|error| {
+        FittingsError::internal(format!("failed to encode response frame: {error}"))
+    })?;
+    transport.send(&encoded).await
+}
+
+async fn dispatch_method(
+    service: &McpServiceImpl,
+    method: &str,
+    params: Value,
+    context: ToolCallContext,
+) -> Result<Value> {
     match method {
         "initialize" => {
             let decoded: InitializeParams = decode_params(method, params)?;
@@ -508,7 +694,7 @@ async fn dispatch_method(service: &McpServiceImpl, method: &str, params: Value) 
         }
         "tools/call" => {
             let decoded: ToolsCallParams = decode_params(method, params)?;
-            let result = service.call_tool(decoded).await?;
+            let result = service.call_tool_with_context(decoded, context).await?;
             fittings::serde_json::to_value(result).map_err(|error| {
                 FittingsError::internal(format!(
                     "failed to encode result for method `{method}`: {error}"
@@ -658,7 +844,7 @@ mod tests {
                 "sum",
                 "Sums two numbers",
                 json!({"type": "object"}),
-                |arguments| {
+                |arguments, _context| {
                     let a = arguments["a"].as_i64().ok_or_else(|| {
                         FittingsError::invalid_params("`arguments.a` must be an integer")
                     })?;
@@ -675,11 +861,14 @@ mod tests {
         assert_eq!(listed[0].name, "sum");
 
         let result = registry
-            .execute(ToolsCallParams {
-                name: "sum".to_string(),
-                arguments: json!({"a": 2, "b": 3}),
-                meta: None,
-            })
+            .execute(
+                ToolsCallParams {
+                    name: "sum".to_string(),
+                    arguments: json!({"a": 2, "b": 3}),
+                    meta: None,
+                },
+                &ToolCallContext::default(),
+            )
             .expect("tool execution should succeed");
 
         assert_eq!(result.content.len(), 1);
@@ -690,28 +879,75 @@ mod tests {
     }
 
     #[test]
+    fn tool_handlers_can_observe_cancellation_context() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(
+                "cancel-aware",
+                "Observes cancellation",
+                json!({"type": "object"}),
+                |_arguments, context| {
+                    if context.cancellation().is_cancelled() {
+                        return Ok(ToolsCallResult::text("cancelled"));
+                    }
+                    Ok(ToolsCallResult::text("running"))
+                },
+            )
+            .expect("register should succeed");
+
+        let token = CancellationToken::default();
+        token.cancel(Some("test".to_string()));
+        let context = ToolCallContext::new(token);
+
+        let result = registry
+            .execute(
+                ToolsCallParams {
+                    name: "cancel-aware".to_string(),
+                    arguments: json!({}),
+                    meta: None,
+                },
+                &context,
+            )
+            .expect("tool execution should succeed");
+
+        assert!(matches!(
+            &result.content[0],
+            ToolContent::Text { text } if text == "cancelled"
+        ));
+    }
+
+    #[test]
     fn registry_reports_unknown_tool_and_bad_arguments() {
         let registry = ToolRegistry::new();
 
-        let unknown = registry.execute(ToolsCallParams {
-            name: "missing".to_string(),
-            arguments: json!({}),
-            meta: None,
-        });
+        let unknown = registry.execute(
+            ToolsCallParams {
+                name: "missing".to_string(),
+                arguments: json!({}),
+                meta: None,
+            },
+            &ToolCallContext::default(),
+        );
         assert!(matches!(unknown, Err(FittingsError::MethodNotFound(_))));
 
         let mut registry = ToolRegistry::new();
         registry
-            .register("noop", "No-op tool", json!({"type": "object"}), |_| {
-                Ok(ToolsCallResult::text("ok"))
-            })
+            .register(
+                "noop",
+                "No-op tool",
+                json!({"type": "object"}),
+                |_, _context| Ok(ToolsCallResult::text("ok")),
+            )
             .expect("register should succeed");
 
-        let invalid = registry.execute(ToolsCallParams {
-            name: "noop".to_string(),
-            arguments: json!([1, 2, 3]),
-            meta: None,
-        });
+        let invalid = registry.execute(
+            ToolsCallParams {
+                name: "noop".to_string(),
+                arguments: json!([1, 2, 3]),
+                meta: None,
+            },
+            &ToolCallContext::default(),
+        );
         assert!(matches!(invalid, Err(FittingsError::InvalidParams(_))));
     }
 
@@ -719,14 +955,17 @@ mod tests {
     fn registry_rejects_duplicate_tool_names() {
         let mut registry = ToolRegistry::new();
         registry
-            .register("echo", "Echo", json!({"type": "object"}), |_| {
+            .register("echo", "Echo", json!({"type": "object"}), |_, _context| {
                 Ok(ToolsCallResult::text("one"))
             })
             .expect("first registration should succeed");
 
-        let duplicate = registry.register("echo", "Echo again", json!({"type": "object"}), |_| {
-            Ok(ToolsCallResult::text("two"))
-        });
+        let duplicate = registry.register(
+            "echo",
+            "Echo again",
+            json!({"type": "object"}),
+            |_, _context| Ok(ToolsCallResult::text("two")),
+        );
 
         assert!(matches!(duplicate, Err(FittingsError::InvalidRequest(_))));
     }
