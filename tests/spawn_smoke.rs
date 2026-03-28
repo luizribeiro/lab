@@ -232,8 +232,8 @@ fn serve_tcp_transport_once_serves_one_connection_without_fittings_env() {
 
     let mut listening_line = String::new();
     {
-        let stdout = child.stdout.as_mut().expect("stdout should be piped");
-        let mut reader = BufReader::new(stdout);
+        let stderr = child.stderr.as_mut().expect("stderr should be piped");
+        let mut reader = BufReader::new(stderr);
         reader
             .read_line(&mut listening_line)
             .expect("serve tcp mode should print listening line");
@@ -305,8 +305,8 @@ fn serve_tcp_transport_default_accepts_multiple_connections() {
 
     let mut listening_line = String::new();
     {
-        let stdout = child.stdout.as_mut().expect("stdout should be piped");
-        let mut reader = BufReader::new(stdout);
+        let stderr = child.stderr.as_mut().expect("stderr should be piped");
+        let mut reader = BufReader::new(stderr);
         reader
             .read_line(&mut listening_line)
             .expect("serve tcp mode should print listening line");

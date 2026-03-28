@@ -152,7 +152,7 @@ impl SpawnRunner {
                         })?;
 
                         if options.once {
-                            println!(
+                            eprintln!(
                                 "{} listening on {} (single connection)",
                                 service_name, local_addr
                             );
@@ -163,7 +163,7 @@ impl SpawnRunner {
                                 Server::new(service, transport).with_max_in_flight(max_in_flight);
                             server.serve().await
                         } else {
-                            println!("{} listening on {}", service_name, local_addr);
+                            eprintln!("{} listening on {}", service_name, local_addr);
                             let listener =
                                 TcpConnectionListener::from_listener(listener, max_frame_bytes);
                             serve_listener(Arc::new(service), listener, max_in_flight).await
