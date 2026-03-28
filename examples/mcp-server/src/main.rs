@@ -6,5 +6,5 @@ mod mcp;
 
 #[tokio::main]
 async fn main() {
-    process::exit(McpServiceImpl.main().await);
+    process::exit(McpServiceImpl::default().main().await);
 }
