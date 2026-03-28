@@ -12,6 +12,7 @@ members = [
     "examples/hello-api",
     "examples/hello-service",
     "examples/hello-client",
+    "examples/mcp-server",
 ]
 resolver = "2"
 
