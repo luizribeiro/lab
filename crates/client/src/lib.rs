@@ -16,8 +16,9 @@ use std::{
 
 use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_wire::{
+    codec::{decode_response_line, WireDecodeError},
     error_map::from_error_envelope,
-    types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
+    types::{JsonRpcId, RequestEnvelope},
 };
 use serde_json::Value;
 use tokio::{
@@ -185,15 +186,10 @@ fn handle_response_frame(
     frame: Vec<u8>,
     pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
 ) {
-    let envelope: ResponseEnvelope = match serde_json::from_slice(&frame) {
+    let envelope = match decode_response_line(&frame) {
         Ok(envelope) => envelope,
         Err(error) => {
-            fail_pending(
-                pending,
-                FittingsError::invalid_request(format!(
-                    "failed to decode response envelope: {error}"
-                )),
-            );
+            fail_pending(pending, map_response_decode_error(error));
             return;
         }
     };
@@ -211,6 +207,17 @@ fn handle_response_frame(
     };
 
     let _ = response_tx.send(result);
+}
+
+fn map_response_decode_error(error: WireDecodeError) -> FittingsError {
+    match error {
+        WireDecodeError::Parse(_) => {
+            FittingsError::invalid_request("response must be valid JSON-RPC 2.0 JSON")
+        }
+        WireDecodeError::InvalidRequest { message, .. } => {
+            FittingsError::invalid_request(format!("invalid response envelope: {message}"))
+        }
+    }
 }
 
 fn fail_pending(
@@ -522,6 +529,132 @@ mod tests {
             .expect("call should succeed");
 
         assert_eq!(result, json!({"ok": true}));
+        server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn mismatched_response_id_type_is_ignored_for_correlation() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let server = tokio::spawn(async move {
+            let first = parse_request_fixture(&server_transport.recv().await.expect("request one"))
+                .expect("decode request one");
+            let second =
+                parse_request_fixture(&server_transport.recv().await.expect("request two"))
+                    .expect("decode request two");
+
+            server_transport
+                .send(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":false}}\n")
+                .await
+                .expect("send mismatched typed id response");
+
+            let first_response = success_response_line(
+                first.id.as_ref().expect("request should carry id"),
+                json!({"ok": true, "request": 1}),
+            )
+            .expect("encode first response");
+            server_transport
+                .send(&first_response)
+                .await
+                .expect("send first response");
+
+            let second_response = success_response_line(
+                second.id.as_ref().expect("request should carry id"),
+                json!({"ok": true, "request": 2}),
+            )
+            .expect("encode second response");
+            server_transport
+                .send(&second_response)
+                .await
+                .expect("send second response");
+        });
+
+        let call_one = client.call("typed-id-1", json!({}));
+        let call_two = client.call("typed-id-2", json!({}));
+        let (result_one, result_two) = tokio::join!(call_one, call_two);
+
+        assert_eq!(
+            result_one.expect("first call should succeed"),
+            json!({"ok": true, "request": 1})
+        );
+        assert_eq!(
+            result_two.expect("second call should succeed"),
+            json!({"ok": true, "request": 2})
+        );
+
+        server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn malformed_response_envelope_fails_all_pending_calls() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let server = tokio::spawn(async move {
+            let _ = parse_request_fixture(&server_transport.recv().await.expect("request one"))
+                .expect("decode request one");
+            let _ = parse_request_fixture(&server_transport.recv().await.expect("request two"))
+                .expect("decode request two");
+
+            server_transport
+                .send(b"{\"jsonrpc\":\"1.0\",\"id\":1,\"result\":{\"ok\":true}}\n")
+                .await
+                .expect("send malformed response");
+        });
+
+        let call_one = client.call("bad-response-1", json!({}));
+        let call_two = client.call("bad-response-2", json!({}));
+        let (result_one, result_two) = tokio::join!(call_one, call_two);
+
+        for result in [result_one, result_two] {
+            let error = result.expect_err("all pending calls should fail");
+            assert!(matches!(
+                error,
+                FittingsError::InvalidRequest(message)
+                    if message == "invalid response envelope: field `jsonrpc` must be \"2.0\""
+            ));
+        }
+
+        server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn malformed_response_json_fails_all_pending_calls_deterministically() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let server = tokio::spawn(async move {
+            let _ = parse_request_fixture(&server_transport.recv().await.expect("request one"))
+                .expect("decode request one");
+            let _ = parse_request_fixture(&server_transport.recv().await.expect("request two"))
+                .expect("decode request two");
+
+            server_transport
+                .send(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}\n")
+                .await
+                .expect("send malformed JSON response");
+        });
+
+        let call_one = client.call("bad-json-1", json!({}));
+        let call_two = client.call("bad-json-2", json!({}));
+        let (result_one, result_two) = tokio::join!(call_one, call_two);
+
+        for result in [result_one, result_two] {
+            let error = result.expect_err("all pending calls should fail");
+            assert!(matches!(
+                error,
+                FittingsError::InvalidRequest(message)
+                    if message == "response must be valid JSON-RPC 2.0 JSON"
+            ));
+        }
+
         server.await.expect("server task should join");
     }
 

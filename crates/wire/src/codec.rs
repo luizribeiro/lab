@@ -1,7 +1,9 @@
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::types::{JsonRpcId, JsonRpcVersion, RequestEnvelope, ResponseEnvelope, JSONRPC_VERSION};
+use crate::types::{
+    ErrorEnvelope, JsonRpcId, JsonRpcVersion, RequestEnvelope, ResponseEnvelope, JSONRPC_VERSION,
+};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum WireDecodeError {
@@ -21,6 +23,8 @@ pub enum WireEncodeError {
 }
 
 const ALLOWED_REQUEST_FIELDS: [&str; 4] = ["jsonrpc", "id", "method", "params"];
+const ALLOWED_RESPONSE_FIELDS: [&str; 4] = ["jsonrpc", "id", "result", "error"];
+const ALLOWED_ERROR_FIELDS: [&str; 3] = ["code", "message", "data"];
 
 fn invalid_request(message: impl Into<String>, id: Option<JsonRpcId>) -> WireDecodeError {
     WireDecodeError::InvalidRequest {
@@ -54,6 +58,41 @@ pub fn decode_request_line(line: &[u8]) -> Result<RequestEnvelope, WireDecodeErr
     })
 }
 
+pub fn decode_response_line(line: &[u8]) -> Result<ResponseEnvelope, WireDecodeError> {
+    let value: Value =
+        serde_json::from_slice(line).map_err(|error| WireDecodeError::Parse(error.to_string()))?;
+
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_request("response must be a JSON object", None))?;
+
+    let response_id = extract_valid_id(object.get("id"));
+
+    validate_response_fields(object, &response_id)?;
+    parse_jsonrpc(object, &response_id)?;
+    let id = get_required_id(object, "id", &response_id)?;
+
+    let result = object.get("result").cloned();
+    let error = match object.get("error") {
+        Some(value) => Some(parse_error_envelope(value, &Some(id.clone()))?),
+        None => None,
+    };
+
+    if result.is_some() == error.is_some() {
+        return Err(invalid_request(
+            "response must contain exactly one of `result` or `error`",
+            Some(id),
+        ));
+    }
+
+    Ok(ResponseEnvelope {
+        jsonrpc: JsonRpcVersion,
+        id,
+        result,
+        error,
+    })
+}
+
 pub fn encode_response_line(resp: &ResponseEnvelope) -> Result<Vec<u8>, WireEncodeError> {
     if resp.result.is_some() == resp.error.is_some() {
         return Err(WireEncodeError::Encode(
@@ -84,6 +123,22 @@ fn validate_request_fields(
 ) -> Result<(), WireDecodeError> {
     for field in object.keys() {
         if !ALLOWED_REQUEST_FIELDS.contains(&field.as_str()) {
+            return Err(invalid_request(
+                format!("unexpected field `{field}`"),
+                response_id.clone(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_response_fields(
+    object: &Map<String, Value>,
+    response_id: &Option<JsonRpcId>,
+) -> Result<(), WireDecodeError> {
+    for field in object.keys() {
+        if !ALLOWED_RESPONSE_FIELDS.contains(&field.as_str()) {
             return Err(invalid_request(
                 format!("unexpected field `{field}`"),
                 response_id.clone(),
@@ -151,19 +206,42 @@ fn get_optional_id(
         return Ok(None);
     };
 
+    parse_id_value(value, key, &None).map(Some)
+}
+
+fn get_required_id(
+    object: &Map<String, Value>,
+    key: &str,
+    response_id: &Option<JsonRpcId>,
+) -> Result<JsonRpcId, WireDecodeError> {
+    let value = object.get(key).ok_or_else(|| {
+        invalid_request(
+            format!("missing required field `{key}`"),
+            response_id.clone(),
+        )
+    })?;
+
+    parse_id_value(value, key, response_id)
+}
+
+fn parse_id_value(
+    value: &Value,
+    key: &str,
+    response_id: &Option<JsonRpcId>,
+) -> Result<JsonRpcId, WireDecodeError> {
     match value {
-        Value::String(value) => Ok(Some(JsonRpcId::String(value.clone()))),
+        Value::String(value) => Ok(JsonRpcId::String(value.clone())),
         Value::Number(value) if value.is_i64() || value.is_u64() => {
-            Ok(Some(JsonRpcId::Number(value.clone())))
+            Ok(JsonRpcId::Number(value.clone()))
         }
         Value::Number(_) => Err(invalid_request(
             format!("field `{key}` number must be an integer"),
-            None,
+            response_id.clone(),
         )),
-        Value::Null => Ok(Some(JsonRpcId::Null)),
+        Value::Null => Ok(JsonRpcId::Null),
         _ => Err(invalid_request(
             format!("field `{key}` must be a string, integer number, or null"),
-            None,
+            response_id.clone(),
         )),
     }
 }
@@ -186,11 +264,69 @@ fn get_optional_params(
     Ok(Some(params.clone()))
 }
 
+fn parse_error_envelope(
+    value: &Value,
+    response_id: &Option<JsonRpcId>,
+) -> Result<ErrorEnvelope, WireDecodeError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_request("field `error` must be an object", response_id.clone()))?;
+
+    for field in object.keys() {
+        if !ALLOWED_ERROR_FIELDS.contains(&field.as_str()) {
+            return Err(invalid_request(
+                format!("unexpected field `error.{field}`"),
+                response_id.clone(),
+            ));
+        }
+    }
+
+    let code_value = object.get("code").ok_or_else(|| {
+        invalid_request("missing required field `error.code`", response_id.clone())
+    })?;
+
+    let Some(code_i64) = code_value.as_i64() else {
+        return Err(invalid_request(
+            "field `error.code` must be an integer",
+            response_id.clone(),
+        ));
+    };
+
+    let code = i32::try_from(code_i64).map_err(|_| {
+        invalid_request(
+            "field `error.code` must fit in signed 32-bit integer range",
+            response_id.clone(),
+        )
+    })?;
+
+    let message_value = object.get("message").ok_or_else(|| {
+        invalid_request(
+            "missing required field `error.message`",
+            response_id.clone(),
+        )
+    })?;
+
+    let message = message_value.as_str().ok_or_else(|| {
+        invalid_request(
+            "field `error.message` must be a string",
+            response_id.clone(),
+        )
+    })?;
+
+    let data = object.get("data").cloned();
+
+    Ok(ErrorEnvelope {
+        code,
+        message: message.to_owned(),
+        data,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{decode_request_line, encode_response_line, WireDecodeError};
+    use super::{decode_request_line, decode_response_line, encode_response_line, WireDecodeError};
     use crate::types::{ErrorEnvelope, JsonRpcId, ResponseEnvelope};
 
     #[test]
@@ -344,6 +480,103 @@ mod tests {
             unknown_field,
             WireDecodeError::InvalidRequest { message, id }
                 if message.contains("unexpected field `extra`") && id == Some(JsonRpcId::from("1"))
+        ));
+    }
+
+    #[test]
+    fn response_decode_accepts_string_number_and_null_ids() {
+        let string_id = decode_response_line(br#"{"jsonrpc":"2.0","id":"res-1","result":{}}"#)
+            .expect("string id response should decode");
+        assert_eq!(string_id.id, JsonRpcId::from("res-1"));
+
+        let number_id = decode_response_line(br#"{"jsonrpc":"2.0","id":42,"result":true}"#)
+            .expect("number id response should decode");
+        assert_eq!(number_id.id, JsonRpcId::from(42_i64));
+
+        let null_id = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid Request"}}"#,
+        )
+        .expect("null id response should decode");
+        assert_eq!(null_id.id, JsonRpcId::Null);
+    }
+
+    #[test]
+    fn response_decode_enforces_jsonrpc_shape_and_fields() {
+        let wrong_jsonrpc = decode_response_line(br#"{"jsonrpc":"1.0","id":"1","result":1}"#)
+            .expect_err("must fail");
+        assert!(matches!(
+            wrong_jsonrpc,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `jsonrpc`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let unknown_field =
+            decode_response_line(br#"{"jsonrpc":"2.0","id":"1","result":1,"extra":true}"#)
+                .expect_err("must fail");
+        assert!(matches!(
+            unknown_field,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("unexpected field `extra`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let invalid_id = decode_response_line(br#"{"jsonrpc":"2.0","id":{},"result":1}"#)
+            .expect_err("must fail");
+        assert!(matches!(
+            invalid_id,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `id`") && id.is_none()
+        ));
+    }
+
+    #[test]
+    fn response_decode_rejects_ambiguous_or_invalid_error_payloads() {
+        let both = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":"1","result":{},"error":{"code":-32603,"message":"Internal error"}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            both,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("exactly one of `result` or `error`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let neither =
+            decode_response_line(br#"{"jsonrpc":"2.0","id":"1"}"#).expect_err("must fail");
+        assert!(matches!(
+            neither,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("exactly one of `result` or `error`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let bad_error = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":"1","error":{"code":"oops","message":"bad"}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            bad_error,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `error.code` must be an integer") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let bad_error_field = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":"1","error":{"code":-32603,"message":"bad","extra":true}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            bad_error_field,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("unexpected field `error.extra`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let out_of_range_error_code = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":"1","error":{"code":2147483648,"message":"bad"}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            out_of_range_error_code,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `error.code` must fit in signed 32-bit integer range")
+                    && id == Some(JsonRpcId::from("1"))
         ));
     }
 

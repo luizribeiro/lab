@@ -1,5 +1,8 @@
 use fittings_wire::{
-    codec::{decode_request_line, encode_response_line, WireDecodeError, WireEncodeError},
+    codec::{
+        decode_request_line, decode_response_line, encode_response_line, WireDecodeError,
+        WireEncodeError,
+    },
     types::{ErrorEnvelope, JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use serde_json::Value;
@@ -53,8 +56,8 @@ pub fn parse_request_fixture(line: &[u8]) -> Result<RequestEnvelope, WireDecodeE
     decode_request_line(line)
 }
 
-pub fn parse_response_fixture(line: &[u8]) -> Result<ResponseEnvelope, serde_json::Error> {
-    serde_json::from_slice(line)
+pub fn parse_response_fixture(line: &[u8]) -> Result<ResponseEnvelope, WireDecodeError> {
+    decode_response_line(line)
 }
 
 #[cfg(test)]
