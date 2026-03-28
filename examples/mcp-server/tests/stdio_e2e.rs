@@ -169,16 +169,44 @@ fn stdio_e2e_invalid_tool_arguments_return_error_envelope() {
 }
 
 #[test]
-fn stdio_e2e_notification_requests_emit_no_response() {
-    let notification = br#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
-"#;
+fn stdio_e2e_initialized_notification_is_accepted_without_response_line() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"list-1\",\"method\":\"tools/list\",\"params\":{}}\n"
+    );
 
-    let output = run_stdio_serve(notification);
+    let output = run_stdio_serve(payload.as_bytes());
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
-    assert!(
-        output.stdout.is_empty(),
-        "notifications must not emit responses"
-    );
+
+    let responses = parse_response_lines(&output.stdout);
+    assert_eq!(responses.len(), 2, "notification must not emit a response");
+
+    let initialize = response_by_id(&responses, "init-1");
+    assert_success_response_envelope(initialize, json!("init-1"));
+
+    let list = response_by_id(&responses, "list-1");
+    assert_success_response_envelope(list, json!("list-1"));
+}
+
+#[test]
+fn stdio_e2e_initialized_request_before_initialize_returns_invalid_request() {
+    let request =
+        br#"{"jsonrpc":"2.0","id":"early-init","method":"notifications/initialized","params":{}}
+"#;
+
+    let output = run_stdio_serve(request);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let responses = parse_response_lines(&output.stdout);
+    assert_eq!(responses.len(), 1);
+
+    let response = &responses[0];
+    assert_error_response_envelope(response, json!("early-init"));
+    assert_eq!(response["error"]["code"], -32600);
+    assert_eq!(response["error"]["message"], "Invalid Request");
 }

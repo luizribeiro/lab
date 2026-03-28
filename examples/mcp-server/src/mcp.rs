@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
@@ -176,6 +177,10 @@ pub trait McpService {
     #[fittings::method(name = "initialize")]
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult>;
 
+    /// Client notification sent after successful initialize handshake.
+    #[fittings::method(name = "notifications/initialized")]
+    async fn initialized(&self, params: Value) -> Result<Value>;
+
     /// Returns the tools exposed by this process.
     #[fittings::method(name = "tools/list")]
     async fn list_tools(&self, params: Value) -> Result<ToolsListResult>;
@@ -185,26 +190,51 @@ pub trait McpService {
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionLifecycle {
+    AwaitingInitialize,
+    AwaitingInitializedNotification,
+    Running,
+}
+
 pub struct McpServiceImpl {
     registry: ToolRegistry,
+    lifecycle: Mutex<SessionLifecycle>,
 }
 
 impl McpServiceImpl {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
+        }
+    }
+
+    #[cfg(test)]
+    fn lifecycle_state(&self) -> SessionLifecycle {
+        *self
+            .lifecycle
+            .lock()
+            .expect("session lifecycle mutex should not be poisoned")
     }
 }
 
 impl Default for McpServiceImpl {
     fn default() -> Self {
-        Self {
-            registry: ToolRegistry::new(),
-        }
+        Self::new(ToolRegistry::new())
     }
 }
 
 impl McpService for McpServiceImpl {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        {
+            let mut lifecycle = self
+                .lifecycle
+                .lock()
+                .expect("session lifecycle mutex should not be poisoned");
+            *lifecycle = SessionLifecycle::AwaitingInitializedNotification;
+        }
+
         Ok(InitializeResult {
             protocol_version: params.protocol_version,
             capabilities: ServerCapabilities {
@@ -217,6 +247,24 @@ impl McpService for McpServiceImpl {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
         })
+    }
+
+    async fn initialized(&self, _params: Value) -> Result<Value> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("session lifecycle mutex should not be poisoned");
+
+        match *lifecycle {
+            SessionLifecycle::AwaitingInitialize => Err(FittingsError::invalid_request(
+                "received notifications/initialized before initialize",
+            )),
+            SessionLifecycle::AwaitingInitializedNotification => {
+                *lifecycle = SessionLifecycle::Running;
+                Ok(Value::Null)
+            }
+            SessionLifecycle::Running => Ok(Value::Null),
+        }
     }
 
     async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
@@ -248,7 +296,15 @@ mod tests {
             .collect();
 
         assert_eq!(schema.name, "mcp-service");
-        assert_eq!(method_names, vec!["initialize", "tools/list", "tools/call"]);
+        assert_eq!(
+            method_names,
+            vec![
+                "initialize",
+                "notifications/initialized",
+                "tools/list",
+                "tools/call"
+            ]
+        );
     }
 
     #[test]
@@ -395,5 +451,47 @@ mod tests {
             .await;
 
         assert!(matches!(called, Err(FittingsError::MethodNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn initialized_before_initialize_is_invalid_request() {
+        let service = McpServiceImpl::default();
+
+        let result = service.initialized(Value::Null).await;
+
+        assert!(matches!(result, Err(FittingsError::InvalidRequest(_))));
+        assert_eq!(
+            service.lifecycle_state(),
+            SessionLifecycle::AwaitingInitialize,
+            "state should remain unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_and_initialized_notification_advance_session_lifecycle() {
+        let service = McpServiceImpl::default();
+        assert_eq!(
+            service.lifecycle_state(),
+            SessionLifecycle::AwaitingInitialize
+        );
+
+        service
+            .initialize(InitializeParams {
+                protocol_version: "2024-11-05".to_string(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+        assert_eq!(
+            service.lifecycle_state(),
+            SessionLifecycle::AwaitingInitializedNotification
+        );
+
+        service
+            .initialized(Value::Null)
+            .await
+            .expect("initialized notification should be accepted");
+        assert_eq!(service.lifecycle_state(), SessionLifecycle::Running);
     }
 }
