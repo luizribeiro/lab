@@ -188,7 +188,7 @@ if [ "$1" != "serve" ]; then
   exit 91
 fi
 IFS= read -r _line || exit 1
-printf '{"id":"1","result":{"ok":true},"error":null,"metadata":{}}\n'
+printf '{"jsonrpc":"2.0","id":"1","result":{"ok":true}}\n'
 "#,
         );
 

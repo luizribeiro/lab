@@ -84,7 +84,7 @@ async fn generated_typed_client_roundtrips_method_calls() {
         assert_eq!(request.method, "add");
         assert_eq!(
             request.params,
-            fittings::serde_json::json!({"left": 20, "right": 22})
+            Some(fittings::serde_json::json!({"left": 20, "right": 22}))
         );
 
         let response_line =

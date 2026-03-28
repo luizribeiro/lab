@@ -1,9 +1,6 @@
-use fittings_core::{
-    error::FittingsError,
-    message::{Metadata, ServiceError},
-};
+use fittings_core::{error::FittingsError, message::ServiceError};
 
-use crate::types::{ErrorEnvelope, ResponseEnvelope};
+use crate::types::{ErrorEnvelope, JsonRpcId, ResponseEnvelope};
 
 const PARSE_ERROR_CODE: i32 = -32700;
 const INVALID_REQUEST_CODE: i32 = -32600;
@@ -11,7 +8,8 @@ const METHOD_NOT_FOUND_CODE: i32 = -32601;
 const INVALID_PARAMS_CODE: i32 = -32602;
 const INTERNAL_ERROR_CODE: i32 = -32603;
 
-pub fn to_error_envelope(id: String, err: FittingsError) -> ResponseEnvelope {
+pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
+    let id = id.into();
     let error = match err {
         FittingsError::ParseError(message) => ErrorEnvelope {
             code: PARSE_ERROR_CODE,
@@ -54,7 +52,7 @@ pub fn to_error_envelope(id: String, err: FittingsError) -> ResponseEnvelope {
         },
     };
 
-    ResponseEnvelope::error(id, error, Metadata::default())
+    ResponseEnvelope::error(id, error)
 }
 
 pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {

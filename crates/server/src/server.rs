@@ -9,9 +9,10 @@ use fittings_core::{
 use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError},
     error_map::to_error_envelope,
-    types::{RequestEnvelope, ResponseEnvelope},
+    types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use futures::FutureExt;
+use serde_json::Value;
 use tokio::{
     sync::{mpsc, Semaphore},
     task::JoinSet,
@@ -137,7 +138,7 @@ async fn handle_frame<S>(
         Ok(request_envelope) => execute_request(request_envelope, service).await,
         Err(error) => {
             let err = map_decode_error(error);
-            to_error_envelope(String::new(), err)
+            to_error_envelope(JsonRpcId::Null, err)
         }
     };
 
@@ -152,18 +153,16 @@ where
 {
     let request_id = request.id.clone();
     let request = Request {
-        id: request.id,
+        id: request.id.to_string(),
         method: request.method,
-        params: request.params,
-        metadata: request.metadata,
+        params: request.params.unwrap_or(Value::Null),
+        metadata: Default::default(),
     };
 
     let call_result = AssertUnwindSafe(service.call(request)).catch_unwind().await;
 
     match call_result {
-        Ok(Ok(Response {
-            result, metadata, ..
-        })) => ResponseEnvelope::success(request_id.clone(), result, metadata),
+        Ok(Ok(Response { result, .. })) => ResponseEnvelope::success(request_id.clone(), result),
         Ok(Err(error)) => to_error_envelope(request_id.clone(), error),
         Err(_) => to_error_envelope(
             request_id,

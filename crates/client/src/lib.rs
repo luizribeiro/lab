@@ -17,7 +17,7 @@ use std::{
 use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_wire::{
     error_map::from_error_envelope,
-    types::{RequestEnvelope, ResponseEnvelope},
+    types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use serde_json::Value;
 use tokio::{
@@ -70,8 +70,8 @@ where
             .map_err(|_| FittingsError::internal("client request canceled"))?
     }
 
-    fn next_request_id(&self) -> String {
-        self.next_id.fetch_add(1, Ordering::Relaxed).to_string()
+    fn next_request_id(&self) -> JsonRpcId {
+        JsonRpcId::from(self.next_id.fetch_add(1, Ordering::Relaxed).to_string())
     }
 }
 
@@ -87,7 +87,7 @@ where
 
 enum ClientCommand {
     Call {
-        id: String,
+        id: JsonRpcId,
         method: String,
         params: Value,
         response_tx: oneshot::Sender<Result<Value, FittingsError>>,
@@ -101,7 +101,7 @@ async fn run_client_loop<T>(
 ) where
     T: fittings_core::transport::Transport + Send + 'static,
 {
-    let mut pending: HashMap<String, oneshot::Sender<Result<Value, FittingsError>>> =
+    let mut pending: HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>> =
         HashMap::new();
 
     loop {
@@ -142,19 +142,14 @@ async fn run_client_loop<T>(
 
 async fn send_request<T>(
     transport: &mut T,
-    id: &str,
+    id: &JsonRpcId,
     method: &str,
     params: Value,
 ) -> Result<(), FittingsError>
 where
     T: fittings_core::transport::Transport,
 {
-    let request = RequestEnvelope {
-        id: id.to_string(),
-        method: method.to_string(),
-        params,
-        metadata: Default::default(),
-    };
+    let request = RequestEnvelope::new(id, method, Some(params));
 
     let mut encoded = serde_json::to_vec(&request)
         .map_err(|error| FittingsError::internal(format!("failed to encode request: {error}")))?;
@@ -165,7 +160,7 @@ where
 
 fn handle_response_frame(
     frame: Vec<u8>,
-    pending: &mut HashMap<String, oneshot::Sender<Result<Value, FittingsError>>>,
+    pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
 ) {
     let envelope: ResponseEnvelope = match serde_json::from_slice(&frame) {
         Ok(envelope) => envelope,
@@ -196,7 +191,7 @@ fn handle_response_frame(
 }
 
 fn fail_pending(
-    pending: &mut HashMap<String, oneshot::Sender<Result<Value, FittingsError>>>,
+    pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
     error: FittingsError,
 ) {
     for (_, sender) in pending.drain() {

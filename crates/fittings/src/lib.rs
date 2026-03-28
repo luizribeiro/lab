@@ -56,12 +56,16 @@ mod tests {
     fn re_exports_expose_expected_symbols() {
         assert_eq!(FITTINGS_PROTOCOL_VERSION, "1");
 
-        let request = decode_request_line(br#"{"id":"1","method":"ping","params":{}}"#)
-            .expect("request should decode");
+        let request =
+            decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{}}"#)
+                .expect("request should decode");
         assert_eq!(request.id, "1");
         assert_eq!(request.method, "ping");
 
-        let success = ResponseEnvelope::success("1", request.params.clone(), Default::default());
+        let success = ResponseEnvelope::success(
+            "1",
+            request.params.clone().unwrap_or(serde_json::Value::Null),
+        );
         let encoded = encode_response_line(&success).expect("response should encode");
         assert!(encoded.ends_with(b"\n"));
 

@@ -1,31 +1,29 @@
-use fittings_core::message::Metadata;
 use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError, WireEncodeError},
-    types::{ErrorEnvelope, RequestEnvelope, ResponseEnvelope},
+    types::{ErrorEnvelope, JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use serde_json::Value;
 
-pub fn request_envelope(id: &str, method: &str, params: Value) -> RequestEnvelope {
-    RequestEnvelope {
-        id: id.to_string(),
-        method: method.to_string(),
-        params,
-        metadata: Metadata::default(),
-    }
+pub fn request_envelope(id: impl Into<JsonRpcId>, method: &str, params: Value) -> RequestEnvelope {
+    RequestEnvelope::new(id, method, Some(params))
 }
 
-pub fn request_line(id: &str, method: &str, params: Value) -> Vec<u8> {
+pub fn request_line(id: impl Into<JsonRpcId>, method: &str, params: Value) -> Vec<u8> {
     let envelope = request_envelope(id, method, params);
     let mut bytes = serde_json::to_vec(&envelope).expect("request fixture should serialize");
     bytes.push(b'\n');
     bytes
 }
 
-pub fn success_response_envelope(id: &str, result: Value) -> ResponseEnvelope {
-    ResponseEnvelope::success(id, result, Metadata::default())
+pub fn success_response_envelope(id: impl Into<JsonRpcId>, result: Value) -> ResponseEnvelope {
+    ResponseEnvelope::success(id, result)
 }
 
-pub fn error_response_envelope(id: &str, code: i32, message: &str) -> ResponseEnvelope {
+pub fn error_response_envelope(
+    id: impl Into<JsonRpcId>,
+    code: i32,
+    message: &str,
+) -> ResponseEnvelope {
     ResponseEnvelope::error(
         id,
         ErrorEnvelope {
@@ -33,15 +31,21 @@ pub fn error_response_envelope(id: &str, code: i32, message: &str) -> ResponseEn
             message: message.to_string(),
             data: None,
         },
-        Metadata::default(),
     )
 }
 
-pub fn success_response_line(id: &str, result: Value) -> Result<Vec<u8>, WireEncodeError> {
+pub fn success_response_line(
+    id: impl Into<JsonRpcId>,
+    result: Value,
+) -> Result<Vec<u8>, WireEncodeError> {
     encode_response_line(&success_response_envelope(id, result))
 }
 
-pub fn error_response_line(id: &str, code: i32, message: &str) -> Result<Vec<u8>, WireEncodeError> {
+pub fn error_response_line(
+    id: impl Into<JsonRpcId>,
+    code: i32,
+    message: &str,
+) -> Result<Vec<u8>, WireEncodeError> {
     encode_response_line(&error_response_envelope(id, code, message))
 }
 
@@ -68,7 +72,7 @@ mod tests {
         let parsed_request = parse_request_fixture(&request).expect("request fixture should parse");
         assert_eq!(parsed_request.id, "req-1");
         assert_eq!(parsed_request.method, "hello");
-        assert_eq!(parsed_request.params, json!({"name": "Ada"}));
+        assert_eq!(parsed_request.params, Some(json!({"name": "Ada"})));
 
         let success = success_response_line("req-1", json!({"message": "Hi Ada"}))
             .expect("success response should encode");

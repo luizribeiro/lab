@@ -250,7 +250,7 @@ fn serve_tcp_transport_once_serves_one_connection_without_fittings_env() {
     let mut stream = connect_with_retry(&address, 30, Duration::from_millis(20));
     stream
         .write_all(
-            br#"{"id":"1","method":"hello","params":{"name":"Ada"},"metadata":{}}
+            br#"{"jsonrpc":"2.0","id":"1","method":"hello","params":{"name":"Ada"}}
 "#,
         )
         .expect("write request");
@@ -322,7 +322,7 @@ fn serve_tcp_transport_default_accepts_multiple_connections() {
     for (id, name) in [("1", "Ada"), ("2", "Grace")] {
         let mut stream = connect_with_retry(&address, 30, Duration::from_millis(20));
         let request = format!(
-            "{{\"id\":\"{id}\",\"method\":\"hello\",\"params\":{{\"name\":\"{name}\"}},\"metadata\":{{}}}}\n"
+            "{{\"jsonrpc\":\"2.0\",\"id\":\"{id}\",\"method\":\"hello\",\"params\":{{\"name\":\"{name}\"}}}}\n"
         );
         stream.write_all(request.as_bytes()).expect("write request");
 
@@ -347,7 +347,7 @@ fn serve_tcp_transport_default_accepts_multiple_connections() {
 
 #[test]
 fn fittings_serve_handles_success_request() {
-    let request = br#"{"id":"1","method":"hello","params":{"name":"Ada"},"metadata":{}}
+    let request = br#"{"jsonrpc":"2.0","id":"1","method":"hello","params":{"name":"Ada"}}
 "#;
     let output = run_service_command(&["serve"], Some(request), None);
 
@@ -376,7 +376,7 @@ fn malformed_request_maps_to_parse_error_code() {
 
 #[test]
 fn unknown_method_maps_to_method_not_found_code() {
-    let request = br#"{"id":"404","method":"nope","params":{},"metadata":{}}
+    let request = br#"{"jsonrpc":"2.0","id":"404","method":"nope","params":{}}
 "#;
     let output = run_service_command(&["serve"], Some(request), None);
 
@@ -446,7 +446,7 @@ fn broken_pipe_is_deterministic_transport_failure() {
         let stdin = child.stdin.as_mut().expect("stdin should be piped");
         stdin
             .write_all(
-                br#"{"id":"1","method":"ping","params":{},"metadata":{}}
+                br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{}}
 "#,
             )
             .expect("write request");

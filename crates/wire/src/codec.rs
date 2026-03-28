@@ -1,8 +1,7 @@
-use fittings_core::message::Metadata;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::types::{RequestEnvelope, ResponseEnvelope};
+use crate::types::{JsonRpcId, JsonRpcVersion, RequestEnvelope, ResponseEnvelope, JSONRPC_VERSION};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum WireDecodeError {
@@ -30,19 +29,16 @@ pub fn decode_request_line(line: &[u8]) -> Result<RequestEnvelope, WireDecodeErr
         .as_object()
         .ok_or_else(|| WireDecodeError::InvalidRequest("request must be a JSON object".into()))?;
 
-    let id = get_required_string(object, "id")?;
+    parse_jsonrpc(object)?;
+    let id = get_required_id(object, "id")?;
     let method = get_required_string(object, "method")?;
-    let params = object
-        .get("params")
-        .cloned()
-        .ok_or_else(|| WireDecodeError::InvalidRequest("missing required field `params`".into()))?;
-    let metadata = parse_metadata(object.get("metadata"))?;
+    let params = get_optional_params(object)?;
 
     Ok(RequestEnvelope {
+        jsonrpc: JsonRpcVersion,
         id,
         method,
         params,
-        metadata,
     })
 }
 
@@ -59,6 +55,17 @@ pub fn encode_response_line(resp: &ResponseEnvelope) -> Result<Vec<u8>, WireEnco
     Ok(encoded)
 }
 
+fn parse_jsonrpc(object: &Map<String, Value>) -> Result<(), WireDecodeError> {
+    let version = get_required_string(object, "jsonrpc")?;
+    if version != JSONRPC_VERSION {
+        return Err(WireDecodeError::InvalidRequest(format!(
+            "field `jsonrpc` must be \"{JSONRPC_VERSION}\""
+        )));
+    }
+
+    Ok(())
+}
+
 fn get_required_string(object: &Map<String, Value>, key: &str) -> Result<String, WireDecodeError> {
     let value = object.get(key).ok_or_else(|| {
         WireDecodeError::InvalidRequest(format!("missing required field `{key}`"))
@@ -70,26 +77,33 @@ fn get_required_string(object: &Map<String, Value>, key: &str) -> Result<String,
         .ok_or_else(|| WireDecodeError::InvalidRequest(format!("field `{key}` must be a string")))
 }
 
-fn parse_metadata(raw_metadata: Option<&Value>) -> Result<Metadata, WireDecodeError> {
-    let Some(raw_metadata) = raw_metadata else {
-        return Ok(Metadata::default());
-    };
-
-    let metadata_obj = raw_metadata.as_object().ok_or_else(|| {
-        WireDecodeError::InvalidRequest(
-            "field `metadata` must be an object of string values".into(),
-        )
+fn get_required_id(object: &Map<String, Value>, key: &str) -> Result<JsonRpcId, WireDecodeError> {
+    let value = object.get(key).ok_or_else(|| {
+        WireDecodeError::InvalidRequest(format!("missing required field `{key}`"))
     })?;
 
-    let mut metadata = Metadata::with_capacity(metadata_obj.len());
-    for (key, value) in metadata_obj {
-        let value = value.as_str().ok_or_else(|| {
-            WireDecodeError::InvalidRequest(format!("field `metadata.{key}` must be a string"))
-        })?;
-        metadata.insert(key.clone(), value.to_owned());
+    match value {
+        Value::String(value) => Ok(JsonRpcId::String(value.clone())),
+        Value::Number(value) => Ok(JsonRpcId::Number(value.clone())),
+        Value::Null => Ok(JsonRpcId::Null),
+        _ => Err(WireDecodeError::InvalidRequest(format!(
+            "field `{key}` must be a string, number, or null"
+        ))),
+    }
+}
+
+fn get_optional_params(object: &Map<String, Value>) -> Result<Option<Value>, WireDecodeError> {
+    let Some(params) = object.get("params") else {
+        return Ok(None);
+    };
+
+    if !params.is_object() && !params.is_array() {
+        return Err(WireDecodeError::InvalidRequest(
+            "field `params` must be an object or array when present".into(),
+        ));
     }
 
-    Ok(metadata)
+    Ok(Some(params.clone()))
 }
 
 #[cfg(test)]
@@ -97,51 +111,97 @@ mod tests {
     use serde_json::json;
 
     use super::{decode_request_line, encode_response_line, WireDecodeError};
-    use crate::types::{ErrorEnvelope, ResponseEnvelope};
+    use crate::types::{ErrorEnvelope, JsonRpcId, ResponseEnvelope};
 
     #[test]
     fn valid_line_decode_and_response_encode_roundtrip() {
-        let line = br#"{"id":"1","method":"ping","params":{"x":1},"metadata":{"trace":"abc"}}"#;
+        let line = br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{"x":1}}"#;
         let decoded = decode_request_line(line).expect("line should decode");
 
-        assert_eq!(decoded.id, "1");
+        assert_eq!(decoded.id, JsonRpcId::from("1"));
         assert_eq!(decoded.method, "ping");
-        assert_eq!(decoded.params, json!({"x": 1}));
-        assert_eq!(decoded.metadata.get("trace"), Some(&"abc".to_string()));
+        assert_eq!(decoded.params, Some(json!({"x": 1})));
 
-        let response =
-            ResponseEnvelope::success(decoded.id, json!({"ok": true}), Default::default());
+        let response = ResponseEnvelope::success(decoded.id.clone(), json!({"ok": true}));
         let encoded = encode_response_line(&response).expect("response should encode");
 
         assert!(encoded.ends_with(b"\n"));
         let encoded_json: serde_json::Value = serde_json::from_slice(&encoded[..encoded.len() - 1])
             .expect("encoded JSON should parse");
-        assert_eq!(encoded_json, json!({"id":"1","result":{"ok":true}}));
+        assert_eq!(
+            encoded_json,
+            json!({"jsonrpc":"2.0","id":"1","result":{"ok":true}})
+        );
+    }
+
+    #[test]
+    fn request_id_accepts_string_number_and_null() {
+        let with_string = decode_request_line(br#"{"jsonrpc":"2.0","id":"req-1","method":"ping"}"#)
+            .expect("string id should decode");
+        assert_eq!(with_string.id, JsonRpcId::from("req-1"));
+
+        let with_number = decode_request_line(br#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#)
+            .expect("number id should decode");
+        assert_eq!(with_number.id, JsonRpcId::from(7_i64));
+
+        let with_null = decode_request_line(br#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)
+            .expect("null id should decode");
+        assert_eq!(with_null.id, JsonRpcId::Null);
+    }
+
+    #[test]
+    fn params_is_optional_and_accepts_object_or_array() {
+        let without_params = decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#)
+            .expect("request without params should decode");
+        assert!(without_params.params.is_none());
+
+        let with_object =
+            decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{"x":1}}"#)
+                .expect("request with object params should decode");
+        assert_eq!(with_object.params, Some(json!({"x": 1})));
+
+        let with_array =
+            decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":[1,2,3]}"#)
+                .expect("request with array params should decode");
+        assert_eq!(with_array.params, Some(json!([1, 2, 3])));
     }
 
     #[test]
     fn malformed_json_returns_parse_error() {
-        let error = decode_request_line(br#"{"id": "1""#).expect_err("must fail");
+        let error = decode_request_line(br#"{"jsonrpc": "2.0", "id": "1""#).expect_err("must fail");
 
         assert!(matches!(error, WireDecodeError::Parse(_)));
     }
 
     #[test]
-    fn missing_fields_and_wrong_metadata_type_return_invalid_request() {
-        let missing_params =
+    fn missing_or_invalid_fields_return_invalid_request() {
+        let missing_jsonrpc =
             decode_request_line(br#"{"id":"1","method":"ping"}"#).expect_err("must fail");
         assert!(matches!(
-            missing_params,
-            WireDecodeError::InvalidRequest(message) if message.contains("missing required field `params`")
+            missing_jsonrpc,
+            WireDecodeError::InvalidRequest(message) if message.contains("missing required field `jsonrpc`")
         ));
 
-        let wrong_metadata = decode_request_line(
-            br#"{"id":"1","method":"ping","params":{},"metadata":{"trace":42}}"#,
-        )
-        .expect_err("must fail");
+        let wrong_jsonrpc = decode_request_line(br#"{"jsonrpc":"1.0","id":"1","method":"ping"}"#)
+            .expect_err("must fail");
         assert!(matches!(
-            wrong_metadata,
-            WireDecodeError::InvalidRequest(message) if message.contains("metadata.trace")
+            wrong_jsonrpc,
+            WireDecodeError::InvalidRequest(message) if message.contains("field `jsonrpc`")
+        ));
+
+        let invalid_id = decode_request_line(br#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#)
+            .expect_err("must fail");
+        assert!(matches!(
+            invalid_id,
+            WireDecodeError::InvalidRequest(message) if message.contains("field `id`")
+        ));
+
+        let invalid_params =
+            decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":1}"#)
+                .expect_err("must fail");
+        assert!(matches!(
+            invalid_params,
+            WireDecodeError::InvalidRequest(message) if message.contains("field `params`")
         ));
     }
 
@@ -161,34 +221,23 @@ mod tests {
     }
 
     #[test]
-    fn metadata_must_be_object_of_strings() {
-        let metadata_not_object =
-            decode_request_line(br#"{"id":"1","method":"ping","params":{},"metadata":1}"#)
-                .expect_err("must fail");
-        assert!(matches!(
-            metadata_not_object,
-            WireDecodeError::InvalidRequest(message) if message.contains("metadata")
-        ));
-    }
-
-    #[test]
     fn encode_rejects_ambiguous_response_shapes() {
         let both_some = ResponseEnvelope {
-            id: "1".to_string(),
+            jsonrpc: crate::types::JsonRpcVersion,
+            id: JsonRpcId::from("1"),
             result: Some(json!({"ok": true})),
             error: Some(ErrorEnvelope {
                 code: -32603,
                 message: "internal".to_string(),
                 data: None,
             }),
-            metadata: Default::default(),
         };
 
         let both_none = ResponseEnvelope {
-            id: "1".to_string(),
+            jsonrpc: crate::types::JsonRpcVersion,
+            id: JsonRpcId::from("1"),
             result: None,
             error: None,
-            metadata: Default::default(),
         };
 
         assert!(encode_response_line(&both_some).is_err());
