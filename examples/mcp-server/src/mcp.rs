@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use fittings::serde_json::{json, Value};
-use fittings::{FittingsError, Result};
+use fittings::{FittingsError, Result, Transport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,21 @@ pub struct ToolsCallParams {
     pub arguments: Value,
     #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsRegisterParams {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub response_text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsRegisterResult {
+    pub tool: Tool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -149,6 +164,35 @@ impl ToolRegistry {
         Ok(())
     }
 
+    pub fn register_static_text_tool(
+        &mut self,
+        name: impl Into<String>,
+        description: Option<String>,
+        response_text: impl Into<String>,
+    ) -> Result<Tool> {
+        let name = name.into();
+        let response_text = response_text.into();
+        let description = description.unwrap_or_else(|| "Runtime registered tool".to_string());
+
+        self.register(
+            name.clone(),
+            description,
+            json!({
+                "type": "object",
+                "additionalProperties": false
+            }),
+            move |_arguments| Ok(ToolsCallResult::text(response_text.clone())),
+        )?;
+
+        let tool = self
+            .tools
+            .get(&name)
+            .map(|entry| entry.tool.clone())
+            .expect("newly registered tool should exist");
+
+        Ok(tool)
+    }
+
     pub fn list(&self) -> Vec<Tool> {
         self.tools
             .values()
@@ -171,6 +215,12 @@ impl ToolRegistry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerNotification {
+    pub method: String,
+    pub params: Value,
+}
+
 #[fittings::service]
 pub trait McpService {
     /// Minimal MCP initialize handshake (stdio-oriented baseline).
@@ -188,6 +238,10 @@ pub trait McpService {
     /// Executes a named tool with JSON arguments.
     #[fittings::method(name = "tools/call")]
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult>;
+
+    /// Registers a simple runtime tool and notifies active clients that tools/list changed.
+    #[fittings::method(name = "tools/register")]
+    async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,16 +252,57 @@ enum SessionLifecycle {
 }
 
 pub struct McpServiceImpl {
-    registry: ToolRegistry,
+    registry: Mutex<ToolRegistry>,
     lifecycle: Mutex<SessionLifecycle>,
+    list_changed_enabled: bool,
+    pending_notifications: Mutex<Vec<ServerNotification>>,
 }
 
 impl McpServiceImpl {
     pub fn new(registry: ToolRegistry) -> Self {
         Self {
-            registry,
+            registry: Mutex::new(registry),
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
+            list_changed_enabled: false,
+            pending_notifications: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_tools_list_changed(mut self, enabled: bool) -> Self {
+        self.list_changed_enabled = enabled;
+        self
+    }
+
+    pub fn drain_notifications(&self) -> Vec<ServerNotification> {
+        let mut notifications = self
+            .pending_notifications
+            .lock()
+            .expect("pending notifications mutex should not be poisoned");
+        notifications.drain(..).collect()
+    }
+
+    fn enqueue_tools_list_changed_notification(&self) {
+        if !self.list_changed_enabled {
+            return;
+        }
+
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("session lifecycle mutex should not be poisoned");
+        if *lifecycle != SessionLifecycle::Running {
+            return;
+        }
+
+        drop(lifecycle);
+
+        self.pending_notifications
+            .lock()
+            .expect("pending notifications mutex should not be poisoned")
+            .push(ServerNotification {
+                method: "notifications/tools/list_changed".to_string(),
+                params: json!({}),
+            });
     }
 
     #[cfg(test)]
@@ -239,7 +334,7 @@ impl McpService for McpServiceImpl {
             protocol_version: params.protocol_version,
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability {
-                    list_changed: Some(false),
+                    list_changed: self.list_changed_enabled.then_some(true),
                 }),
             },
             server_info: ServerInfo {
@@ -268,14 +363,179 @@ impl McpService for McpServiceImpl {
     }
 
     async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
+        let registry = self
+            .registry
+            .lock()
+            .expect("tool registry mutex should not be poisoned");
+
         Ok(ToolsListResult {
-            tools: self.registry.list(),
+            tools: registry.list(),
         })
     }
 
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult> {
-        self.registry.execute(params)
+        let registry = self
+            .registry
+            .lock()
+            .expect("tool registry mutex should not be poisoned");
+        registry.execute(params)
     }
+
+    async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
+        if params.name.trim().is_empty() {
+            return Err(FittingsError::invalid_params("`name` must not be empty"));
+        }
+
+        let tool = {
+            let mut registry = self
+                .registry
+                .lock()
+                .expect("tool registry mutex should not be poisoned");
+            registry.register_static_text_tool(
+                params.name,
+                params.description,
+                params.response_text,
+            )?
+        };
+
+        self.enqueue_tools_list_changed_notification();
+
+        Ok(ToolsRegisterResult { tool })
+    }
+}
+
+pub async fn serve_stdio(service: &McpServiceImpl) -> Result<()> {
+    let mut transport = fittings::from_process_stdio(1_048_576);
+
+    loop {
+        let frame = match transport.recv().await {
+            Ok(frame) => frame,
+            Err(error) if is_graceful_eof(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+
+        if let Some(response) = dispatch_request_frame(service, &frame).await {
+            let encoded = fittings::encode_response_line(&response).map_err(|error| {
+                FittingsError::internal(format!("failed to encode response frame: {error}"))
+            })?;
+            transport.send(&encoded).await?;
+        }
+
+        for notification in service.drain_notifications() {
+            let frame = fittings::RequestEnvelope::notification(
+                notification.method,
+                Some(notification.params),
+            );
+            let mut encoded = fittings::serde_json::to_vec(&frame).map_err(|error| {
+                FittingsError::internal(format!("failed to encode notification frame: {error}"))
+            })?;
+            encoded.push(b'\n');
+            transport.send(&encoded).await?;
+        }
+    }
+}
+
+async fn dispatch_request_frame(
+    service: &McpServiceImpl,
+    frame: &[u8],
+) -> Option<fittings::ResponseEnvelope> {
+    let request = match fittings::decode_request_line(frame) {
+        Ok(request) => request,
+        Err(error) => {
+            let (id, err) = map_decode_error(error);
+            return Some(fittings::to_error_envelope(id, err));
+        }
+    };
+
+    let params = request.params.unwrap_or(Value::Null);
+    let result = dispatch_method(service, &request.method, params).await;
+
+    match (request.id, result) {
+        (Some(id), Ok(value)) => Some(fittings::ResponseEnvelope::success(id, value)),
+        (Some(id), Err(error)) => Some(fittings::to_error_envelope(id, error)),
+        (None, _) => None,
+    }
+}
+
+async fn dispatch_method(service: &McpServiceImpl, method: &str, params: Value) -> Result<Value> {
+    match method {
+        "initialize" => {
+            let decoded: InitializeParams = decode_params(method, params)?;
+            let result = service.initialize(decoded).await?;
+            fittings::serde_json::to_value(result).map_err(|error| {
+                FittingsError::internal(format!(
+                    "failed to encode result for method `{method}`: {error}"
+                ))
+            })
+        }
+        "notifications/initialized" => {
+            let decoded: Value = decode_params(method, params)?;
+            let result = service.initialized(decoded).await?;
+            fittings::serde_json::to_value(result).map_err(|error| {
+                FittingsError::internal(format!(
+                    "failed to encode result for method `{method}`: {error}"
+                ))
+            })
+        }
+        "tools/list" => {
+            let decoded: Value = decode_params(method, params)?;
+            let result = service.list_tools(decoded).await?;
+            fittings::serde_json::to_value(result).map_err(|error| {
+                FittingsError::internal(format!(
+                    "failed to encode result for method `{method}`: {error}"
+                ))
+            })
+        }
+        "tools/call" => {
+            let decoded: ToolsCallParams = decode_params(method, params)?;
+            let result = service.call_tool(decoded).await?;
+            fittings::serde_json::to_value(result).map_err(|error| {
+                FittingsError::internal(format!(
+                    "failed to encode result for method `{method}`: {error}"
+                ))
+            })
+        }
+        "tools/register" => {
+            let decoded: ToolsRegisterParams = decode_params(method, params)?;
+            let result = service.register_tool(decoded).await?;
+            fittings::serde_json::to_value(result).map_err(|error| {
+                FittingsError::internal(format!(
+                    "failed to encode result for method `{method}`: {error}"
+                ))
+            })
+        }
+        _ => Err(FittingsError::method_not_found(method.to_string())),
+    }
+}
+
+fn decode_params<T>(method: &str, params: Value) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    fittings::serde_json::from_value(params).map_err(|error| {
+        FittingsError::invalid_params(format!(
+            "failed to decode params for method `{method}`: {error}"
+        ))
+    })
+}
+
+fn map_decode_error(
+    error: fittings::WireDecodeError,
+) -> (fittings::wire::types::JsonRpcId, FittingsError) {
+    match error {
+        fittings::WireDecodeError::Parse(message) => (
+            fittings::wire::types::JsonRpcId::Null,
+            FittingsError::parse_error(message),
+        ),
+        fittings::WireDecodeError::InvalidRequest { message, id } => (
+            id.unwrap_or(fittings::wire::types::JsonRpcId::Null),
+            FittingsError::invalid_request(message),
+        ),
+    }
+}
+
+fn is_graceful_eof(error: &FittingsError) -> bool {
+    matches!(error, FittingsError::Transport(message) if message == "end of input" || message.ends_with("input closed"))
 }
 
 fn empty_object() -> Value {
@@ -302,7 +562,8 @@ mod tests {
                 "initialize",
                 "notifications/initialized",
                 "tools/list",
-                "tools/call"
+                "tools/call",
+                "tools/register"
             ]
         );
     }
@@ -313,7 +574,7 @@ mod tests {
             protocol_version: "2025-01-01".to_string(),
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability {
-                    list_changed: Some(false),
+                    list_changed: Some(true),
                 }),
             },
             server_info: ServerInfo {
@@ -327,7 +588,7 @@ mod tests {
 
         assert_eq!(encoded["protocolVersion"], "2025-01-01");
         assert_eq!(encoded["serverInfo"]["name"], "server");
-        assert_eq!(encoded["capabilities"]["tools"]["listChanged"], false);
+        assert_eq!(encoded["capabilities"]["tools"]["listChanged"], true);
     }
 
     #[test]
@@ -435,6 +696,15 @@ mod tests {
             .await
             .expect("initialize should succeed");
         assert_eq!(initialize.protocol_version, "2024-11-05");
+        assert!(initialize.capabilities.tools.is_some());
+        assert_eq!(
+            initialize
+                .capabilities
+                .tools
+                .expect("tools capability should be present")
+                .list_changed,
+            None
+        );
 
         let listed = service
             .list_tools(fittings::serde_json::Value::Null)
@@ -493,5 +763,107 @@ mod tests {
             .await
             .expect("initialized notification should be accepted");
         assert_eq!(service.lifecycle_state(), SessionLifecycle::Running);
+    }
+
+    #[tokio::test]
+    async fn runtime_tool_registration_enqueues_list_changed_only_when_enabled_and_running() {
+        let service = McpServiceImpl::default().with_tools_list_changed(true);
+
+        service
+            .register_tool(ToolsRegisterParams {
+                name: "runtime".to_string(),
+                description: None,
+                response_text: "ok".to_string(),
+            })
+            .await
+            .expect("register should succeed");
+        assert!(service.drain_notifications().is_empty());
+
+        service
+            .initialize(InitializeParams {
+                protocol_version: "2024-11-05".to_string(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+        service
+            .initialized(Value::Null)
+            .await
+            .expect("initialized should succeed");
+
+        service
+            .register_tool(ToolsRegisterParams {
+                name: "runtime-two".to_string(),
+                description: Some("runtime".to_string()),
+                response_text: "ok".to_string(),
+            })
+            .await
+            .expect("register should succeed");
+
+        let notifications = service.drain_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(
+            notifications[0],
+            ServerNotification {
+                method: "notifications/tools/list_changed".to_string(),
+                params: json!({})
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_tool_registration_rejects_invalid_or_duplicate_names_without_notification() {
+        let service = McpServiceImpl::default().with_tools_list_changed(true);
+
+        service
+            .initialize(InitializeParams {
+                protocol_version: "2024-11-05".to_string(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+        service
+            .initialized(Value::Null)
+            .await
+            .expect("initialized should succeed");
+
+        let empty_name = service
+            .register_tool(ToolsRegisterParams {
+                name: "   ".to_string(),
+                description: None,
+                response_text: "ignored".to_string(),
+            })
+            .await;
+        assert!(matches!(empty_name, Err(FittingsError::InvalidParams(_))));
+        assert!(service.drain_notifications().is_empty());
+
+        service
+            .register_tool(ToolsRegisterParams {
+                name: "runtime".to_string(),
+                description: None,
+                response_text: "ok".to_string(),
+            })
+            .await
+            .expect("first registration should succeed");
+        assert_eq!(service.drain_notifications().len(), 1);
+
+        let duplicate = service
+            .register_tool(ToolsRegisterParams {
+                name: "runtime".to_string(),
+                description: None,
+                response_text: "another".to_string(),
+            })
+            .await;
+        assert!(matches!(duplicate, Err(FittingsError::InvalidRequest(_))));
+        assert!(service.drain_notifications().is_empty());
+
+        let listed = service
+            .list_tools(Value::Null)
+            .await
+            .expect("tools/list should succeed");
+        assert_eq!(listed.tools.len(), 1);
+        assert_eq!(listed.tools[0].name, "runtime");
     }
 }

@@ -71,6 +71,20 @@ fn response_by_id<'a>(responses: &'a [Value], expected_id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing response id `{expected_id}`"))
 }
 
+fn notification_by_method<'a>(frames: &'a [Value], expected_method: &str) -> &'a Value {
+    frames
+        .iter()
+        .find(|frame| frame.get("id").is_none() && frame["method"] == expected_method)
+        .unwrap_or_else(|| panic!("missing notification method `{expected_method}`"))
+}
+
+fn notification_count(frames: &[Value], method: &str) -> usize {
+    frames
+        .iter()
+        .filter(|frame| frame.get("id").is_none() && frame["method"] == method)
+        .count()
+}
+
 fn assert_success_response_envelope(response: &Value, expected_id: Value) {
     let object = response
         .as_object()
@@ -126,7 +140,7 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     assert_eq!(initialize["result"]["protocolVersion"], "2025-01-01");
     assert_eq!(
         initialize["result"]["capabilities"]["tools"]["listChanged"],
-        false
+        true
     );
     assert_eq!(
         initialize["result"]["serverInfo"]["name"],
@@ -209,4 +223,95 @@ fn stdio_e2e_initialized_request_before_initialize_returns_invalid_request() {
     assert_error_response_envelope(response, json!("early-init"));
     assert_eq!(response["error"]["code"], -32600);
     assert_eq!(response["error"]["message"], "Invalid Request");
+}
+
+#[test]
+fn stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"register-1\",\"method\":\"tools/register\",\"params\":{\"name\":\"runtime_tool\",\"description\":\"Runtime tool\",\"responseText\":\"hello runtime\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"list-2\",\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"call-2\",\"method\":\"tools/call\",\"params\":{\"name\":\"runtime_tool\",\"arguments\":{}}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+    assert_eq!(frames.len(), 5);
+
+    let register = response_by_id(&frames, "register-1");
+    assert_success_response_envelope(register, json!("register-1"));
+    assert_eq!(register["result"]["tool"]["name"], "runtime_tool");
+
+    let changed = notification_by_method(&frames, "notifications/tools/list_changed");
+    assert_eq!(changed["jsonrpc"], "2.0");
+    assert_eq!(changed["params"], json!({}));
+    assert_eq!(
+        notification_count(&frames, "notifications/tools/list_changed"),
+        1,
+        "exactly one list_changed notification should be emitted"
+    );
+
+    let list = response_by_id(&frames, "list-2");
+    assert_success_response_envelope(list, json!("list-2"));
+    let names: Vec<_> = list["result"]["tools"]
+        .as_array()
+        .expect("tools/list result should include tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name should be string"))
+        .collect();
+    assert_eq!(names, vec!["add", "echo", "runtime_tool"]);
+
+    let call = response_by_id(&frames, "call-2");
+    assert_success_response_envelope(call, json!("call-2"));
+    assert_eq!(call["result"]["content"][0]["text"], "hello runtime");
+}
+
+#[test]
+fn stdio_e2e_runtime_registry_mutation_errors_do_not_emit_list_changed_notifications() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"register-ok\",\"method\":\"tools/register\",\"params\":{\"name\":\"runtime_tool\",\"responseText\":\"hello runtime\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"register-empty\",\"method\":\"tools/register\",\"params\":{\"name\":\"  \",\"responseText\":\"x\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"register-dup\",\"method\":\"tools/register\",\"params\":{\"name\":\"runtime_tool\",\"responseText\":\"x\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"list-1\",\"method\":\"tools/list\",\"params\":{}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+
+    assert_success_response_envelope(response_by_id(&frames, "register-ok"), json!("register-ok"));
+
+    let empty = response_by_id(&frames, "register-empty");
+    assert_error_response_envelope(empty, json!("register-empty"));
+    assert_eq!(empty["error"]["code"], -32602);
+
+    let duplicate = response_by_id(&frames, "register-dup");
+    assert_error_response_envelope(duplicate, json!("register-dup"));
+    assert_eq!(duplicate["error"]["code"], -32600);
+
+    assert_eq!(
+        notification_count(&frames, "notifications/tools/list_changed"),
+        1,
+        "only successful registration should emit list_changed"
+    );
+
+    let list = response_by_id(&frames, "list-1");
+    assert_success_response_envelope(list, json!("list-1"));
+    let names: Vec<_> = list["result"]["tools"]
+        .as_array()
+        .expect("tools/list result should include tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name should be string"))
+        .collect();
+    assert_eq!(names, vec!["add", "echo", "runtime_tool"]);
 }
