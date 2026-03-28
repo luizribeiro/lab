@@ -45,6 +45,10 @@ async function main() {
     console.log("tools/list =>", toolNames);
     assert(toolNames.includes("echo"), "expected `echo` tool");
     assert(toolNames.includes("add"), "expected `add` tool");
+    assert(
+      toolNames.includes("add_with_details"),
+      "expected `add_with_details` tool",
+    );
 
     const echo = await client.callTool({
       name: "echo",
@@ -59,6 +63,28 @@ async function main() {
     });
     console.log("tools/call add =>", JSON.stringify(add));
     assert(Array.isArray(add.content), "add response should include content array");
+
+    const addWithDetails = await client.callTool({
+      name: "add_with_details",
+      arguments: { a: 2, b: 3 },
+    });
+    console.log(
+      "tools/call add_with_details =>",
+      JSON.stringify(addWithDetails),
+    );
+    assert(
+      Array.isArray(addWithDetails.content),
+      "add_with_details response should include content array",
+    );
+    assert(
+      typeof addWithDetails.structuredContent === "object" &&
+        addWithDetails.structuredContent !== null,
+      "add_with_details response should include structuredContent object",
+    );
+    assert(
+      addWithDetails.structuredContent.sum === 5,
+      "add_with_details structuredContent.sum should equal 5",
+    );
 
     console.log("✅ Real MCP client check passed.");
   } finally {

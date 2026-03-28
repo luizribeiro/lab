@@ -8,7 +8,7 @@ This example shows how to build an **MCP-style tool-calling server** on top of `
   - MCP request/response types (`initialize`, `tools/list`, `tools/call`)
   - a small tool registry
   - a `#[fittings::service]` trait with MCP wire method names via `#[fittings::method(name = ...)]`
-- `src/main.rs` wires two example tools (`echo`, `add`) and runs the service.
+- `src/main.rs` wires example tools (`echo`, `add`, `add_with_details`) and runs the service.
 
 So this is intentionally a **library-like layer in the example itself** (not a core `fittings` crate), to demonstrate how MCP can be modeled on top of fittings primitives.
 
@@ -63,6 +63,7 @@ and then performs:
 2. tools/list
 3. tools/call (`echo`)
 4. tools/call (`add`)
+5. tools/call (`add_with_details`, text + structuredContent)
 
 using the official MCP SDK client.
 

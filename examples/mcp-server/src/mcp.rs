@@ -102,6 +102,8 @@ pub enum ToolContent {
 #[serde(rename_all = "camelCase")]
 pub struct ToolsCallResult {
     pub content: Vec<ToolContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     #[serde(default)]
     pub is_error: bool,
 }
@@ -110,8 +112,26 @@ impl ToolsCallResult {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             content: vec![ToolContent::Text { text: text.into() }],
+            structured_content: None,
             is_error: false,
         }
+    }
+
+    pub fn text_with_structured(
+        text: impl Into<String>,
+        structured_content: Value,
+    ) -> Result<Self> {
+        if !structured_content.is_object() {
+            return Err(FittingsError::invalid_params(
+                "`structuredContent` must be a JSON object",
+            ));
+        }
+
+        Ok(Self {
+            content: vec![ToolContent::Text { text: text.into() }],
+            structured_content: Some(structured_content),
+            is_error: false,
+        })
     }
 }
 
@@ -600,6 +620,34 @@ mod tests {
 
         assert_eq!(params.name, "echo");
         assert_eq!(params.arguments, json!({}));
+    }
+
+    #[test]
+    fn tools_call_result_supports_text_and_structured_content() {
+        let result = ToolsCallResult::text_with_structured(
+            "2 + 3 = 5",
+            json!({
+                "a": 2,
+                "b": 3,
+                "sum": 5
+            }),
+        )
+        .expect("tools/call result with structured content should be valid");
+
+        let encoded = fittings::serde_json::to_value(result)
+            .expect("tools/call result should serialize to JSON");
+
+        assert_eq!(encoded["content"][0]["type"], "text");
+        assert_eq!(encoded["content"][0]["text"], "2 + 3 = 5");
+        assert_eq!(encoded["structuredContent"]["sum"], 5);
+        assert_eq!(encoded["isError"], false);
+    }
+
+    #[test]
+    fn tools_call_result_rejects_non_object_structured_content() {
+        let result = ToolsCallResult::text_with_structured("invalid", json!([1, 2, 3]));
+
+        assert!(matches!(result, Err(FittingsError::InvalidParams(_))));
     }
 
     #[test]

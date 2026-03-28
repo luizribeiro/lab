@@ -152,15 +152,40 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     let tools = list["result"]["tools"]
         .as_array()
         .expect("tools/list result should include tools array");
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 3);
     assert_eq!(tools[0]["name"], "add");
-    assert_eq!(tools[1]["name"], "echo");
+    assert_eq!(tools[1]["name"], "add_with_details");
+    assert_eq!(tools[2]["name"], "echo");
 
     let call = response_by_id(&responses, "call-1");
     assert_success_response_envelope(call, json!("call-1"));
     assert_eq!(call["result"]["isError"], false);
     assert_eq!(call["result"]["content"][0]["type"], "text");
     assert_eq!(call["result"]["content"][0]["text"], "5");
+}
+
+#[test]
+fn stdio_e2e_structured_tool_call_returns_text_and_structured_content() {
+    let request = br#"{"jsonrpc":"2.0","id":"call-structured-1","method":"tools/call","params":{"name":"add_with_details","arguments":{"a":2,"b":3}}}
+"#;
+
+    let output = run_stdio_serve(request);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let responses = parse_response_lines(&output.stdout);
+    assert_eq!(responses.len(), 1);
+
+    let response = &responses[0];
+    assert_success_response_envelope(response, json!("call-structured-1"));
+    assert_eq!(response["result"]["content"][0]["type"], "text");
+    assert_eq!(response["result"]["content"][0]["text"], "2 + 3 = 5");
+    assert_eq!(
+        response["result"]["structuredContent"],
+        json!({"a": 2.0, "b": 3.0, "sum": 5.0})
+    );
+    assert_eq!(response["result"]["isError"], false);
 }
 
 #[test]
@@ -264,7 +289,10 @@ fn stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name should be string"))
         .collect();
-    assert_eq!(names, vec!["add", "echo", "runtime_tool"]);
+    assert_eq!(
+        names,
+        vec!["add", "add_with_details", "echo", "runtime_tool"]
+    );
 
     let call = response_by_id(&frames, "call-2");
     assert_success_response_envelope(call, json!("call-2"));
@@ -313,5 +341,8 @@ fn stdio_e2e_runtime_registry_mutation_errors_do_not_emit_list_changed_notificat
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name should be string"))
         .collect();
-    assert_eq!(names, vec!["add", "echo", "runtime_tool"]);
+    assert_eq!(
+        names,
+        vec!["add", "add_with_details", "echo", "runtime_tool"]
+    );
 }
