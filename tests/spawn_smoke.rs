@@ -79,6 +79,22 @@ fn parse_single_response(stdout: &[u8]) -> Value {
     serde_json::from_str(line).expect("response line should be valid json")
 }
 
+fn parse_batch_response(stdout: &[u8]) -> Vec<Value> {
+    let stdout_text = std::str::from_utf8(stdout).expect("stdout should be utf-8");
+    let mut lines = stdout_text.lines();
+    let line = lines.next().expect("expected one batch response line");
+    assert!(
+        lines.next().is_none(),
+        "expected exactly one batch response line"
+    );
+
+    serde_json::from_str::<Value>(line)
+        .expect("batch response line should be valid json")
+        .as_array()
+        .expect("batch response must be a JSON array")
+        .clone()
+}
+
 fn wait_for_child_exit(mut child: Child, timeout: Duration) -> Output {
     let start = Instant::now();
 
@@ -386,6 +402,102 @@ fn unknown_method_maps_to_method_not_found_code() {
     let response = parse_single_response(&output.stdout);
     assert_eq!(response["id"], "404");
     assert_eq!(response["error"]["code"], -32601);
+}
+
+#[test]
+fn notification_request_emits_no_response() {
+    let notification = br#"{"jsonrpc":"2.0","method":"hello","params":{"name":"Ada"}}
+"#;
+    let output = run_service_command(&["serve"], Some(notification), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+    assert!(
+        output.stdout.is_empty(),
+        "notifications must not emit responses"
+    );
+}
+
+#[test]
+fn numeric_request_ids_roundtrip_as_numbers() {
+    let request = br#"{"jsonrpc":"2.0","id":7,"method":"hello","params":{"name":"Ada"}}
+"#;
+    let output = run_service_command(&["serve"], Some(request), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let response = parse_single_response(&output.stdout);
+    assert_eq!(response["id"], 7);
+    assert_eq!(response["result"]["message"], "Hello, Ada!");
+}
+
+#[test]
+fn invalid_envelope_reuses_string_id_and_maps_to_invalid_request() {
+    let request = br#"{"jsonrpc":"2.0","id":"bad-1","method":"hello","params":{"name":"Ada"},"metadata":{"trace":"x"}}
+"#;
+    let output = run_service_command(&["serve"], Some(request), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let response = parse_single_response(&output.stdout);
+    assert_eq!(response["id"], "bad-1");
+    assert_eq!(response["error"]["code"], -32600);
+    assert_eq!(response["error"]["message"], "Invalid Request");
+}
+
+#[test]
+fn batch_mixes_notifications_calls_and_invalid_items() {
+    let request = br#"[{"jsonrpc":"2.0","method":"hello","params":{"name":"Skip"}},{"jsonrpc":"2.0","id":"b-1","method":"hello","params":{"name":"Ada"}},{"jsonrpc":"2.0","id":9,"method":"hello","params":{"name":"Grace"}},42]
+"#;
+    let output = run_service_command(&["serve"], Some(request), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let mut responses = parse_batch_response(&output.stdout);
+    assert_eq!(
+        responses.len(),
+        3,
+        "batch should include only call/error responses"
+    );
+
+    responses.sort_by(|left, right| left["id"].to_string().cmp(&right["id"].to_string()));
+
+    assert_eq!(responses[0]["id"], "b-1");
+    assert_eq!(responses[0]["result"]["message"], "Hello, Ada!");
+    assert_eq!(responses[1]["id"], 9);
+    assert_eq!(responses[1]["result"]["message"], "Hello, Grace!");
+    assert_eq!(responses[2]["id"], Value::Null);
+    assert_eq!(responses[2]["error"]["code"], -32600);
+}
+
+#[test]
+fn empty_batch_returns_single_invalid_request_error() {
+    let output = run_service_command(&["serve"], Some(b"[]\n"), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let response = parse_single_response(&output.stdout);
+    assert_eq!(response["id"], Value::Null);
+    assert_eq!(response["error"]["code"], -32600);
+    assert_eq!(response["error"]["message"], "Invalid Request");
+}
+
+#[test]
+fn batch_with_only_notifications_emits_no_response() {
+    let request = br#"[{"jsonrpc":"2.0","method":"hello","params":{"name":"Ada"}},{"jsonrpc":"2.0","method":"hello","params":{"name":"Grace"}}]
+"#;
+    let output = run_service_command(&["serve"], Some(request), None);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+    assert!(
+        output.stdout.is_empty(),
+        "batch with only notifications must not emit responses"
+    );
 }
 
 #[test]

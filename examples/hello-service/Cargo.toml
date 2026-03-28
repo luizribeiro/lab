@@ -21,3 +21,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 [[test]]
 name = "spawn_smoke"
 path = "../../tests/spawn_smoke.rs"
+
+[[test]]
+name = "jsonrpc_conformance"
+path = "../../tests/jsonrpc_conformance.rs"
