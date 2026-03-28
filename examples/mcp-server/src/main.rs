@@ -99,6 +99,7 @@ mod tests {
             .call_tool(ToolsCallParams {
                 name: "add".to_string(),
                 arguments: json!({"a": 2, "b": 3}),
+                meta: None,
             })
             .await
             .expect("tools/call should succeed");
@@ -117,6 +118,7 @@ mod tests {
             .call_tool(ToolsCallParams {
                 name: "add".to_string(),
                 arguments: json!({"a": "x", "b": 1}),
+                meta: None,
             })
             .await;
 

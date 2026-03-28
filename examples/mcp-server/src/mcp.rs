@@ -66,11 +66,13 @@ pub struct ToolsListResult {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolsCallParams {
     pub name: String,
     #[serde(default = "empty_object")]
     pub arguments: Value,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -311,6 +313,7 @@ mod tests {
             .execute(ToolsCallParams {
                 name: "sum".to_string(),
                 arguments: json!({"a": 2, "b": 3}),
+                meta: None,
             })
             .expect("tool execution should succeed");
 
@@ -328,6 +331,7 @@ mod tests {
         let unknown = registry.execute(ToolsCallParams {
             name: "missing".to_string(),
             arguments: json!({}),
+            meta: None,
         });
         assert!(matches!(unknown, Err(FittingsError::MethodNotFound(_))));
 
@@ -341,6 +345,7 @@ mod tests {
         let invalid = registry.execute(ToolsCallParams {
             name: "noop".to_string(),
             arguments: json!([1, 2, 3]),
+            meta: None,
         });
         assert!(matches!(invalid, Err(FittingsError::InvalidParams(_))));
     }
@@ -385,6 +390,7 @@ mod tests {
             .call_tool(ToolsCallParams {
                 name: "echo".to_string(),
                 arguments: json!({"message": "hello"}),
+                meta: None,
             })
             .await;
 
