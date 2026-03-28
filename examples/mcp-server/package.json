@@ -1,0 +1,11 @@
+{
+  "name": "fittings-mcp-server-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:real-client": "node scripts/check-with-mcp-sdk.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5"
+  }
+}

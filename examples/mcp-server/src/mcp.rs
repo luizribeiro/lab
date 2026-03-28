@@ -6,13 +6,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub protocol_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<ClientInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Value>,
 }
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
@@ -48,10 +49,6 @@ pub struct InitializeResult {
     pub capabilities: ServerCapabilities,
     pub server_info: ServerInfo,
 }
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ToolsListParams {}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -179,7 +176,7 @@ pub trait McpService {
 
     /// Returns the tools exposed by this process.
     #[fittings::method(name = "tools/list")]
-    async fn list_tools(&self, params: ToolsListParams) -> Result<ToolsListResult>;
+    async fn list_tools(&self, params: Value) -> Result<ToolsListResult>;
 
     /// Executes a named tool with JSON arguments.
     #[fittings::method(name = "tools/call")]
@@ -222,7 +219,7 @@ impl McpService for McpServiceImpl {
         })
     }
 
-    async fn list_tools(&self, _params: ToolsListParams) -> Result<ToolsListResult> {
+    async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
         Ok(ToolsListResult {
             tools: self.registry.list(),
         })
@@ -427,13 +424,14 @@ mod tests {
             .initialize(InitializeParams {
                 protocol_version: "2024-11-05".to_string(),
                 client_info: None,
+                capabilities: None,
             })
             .await
             .expect("initialize should succeed");
         assert_eq!(initialize.protocol_version, "2024-11-05");
 
         let listed = service
-            .list_tools(ToolsListParams {})
+            .list_tools(fittings::serde_json::Value::Null)
             .await
             .expect("tools/list should succeed");
         assert_eq!(listed.tools.len(), 1);

@@ -19,7 +19,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::build_service;
-    use crate::mcp::{McpService, ToolContent, ToolsCallParams, ToolsListParams};
+    use crate::mcp::{McpService, ToolContent, ToolsCallParams};
     use fittings::serde_json::json;
     use fittings::FittingsError;
 
@@ -28,7 +28,7 @@ mod tests {
         let service = build_service();
 
         let listed = service
-            .list_tools(ToolsListParams {})
+            .list_tools(fittings::serde_json::Value::Null)
             .await
             .expect("tools/list should succeed");
 
