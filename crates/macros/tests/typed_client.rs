@@ -87,9 +87,11 @@ async fn generated_typed_client_roundtrips_method_calls() {
             Some(fittings::serde_json::json!({"left": 20, "right": 22}))
         );
 
-        let response_line =
-            success_response_line(&request.id, fittings::serde_json::json!({"sum": 42}))
-                .expect("encode response");
+        let response_line = success_response_line(
+            request.id.as_ref().expect("request should carry an id"),
+            fittings::serde_json::json!({"sum": 42}),
+        )
+        .expect("encode response");
         server_transport
             .send(&response_line)
             .await
@@ -122,7 +124,7 @@ async fn generated_typed_client_maps_result_decode_failures_to_internal_error() 
             .expect("request envelope should decode");
 
         let response_line = success_response_line(
-            &request.id,
+            request.id.as_ref().expect("request should carry an id"),
             fittings::serde_json::json!({"sum": "not-an-int"}),
         )
         .expect("encode response");

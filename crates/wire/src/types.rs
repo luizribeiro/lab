@@ -109,7 +109,8 @@ impl PartialEq<&str> for JsonRpcId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestEnvelope {
     pub jsonrpc: JsonRpcVersion,
-    pub id: JsonRpcId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<JsonRpcId>,
     pub method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
@@ -119,7 +120,16 @@ impl RequestEnvelope {
     pub fn new(id: impl Into<JsonRpcId>, method: impl Into<String>, params: Option<Value>) -> Self {
         Self {
             jsonrpc: JsonRpcVersion,
-            id: id.into(),
+            id: Some(id.into()),
+            method: method.into(),
+            params,
+        }
+    }
+
+    pub fn notification(method: impl Into<String>, params: Option<Value>) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion,
+            id: None,
             method: method.into(),
             params,
         }

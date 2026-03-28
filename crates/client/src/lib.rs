@@ -70,6 +70,15 @@ where
             .map_err(|_| FittingsError::internal("client request canceled"))?
     }
 
+    pub async fn notify(&self, method: &str, params: Value) -> Result<(), FittingsError> {
+        self.request_tx
+            .send(ClientCommand::Notify {
+                method: method.to_string(),
+                params,
+            })
+            .map_err(|_| FittingsError::internal("client is not connected"))
+    }
+
     fn next_request_id(&self) -> JsonRpcId {
         JsonRpcId::from(self.next_id.fetch_add(1, Ordering::Relaxed).to_string())
     }
@@ -92,6 +101,10 @@ enum ClientCommand {
         params: Value,
         response_tx: oneshot::Sender<Result<Value, FittingsError>>,
     },
+    Notify {
+        method: String,
+        params: Value,
+    },
     Shutdown,
 }
 
@@ -111,7 +124,7 @@ async fn run_client_loop<T>(
             command = request_rx.recv() => {
                 match command {
                     Some(ClientCommand::Call { id, method, params, response_tx }) => {
-                        if let Err(error) = send_request(&mut transport, &id, &method, params).await {
+                        if let Err(error) = send_request(&mut transport, Some(&id), &method, params).await {
                             let _ = response_tx.send(Err(error.clone()));
                             fail_pending(&mut pending, error.clone());
                             fail_queued_calls(&mut request_rx, error);
@@ -119,6 +132,13 @@ async fn run_client_loop<T>(
                         }
 
                         pending.insert(id, response_tx);
+                    }
+                    Some(ClientCommand::Notify { method, params }) => {
+                        if let Err(error) = send_request(&mut transport, None, &method, params).await {
+                            fail_pending(&mut pending, error.clone());
+                            fail_queued_calls(&mut request_rx, error);
+                            return;
+                        }
                     }
                     Some(ClientCommand::Shutdown) | None => {
                         fail_pending(&mut pending, FittingsError::internal("client closed"));
@@ -142,14 +162,17 @@ async fn run_client_loop<T>(
 
 async fn send_request<T>(
     transport: &mut T,
-    id: &JsonRpcId,
+    id: Option<&JsonRpcId>,
     method: &str,
     params: Value,
 ) -> Result<(), FittingsError>
 where
     T: fittings_core::transport::Transport,
 {
-    let request = RequestEnvelope::new(id, method, Some(params));
+    let request = match id {
+        Some(id) => RequestEnvelope::new(id, method, Some(params)),
+        None => RequestEnvelope::notification(method, Some(params)),
+    };
 
     let mut encoded = serde_json::to_vec(&request)
         .map_err(|error| FittingsError::internal(format!("failed to encode request: {error}")))?;
@@ -208,7 +231,7 @@ fn fail_queued_calls(
             Ok(ClientCommand::Call { response_tx, .. }) => {
                 let _ = response_tx.send(Err(error.clone()));
             }
-            Ok(ClientCommand::Shutdown) => {}
+            Ok(ClientCommand::Notify { .. } | ClientCommand::Shutdown) => {}
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => return,
         }
     }
@@ -295,17 +318,21 @@ mod tests {
                 parse_request_fixture(&server_transport.recv().await.expect("request two"))
                     .expect("decode request two");
 
-            let second_response =
-                success_response_line(&second.id, json!({"method": second.method, "order": 2}))
-                    .expect("encode second response");
+            let second_response = success_response_line(
+                second.id.as_ref().expect("request should carry an id"),
+                json!({"method": second.method, "order": 2}),
+            )
+            .expect("encode second response");
             server_transport
                 .send(&second_response)
                 .await
                 .expect("send second response");
 
-            let first_response =
-                success_response_line(&first.id, json!({"method": first.method, "order": 1}))
-                    .expect("encode first response");
+            let first_response = success_response_line(
+                first.id.as_ref().expect("request should carry an id"),
+                json!({"method": first.method, "order": 1}),
+            )
+            .expect("encode first response");
             server_transport
                 .send(&first_response)
                 .await
@@ -340,8 +367,11 @@ mod tests {
                 .expect("decode request one");
 
             tokio::time::sleep(Duration::from_millis(60)).await;
-            let first_response = success_response_line(&first.id, json!({"ok": true}))
-                .expect("encode first response");
+            let first_response = success_response_line(
+                first.id.as_ref().expect("request should carry an id"),
+                json!({"ok": true}),
+            )
+            .expect("encode first response");
             server_transport
                 .send(&first_response)
                 .await
@@ -350,8 +380,11 @@ mod tests {
             let second =
                 parse_request_fixture(&server_transport.recv().await.expect("request two"))
                     .expect("decode request two");
-            let second_response = success_response_line(&second.id, json!({"ok": true, "call": 2}))
-                .expect("encode second response");
+            let second_response = success_response_line(
+                second.id.as_ref().expect("request should carry an id"),
+                json!({"ok": true, "call": 2}),
+            )
+            .expect("encode second response");
             server_transport
                 .send(&second_response)
                 .await
@@ -409,8 +442,12 @@ mod tests {
         let server = tokio::spawn(async move {
             let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
                 .expect("decode request");
-            let response = error_response_line(&request.id, -32601, "missing-method")
-                .expect("encode error response");
+            let response = error_response_line(
+                request.id.as_ref().expect("request should carry an id"),
+                -32601,
+                "missing-method",
+            )
+            .expect("encode error response");
             server_transport
                 .send(&response)
                 .await
@@ -427,6 +464,64 @@ mod tests {
             FittingsError::MethodNotFound(message) if message == "Method not found"
         ));
 
+        server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn notify_sends_request_without_id_and_does_not_wait_for_response() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        client
+            .notify("event", json!({"kind": "tick"}))
+            .await
+            .expect("notify should succeed");
+
+        let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
+            .expect("decode request");
+        assert!(request.id.is_none());
+        assert_eq!(request.method, "event");
+        assert_eq!(request.params, Some(json!({"kind": "tick"})));
+    }
+
+    #[tokio::test]
+    async fn notify_and_call_can_be_mixed_without_losing_response_correlation() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let server = tokio::spawn(async move {
+            let first = parse_request_fixture(&server_transport.recv().await.expect("request one"))
+                .expect("decode request one");
+            assert!(first.id.is_none(), "first frame should be a notification");
+
+            let second =
+                parse_request_fixture(&server_transport.recv().await.expect("request two"))
+                    .expect("decode request two");
+            let response = success_response_line(
+                second.id.as_ref().expect("call should carry an id"),
+                json!({"ok": true}),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send response");
+        });
+
+        client
+            .notify("event", json!({"kind": "tick"}))
+            .await
+            .expect("notify should succeed");
+        let result = client
+            .call("work", json!({}))
+            .await
+            .expect("call should succeed");
+
+        assert_eq!(result, json!({"ok": true}));
         server.await.expect("server task should join");
     }
 

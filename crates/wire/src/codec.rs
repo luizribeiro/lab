@@ -41,7 +41,7 @@ pub fn decode_request_line(line: &[u8]) -> Result<RequestEnvelope, WireDecodeErr
 
     validate_request_fields(object, &response_id)?;
     parse_jsonrpc(object, &response_id)?;
-    let id = get_required_id(object, "id")?;
+    let id = get_optional_id(object, "id")?;
     let method = get_required_string(object, "method", &response_id)?;
     validate_method_name(&method, &response_id)?;
     let params = get_optional_params(object, &response_id)?;
@@ -143,21 +143,24 @@ fn get_required_string(
     })
 }
 
-fn get_required_id(object: &Map<String, Value>, key: &str) -> Result<JsonRpcId, WireDecodeError> {
-    let value = object
-        .get(key)
-        .ok_or_else(|| invalid_request(format!("missing required field `{key}`"), None))?;
+fn get_optional_id(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<JsonRpcId>, WireDecodeError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
 
     match value {
-        Value::String(value) => Ok(JsonRpcId::String(value.clone())),
+        Value::String(value) => Ok(Some(JsonRpcId::String(value.clone()))),
         Value::Number(value) if value.is_i64() || value.is_u64() => {
-            Ok(JsonRpcId::Number(value.clone()))
+            Ok(Some(JsonRpcId::Number(value.clone())))
         }
         Value::Number(_) => Err(invalid_request(
             format!("field `{key}` number must be an integer"),
             None,
         )),
-        Value::Null => Ok(JsonRpcId::Null),
+        Value::Null => Ok(Some(JsonRpcId::Null)),
         _ => Err(invalid_request(
             format!("field `{key}` must be a string, integer number, or null"),
             None,
@@ -195,11 +198,14 @@ mod tests {
         let line = br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{"x":1}}"#;
         let decoded = decode_request_line(line).expect("line should decode");
 
-        assert_eq!(decoded.id, JsonRpcId::from("1"));
+        assert_eq!(decoded.id, Some(JsonRpcId::from("1")));
         assert_eq!(decoded.method, "ping");
         assert_eq!(decoded.params, Some(json!({"x": 1})));
 
-        let response = ResponseEnvelope::success(decoded.id.clone(), json!({"ok": true}));
+        let response = ResponseEnvelope::success(
+            decoded.id.clone().expect("request id should be present"),
+            json!({"ok": true}),
+        );
         let encoded = encode_response_line(&response).expect("response should encode");
 
         assert!(encoded.ends_with(b"\n"));
@@ -215,15 +221,24 @@ mod tests {
     fn request_id_accepts_string_number_and_null() {
         let with_string = decode_request_line(br#"{"jsonrpc":"2.0","id":"req-1","method":"ping"}"#)
             .expect("string id should decode");
-        assert_eq!(with_string.id, JsonRpcId::from("req-1"));
+        assert_eq!(with_string.id, Some(JsonRpcId::from("req-1")));
 
         let with_number = decode_request_line(br#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#)
             .expect("number id should decode");
-        assert_eq!(with_number.id, JsonRpcId::from(7_i64));
+        assert_eq!(with_number.id, Some(JsonRpcId::from(7_i64)));
 
         let with_null = decode_request_line(br#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)
             .expect("null id should decode");
-        assert_eq!(with_null.id, JsonRpcId::Null);
+        assert_eq!(with_null.id, Some(JsonRpcId::Null));
+    }
+
+    #[test]
+    fn request_without_id_decodes_as_notification() {
+        let notification = decode_request_line(br#"{"jsonrpc":"2.0","method":"ping"}"#)
+            .expect("notification should decode");
+
+        assert!(notification.id.is_none());
+        assert_eq!(notification.method, "ping");
     }
 
     #[test]

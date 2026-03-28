@@ -70,7 +70,7 @@ mod tests {
     fn fixture_parsers_produce_expected_envelopes() {
         let request = request_line("req-1", "hello", json!({"name": "Ada"}));
         let parsed_request = parse_request_fixture(&request).expect("request fixture should parse");
-        assert_eq!(parsed_request.id, "req-1");
+        assert_eq!(parsed_request.id, Some("req-1".into()));
         assert_eq!(parsed_request.method, "hello");
         assert_eq!(parsed_request.params, Some(json!({"name": "Ada"})));
 

@@ -133,27 +133,28 @@ async fn handle_frame<S>(
 ) where
     S: Service + 'static,
 {
-    let decoded = decode_request_line(&frame);
-    let response = match decoded {
+    let response = match decode_request_line(&frame) {
         Ok(request_envelope) => execute_request(request_envelope, service).await,
         Err(error) => {
             let (id, err) = map_decode_error(error);
-            to_error_envelope(id, err)
+            Some(to_error_envelope(id, err))
         }
     };
 
-    if let Ok(encoded) = encode_response_line(&response) {
-        let _ = response_tx.send(encoded);
+    if let Some(response) = response {
+        if let Ok(encoded) = encode_response_line(&response) {
+            let _ = response_tx.send(encoded);
+        }
     }
 }
 
-async fn execute_request<S>(request: RequestEnvelope, service: Arc<S>) -> ResponseEnvelope
+async fn execute_request<S>(request: RequestEnvelope, service: Arc<S>) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
 {
     let request_id = request.id.clone();
     let request = Request {
-        id: request.id.to_string(),
+        id: request.id.clone().unwrap_or(JsonRpcId::Null).to_string(),
         method: request.method,
         params: request.params.unwrap_or(Value::Null),
         metadata: Default::default(),
@@ -161,13 +162,14 @@ where
 
     let call_result = AssertUnwindSafe(service.call(request)).catch_unwind().await;
 
-    match call_result {
-        Ok(Ok(Response { result, .. })) => ResponseEnvelope::success(request_id.clone(), result),
-        Ok(Err(error)) => to_error_envelope(request_id.clone(), error),
-        Err(_) => to_error_envelope(
-            request_id,
+    match (request_id, call_result) {
+        (Some(id), Ok(Ok(Response { result, .. }))) => Some(ResponseEnvelope::success(id, result)),
+        (Some(id), Ok(Err(error))) => Some(to_error_envelope(id, error)),
+        (Some(id), Err(_)) => Some(to_error_envelope(
+            id,
             FittingsError::internal("request handler panicked"),
-        ),
+        )),
+        (None, _) => None,
     }
 }
 
@@ -292,6 +294,64 @@ mod tests {
 
         assert_eq!(first.id, "1");
         assert_eq!(second.id, "2");
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn notifications_do_not_emit_responses() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(
+                br#"{"jsonrpc":"2.0","method":"work","params":{"delay_ms":0}}
+"#,
+            )
+            .await
+            .expect("send notification");
+
+        let recv_result = timeout(Duration::from_millis(30), client.recv()).await;
+        assert!(
+            recv_result.is_err(),
+            "notification must not produce a response frame"
+        );
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn notification_and_request_can_be_mixed() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(
+                br#"{"jsonrpc":"2.0","method":"work","params":{"delay_ms":0}}
+"#,
+            )
+            .await
+            .expect("send notification");
+        client
+            .send(&request_line("mix-1", "work", json!({"delay_ms": 0})))
+            .await
+            .expect("send request");
+
+        let response = parse_response_fixture(&client.recv().await.expect("recv response"))
+            .expect("parse response");
+        assert_eq!(response.id, "mix-1");
+
+        let recv_result = timeout(Duration::from_millis(30), client.recv()).await;
+        assert!(
+            recv_result.is_err(),
+            "only the regular request should receive a response"
+        );
 
         drop(client);
         let result = handle.await.expect("server task join");

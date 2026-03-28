@@ -59,7 +59,7 @@ mod tests {
         let request =
             decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","params":{}}"#)
                 .expect("request should decode");
-        assert_eq!(request.id, "1");
+        assert_eq!(request.id, Some("1".into()));
         assert_eq!(request.method, "ping");
 
         let success = ResponseEnvelope::success(
