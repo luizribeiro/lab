@@ -10,7 +10,7 @@ pub struct Request {
     pub id: String,
     pub method: String,
     pub params: Value,
-    #[serde(default)]
+    #[serde(default, skip_serializing, skip_deserializing)]
     pub metadata: Metadata,
 }
 
@@ -18,7 +18,7 @@ pub struct Request {
 pub struct Response {
     pub id: String,
     pub result: Value,
-    #[serde(default)]
+    #[serde(default, skip_serializing, skip_deserializing)]
     pub metadata: Metadata,
 }
 
@@ -55,30 +55,56 @@ mod tests {
     use super::{Request, Response, ServiceError};
 
     #[test]
-    fn request_response_serde_roundtrip_and_metadata_default() {
+    fn request_response_serde_roundtrip_and_metadata_isolation() {
         let req_json = json!({
             "id": "req-1",
             "method": "ping",
             "params": {"x": 1}
         });
-        let request: Request =
+        let mut request: Request =
             serde_json::from_value(req_json).expect("request should deserialize");
         assert!(request.metadata.is_empty());
+
+        let request_with_metadata: Request = serde_json::from_value(json!({
+            "id": "req-1",
+            "method": "ping",
+            "params": {"x": 1},
+            "metadata": {"trace_id": "wire-should-not-pass"}
+        }))
+        .expect("request with metadata should deserialize");
+        assert!(request_with_metadata.metadata.is_empty());
+
+        request.metadata.insert("trace_id".into(), "abc123".into());
 
         let request_out = serde_json::to_value(&request).expect("request should serialize");
         assert_eq!(request_out["id"], json!("req-1"));
         assert_eq!(request_out["method"], json!("ping"));
         assert_eq!(request_out["params"], json!({"x": 1}));
+        assert!(request_out.get("metadata").is_none());
 
-        let response = Response {
+        let mut response = Response {
             id: "req-1".to_string(),
             result: json!({"ok": true}),
             metadata: Default::default(),
         };
+        response.metadata.insert("trace_id".into(), "abc123".into());
+
         let response_out = serde_json::to_value(&response).expect("response should serialize");
+        assert!(response_out.get("metadata").is_none());
+
         let response_back: Response =
             serde_json::from_value(response_out).expect("response should deserialize");
-        assert_eq!(response_back, response);
+        assert!(response_back.metadata.is_empty());
+        assert_eq!(response_back.id, "req-1");
+        assert_eq!(response_back.result, json!({"ok": true}));
+
+        let response_with_metadata: Response = serde_json::from_value(json!({
+            "id": "req-1",
+            "result": {"ok": true},
+            "metadata": {"trace_id": "wire-should-not-pass"}
+        }))
+        .expect("response with metadata should deserialize");
+        assert!(response_with_metadata.metadata.is_empty());
     }
 
     #[test]

@@ -481,6 +481,16 @@ mod tests {
             WireDecodeError::InvalidRequest { message, id }
                 if message.contains("unexpected field `extra`") && id == Some(JsonRpcId::from("1"))
         ));
+
+        let metadata_field = decode_request_line(
+            br#"{"jsonrpc":"2.0","id":"1","method":"ping","metadata":{"trace_id":"abc123"}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            metadata_field,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("unexpected field `metadata`") && id == Some(JsonRpcId::from("1"))
+        ));
     }
 
     #[test]
@@ -517,6 +527,16 @@ mod tests {
             unknown_field,
             WireDecodeError::InvalidRequest { message, id }
                 if message.contains("unexpected field `extra`") && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let metadata_field = decode_response_line(
+            br#"{"jsonrpc":"2.0","id":"1","result":1,"metadata":{"trace_id":"abc123"}}"#,
+        )
+        .expect_err("must fail");
+        assert!(matches!(
+            metadata_field,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("unexpected field `metadata`") && id == Some(JsonRpcId::from("1"))
         ));
 
         let invalid_id = decode_response_line(br#"{"jsonrpc":"2.0","id":{},"result":1}"#)
