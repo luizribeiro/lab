@@ -133,18 +133,94 @@ async fn handle_frame<S>(
 ) where
     S: Service + 'static,
 {
-    let response = match decode_request_line(&frame) {
-        Ok(request_envelope) => execute_request(request_envelope, service).await,
+    let value: Value = match serde_json::from_slice(&frame) {
+        Ok(value) => value,
         Err(error) => {
-            let (id, err) = map_decode_error(error);
-            Some(to_error_envelope(id, err))
+            let response = to_error_envelope(
+                JsonRpcId::Null,
+                FittingsError::parse_error(error.to_string()),
+            );
+            send_single_response(response_tx, response);
+            return;
         }
     };
 
-    if let Some(response) = response {
-        if let Ok(encoded) = encode_response_line(&response) {
-            let _ = response_tx.send(encoded);
+    match value {
+        Value::Array(batch) => {
+            handle_batch_request(batch, service, response_tx).await;
         }
+        _ => {
+            let response = match decode_request_line(&frame) {
+                Ok(request_envelope) => execute_request(request_envelope, service).await,
+                Err(error) => {
+                    let (id, err) = map_decode_error(error);
+                    Some(to_error_envelope(id, err))
+                }
+            };
+
+            if let Some(response) = response {
+                send_single_response(response_tx, response);
+            }
+        }
+    }
+}
+
+async fn handle_batch_request<S>(
+    batch: Vec<Value>,
+    service: Arc<S>,
+    response_tx: mpsc::UnboundedSender<Vec<u8>>,
+) where
+    S: Service + 'static,
+{
+    if batch.is_empty() {
+        let response = to_error_envelope(
+            JsonRpcId::Null,
+            FittingsError::invalid_request("batch request must not be empty"),
+        );
+        send_single_response(response_tx, response);
+        return;
+    }
+
+    let mut responses = Vec::new();
+
+    for item in batch {
+        let item_line = match serde_json::to_vec(&item) {
+            Ok(item_line) => item_line,
+            Err(_) => {
+                responses.push(to_error_envelope(
+                    JsonRpcId::Null,
+                    FittingsError::invalid_request("batch item must be valid JSON-RPC request"),
+                ));
+                continue;
+            }
+        };
+
+        let response = match decode_request_line(&item_line) {
+            Ok(request_envelope) => execute_request(request_envelope, Arc::clone(&service)).await,
+            Err(error) => {
+                let (id, err) = map_decode_error(error);
+                Some(to_error_envelope(id, err))
+            }
+        };
+
+        if let Some(response) = response {
+            responses.push(response);
+        }
+    }
+
+    if responses.is_empty() {
+        return;
+    }
+
+    if let Ok(mut encoded) = serde_json::to_vec(&responses) {
+        encoded.push(b'\n');
+        let _ = response_tx.send(encoded);
+    }
+}
+
+fn send_single_response(response_tx: mpsc::UnboundedSender<Vec<u8>>, response: ResponseEnvelope) {
+    if let Ok(encoded) = encode_response_line(&response) {
+        let _ = response_tx.send(encoded);
     }
 }
 
@@ -213,8 +289,8 @@ mod tests {
         fixtures::{parse_response_fixture, request_line},
         memory_transport::MemoryTransport,
     };
-    use fittings_wire::types::JsonRpcId;
-    use serde_json::json;
+    use fittings_wire::types::{JsonRpcId, ResponseEnvelope};
+    use serde_json::{json, Value};
     use tokio::{
         sync::Mutex,
         time::{sleep, timeout, Duration},
@@ -223,6 +299,21 @@ mod tests {
     use crate::dispatch::{MethodRouter, RouterService};
 
     use super::Server;
+
+    fn parse_batch_response_fixture(frame: &[u8]) -> Vec<ResponseEnvelope> {
+        let value: Value = serde_json::from_slice(frame).expect("batch frame should be valid JSON");
+        let items = value
+            .as_array()
+            .expect("batch response should be a JSON array");
+
+        items
+            .iter()
+            .map(|item| {
+                let item_line = serde_json::to_vec(item).expect("batch item should serialize");
+                parse_response_fixture(&item_line).expect("batch item should decode as response")
+            })
+            .collect()
+    }
 
     struct DelayService;
 
@@ -351,6 +442,61 @@ mod tests {
         assert!(
             recv_result.is_err(),
             "only the regular request should receive a response"
+        );
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn empty_batch_returns_invalid_request_error() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client.send(b"[]\n").await.expect("send empty batch");
+
+        let response = parse_response_fixture(&client.recv().await.expect("recv response"))
+            .expect("parse response");
+        let error = response.error.expect("response should be an error");
+
+        assert_eq!(response.id, JsonRpcId::Null);
+        assert_eq!(error.code, -32600);
+        assert_eq!(error.message, "Invalid Request");
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn batch_with_notifications_and_calls_returns_only_call_responses() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(
+                br#"[{"jsonrpc":"2.0","method":"work","params":{"delay_ms":0}},{"jsonrpc":"2.0","id":"batch-1","method":"work","params":{"delay_ms":0}},{"jsonrpc":"2.0","id":"batch-2","method":"work","params":{"delay_ms":0}}]
+"#,
+            )
+            .await
+            .expect("send mixed batch");
+
+        let batch_frame = client.recv().await.expect("recv batch response");
+        let mut responses = parse_batch_response_fixture(&batch_frame);
+        assert_eq!(responses.len(), 2);
+
+        responses.sort_by(|left, right| left.id.to_string().cmp(&right.id.to_string()));
+        assert_eq!(responses[0].id, JsonRpcId::from("batch-1"));
+        assert_eq!(responses[1].id, JsonRpcId::from("batch-2"));
+        assert!(responses.iter().all(|response| response.error.is_none()));
+
+        let recv_result = timeout(Duration::from_millis(30), client.recv()).await;
+        assert!(
+            recv_result.is_err(),
+            "mixed batch should emit exactly one batch response"
         );
 
         drop(client);
