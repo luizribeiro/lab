@@ -195,11 +195,9 @@ impl McpServiceImpl {
 
 impl Default for McpServiceImpl {
     fn default() -> Self {
-        let mut registry = ToolRegistry::new();
-        register_echo_tool(&mut registry)
-            .expect("default registry must not register duplicate tools");
-
-        Self { registry }
+        Self {
+            registry: ToolRegistry::new(),
+        }
     }
 }
 
@@ -228,59 +226,6 @@ impl McpService for McpServiceImpl {
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult> {
         self.registry.execute(params)
     }
-}
-
-pub fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
-    registry.register(
-        "echo",
-        "Echoes the provided message",
-        json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string" }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-        }),
-        |arguments| {
-            let message = arguments
-                .get("message")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    FittingsError::invalid_params("`arguments.message` must be a string")
-                })?;
-
-            Ok(ToolsCallResult::text(message))
-        },
-    )
-}
-
-pub fn register_add_tool(registry: &mut ToolRegistry) -> Result<()> {
-    registry.register(
-        "add",
-        "Adds two numbers and returns their sum",
-        json!({
-            "type": "object",
-            "properties": {
-                "a": { "type": "number" },
-                "b": { "type": "number" }
-            },
-            "required": ["a", "b"],
-            "additionalProperties": false
-        }),
-        |arguments| {
-            let a = arguments
-                .get("a")
-                .and_then(Value::as_f64)
-                .ok_or_else(|| FittingsError::invalid_params("`arguments.a` must be a number"))?;
-            let b = arguments
-                .get("b")
-                .and_then(Value::as_f64)
-                .ok_or_else(|| FittingsError::invalid_params("`arguments.b` must be a number"))?;
-
-            Ok(ToolsCallResult::text((a + b).to_string()))
-        },
-    )
 }
 
 fn empty_object() -> Value {
@@ -417,7 +362,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_service_supports_initialize_list_and_call() {
+    async fn default_service_supports_initialize_and_empty_tool_list() {
         let service = McpServiceImpl::default();
 
         let initialize = service
@@ -434,20 +379,15 @@ mod tests {
             .list_tools(fittings::serde_json::Value::Null)
             .await
             .expect("tools/list should succeed");
-        assert_eq!(listed.tools.len(), 1);
-        assert_eq!(listed.tools[0].name, "echo");
+        assert!(listed.tools.is_empty());
 
         let called = service
             .call_tool(ToolsCallParams {
                 name: "echo".to_string(),
                 arguments: json!({"message": "hello"}),
             })
-            .await
-            .expect("tools/call should succeed");
+            .await;
 
-        assert!(matches!(
-            &called.content[0],
-            ToolContent::Text { text } if text == "hello"
-        ));
+        assert!(matches!(called, Err(FittingsError::MethodNotFound(_))));
     }
 }

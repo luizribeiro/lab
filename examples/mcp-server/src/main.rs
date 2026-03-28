@@ -1,8 +1,63 @@
 use std::process;
 
-use mcp::{register_add_tool, register_echo_tool, McpService, McpServiceImpl, ToolRegistry};
+use fittings::serde_json::{json, Value};
+use fittings::{FittingsError, Result};
+use mcp::{McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
 
 mod mcp;
+
+fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
+    registry.register(
+        "echo",
+        "Echoes the provided message",
+        json!({
+            "type": "object",
+            "properties": {
+                "message": { "type": "string" }
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        }),
+        |arguments| {
+            let message = arguments
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    FittingsError::invalid_params("`arguments.message` must be a string")
+                })?;
+
+            Ok(ToolsCallResult::text(message))
+        },
+    )
+}
+
+fn register_add_tool(registry: &mut ToolRegistry) -> Result<()> {
+    registry.register(
+        "add",
+        "Adds two numbers and returns their sum",
+        json!({
+            "type": "object",
+            "properties": {
+                "a": { "type": "number" },
+                "b": { "type": "number" }
+            },
+            "required": ["a", "b"],
+            "additionalProperties": false
+        }),
+        |arguments| {
+            let a = arguments
+                .get("a")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| FittingsError::invalid_params("`arguments.a` must be a number"))?;
+            let b = arguments
+                .get("b")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| FittingsError::invalid_params("`arguments.b` must be a number"))?;
+
+            Ok(ToolsCallResult::text((a + b).to_string()))
+        },
+    )
+}
 
 fn build_service() -> McpServiceImpl {
     let mut registry = ToolRegistry::new();
