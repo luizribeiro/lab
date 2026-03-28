@@ -137,8 +137,8 @@ async fn handle_frame<S>(
     let response = match decoded {
         Ok(request_envelope) => execute_request(request_envelope, service).await,
         Err(error) => {
-            let err = map_decode_error(error);
-            to_error_envelope(JsonRpcId::Null, err)
+            let (id, err) = map_decode_error(error);
+            to_error_envelope(id, err)
         }
     };
 
@@ -171,10 +171,13 @@ where
     }
 }
 
-fn map_decode_error(error: WireDecodeError) -> FittingsError {
+fn map_decode_error(error: WireDecodeError) -> (JsonRpcId, FittingsError) {
     match error {
-        WireDecodeError::Parse(message) => FittingsError::parse_error(message),
-        WireDecodeError::InvalidRequest(message) => FittingsError::invalid_request(message),
+        WireDecodeError::Parse(message) => (JsonRpcId::Null, FittingsError::parse_error(message)),
+        WireDecodeError::InvalidRequest { message, id } => (
+            id.unwrap_or(JsonRpcId::Null),
+            FittingsError::invalid_request(message),
+        ),
     }
 }
 
@@ -208,6 +211,7 @@ mod tests {
         fixtures::{parse_response_fixture, request_line},
         memory_transport::MemoryTransport,
     };
+    use fittings_wire::types::JsonRpcId;
     use serde_json::json;
     use tokio::{
         sync::Mutex,
@@ -342,6 +346,109 @@ mod tests {
 
         assert_eq!(first_error.code, -32601);
         assert_eq!(second_error.code, -32602);
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn decode_errors_distinguish_parse_error_from_invalid_request() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(b"{bad json\n")
+            .await
+            .expect("send malformed json request");
+        client.send(b"[]\n").await.expect("send non-object request");
+
+        let first = parse_response_fixture(&client.recv().await.expect("recv first"))
+            .expect("parse first response");
+        let second = parse_response_fixture(&client.recv().await.expect("recv second"))
+            .expect("parse second response");
+
+        let mut errors = vec![
+            first.error.expect("first response should be an error"),
+            second.error.expect("second response should be an error"),
+        ];
+        errors.sort_by_key(|error| error.code);
+
+        assert_eq!(errors[0].code, -32700);
+        assert_eq!(errors[0].message, "Parse error");
+        assert_eq!(errors[1].code, -32600);
+        assert_eq!(errors[1].message, "Invalid Request");
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn invalid_request_reuses_request_id_when_available() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(
+                br#"{"jsonrpc":"2.0","id":"bad-1","method":"rpc.ping"}
+"#,
+            )
+            .await
+            .expect("send reserved method request");
+        client
+            .send(
+                br#"{"jsonrpc":"2.0","id":"bad-2","method":"ping","extra":true}
+"#,
+            )
+            .await
+            .expect("send unknown-field request");
+
+        let first = parse_response_fixture(&client.recv().await.expect("recv first"))
+            .expect("parse first response");
+        let second = parse_response_fixture(&client.recv().await.expect("recv second"))
+            .expect("parse second response");
+
+        let mut responses = vec![first, second];
+        responses.sort_by(|left, right| left.id.to_string().cmp(&right.id.to_string()));
+
+        assert_eq!(responses[0].id, JsonRpcId::from("bad-1"));
+        assert_eq!(responses[1].id, JsonRpcId::from("bad-2"));
+
+        for response in responses {
+            let error = response.error.expect("response should be an error");
+            assert_eq!(error.code, -32600);
+            assert_eq!(error.message, "Invalid Request");
+        }
+
+        drop(client);
+        let result = handle.await.expect("server task join");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn invalid_request_with_unusable_id_returns_null_id() {
+        let (mut client, server_transport) = MemoryTransport::pair(16);
+        let server = Server::new(DelayService, server_transport);
+        let handle = tokio::spawn(server.serve());
+
+        client
+            .send(
+                br#"{"jsonrpc":"2.0","id":{},"method":"ping"}
+"#,
+            )
+            .await
+            .expect("send invalid id request");
+
+        let response = parse_response_fixture(&client.recv().await.expect("recv response"))
+            .expect("parse response");
+        let error = response.error.expect("response should be an error");
+
+        assert_eq!(response.id, JsonRpcId::Null);
+        assert_eq!(error.code, -32600);
+        assert_eq!(error.message, "Invalid Request");
 
         drop(client);
         let result = handle.await.expect("server task join");

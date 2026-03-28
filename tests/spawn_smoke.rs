@@ -155,7 +155,7 @@ async fn generated_typed_client_surfaces_service_side_invalid_params() {
 
     assert!(matches!(
         error,
-        FittingsError::InvalidParams(message) if message.contains("name")
+        FittingsError::InvalidParams(message) if message == "Invalid params"
     ));
 }
 
@@ -172,7 +172,7 @@ async fn generated_typed_client_surfaces_unknown_method_errors() {
 
     assert!(matches!(
         error,
-        FittingsError::MethodNotFound(message) if message == "missing"
+        FittingsError::MethodNotFound(message) if message == "Method not found"
     ));
 }
 

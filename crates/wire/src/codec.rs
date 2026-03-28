@@ -7,8 +7,11 @@ use crate::types::{JsonRpcId, JsonRpcVersion, RequestEnvelope, ResponseEnvelope,
 pub enum WireDecodeError {
     #[error("parse error: {0}")]
     Parse(String),
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
+    #[error("invalid request: {message}")]
+    InvalidRequest {
+        message: String,
+        id: Option<JsonRpcId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -17,22 +20,31 @@ pub enum WireEncodeError {
     Encode(String),
 }
 
-pub fn decode_request_line(line: &[u8]) -> Result<RequestEnvelope, WireDecodeError> {
-    if line.is_empty() || line == b"\n" || line == b"\r\n" {
-        return Err(WireDecodeError::InvalidRequest("empty line".to_string()));
-    }
+const ALLOWED_REQUEST_FIELDS: [&str; 4] = ["jsonrpc", "id", "method", "params"];
 
+fn invalid_request(message: impl Into<String>, id: Option<JsonRpcId>) -> WireDecodeError {
+    WireDecodeError::InvalidRequest {
+        message: message.into(),
+        id,
+    }
+}
+
+pub fn decode_request_line(line: &[u8]) -> Result<RequestEnvelope, WireDecodeError> {
     let value: Value =
         serde_json::from_slice(line).map_err(|error| WireDecodeError::Parse(error.to_string()))?;
 
     let object = value
         .as_object()
-        .ok_or_else(|| WireDecodeError::InvalidRequest("request must be a JSON object".into()))?;
+        .ok_or_else(|| invalid_request("request must be a JSON object", None))?;
 
-    parse_jsonrpc(object)?;
+    let response_id = extract_valid_id(object.get("id"));
+
+    validate_request_fields(object, &response_id)?;
+    parse_jsonrpc(object, &response_id)?;
     let id = get_required_id(object, "id")?;
-    let method = get_required_string(object, "method")?;
-    let params = get_optional_params(object)?;
+    let method = get_required_string(object, "method", &response_id)?;
+    validate_method_name(&method, &response_id)?;
+    let params = get_optional_params(object, &response_id)?;
 
     Ok(RequestEnvelope {
         jsonrpc: JsonRpcVersion,
@@ -55,51 +67,116 @@ pub fn encode_response_line(resp: &ResponseEnvelope) -> Result<Vec<u8>, WireEnco
     Ok(encoded)
 }
 
-fn parse_jsonrpc(object: &Map<String, Value>) -> Result<(), WireDecodeError> {
-    let version = get_required_string(object, "jsonrpc")?;
-    if version != JSONRPC_VERSION {
-        return Err(WireDecodeError::InvalidRequest(format!(
-            "field `jsonrpc` must be \"{JSONRPC_VERSION}\""
-        )));
+fn extract_valid_id(value: Option<&Value>) -> Option<JsonRpcId> {
+    match value {
+        Some(Value::String(value)) => Some(JsonRpcId::String(value.clone())),
+        Some(Value::Number(value)) if value.is_i64() || value.is_u64() => {
+            Some(JsonRpcId::Number(value.clone()))
+        }
+        Some(Value::Null) => Some(JsonRpcId::Null),
+        _ => None,
+    }
+}
+
+fn validate_request_fields(
+    object: &Map<String, Value>,
+    response_id: &Option<JsonRpcId>,
+) -> Result<(), WireDecodeError> {
+    for field in object.keys() {
+        if !ALLOWED_REQUEST_FIELDS.contains(&field.as_str()) {
+            return Err(invalid_request(
+                format!("unexpected field `{field}`"),
+                response_id.clone(),
+            ));
+        }
     }
 
     Ok(())
 }
 
-fn get_required_string(object: &Map<String, Value>, key: &str) -> Result<String, WireDecodeError> {
+fn parse_jsonrpc(
+    object: &Map<String, Value>,
+    response_id: &Option<JsonRpcId>,
+) -> Result<(), WireDecodeError> {
+    let version = get_required_string(object, "jsonrpc", response_id)?;
+    if version != JSONRPC_VERSION {
+        return Err(invalid_request(
+            format!("field `jsonrpc` must be \"{JSONRPC_VERSION}\""),
+            response_id.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_method_name(
+    method: &str,
+    response_id: &Option<JsonRpcId>,
+) -> Result<(), WireDecodeError> {
+    if method.starts_with("rpc.") {
+        return Err(invalid_request(
+            "method names starting with `rpc.` are reserved",
+            response_id.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn get_required_string(
+    object: &Map<String, Value>,
+    key: &str,
+    response_id: &Option<JsonRpcId>,
+) -> Result<String, WireDecodeError> {
     let value = object.get(key).ok_or_else(|| {
-        WireDecodeError::InvalidRequest(format!("missing required field `{key}`"))
+        invalid_request(
+            format!("missing required field `{key}`"),
+            response_id.clone(),
+        )
     })?;
 
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| WireDecodeError::InvalidRequest(format!("field `{key}` must be a string")))
+    value.as_str().map(str::to_owned).ok_or_else(|| {
+        invalid_request(
+            format!("field `{key}` must be a string"),
+            response_id.clone(),
+        )
+    })
 }
 
 fn get_required_id(object: &Map<String, Value>, key: &str) -> Result<JsonRpcId, WireDecodeError> {
-    let value = object.get(key).ok_or_else(|| {
-        WireDecodeError::InvalidRequest(format!("missing required field `{key}`"))
-    })?;
+    let value = object
+        .get(key)
+        .ok_or_else(|| invalid_request(format!("missing required field `{key}`"), None))?;
 
     match value {
         Value::String(value) => Ok(JsonRpcId::String(value.clone())),
-        Value::Number(value) => Ok(JsonRpcId::Number(value.clone())),
+        Value::Number(value) if value.is_i64() || value.is_u64() => {
+            Ok(JsonRpcId::Number(value.clone()))
+        }
+        Value::Number(_) => Err(invalid_request(
+            format!("field `{key}` number must be an integer"),
+            None,
+        )),
         Value::Null => Ok(JsonRpcId::Null),
-        _ => Err(WireDecodeError::InvalidRequest(format!(
-            "field `{key}` must be a string, number, or null"
-        ))),
+        _ => Err(invalid_request(
+            format!("field `{key}` must be a string, integer number, or null"),
+            None,
+        )),
     }
 }
 
-fn get_optional_params(object: &Map<String, Value>) -> Result<Option<Value>, WireDecodeError> {
+fn get_optional_params(
+    object: &Map<String, Value>,
+    response_id: &Option<JsonRpcId>,
+) -> Result<Option<Value>, WireDecodeError> {
     let Some(params) = object.get("params") else {
         return Ok(None);
     };
 
     if !params.is_object() && !params.is_array() {
-        return Err(WireDecodeError::InvalidRequest(
-            "field `params` must be an object or array when present".into(),
+        return Err(invalid_request(
+            "field `params` must be an object or array when present",
+            response_id.clone(),
         ));
     }
 
@@ -150,6 +227,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_fractional_number_ids() {
+        let invalid_id = decode_request_line(br#"{"jsonrpc":"2.0","id":1.5,"method":"ping"}"#)
+            .expect_err("must fail");
+
+        assert!(matches!(
+            invalid_id,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `id` number must be an integer") && id.is_none()
+        ));
+    }
+
+    #[test]
     fn params_is_optional_and_accepts_object_or_array() {
         let without_params = decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping"}"#)
             .expect("request without params should decode");
@@ -168,9 +257,12 @@ mod tests {
 
     #[test]
     fn malformed_json_returns_parse_error() {
-        let error = decode_request_line(br#"{"jsonrpc": "2.0", "id": "1""#).expect_err("must fail");
+        let malformed =
+            decode_request_line(br#"{"jsonrpc": "2.0", "id": "1""#).expect_err("must fail");
+        assert!(matches!(malformed, WireDecodeError::Parse(_)));
 
-        assert!(matches!(error, WireDecodeError::Parse(_)));
+        let empty = decode_request_line(b"\n").expect_err("must fail");
+        assert!(matches!(empty, WireDecodeError::Parse(_)));
     }
 
     #[test]
@@ -179,21 +271,24 @@ mod tests {
             decode_request_line(br#"{"id":"1","method":"ping"}"#).expect_err("must fail");
         assert!(matches!(
             missing_jsonrpc,
-            WireDecodeError::InvalidRequest(message) if message.contains("missing required field `jsonrpc`")
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("missing required field `jsonrpc`") && id == Some(JsonRpcId::from("1"))
         ));
 
         let wrong_jsonrpc = decode_request_line(br#"{"jsonrpc":"1.0","id":"1","method":"ping"}"#)
             .expect_err("must fail");
         assert!(matches!(
             wrong_jsonrpc,
-            WireDecodeError::InvalidRequest(message) if message.contains("field `jsonrpc`")
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `jsonrpc`") && id == Some(JsonRpcId::from("1"))
         ));
 
         let invalid_id = decode_request_line(br#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#)
             .expect_err("must fail");
         assert!(matches!(
             invalid_id,
-            WireDecodeError::InvalidRequest(message) if message.contains("field `id`")
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `id`") && id.is_none()
         ));
 
         let invalid_params =
@@ -201,22 +296,39 @@ mod tests {
                 .expect_err("must fail");
         assert!(matches!(
             invalid_params,
-            WireDecodeError::InvalidRequest(message) if message.contains("field `params`")
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("field `params`") && id == Some(JsonRpcId::from("1"))
         ));
     }
 
     #[test]
-    fn empty_or_non_object_input_returns_invalid_request() {
-        let empty = decode_request_line(b"\n").expect_err("must fail");
-        assert!(matches!(
-            empty,
-            WireDecodeError::InvalidRequest(message) if message.contains("empty line")
-        ));
-
+    fn non_object_input_returns_invalid_request() {
         let non_object = decode_request_line(br#"[]"#).expect_err("must fail");
         assert!(matches!(
             non_object,
-            WireDecodeError::InvalidRequest(message) if message.contains("JSON object")
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("JSON object") && id.is_none()
+        ));
+    }
+
+    #[test]
+    fn reserved_method_prefix_and_unknown_fields_are_rejected() {
+        let reserved = decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"rpc.ping"}"#)
+            .expect_err("must fail");
+        assert!(matches!(
+            reserved,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("method names starting with `rpc.` are reserved")
+                    && id == Some(JsonRpcId::from("1"))
+        ));
+
+        let unknown_field =
+            decode_request_line(br#"{"jsonrpc":"2.0","id":"1","method":"ping","extra":true}"#)
+                .expect_err("must fail");
+        assert!(matches!(
+            unknown_field,
+            WireDecodeError::InvalidRequest { message, id }
+                if message.contains("unexpected field `extra`") && id == Some(JsonRpcId::from("1"))
         ));
     }
 

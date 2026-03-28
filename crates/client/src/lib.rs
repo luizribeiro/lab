@@ -424,7 +424,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            FittingsError::MethodNotFound(message) if message == "missing-method"
+            FittingsError::MethodNotFound(message) if message == "Method not found"
         ));
 
         server.await.expect("server task should join");

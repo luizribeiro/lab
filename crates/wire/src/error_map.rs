@@ -8,32 +8,38 @@ const METHOD_NOT_FOUND_CODE: i32 = -32601;
 const INVALID_PARAMS_CODE: i32 = -32602;
 const INTERNAL_ERROR_CODE: i32 = -32603;
 
+const PARSE_ERROR_MESSAGE: &str = "Parse error";
+const INVALID_REQUEST_MESSAGE: &str = "Invalid Request";
+const METHOD_NOT_FOUND_MESSAGE: &str = "Method not found";
+const INVALID_PARAMS_MESSAGE: &str = "Invalid params";
+const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
+
 pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
     let id = id.into();
     let error = match err {
-        FittingsError::ParseError(message) => ErrorEnvelope {
+        FittingsError::ParseError(_) => ErrorEnvelope {
             code: PARSE_ERROR_CODE,
-            message,
+            message: PARSE_ERROR_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::InvalidRequest(message) => ErrorEnvelope {
+        FittingsError::InvalidRequest(_) => ErrorEnvelope {
             code: INVALID_REQUEST_CODE,
-            message,
+            message: INVALID_REQUEST_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::MethodNotFound(message) => ErrorEnvelope {
+        FittingsError::MethodNotFound(_) => ErrorEnvelope {
             code: METHOD_NOT_FOUND_CODE,
-            message,
+            message: METHOD_NOT_FOUND_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::InvalidParams(message) => ErrorEnvelope {
+        FittingsError::InvalidParams(_) => ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
-            message,
+            message: INVALID_PARAMS_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::Transport(message) | FittingsError::Internal(message) => ErrorEnvelope {
+        FittingsError::Transport(_) | FittingsError::Internal(_) => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
-            message,
+            message: INTERNAL_ERROR_MESSAGE.to_string(),
             data: None,
         },
         FittingsError::Service(ServiceError {
@@ -45,9 +51,9 @@ pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> Respon
             message,
             data,
         },
-        FittingsError::Service(ServiceError { message, .. }) => ErrorEnvelope {
+        FittingsError::Service(_) => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
-            message,
+            message: INTERNAL_ERROR_MESSAGE.to_string(),
             data: None,
         },
     };
@@ -59,29 +65,24 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
     match error {
         ErrorEnvelope {
             code: PARSE_ERROR_CODE,
-            message,
             ..
-        } => FittingsError::parse_error(message),
+        } => FittingsError::parse_error(PARSE_ERROR_MESSAGE),
         ErrorEnvelope {
             code: INVALID_REQUEST_CODE,
-            message,
             ..
-        } => FittingsError::invalid_request(message),
+        } => FittingsError::invalid_request(INVALID_REQUEST_MESSAGE),
         ErrorEnvelope {
             code: METHOD_NOT_FOUND_CODE,
-            message,
             ..
-        } => FittingsError::method_not_found(message),
+        } => FittingsError::method_not_found(METHOD_NOT_FOUND_MESSAGE),
         ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
-            message,
             ..
-        } => FittingsError::invalid_params(message),
+        } => FittingsError::invalid_params(INVALID_PARAMS_MESSAGE),
         ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
-            message,
             ..
-        } => FittingsError::internal(message),
+        } => FittingsError::internal(INTERNAL_ERROR_MESSAGE),
         ErrorEnvelope {
             code,
             message,
@@ -91,7 +92,7 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
             message,
             data,
         }),
-        ErrorEnvelope { message, .. } => FittingsError::internal(message),
+        ErrorEnvelope { .. } => FittingsError::internal(INTERNAL_ERROR_MESSAGE),
     }
 }
 
@@ -105,29 +106,41 @@ mod tests {
     use crate::types::ErrorEnvelope;
 
     #[test]
-    fn maps_each_error_family_to_expected_code() {
+    fn maps_each_error_family_to_expected_code_and_message() {
         let parse = to_error_envelope("1".to_string(), FittingsError::parse_error("bad json"));
-        assert_eq!(parse.error.expect("error").code, -32700);
+        let parse_error = parse.error.expect("error");
+        assert_eq!(parse_error.code, -32700);
+        assert_eq!(parse_error.message, "Parse error");
 
         let invalid = to_error_envelope(
             "1".to_string(),
             FittingsError::invalid_request("bad request"),
         );
-        assert_eq!(invalid.error.expect("error").code, -32600);
+        let invalid_error = invalid.error.expect("error");
+        assert_eq!(invalid_error.code, -32600);
+        assert_eq!(invalid_error.message, "Invalid Request");
 
         let not_found =
             to_error_envelope("1".to_string(), FittingsError::method_not_found("missing"));
-        assert_eq!(not_found.error.expect("error").code, -32601);
+        let not_found_error = not_found.error.expect("error");
+        assert_eq!(not_found_error.code, -32601);
+        assert_eq!(not_found_error.message, "Method not found");
 
         let bad_params =
             to_error_envelope("1".to_string(), FittingsError::invalid_params("bad params"));
-        assert_eq!(bad_params.error.expect("error").code, -32602);
+        let bad_params_error = bad_params.error.expect("error");
+        assert_eq!(bad_params_error.code, -32602);
+        assert_eq!(bad_params_error.message, "Invalid params");
 
         let internal = to_error_envelope("1".to_string(), FittingsError::internal("oops"));
-        assert_eq!(internal.error.expect("error").code, -32603);
+        let internal_error = internal.error.expect("error");
+        assert_eq!(internal_error.code, -32603);
+        assert_eq!(internal_error.message, "Internal error");
 
         let transport = to_error_envelope("1".to_string(), FittingsError::transport("pipe"));
-        assert_eq!(transport.error.expect("error").code, -32603);
+        let transport_error = transport.error.expect("error");
+        assert_eq!(transport_error.code, -32603);
+        assert_eq!(transport_error.message, "Internal error");
     }
 
     #[test]
@@ -142,7 +155,7 @@ mod tests {
         let error = mapped.error.expect("error envelope should exist");
 
         assert_eq!(error.code, -32603);
-        assert_eq!(error.message, "domain error");
+        assert_eq!(error.message, "Internal error");
         assert_eq!(error.data, None);
     }
 
@@ -169,7 +182,7 @@ mod tests {
             message: "bad json".to_string(),
             data: Some(json!({"ignored": true})),
         });
-        assert!(matches!(parse, FittingsError::ParseError(message) if message == "bad json"));
+        assert!(matches!(parse, FittingsError::ParseError(message) if message == "Parse error"));
 
         let invalid_request = from_error_envelope(ErrorEnvelope {
             code: -32600,
@@ -178,7 +191,7 @@ mod tests {
         });
         assert!(matches!(
             invalid_request,
-            FittingsError::InvalidRequest(message) if message == "bad request"
+            FittingsError::InvalidRequest(message) if message == "Invalid Request"
         ));
 
         let method_not_found = from_error_envelope(ErrorEnvelope {
@@ -188,7 +201,7 @@ mod tests {
         });
         assert!(matches!(
             method_not_found,
-            FittingsError::MethodNotFound(message) if message == "missing"
+            FittingsError::MethodNotFound(message) if message == "Method not found"
         ));
 
         let invalid_params = from_error_envelope(ErrorEnvelope {
@@ -198,7 +211,7 @@ mod tests {
         });
         assert!(matches!(
             invalid_params,
-            FittingsError::InvalidParams(message) if message == "bad params"
+            FittingsError::InvalidParams(message) if message == "Invalid params"
         ));
 
         let internal = from_error_envelope(ErrorEnvelope {
@@ -206,7 +219,9 @@ mod tests {
             message: "internal".to_string(),
             data: None,
         });
-        assert!(matches!(internal, FittingsError::Internal(message) if message == "internal"));
+        assert!(
+            matches!(internal, FittingsError::Internal(message) if message == "Internal error")
+        );
 
         let service = from_error_envelope(ErrorEnvelope {
             code: 42,
@@ -226,7 +241,7 @@ mod tests {
         });
         assert!(matches!(
             unknown_negative,
-            FittingsError::Internal(message) if message == "unknown negative"
+            FittingsError::Internal(message) if message == "Internal error"
         ));
 
         let unknown_positive = from_error_envelope(ErrorEnvelope {
@@ -236,7 +251,7 @@ mod tests {
         });
         assert!(matches!(
             unknown_positive,
-            FittingsError::Internal(message) if message == "unknown positive"
+            FittingsError::Internal(message) if message == "Internal error"
         ));
     }
 }
