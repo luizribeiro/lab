@@ -26,6 +26,7 @@ pub mod channel {
     /// Port forward accepts are lightweight (just a TcpStream handoff), but
     /// bursty under load (many clients connecting at once). 64 provides
     /// headroom without over-buffering connection setup state.
+    #[allow(dead_code)]
     pub const PORT_FORWARD: usize = 64;
 }
 
@@ -43,7 +44,9 @@ pub mod pending {
 }
 
 /// Ephemeral port range for virtual port allocation (IANA dynamic/private ports).
+#[allow(dead_code)]
 pub(crate) const EPHEMERAL_START: u16 = 49152;
+#[allow(dead_code)]
 pub(crate) const EPHEMERAL_END: u16 = 65535;
 
 /// Network size constants.
@@ -59,11 +62,13 @@ pub(crate) const ICMP_HEADER_LEN: usize = 8;
 /// Protocol defaults.
 pub(crate) const DEFAULT_HOP_LIMIT: u8 = 64;
 
+#[allow(dead_code)]
 const EPHEMERAL_RANGE: u16 = EPHEMERAL_END - EPHEMERAL_START + 1;
 
 /// Core ephemeral port allocation: scans the ephemeral range starting from
 /// `counter`, skipping ports for which `is_used` returns true.
 /// Returns the allocated port and advances `counter` past it.
+#[allow(dead_code)]
 pub(crate) fn allocate_ephemeral_port(
     counter: &mut u16,
     is_used: impl Fn(u16) -> bool,

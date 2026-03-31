@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+#[allow(dead_code)]
 pub struct PortForwardRequest {
     pub stream: TcpStream,
     pub guest_ip: std::net::Ipv4Addr,
@@ -37,6 +38,7 @@ pub struct TcpManager {
     flow_index: HashMap<FlowKey, SocketHandle>,
     connect_result_rx: mpsc::Receiver<ConnectResult>,
     connect_result_tx: mpsc::Sender<ConnectResult>,
+    #[allow(dead_code)]
     next_ephemeral_port: u16,
 }
 
@@ -128,6 +130,7 @@ impl TcpManager {
         InitiateResult::Created(handle)
     }
 
+    #[allow(dead_code)]
     pub fn register_host_stream(
         &mut self,
         socket: tcp::Socket<'static>,
@@ -324,6 +327,7 @@ impl TcpManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn allocate_local_port(&mut self, sockets: &SocketSet<'_>) -> Option<u16> {
         let connections = &self.connections;
         crate::config::allocate_ephemeral_port(&mut self.next_ephemeral_port, |candidate| {

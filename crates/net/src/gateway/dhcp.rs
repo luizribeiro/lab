@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+#[allow(dead_code)]
 pub(super) enum DhcpEvent<'a> {
     Response(DhcpRepr<'a>),
     Released(EthernetAddress),

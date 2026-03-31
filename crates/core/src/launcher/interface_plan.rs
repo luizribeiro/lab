@@ -118,6 +118,7 @@ pub(crate) fn resolved_interfaces_for_plan(
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn vmm_fd_remaps_for_plan(plan: &[PlannedInterface]) -> Vec<capsa_sandbox::FdRemap> {
     plan.iter()
         .map(|interface| capsa_sandbox::FdRemap {

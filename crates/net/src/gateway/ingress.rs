@@ -267,6 +267,7 @@ fn craft_rst_for_denied_tcp_syn(frame: &[u8], gateway_mac: [u8; 6]) -> Option<Ve
     ))
 }
 
+#[allow(clippy::type_complexity)]
 fn denied_tcp_syn_components(
     frame: &[u8],
 ) -> Option<(EthernetFrame<&[u8]>, Ipv4Packet<&[u8]>, TcpPacket<&[u8]>)> {

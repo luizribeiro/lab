@@ -234,6 +234,7 @@ pub struct DaemonHandle<D: DaemonAdapter> {
     _marker: PhantomData<D>,
 }
 
+#[allow(dead_code)]
 impl<D: DaemonAdapter> DaemonHandle<D> {
     pub fn daemon_name(&self) -> &'static str {
         self.process.name()
