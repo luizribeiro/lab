@@ -1,7 +1,7 @@
 use super::bounded_queue::BoundedQueue;
 use crate::config;
 use crate::frame::FrameSender;
-use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::phy::{Checksum, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -91,6 +91,13 @@ impl Device for SmoltcpDevice {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = self.mtu;
         caps.medium = Medium::Ethernet;
+        // The guest negotiates VIRTIO_NET_F_CSUM and sends frames with partial or
+        // invalid transport checksums, expecting the host NIC to complete them.
+        // As a userspace stack we are not a real NIC, so disable RX validation.
+        caps.checksum.ipv4 = Checksum::Tx;
+        caps.checksum.tcp = Checksum::Tx;
+        caps.checksum.udp = Checksum::Tx;
+        caps.checksum.icmpv4 = Checksum::Tx;
         caps
     }
 
@@ -292,5 +299,37 @@ mod tests {
 
         // Pending queue should now be empty
         assert!(!device.has_pending_tx());
+    }
+
+    #[test]
+    fn capabilities_skip_rx_checksum_validation() {
+        let (tx, _rx) = frame_channel(config::channel::DEFAULT);
+        let device = SmoltcpDevice::new(tx, 1500);
+        let caps = device.capabilities();
+
+        assert!(
+            !caps.checksum.ipv4.rx(),
+            "should not validate IPv4 RX checksum"
+        );
+        assert!(
+            !caps.checksum.tcp.rx(),
+            "should not validate TCP RX checksum"
+        );
+        assert!(
+            !caps.checksum.udp.rx(),
+            "should not validate UDP RX checksum"
+        );
+        assert!(
+            !caps.checksum.icmpv4.rx(),
+            "should not validate ICMPv4 RX checksum"
+        );
+
+        assert!(caps.checksum.ipv4.tx(), "should compute IPv4 TX checksum");
+        assert!(caps.checksum.tcp.tx(), "should compute TCP TX checksum");
+        assert!(caps.checksum.udp.tx(), "should compute UDP TX checksum");
+        assert!(
+            caps.checksum.icmpv4.tx(),
+            "should compute ICMPv4 TX checksum"
+        );
     }
 }
