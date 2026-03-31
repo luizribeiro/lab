@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct NetLaunchSpec {
     #[serde(default)]
     pub interfaces: Vec<NetInterfaceSpec>,
+    #[serde(default)]
+    pub port_forwards: Vec<(u16, u16)>,
 }
 
 impl NetLaunchSpec {
@@ -58,6 +60,7 @@ mod tests {
     fn validate_rejects_negative_host_fd() {
         let spec = NetLaunchSpec {
             interfaces: vec![sample_interface(-1, [0x02, 0, 0, 0, 0, 1])],
+            port_forwards: vec![],
         };
 
         let err = spec.validate().expect_err("negative host fd should fail");
@@ -71,6 +74,7 @@ mod tests {
                 sample_interface(10, [0x02, 0, 0, 0, 0, 1]),
                 sample_interface(10, [0x02, 0, 0, 0, 0, 2]),
             ],
+            port_forwards: vec![],
         };
 
         let err = spec.validate().expect_err("duplicate host fd should fail");
@@ -83,6 +87,7 @@ mod tests {
     fn validate_rejects_zero_mac() {
         let spec = NetLaunchSpec {
             interfaces: vec![sample_interface(10, [0; 6])],
+            port_forwards: vec![],
         };
 
         let err = spec.validate().expect_err("zero mac should fail");
@@ -98,6 +103,7 @@ mod tests {
                 sample_interface(10, [0x02, 0, 0, 0, 0, 1]),
                 sample_interface(11, [0x02, 0, 0, 0, 0, 2]),
             ],
+            port_forwards: vec![],
         };
 
         spec.validate().expect("spec should validate");

@@ -147,6 +147,7 @@ mod tests {
         let iface = VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         };
 
         let mac = resolve_interface_mac(0, &iface).expect("mac should resolve");
@@ -160,6 +161,7 @@ mod tests {
         let iface = VmNetworkInterfaceConfig {
             mac: Some(explicit_mac),
             policy: None,
+            port_forwards: vec![],
         };
 
         let mac = resolve_interface_mac(0, &iface).expect("mac should resolve");
@@ -172,6 +174,7 @@ mod tests {
         let iface = VmNetworkInterfaceConfig {
             mac: Some([0; 6]),
             policy: None,
+            port_forwards: vec![],
         };
 
         let err = resolve_interface_mac(0, &iface).expect_err("all-zero MAC should fail");
@@ -184,10 +187,12 @@ mod tests {
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
         ];
 
@@ -221,6 +226,7 @@ mod tests {
         let iface = VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         };
 
         assert_eq!(
@@ -235,6 +241,7 @@ mod tests {
         let interfaces = vec![VmNetworkInterfaceConfig {
             mac: Some(explicit_mac),
             policy: None,
+            port_forwards: vec![],
         }];
         let plan = build_interface_plan(&interfaces).expect("plan should build");
 
@@ -250,6 +257,7 @@ mod tests {
         let interfaces = vec![VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         }];
         let plan = build_interface_plan(&interfaces).expect("plan should build");
 
@@ -266,6 +274,7 @@ mod tests {
         let iface = VmNetworkInterfaceConfig {
             mac: None,
             policy: Some(explicit_policy.clone()),
+            port_forwards: vec![],
         };
 
         assert_eq!(effective_interface_policy(&iface), explicit_policy);

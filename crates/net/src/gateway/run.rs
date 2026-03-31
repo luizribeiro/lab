@@ -3,12 +3,13 @@ use crate::frame::smoltcp_now;
 
 use super::config::{CLEANUP_INTERVAL, DHCP_LEASE_TIMEOUT};
 use super::outbound_buffer::OutboundFrameBuffer;
+use super::tcp::new_smoltcp_tcp_socket;
 use super::GatewayStack;
 
 use std::net::SocketAddrV4;
 
 use smoltcp::iface::PollResult;
-use smoltcp::wire::EthernetAddress;
+use smoltcp::wire::{EthernetAddress, IpAddress};
 
 impl GatewayStack {
     /// Run the network stack.
@@ -85,6 +86,32 @@ impl GatewayStack {
                             }
                             Err(_) => break,
                         }
+                    }
+                }
+
+                Some(request) = self.port_forward_rx.recv() => {
+                    let mut socket = new_smoltcp_tcp_socket();
+                    let Some(local_port) = self.tcp_manager.allocate_local_port(&self.sockets) else {
+                        tracing::warn!("TCP: no ephemeral port available for port forward");
+                        continue;
+                    };
+
+                    let guest_endpoint = (IpAddress::Ipv4(request.guest_ip), request.guest_port);
+                    if let Err(err) = socket.connect(self.iface.context(), guest_endpoint, local_port) {
+                        tracing::warn!(
+                            guest_ip = %request.guest_ip,
+                            guest_port = request.guest_port,
+                            "TCP: failed to connect forwarded host stream to guest: {err:?}"
+                        );
+                        continue;
+                    }
+
+                    if self
+                        .tcp_manager
+                        .register_host_stream(socket, request.stream, &mut self.sockets)
+                        .is_none()
+                    {
+                        tracing::warn!("TCP: connection limit reached, dropping forwarded host stream");
                     }
                 }
 

@@ -13,6 +13,9 @@ pub struct VmNetworkInterfaceConfig {
     /// Optional outbound policy for this interface (runtime defaults to deny-all when omitted).
     #[serde(default)]
     pub policy: Option<NetworkPolicy>,
+    /// TCP host->guest port forwards as (host_port, guest_port).
+    #[serde(default)]
+    pub port_forwards: Vec<(u16, u16)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,10 +66,12 @@ mod tests {
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
         ];
 
@@ -84,6 +89,7 @@ mod tests {
 
         assert_eq!(iface.mac, Some([2, 170, 187, 204, 221, 238]));
         assert_eq!(iface.policy, None);
+        assert!(iface.port_forwards.is_empty());
     }
 
     #[test]
@@ -93,6 +99,7 @@ mod tests {
             policy: Some(NetworkPolicy::deny_all().allow_domain(
                 DomainPattern::parse("api.example.com").expect("pattern should parse"),
             )),
+            port_forwards: vec![(8080, 80)],
         };
 
         let json = serde_json::to_string(&iface).expect("interface should serialize");

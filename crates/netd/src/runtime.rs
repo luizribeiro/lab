@@ -4,7 +4,12 @@ use std::os::fd::{FromRawFd, OwnedFd};
 
 use anyhow::{anyhow, Context, Result};
 use capsa_core::daemon::net::spec::{NetInterfaceSpec, NetLaunchSpec};
-use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, VirtualSwitch};
+use capsa_net::{
+    bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, PortForwardRequest,
+    VirtualSwitch,
+};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 const READY_SIGNAL: u8 = b'R';
@@ -20,7 +25,10 @@ pub async fn run(launch_spec: NetLaunchSpec, ready_fd: i32) -> Result<()> {
     runtime.wait_fail_fast().await
 }
 
-fn gateway_config_for_interface(interface: &NetInterfaceSpec) -> GatewayStackConfig {
+fn gateway_config_for_interface(
+    interface: &NetInterfaceSpec,
+    port_forwards: Vec<(u16, u16)>,
+) -> GatewayStackConfig {
     GatewayStackConfig {
         policy: Some(
             interface
@@ -28,6 +36,7 @@ fn gateway_config_for_interface(interface: &NetInterfaceSpec) -> GatewayStackCon
                 .clone()
                 .unwrap_or_else(NetworkPolicy::deny_all),
         ),
+        port_forwards,
         ..GatewayStackConfig::default()
     }
 }
@@ -51,15 +60,40 @@ fn signal_readiness(ready_fd: i32) -> io::Result<()> {
     Ok(())
 }
 
+async fn run_port_forward_listener(
+    listener: TcpListener,
+    tx: mpsc::Sender<PortForwardRequest>,
+    guest_ip: std::net::Ipv4Addr,
+    guest_port: u16,
+) -> io::Result<()> {
+    loop {
+        let (stream, _peer_addr) = listener.accept().await?;
+        let request = PortForwardRequest {
+            stream,
+            guest_ip,
+            guest_port,
+        };
+
+        if tx.send(request).await.is_err() {
+            return Ok(());
+        }
+    }
+}
+
 struct NetworkRuntime {
     tasks: Vec<JoinHandle<io::Result<()>>>,
 }
 
 impl NetworkRuntime {
     async fn start(launch_spec: NetLaunchSpec) -> Result<Self> {
-        let mut tasks = Vec::with_capacity(launch_spec.interfaces.len() * 2);
+        let NetLaunchSpec {
+            interfaces,
+            port_forwards,
+        } = launch_spec;
 
-        for (index, interface) in launch_spec.interfaces.into_iter().enumerate() {
+        let mut tasks = Vec::with_capacity(interfaces.len() * 2 + port_forwards.len());
+
+        for (index, interface) in interfaces.into_iter().enumerate() {
             // SAFETY: interface host fd values are validated by `NetLaunchSpec::validate` and
             // provided by the launcher after fd remapping. Ownership is transferred into netd.
             let host_fd = unsafe { OwnedFd::from_raw_fd(interface.host_fd) };
@@ -68,13 +102,42 @@ impl NetworkRuntime {
             let vm_port = switch.create_port().await;
             let gateway_port = switch.create_port().await;
 
+            let interface_port_forwards = if index == 0 {
+                port_forwards.clone()
+            } else {
+                vec![]
+            };
+            let gateway_config =
+                gateway_config_for_interface(&interface, interface_port_forwards.clone());
+            let guest_ip = gateway_config.dhcp_range_start;
+
+            let (port_forward_tx, port_forward_rx) = mpsc::channel(64);
+
             let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
-            let gateway =
-                GatewayStack::new(gateway_port, gateway_config_for_interface(&interface)).await;
+            let gateway = GatewayStack::new(gateway_port, gateway_config)
+                .await
+                .with_port_forward_rx(port_forward_rx);
             let gateway_task = tokio::spawn(async move { gateway.run().await });
 
             tasks.push(bridge_task);
             tasks.push(gateway_task);
+
+            if index == 0 {
+                for (host_port, guest_port) in interface_port_forwards {
+                    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, host_port))
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to bind TCP port forward listener on host port {host_port}"
+                            )
+                        })?;
+                    let tx = port_forward_tx.clone();
+                    let listener_task = tokio::spawn(async move {
+                        run_port_forward_listener(listener, tx, guest_ip, guest_port).await
+                    });
+                    tasks.push(listener_task);
+                }
+            }
 
             tracing::debug!(interface = index, "netd interface runtime initialized");
         }
@@ -154,7 +217,7 @@ mod tests {
             .allow_domain(DomainPattern::parse("api.example.com").expect("pattern should parse"));
         let interface = sample_interface(200, Some(explicit_policy.clone()));
 
-        let config = super::gateway_config_for_interface(&interface);
+        let config = super::gateway_config_for_interface(&interface, vec![]);
 
         assert_eq!(config.policy, Some(explicit_policy));
     }
@@ -163,7 +226,7 @@ mod tests {
     fn omitted_policy_falls_back_to_deny_all() {
         let interface = sample_interface(200, None);
 
-        let config = super::gateway_config_for_interface(&interface);
+        let config = super::gateway_config_for_interface(&interface, vec![]);
 
         assert_eq!(config.policy, Some(NetworkPolicy::deny_all()));
     }
@@ -186,6 +249,7 @@ mod tests {
 
         let launch_spec = NetLaunchSpec {
             interfaces: vec![sample_interface(host_fd, None)],
+            port_forwards: vec![],
         };
 
         let err = run(launch_spec, writer_fd)
@@ -207,6 +271,7 @@ mod tests {
         let host_fd = host.into_raw_fd();
         let launch_spec = NetLaunchSpec {
             interfaces: vec![sample_interface(host_fd, None)],
+            port_forwards: vec![],
         };
 
         let (mut reader, writer_fd) = pipe();

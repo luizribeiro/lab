@@ -495,6 +495,7 @@ mod tests {
             dhcp_range_end: Ipv4Addr::new(10, 0, 2, 254),
             gateway_mac: gateway_mac().0,
             policy: None,
+            port_forwards: vec![],
         }
     }
 

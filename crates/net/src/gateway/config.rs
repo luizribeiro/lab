@@ -62,6 +62,8 @@ pub struct GatewayStackConfig {
     pub gateway_mac: [u8; 6],
     /// Optional outbound network policy enforced by the gateway.
     pub policy: Option<NetworkPolicy>,
+    /// TCP host->guest port forwards as (host_port, guest_port).
+    pub port_forwards: Vec<(u16, u16)>,
 }
 
 impl Default for GatewayStackConfig {
@@ -73,6 +75,7 @@ impl Default for GatewayStackConfig {
             dhcp_range_end: Ipv4Addr::new(10, 0, 2, 254),
             gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
             policy: None,
+            port_forwards: vec![],
         }
     }
 }

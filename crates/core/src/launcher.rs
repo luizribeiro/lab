@@ -78,6 +78,11 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
                 policy: Some(iface.policy.clone()),
             })
             .collect(),
+        port_forwards: config
+            .interfaces
+            .first()
+            .map(|iface| iface.port_forwards.clone())
+            .unwrap_or_default(),
     };
 
     let mut host_fds = Vec::with_capacity(plan.interfaces.len());
@@ -270,6 +275,7 @@ mod tests {
         config.interfaces = vec![VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         }];
         config
     }
@@ -319,10 +325,12 @@ mod tests {
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
             VmNetworkInterfaceConfig {
                 mac: None,
                 policy: None,
+                port_forwards: vec![],
             },
         ];
 

@@ -20,6 +20,7 @@ pub use self::config::GatewayStackConfig;
 use self::device::SmoltcpDevice;
 use self::dhcp::{DhcpEvent, DhcpServer};
 use self::dns::{DnsDispatcher, DnsResponse, MAX_DNS_QUERIES};
+pub use self::tcp::PortForwardRequest;
 use self::tcp::{TcpHostEvent, TcpManager};
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -56,6 +57,7 @@ pub struct GatewayStack {
     pub(super) tcp_manager: TcpManager,
     pub(super) tcp_host_rx: tokio::sync::mpsc::Receiver<TcpHostEvent>,
     pub(super) tcp_host_tx: tokio::sync::mpsc::Sender<TcpHostEvent>,
+    pub(super) port_forward_rx: tokio::sync::mpsc::Receiver<PortForwardRequest>,
     pub(super) policy_checker: Option<PolicyChecker>,
     pub(super) start_time: std::time::Instant,
     /// Channel for receiving frames from the I/O task (bounded for backpressure).
@@ -143,6 +145,8 @@ impl GatewayStack {
         let tcp_manager = TcpManager::new();
         let (tcp_host_tx, tcp_host_rx) =
             tokio::sync::mpsc::channel(crate::config::channel::TCP_HOST);
+        let (port_forward_tx, port_forward_rx) = tokio::sync::mpsc::channel(1);
+        drop(port_forward_tx);
 
         Self {
             device,
@@ -158,11 +162,20 @@ impl GatewayStack {
             tcp_manager,
             tcp_host_rx,
             tcp_host_tx,
+            port_forward_rx,
             policy_checker,
             start_time,
             rx_from_guest,
             io_tasks: Mutex::new(Some(io_task_handles)),
         }
+    }
+
+    pub fn with_port_forward_rx(
+        mut self,
+        port_forward_rx: tokio::sync::mpsc::Receiver<PortForwardRequest>,
+    ) -> Self {
+        self.port_forward_rx = port_forward_rx;
+        self
     }
 
     pub(super) fn process_dhcp(&mut self) {

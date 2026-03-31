@@ -194,6 +194,7 @@ mod tests {
         config.interfaces.push(VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         });
 
         let resolved = vec![ResolvedNetworkInterface {
@@ -211,10 +212,12 @@ mod tests {
         config.interfaces.push(VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         });
         config.interfaces.push(VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         });
 
         let resolved = vec![
@@ -240,6 +243,7 @@ mod tests {
         config.interfaces.push(VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         });
 
         let resolved = vec![ResolvedNetworkInterface {
@@ -259,6 +263,7 @@ mod tests {
         config.interfaces.push(VmNetworkInterfaceConfig {
             mac: None,
             policy: None,
+            port_forwards: vec![],
         });
 
         let resolved = vec![ResolvedNetworkInterface {

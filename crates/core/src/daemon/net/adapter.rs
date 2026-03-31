@@ -271,6 +271,7 @@ mod tests {
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 policy: None,
             }],
+            port_forwards: vec![],
         }
     }
 
