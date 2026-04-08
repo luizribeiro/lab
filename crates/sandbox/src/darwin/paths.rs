@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use crate::discover::library_dirs;
 use crate::SandboxSpec;
 
 #[derive(Debug, Default)]
@@ -33,10 +33,11 @@ impl PathSets {
             paths.add_ioctl(path);
         }
 
-        // Runtime dependencies discovered from the target binary and its linked dylibs.
-        // Keep this explicit rather than granting broad read access to /System or /usr/lib.
-        for dylib in linked_dylibs_recursive(program) {
-            paths.add_read_only(&dylib);
+        // Grant read on each directory the dynamic linker will search for
+        // `program`. Covers the link-time closure as well as any runtime
+        // `dlopen` of siblings in the same directory.
+        for dir in library_dirs(program) {
+            paths.add_read_only(&dir);
         }
 
         // Interactive terminal support for libkrun console handling.
@@ -107,45 +108,6 @@ impl PathSets {
             paths.push(path);
         }
     }
-}
-
-fn linked_dylibs_recursive(exe: &Path) -> Vec<PathBuf> {
-    let mut discovered = Vec::new();
-    let mut queue = std::collections::VecDeque::new();
-    let mut visited = std::collections::HashSet::new();
-
-    queue.push_back(exe.to_path_buf());
-    visited.insert(exe.to_path_buf());
-
-    while let Some(binary) = queue.pop_front() {
-        for dep in direct_dylibs(&binary) {
-            if dep == binary {
-                continue;
-            }
-            if visited.insert(dep.clone()) {
-                discovered.push(dep.clone());
-                queue.push_back(dep);
-            }
-        }
-    }
-
-    discovered
-}
-
-fn direct_dylibs(binary: &Path) -> Vec<PathBuf> {
-    let output = match Command::new("otool").arg("-L").arg(binary).output() {
-        Ok(out) if out.status.success() => out,
-        _ => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|path| path.starts_with('/'))
-        .map(PathBuf::from)
-        .collect()
 }
 
 fn stdio_tty_paths() -> Vec<PathBuf> {
