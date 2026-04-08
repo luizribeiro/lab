@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
+use crate::discover::library_dirs;
 use crate::{configure_fd_remaps, FdRemap, SandboxSpec, SandboxedChild};
 
 /// Linux sandbox backend via `syd`.
@@ -143,6 +144,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     let mut read_paths = Vec::new();
     let mut read_recursive_paths = Vec::new();
     let mut exec_paths = Vec::new();
+    let mut exec_recursive_paths = Vec::new();
 
     for candidate in path_candidates(program) {
         push_with_ancestors(&mut read_paths, &candidate);
@@ -173,10 +175,17 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    for dylib in linked_dylibs(program) {
-        for candidate in path_candidates(&dylib) {
+    // Grant read+exec recursively on each directory the dynamic linker will
+    // search for `program`. Covers the link-time closure as well as any
+    // runtime `dlopen` of siblings in the same directory (NSS modules,
+    // locale data, ICU plugins, ...).
+    for dir in library_dirs(program) {
+        for candidate in path_candidates(&dir) {
             push_with_ancestors(&mut read_paths, &candidate);
-            push_unique(&mut exec_paths, candidate);
+            if candidate.is_dir() {
+                push_unique(&mut read_recursive_paths, candidate.clone());
+                push_unique(&mut exec_recursive_paths, candidate);
+            }
         }
     }
 
@@ -218,6 +227,11 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
 
     for path in exec_paths {
         add_allow_rule(&mut rules, "allow/exec", &path);
+        add_lock_allow_rule(&mut rules, "allow/lock/exec", &path);
+    }
+
+    for path in exec_recursive_paths {
+        add_allow_recursive_rule(&mut rules, "allow/exec", &path);
         add_lock_allow_rule(&mut rules, "allow/lock/exec", &path);
     }
 
@@ -275,41 +289,6 @@ fn add_lock_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
 
     let escaped = escape_syd_path(path);
     rules.push(format!("{prefix}+{escaped}"));
-}
-
-fn linked_dylibs(binary: &Path) -> Vec<PathBuf> {
-    let output = match Command::new("ldd").arg(binary).output() {
-        Ok(out) if out.status.success() => out,
-        _ => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut libs = Vec::new();
-
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-
-        if let Some((_, right)) = trimmed.split_once("=>") {
-            if let Some(path) = right
-                .split_whitespace()
-                .next()
-                .filter(|p| p.starts_with('/'))
-            {
-                push_unique(&mut libs, PathBuf::from(path));
-            }
-            continue;
-        }
-
-        if let Some(path) = trimmed
-            .split_whitespace()
-            .next()
-            .filter(|p| p.starts_with('/'))
-        {
-            push_unique(&mut libs, PathBuf::from(path));
-        }
-    }
-
-    libs
 }
 
 fn stdio_tty_paths() -> Vec<PathBuf> {

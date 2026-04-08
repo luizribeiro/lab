@@ -3,6 +3,8 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 use anyhow::{ensure, Context, Result};
 
+mod discover;
+
 #[cfg(target_os = "macos")]
 mod darwin;
 #[cfg(target_os = "linux")]
