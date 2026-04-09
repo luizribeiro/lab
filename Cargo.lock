@@ -166,6 +166,7 @@ dependencies = [
  "anyhow",
  "lddtree",
  "libc",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

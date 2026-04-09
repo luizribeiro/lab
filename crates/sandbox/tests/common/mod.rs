@@ -3,8 +3,20 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::process::Child;
 
 use capsa_sandbox::SandboxBuilder;
+
+/// RAII wrapper that SIGKILLs and reaps a spawned child on drop, so a
+/// panicking `#[test]` body never leaks a subprocess.
+pub struct ChildGuard(pub Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 pub struct TestDir {
     dir: tempfile::TempDir,
