@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
@@ -154,8 +153,6 @@ impl DaemonAdapter for NetDaemonAdapter {
             target_fd: NETD_READY_FD,
         });
 
-        validate_fd_remaps(&fd_remaps)?;
-
         let mut sandbox = capsa_sandbox::SandboxSpec::new().allow_network(true);
         sandbox.read_only_paths.push(binary_path.to_path_buf());
         sandbox
@@ -206,32 +203,6 @@ fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
 
     // SAFETY: `duplicated` is a newly created fd from `fcntl` above.
     Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-}
-
-fn validate_fd_remaps(remaps: &[capsa_sandbox::FdRemap]) -> Result<()> {
-    let mut seen_sources = HashSet::new();
-    let mut seen_targets = HashSet::new();
-
-    for remap in remaps {
-        ensure!(
-            seen_sources.insert(remap.source_fd),
-            "duplicate source fd in remaps"
-        );
-        ensure!(
-            seen_targets.insert(remap.target_fd),
-            "duplicate target fd in remaps"
-        );
-    }
-
-    for source in &seen_sources {
-        ensure!(
-            !seen_targets.contains(source),
-            "overlapping source/target fd {} in remaps",
-            source
-        );
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
