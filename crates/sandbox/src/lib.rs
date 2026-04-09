@@ -272,11 +272,13 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: Vec<FdRemap>) -> Re
 /// Validates that `fd_remaps` can be applied to a spawn.
 ///
 /// Checks that each `target_fd` is non-negative, that no two remaps share
-/// the same `target_fd`, and that no `target_fd` overlaps another remap's
-/// source fd (which would silently clobber that source during ordered
-/// processing). Source fds themselves are [`OwnedFd`]s, so the type
-/// system already guarantees they are open, non-negative, and unique
-/// across remaps — there is nothing left to check on the source side.
+/// the same `target_fd`, and that no `target_fd` equals a source fd —
+/// including its own (a self-remap is a no-op and almost always a caller
+/// bug), and including any other remap's source (which would silently
+/// clobber that source during ordered processing). Source fds themselves
+/// are [`OwnedFd`]s, so the type system already guarantees they are
+/// open, non-negative, and unique across remaps — there is nothing left
+/// to check on the source side.
 ///
 /// [`configure_fd_remaps`] calls this internally; callers do not need to
 /// invoke it explicitly unless they want to fail earlier than spawn time.
@@ -301,7 +303,7 @@ pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
         );
         ensure!(
             !sources.contains(&remap.target_fd),
-            "fd remap {index}: target_fd {} overlaps another remap's source fd",
+            "fd remap {index}: target_fd {} overlaps a source fd",
             remap.target_fd
         );
     }
@@ -372,8 +374,7 @@ mod tests {
 
         let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
         assert!(
-            err.to_string()
-                .contains("overlaps another remap's source fd"),
+            err.to_string().contains("overlaps a source fd"),
             "unexpected error: {err}"
         );
     }
