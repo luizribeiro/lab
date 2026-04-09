@@ -343,7 +343,14 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     }
 }
 
-fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
+/// Validates that `fd_remaps` can be applied to a spawn.
+///
+/// Returns an error if any source or target fd is negative, if there are
+/// duplicates, if source and target fd sets overlap, or if a source fd is
+/// not actually open. Call this before [`configure_fd_remaps`] to catch
+/// invalid remaps with a clear error, rather than letting them fail inside
+/// the child's `pre_exec` hook.
+pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
     let mut seen_sources = std::collections::HashSet::new();
     let mut seen_targets = std::collections::HashSet::new();
 

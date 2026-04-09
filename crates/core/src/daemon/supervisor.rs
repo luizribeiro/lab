@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -25,6 +26,14 @@ impl Default for SupervisorConfig {
     }
 }
 
+/// A freshly-spawned process together with the sandbox handle (if any) that
+/// owns its private tmp directory. The sandbox must outlive the child so the
+/// tmp dir stays alive; callers typically park both on a [`DaemonProcess`].
+pub(crate) struct SpawnedProcess {
+    pub sandbox: Option<capsa_sandbox::Sandbox>,
+    pub child: Child,
+}
+
 pub(crate) trait SpawnBackend: Send + Sync + 'static {
     fn spawn(
         &self,
@@ -33,7 +42,7 @@ pub(crate) trait SpawnBackend: Send + Sync + 'static {
         sandbox: &capsa_sandbox::SandboxSpec,
         fd_remaps: &[capsa_sandbox::FdRemap],
         stdin_null: bool,
-    ) -> Result<capsa_sandbox::SandboxedChild>;
+    ) -> Result<SpawnedProcess>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -44,13 +53,92 @@ impl SpawnBackend for SandboxedSpawnBackend {
         &self,
         program: &Path,
         args: &[String],
-        sandbox: &capsa_sandbox::SandboxSpec,
+        spec: &capsa_sandbox::SandboxSpec,
         fd_remaps: &[capsa_sandbox::FdRemap],
         stdin_null: bool,
-    ) -> Result<capsa_sandbox::SandboxedChild> {
-        capsa_sandbox::spawn_sandboxed_with_fds(program, args, sandbox, fd_remaps, stdin_null)
-            .with_context(|| format!("failed to spawn daemon binary {}", program.display()))
+    ) -> Result<SpawnedProcess> {
+        // CAPSA_DISABLE_SANDBOX: dev/ops escape hatch so operators can bypass
+        // sandboxing when debugging daemon behavior.
+        if sandbox_bypassed_by_env() {
+            eprintln!(
+                "warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running {} without sandbox",
+                program.display()
+            );
+            return spawn_direct(program, args, fd_remaps, stdin_null);
+        }
+
+        // The Linux `syd` backend hard-errors when allow_network is true
+        // because syd's network mediation conflicts with capsa-netd's policy
+        // runtime. Fall back to unsandboxed spawn here so network-enabled
+        // daemons keep working until syd gains netd-compatible mediation.
+        // On macOS `Sandbox::new` accepts allow_network=true so this guard
+        // is intentionally Linux-only.
+        if cfg!(target_os = "linux") && spec.allow_network {
+            return spawn_direct(program, args, fd_remaps, stdin_null);
+        }
+
+        let sandbox = capsa_sandbox::Sandbox::new(spec.clone())
+            .with_context(|| format!("failed to prepare sandbox for {}", program.display()))?;
+
+        let mut command = sandbox.command(program);
+        configure_command(&mut command, args, fd_remaps, stdin_null)?;
+
+        let child = command.spawn().with_context(|| {
+            format!(
+                "failed to spawn sandboxed daemon binary {}",
+                program.display()
+            )
+        })?;
+
+        Ok(SpawnedProcess {
+            sandbox: Some(sandbox),
+            child,
+        })
     }
+}
+
+fn spawn_direct(
+    program: &Path,
+    args: &[String],
+    fd_remaps: &[capsa_sandbox::FdRemap],
+    stdin_null: bool,
+) -> Result<SpawnedProcess> {
+    let mut command = Command::new(program);
+    configure_command(&mut command, args, fd_remaps, stdin_null)?;
+
+    let child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn daemon binary {}", program.display()))?;
+
+    Ok(SpawnedProcess {
+        sandbox: None,
+        child,
+    })
+}
+
+/// Applies the common per-spawn configuration: caller args, optional stdin
+/// detachment, and validated fd remaps. Used by both the sandboxed and direct
+/// spawn paths so they cannot drift.
+fn configure_command(
+    command: &mut Command,
+    args: &[String],
+    fd_remaps: &[capsa_sandbox::FdRemap],
+    stdin_null: bool,
+) -> Result<()> {
+    capsa_sandbox::validate_fd_remaps(fd_remaps)?;
+    command.args(args);
+    if stdin_null {
+        command.stdin(Stdio::null());
+    }
+    capsa_sandbox::configure_fd_remaps(command, fd_remaps);
+    Ok(())
+}
+
+fn sandbox_bypassed_by_env() -> bool {
+    matches!(
+        std::env::var("CAPSA_DISABLE_SANDBOX").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+    )
 }
 
 pub struct DaemonSupervisor<B = SandboxedSpawnBackend> {
@@ -148,8 +236,8 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
             )
             .with_context(|| format!("failed to spawn {} daemon", binary_info.daemon_name));
 
-        let child = match child {
-            Ok(child) => child,
+        let spawned = match child {
+            Ok(spawned) => spawned,
             Err(primary_error) => {
                 let mut error = primary_error;
                 if let Err(cleanup_error) = D::on_spawn_failed(&spec, handoff) {
@@ -166,7 +254,8 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
             }
         };
 
-        let mut process = DaemonProcess::new(binary_info.daemon_name, child);
+        let mut process =
+            DaemonProcess::new(binary_info.daemon_name, spawned.sandbox, spawned.child);
 
         if let Err(primary_error) = readiness.wait_ready(self.config.readiness_timeout) {
             let mut error = primary_error.context(format!(
@@ -421,16 +510,19 @@ mod tests {
             &self,
             program: &Path,
             args: &[String],
-            sandbox: &capsa_sandbox::SandboxSpec,
+            _sandbox: &capsa_sandbox::SandboxSpec,
             fd_remaps: &[capsa_sandbox::FdRemap],
             stdin_null: bool,
-        ) -> Result<capsa_sandbox::SandboxedChild> {
+        ) -> Result<SpawnedProcess> {
             match self.mode {
                 BackendMode::SpawnError => anyhow::bail!("backend spawn error"),
-                BackendMode::SpawnSleep => capsa_sandbox::spawn_sandboxed_with_fds(
-                    program, args, sandbox, fd_remaps, stdin_null,
-                )
-                .context("fake backend failed to spawn"),
+                BackendMode::SpawnSleep => {
+                    // Tests exercise supervisor logic, not sandbox enforcement;
+                    // spawn the child directly to keep tests hermetic and
+                    // independent of whether `syd`/`sandbox-exec` is installed.
+                    spawn_direct(program, args, fd_remaps, stdin_null)
+                        .context("fake backend failed to spawn")
+                }
             }
         }
     }
@@ -467,12 +559,6 @@ mod tests {
 
     impl EnvVarGuard {
         fn set_path(key: &'static str, value: &Path) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn set_raw(key: &'static str, value: &str) -> Self {
             let old = std::env::var_os(key);
             std::env::set_var(key, value);
             Self { key, old }
@@ -604,7 +690,6 @@ mod tests {
         adapter_state().lock().expect("state lock").readiness_fails = true;
 
         let _env_guard = EnvVarGuard::set_path("CAPSA_TEST_DAEMON_PATH", Path::new("/bin/sh"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
         let supervisor = DaemonSupervisor::with_backend(
             SupervisorConfig::default(),
@@ -631,7 +716,6 @@ mod tests {
         adapter_state().lock().expect("state lock").on_spawned_fails = true;
 
         let _env_guard = EnvVarGuard::set_path("CAPSA_TEST_DAEMON_PATH", Path::new("/bin/sh"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
         let supervisor = DaemonSupervisor::with_backend(
             SupervisorConfig::default(),
@@ -657,7 +741,6 @@ mod tests {
         reset_adapter_state();
 
         let _env_guard = EnvVarGuard::set_path("CAPSA_TEST_DAEMON_PATH", Path::new("/bin/sh"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
         let supervisor = DaemonSupervisor::with_backend(
             SupervisorConfig {
@@ -686,7 +769,6 @@ mod tests {
         reset_adapter_state();
 
         let _env_guard = EnvVarGuard::set_path("CAPSA_TEST_DAEMON_PATH", Path::new("/bin/sh"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
         let supervisor = DaemonSupervisor::with_backend(
             SupervisorConfig {
@@ -750,7 +832,6 @@ mod tests {
         reset_adapter_state();
 
         let _env_guard = EnvVarGuard::set_path("CAPSA_TEST_DAEMON_PATH", Path::new("/bin/sh"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
 
         let supervisor = DaemonSupervisor::with_backend(
             SupervisorConfig::default(),

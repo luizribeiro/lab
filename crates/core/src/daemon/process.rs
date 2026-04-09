@@ -1,15 +1,31 @@
-use std::process::ExitStatus;
+use std::process::{Child, ExitStatus};
 
 use anyhow::Result;
 
+use capsa_sandbox::Sandbox;
+
 pub struct DaemonProcess {
     name: &'static str,
-    child: capsa_sandbox::SandboxedChild,
+    // Field order matters: `child` must be declared before `_sandbox` so that
+    // if a `DaemonProcess` is dropped without an explicit teardown, the child
+    // handle is released before the sandbox's private tmp directory is
+    // removed. Normal shutdown paths wait on the child first anyway; this
+    // ordering is a defense-in-depth for panic/unwinding paths.
+    child: Child,
+    // Held to keep the sandbox's private tmp directory alive until the child
+    // exits. `None` when sandboxing was bypassed (CAPSA_DISABLE_SANDBOX or a
+    // platform combination the backend can't handle, such as Linux +
+    // allow_network).
+    _sandbox: Option<Sandbox>,
 }
 
 impl DaemonProcess {
-    pub fn new(name: &'static str, child: capsa_sandbox::SandboxedChild) -> Self {
-        Self { name, child }
+    pub fn new(name: &'static str, sandbox: Option<Sandbox>, child: Child) -> Self {
+        Self {
+            name,
+            child,
+            _sandbox: sandbox,
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -32,7 +48,7 @@ impl DaemonProcess {
 
     pub fn wait_blocking(&mut self) -> Result<ExitStatus> {
         self.child
-            .wait_blocking()
+            .wait()
             .map_err(anyhow::Error::from)
             .map_err(|err| err.context(format!("failed waiting for {} process", self.name)))
     }
