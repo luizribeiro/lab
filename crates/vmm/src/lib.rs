@@ -1,74 +1,32 @@
-use std::collections::HashSet;
+use anyhow::Result;
 
-use anyhow::{ensure, Result};
-
-use capsa_core::{ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
+use capsa_core::{ResolvedNetworkInterface, VmmLaunchSpec};
 
 mod boot;
 mod libkrun;
 
 pub fn start_vm(spec: &VmmLaunchSpec) -> Result<()> {
-    let config = &spec.vm_config;
-    let resolved_interfaces = &spec.resolved_interfaces;
+    spec.validate()?;
 
-    config.validate()?;
-    validate_vmm_launch_spec(config, resolved_interfaces)?;
-
-    libkrun::init_logging(config.verbosity)?;
+    libkrun::init_logging(spec.verbosity)?;
 
     let vm = libkrun::KrunVm::new()?
-        .configure(config.vcpus, config.memory_mib)?
+        .configure(spec.vcpus, spec.memory_mib)?
         .configure_host_tty_console()?;
 
-    let vm = configure_network(vm, resolved_interfaces)?;
+    let vm = configure_network(vm, &spec.resolved_interfaces)?;
 
-    if let Some(kernel) = &config.kernel {
-        let kernel_cmdline = effective_kernel_cmdline(config);
-        let vm = vm.set_kernel(
-            kernel,
-            config.initramfs.as_deref(),
-            kernel_cmdline.as_deref(),
-        )?;
+    if let Some(kernel) = &spec.kernel {
+        let kernel_cmdline = effective_kernel_cmdline(spec);
+        let vm = vm.set_kernel(kernel, spec.initramfs.as_deref(), kernel_cmdline.as_deref())?;
         return vm.start_enter();
     }
 
-    if let Some(root) = &config.root {
+    if let Some(root) = &spec.root {
         return vm.set_root(root)?.start_enter();
     }
 
     anyhow::bail!("missing boot source: pass either --root <dir> or --kernel <path>")
-}
-
-fn validate_vmm_launch_spec(
-    config: &VmConfig,
-    resolved: &[ResolvedNetworkInterface],
-) -> Result<()> {
-    ensure!(
-        resolved.len() == config.interfaces.len(),
-        "resolved interfaces count ({}) does not match declared interfaces count ({})",
-        resolved.len(),
-        config.interfaces.len(),
-    );
-
-    let mut seen_fds = HashSet::new();
-    for (i, iface) in resolved.iter().enumerate() {
-        ensure!(
-            iface.guest_fd >= 0,
-            "interface {i}: invalid guest_fd {}",
-            iface.guest_fd
-        );
-        ensure!(
-            seen_fds.insert(iface.guest_fd),
-            "interface {i}: duplicate guest_fd {}",
-            iface.guest_fd
-        );
-        ensure!(
-            iface.mac != [0u8; 6],
-            "interface {i}: MAC address is all zeros"
-        );
-    }
-
-    Ok(())
 }
 
 fn configure_network(
@@ -89,18 +47,18 @@ fn network_call_params(interfaces: &[ResolvedNetworkInterface]) -> Vec<(i32, [u8
         .collect()
 }
 
-fn effective_kernel_cmdline(config: &VmConfig) -> Option<String> {
+fn effective_kernel_cmdline(spec: &VmmLaunchSpec) -> Option<String> {
     let mut cmdline = KernelCmdline::new();
 
-    if config.verbosity == 0 {
+    if spec.verbosity == 0 {
         cmdline.push_segment("quiet loglevel=0");
     }
 
-    if config.verbosity > 0 {
+    if spec.verbosity > 0 {
         cmdline.push_segment("capsa_init_verbose=1");
     }
 
-    if let Some(user_cmdline) = config.kernel_cmdline.as_deref() {
+    if let Some(user_cmdline) = spec.kernel_cmdline.as_deref() {
         cmdline.push_segment(user_cmdline);
     }
 
@@ -132,11 +90,11 @@ impl KernelCmdline {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_kernel_cmdline, network_call_params, validate_vmm_launch_spec};
-    use capsa_core::{ResolvedNetworkInterface, VmConfig, VmNetworkInterfaceConfig};
+    use super::{effective_kernel_cmdline, network_call_params};
+    use capsa_core::{ResolvedNetworkInterface, VmmLaunchSpec};
 
-    fn base_vm_config() -> VmConfig {
-        VmConfig {
+    fn base_spec() -> VmmLaunchSpec {
+        VmmLaunchSpec {
             root: Some("/tmp/root".into()),
             kernel: None,
             initramfs: None,
@@ -144,7 +102,7 @@ mod tests {
             vcpus: 1,
             memory_mib: 512,
             verbosity: 0,
-            interfaces: vec![],
+            resolved_interfaces: vec![],
         }
     }
 
@@ -175,109 +133,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_vmm_launch_spec_rejects_mismatched_interface_counts() {
-        let config = base_vm_config();
-        let resolved = vec![ResolvedNetworkInterface {
-            mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
-            guest_fd: 10,
-        }];
-
-        let err = validate_vmm_launch_spec(&config, &resolved).expect_err("validation should fail");
-        assert!(err.to_string().contains(
-            "resolved interfaces count (1) does not match declared interfaces count (0)"
-        ));
-    }
-
-    #[test]
-    fn validate_vmm_launch_spec_rejects_negative_guest_fd() {
-        let mut config = base_vm_config();
-        config.interfaces.push(VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        });
-
-        let resolved = vec![ResolvedNetworkInterface {
-            mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
-            guest_fd: -1,
-        }];
-
-        let err = validate_vmm_launch_spec(&config, &resolved).expect_err("validation should fail");
-        assert!(err.to_string().contains("interface 0: invalid guest_fd -1"));
-    }
-
-    #[test]
-    fn validate_vmm_launch_spec_rejects_duplicate_guest_fd() {
-        let mut config = base_vm_config();
-        config.interfaces.push(VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        });
-        config.interfaces.push(VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        });
-
-        let resolved = vec![
-            ResolvedNetworkInterface {
-                mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
-                guest_fd: 10,
-            },
-            ResolvedNetworkInterface {
-                mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x02],
-                guest_fd: 10,
-            },
-        ];
-
-        let err = validate_vmm_launch_spec(&config, &resolved).expect_err("validation should fail");
-        assert!(err
-            .to_string()
-            .contains("interface 1: duplicate guest_fd 10"));
-    }
-
-    #[test]
-    fn validate_vmm_launch_spec_rejects_all_zero_mac() {
-        let mut config = base_vm_config();
-        config.interfaces.push(VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        });
-
-        let resolved = vec![ResolvedNetworkInterface {
-            mac: [0, 0, 0, 0, 0, 0],
-            guest_fd: 10,
-        }];
-
-        let err = validate_vmm_launch_spec(&config, &resolved).expect_err("validation should fail");
-        assert!(err
-            .to_string()
-            .contains("interface 0: MAC address is all zeros"));
-    }
-
-    #[test]
-    fn validate_vmm_launch_spec_accepts_consistent_data() {
-        let mut config = base_vm_config();
-        config.interfaces.push(VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        });
-
-        let resolved = vec![ResolvedNetworkInterface {
-            mac: [0x02, 0x00, 0x00, 0x00, 0x00, 0x01],
-            guest_fd: 10,
-        }];
-
-        validate_vmm_launch_spec(&config, &resolved).expect("validation should pass");
-    }
-
-    #[test]
     fn effective_kernel_cmdline_is_quiet_by_default() {
-        let config = base_vm_config();
-        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        let spec = base_spec();
+        let cmdline = effective_kernel_cmdline(&spec).expect("cmdline should exist");
         assert!(cmdline.contains("quiet loglevel=0"));
         assert!(!cmdline.contains("ignore_loglevel"));
         assert!(!cmdline.contains("capsa_init_verbose=1"));
@@ -285,15 +143,15 @@ mod tests {
 
     #[test]
     fn effective_kernel_cmdline_maps_verbosity_levels() {
-        let mut config = base_vm_config();
+        let mut spec = base_spec();
 
-        config.verbosity = 1;
-        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        spec.verbosity = 1;
+        let cmdline = effective_kernel_cmdline(&spec).expect("cmdline should exist");
         assert!(cmdline.contains("capsa_init_verbose=1"));
         assert!(!cmdline.contains("ignore_loglevel loglevel=7"));
 
-        config.verbosity = 2;
-        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        spec.verbosity = 2;
+        let cmdline = effective_kernel_cmdline(&spec).expect("cmdline should exist");
         assert!(cmdline.contains("capsa_init_verbose=1"));
         assert!(!cmdline.contains("ignore_loglevel loglevel=7"));
     }

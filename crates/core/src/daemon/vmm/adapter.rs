@@ -48,7 +48,7 @@ impl DaemonAdapter for VmmDaemonAdapter {
             spec.resolved_interfaces.len()
         );
 
-        let mut builder = vmm_sandbox_builder(&spec.vm_config, binary_path);
+        let mut builder = vmm_sandbox_builder(spec, binary_path);
 
         // Drain the guest-side socketpair fds from the handoff and
         // hand them to the sandbox builder. Each returned raw fd
@@ -65,7 +65,13 @@ impl DaemonAdapter for VmmDaemonAdapter {
         }
 
         let runtime_spec = VmmLaunchSpec {
-            vm_config: spec.vm_config.clone(),
+            root: spec.root.clone(),
+            kernel: spec.kernel.clone(),
+            initramfs: spec.initramfs.clone(),
+            kernel_cmdline: spec.kernel_cmdline.clone(),
+            vcpus: spec.vcpus,
+            memory_mib: spec.memory_mib,
+            verbosity: spec.verbosity,
             resolved_interfaces,
         };
 
@@ -94,22 +100,22 @@ impl DaemonAdapter for VmmDaemonAdapter {
     }
 }
 
-fn vmm_sandbox_builder(config: &crate::VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxBuilder {
+fn vmm_sandbox_builder(spec: &VmmLaunchSpec, vmm_exe: &Path) -> capsa_sandbox::SandboxBuilder {
     let mut builder = capsa_sandbox::Sandbox::builder()
         .allow_network(false)
         .allow_kvm(true)
         .allow_interactive_tty(true)
         .read_only_path(vmm_exe.to_path_buf());
 
-    if let Some(root) = &config.root {
+    if let Some(root) = &spec.root {
         builder = builder.read_write_path(root.clone());
     }
 
-    if let Some(kernel) = &config.kernel {
+    if let Some(kernel) = &spec.kernel {
         builder = builder.read_only_path(kernel.clone());
     }
 
-    if let Some(initramfs) = &config.initramfs {
+    if let Some(initramfs) = &spec.initramfs {
         builder = builder.read_only_path(initramfs.clone());
     }
 
@@ -122,12 +128,12 @@ mod tests {
     use std::os::unix::net::UnixDatagram;
 
     use crate::daemon::traits::DaemonAdapter;
-    use crate::{ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
+    use crate::{ResolvedNetworkInterface, VmmLaunchSpec};
 
     use super::{VmmDaemonAdapter, VmmDaemonHandoff};
 
-    fn sample_vm_config() -> VmConfig {
-        VmConfig {
+    fn sample_spec() -> VmmLaunchSpec {
+        VmmLaunchSpec {
             root: Some("/tmp/root".into()),
             kernel: Some("/tmp/kernel".into()),
             initramfs: Some("/tmp/initramfs".into()),
@@ -135,13 +141,6 @@ mod tests {
             vcpus: 1,
             memory_mib: 512,
             verbosity: 0,
-            interfaces: vec![],
-        }
-    }
-
-    fn sample_spec() -> VmmLaunchSpec {
-        VmmLaunchSpec {
-            vm_config: sample_vm_config(),
             resolved_interfaces: vec![ResolvedNetworkInterface {
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 guest_fd: 0, // placeholder; the adapter overwrites
@@ -195,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn vmm_spawn_spec_preserves_vm_config() {
+    fn vmm_spawn_spec_preserves_boot_fields() {
         let spec = sample_spec();
         let mut handoff =
             VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
@@ -208,8 +207,10 @@ mod tests {
         .expect("spawn spec should build");
 
         let runtime_spec = decode_runtime_spec(&spawn_spec);
-        assert_eq!(runtime_spec.vm_config.kernel, spec.vm_config.kernel);
-        assert_eq!(runtime_spec.vm_config.root, spec.vm_config.root);
-        assert_eq!(runtime_spec.vm_config.vcpus, spec.vm_config.vcpus);
+        assert_eq!(runtime_spec.kernel, spec.kernel);
+        assert_eq!(runtime_spec.root, spec.root);
+        assert_eq!(runtime_spec.vcpus, spec.vcpus);
+        assert_eq!(runtime_spec.kernel_cmdline, spec.kernel_cmdline);
+        assert_eq!(runtime_spec.verbosity, spec.verbosity);
     }
 }

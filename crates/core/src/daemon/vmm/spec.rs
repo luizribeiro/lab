@@ -1,24 +1,5 @@
-use serde::{Deserialize, Serialize};
-
-use crate::config::VmConfig;
-
-/// Resolved network interface with launcher-assigned fd.
-///
-/// Not part of user-facing config. Serialized only inside `VmmLaunchSpec`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolvedNetworkInterface {
-    /// MAC address (resolved: always populated, non-zero).
-    pub mac: [u8; 6],
-    /// FD number in the VMM sidecar process (assigned by launcher, must be >= 0).
-    pub guest_fd: i32,
-}
-
-/// Launcher -> VMM JSON specification.
-///
-/// This is an internal contract consumed by the VMM sidecar, not the user-facing API.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VmmLaunchSpec {
-    pub vm_config: VmConfig,
-    #[serde(default)]
-    pub resolved_interfaces: Vec<ResolvedNetworkInterface>,
-}
+// Re-export shim: the canonical types live in `capsa-spec`. This shim
+// exists only so existing `crate::daemon::vmm::spec::...` imports keep
+// working during the migration. Commits 4/5 switch daemon binaries to
+// depend on `capsa-spec` directly and this shim can be deleted.
+pub use capsa_spec::{ResolvedNetworkInterface, VmmLaunchSpec};

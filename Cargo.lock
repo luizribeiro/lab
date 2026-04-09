@@ -120,6 +120,7 @@ dependencies = [
  "anyhow",
  "capsa-net",
  "capsa-sandbox",
+ "capsa-spec",
  "libc",
  "pkg-config",
  "serde",

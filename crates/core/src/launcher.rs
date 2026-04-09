@@ -38,10 +38,7 @@ impl VmConfig {
 }
 
 fn start_without_network_via_supervisor(config: &VmConfig) -> Result<()> {
-    let launch_spec = VmmLaunchSpec {
-        vm_config: config.clone(),
-        resolved_interfaces: vec![],
-    };
+    let launch_spec = minimal_vmm_spec(config, vec![]);
     let handoff = VmmDaemonHandoff::new(vec![]).context("failed to prepare VMM handoff")?;
 
     let supervisor = DaemonSupervisor::default();
@@ -63,10 +60,7 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
     let plan = build_interface_plan(&config.interfaces)
         .context("failed to build network interface plan for daemon startup")?;
 
-    let vmm_launch_spec = VmmLaunchSpec {
-        vm_config: config.clone(),
-        resolved_interfaces: resolved_interfaces_for_plan(&plan.interfaces),
-    };
+    let vmm_launch_spec = minimal_vmm_spec(config, resolved_interfaces_for_plan(&plan.interfaces));
 
     let net_launch_spec = NetLaunchSpec {
         // `ready_fd` and per-interface `host_fd` are placeholders
@@ -156,6 +150,22 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
         }
 
         std::thread::sleep(MONITOR_POLL_INTERVAL);
+    }
+}
+
+fn minimal_vmm_spec(
+    config: &VmConfig,
+    resolved_interfaces: Vec<crate::ResolvedNetworkInterface>,
+) -> VmmLaunchSpec {
+    VmmLaunchSpec {
+        root: config.root.clone(),
+        kernel: config.kernel.clone(),
+        initramfs: config.initramfs.clone(),
+        kernel_cmdline: config.kernel_cmdline.clone(),
+        vcpus: config.vcpus,
+        memory_mib: config.memory_mib,
+        verbosity: config.verbosity,
+        resolved_interfaces,
     }
 }
 

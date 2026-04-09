@@ -5,8 +5,8 @@ mod launcher;
 pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
 };
+pub use capsa_spec::{ResolvedNetworkInterface, VmmLaunchSpec};
 pub use config::{VmConfig, VmNetworkInterfaceConfig};
-pub use daemon::vmm::spec::{ResolvedNetworkInterface, VmmLaunchSpec};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
