@@ -115,12 +115,11 @@ fn configure_command(
     fd_remaps: &[capsa_sandbox::FdRemap],
     stdin_null: bool,
 ) -> Result<()> {
-    capsa_sandbox::validate_fd_remaps(fd_remaps)?;
     command.args(args);
     if stdin_null {
         command.stdin(Stdio::null());
     }
-    capsa_sandbox::configure_fd_remaps(command, fd_remaps);
+    capsa_sandbox::configure_fd_remaps(command, fd_remaps)?;
     Ok(())
 }
 

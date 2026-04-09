@@ -187,13 +187,23 @@ pub struct FdRemap {
     pub target_fd: i32,
 }
 
-/// Installs a `pre_exec` callback on `command` that remaps file descriptors
-/// into the child process according to `fd_remaps`. Use this alongside
-/// [`Sandbox::command`] when the sandboxed child needs specific fd numbers
-/// (for example, pre-opened sockets handed off from a parent).
-pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
+/// Validates `fd_remaps` and installs a `pre_exec` callback on `command`
+/// that remaps file descriptors into the child process accordingly. Use
+/// this alongside [`Sandbox::command`] when the sandboxed child needs
+/// specific fd numbers (for example, pre-opened sockets handed off from
+/// a parent).
+///
+/// Validation is performed via [`validate_fd_remaps`] before the hook is
+/// installed, so callers cannot accidentally skip it and let invalid
+/// remaps surface as cryptic `dup2` failures inside the child's
+/// `pre_exec` phase. Callers that want to fail earlier (e.g. while
+/// building a spawn spec) may still invoke [`validate_fd_remaps`]
+/// directly themselves.
+pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) -> Result<()> {
+    validate_fd_remaps(fd_remaps)?;
+
     if fd_remaps.is_empty() {
-        return;
+        return Ok(());
     }
 
     use std::os::unix::process::CommandExt;
@@ -238,6 +248,8 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     unsafe {
         command.pre_exec(child_hook);
     }
+
+    Ok(())
 }
 
 /// Returns whether `fd` currently refers to an open file description.
@@ -266,9 +278,10 @@ fn fd_is_open(fd: i32) -> std::io::Result<bool> {
 ///
 /// Returns an error if any source or target fd is negative, if there are
 /// duplicates, if source and target fd sets overlap, or if a source fd is
-/// not actually open. Call this before [`configure_fd_remaps`] to catch
-/// invalid remaps with a clear error, rather than letting them fail inside
-/// the child's `pre_exec` hook.
+/// not actually open. [`configure_fd_remaps`] calls this internally so
+/// callers do not need to invoke it explicitly; it is exposed for
+/// callers that want to validate remaps earlier than spawn time (e.g.
+/// while building a spawn spec).
 pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
     let mut seen_sources = std::collections::HashSet::new();
     let mut seen_targets = std::collections::HashSet::new();
@@ -437,13 +450,13 @@ mod tests {
             source_fd: read_end.as_raw_fd(),
             target_fd: 101,
         }];
-        validate_fd_remaps(&remaps).expect("expected validation to pass");
 
         let mut command = Command::new("/bin/sh");
         command
             .arg("-c")
             .arg("IFS= read -r line <&101; [ \"$line\" = \"ping\" ]");
-        super::configure_fd_remaps(&mut command, &remaps);
+        super::configure_fd_remaps(&mut command, &remaps)
+            .expect("expected configure_fd_remaps to succeed");
 
         let status = command.status().expect("failed to spawn child");
         assert!(status.success());
