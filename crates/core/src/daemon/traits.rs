@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
-use capsa_sandbox::{FdRemap, SandboxSpec};
+use capsa_sandbox::SandboxBuilder;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DaemonBinaryInfo {
@@ -11,11 +11,13 @@ pub struct DaemonBinaryInfo {
     pub env_override: &'static str,
 }
 
-#[derive(Debug)]
 pub struct DaemonSpawnSpec {
     pub args: Vec<String>,
-    pub sandbox: SandboxSpec,
-    pub fd_remaps: Vec<FdRemap>,
+    /// Pre-configured sandbox builder: policy + inherited fds. The
+    /// supervisor calls [`SandboxBuilder::build`] to realize it into a
+    /// `Command` (or [`SandboxBuilder::into_inherited_fds`] on the
+    /// bypass path).
+    pub sandbox: SandboxBuilder,
     /// When true, daemon stdin is detached from caller TTY (`/dev/null`).
     pub stdin_null: bool,
 }

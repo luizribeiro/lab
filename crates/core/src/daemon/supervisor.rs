@@ -38,10 +38,7 @@ pub(crate) trait SpawnBackend: Send + Sync + 'static {
     fn spawn(
         &self,
         program: &Path,
-        args: &[String],
-        sandbox: &capsa_sandbox::SandboxSpec,
-        fd_remaps: Vec<capsa_sandbox::FdRemap>,
-        stdin_null: bool,
+        spawn_spec: super::traits::DaemonSpawnSpec,
     ) -> Result<SpawnedProcess>;
 }
 
@@ -52,10 +49,7 @@ impl SpawnBackend for SandboxedSpawnBackend {
     fn spawn(
         &self,
         program: &Path,
-        args: &[String],
-        spec: &capsa_sandbox::SandboxSpec,
-        fd_remaps: Vec<capsa_sandbox::FdRemap>,
-        stdin_null: bool,
+        spawn_spec: super::traits::DaemonSpawnSpec,
     ) -> Result<SpawnedProcess> {
         // CAPSA_DISABLE_SANDBOX: dev/ops escape hatch so operators can bypass
         // sandboxing when debugging daemon behavior.
@@ -64,14 +58,22 @@ impl SpawnBackend for SandboxedSpawnBackend {
                 "warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running {} without sandbox",
                 program.display()
             );
-            return spawn_direct(program, args, fd_remaps, stdin_null);
+            return spawn_direct(program, spawn_spec);
         }
 
-        let sandbox = capsa_sandbox::Sandbox::new(spec.clone())
-            .with_context(|| format!("failed to prepare sandbox for {}", program.display()))?;
+        let super::traits::DaemonSpawnSpec {
+            args,
+            sandbox,
+            stdin_null,
+        } = spawn_spec;
 
-        let mut command = sandbox.command(program);
-        configure_command(&mut command, args, fd_remaps, stdin_null)?;
+        let (mut command, sandbox_handle) = sandbox
+            .build(program)
+            .with_context(|| format!("failed to prepare sandbox for {}", program.display()))?;
+        command.args(&args);
+        if stdin_null {
+            command.stdin(Stdio::null());
+        }
 
         let child = command.spawn().with_context(|| {
             format!(
@@ -81,7 +83,7 @@ impl SpawnBackend for SandboxedSpawnBackend {
         })?;
 
         Ok(SpawnedProcess {
-            sandbox: Some(sandbox),
+            sandbox: Some(sandbox_handle),
             child,
         })
     }
@@ -89,12 +91,20 @@ impl SpawnBackend for SandboxedSpawnBackend {
 
 fn spawn_direct(
     program: &Path,
-    args: &[String],
-    fd_remaps: Vec<capsa_sandbox::FdRemap>,
-    stdin_null: bool,
+    spawn_spec: super::traits::DaemonSpawnSpec,
 ) -> Result<SpawnedProcess> {
+    let super::traits::DaemonSpawnSpec {
+        args,
+        sandbox,
+        stdin_null,
+    } = spawn_spec;
+
     let mut command = Command::new(program);
-    configure_command(&mut command, args, fd_remaps, stdin_null)?;
+    command.args(&args);
+    if stdin_null {
+        command.stdin(Stdio::null());
+    }
+    capsa_sandbox::configure_inherited_fds(&mut command, sandbox.into_inherited_fds())?;
 
     let child = command
         .spawn()
@@ -104,23 +114,6 @@ fn spawn_direct(
         sandbox: None,
         child,
     })
-}
-
-/// Applies the common per-spawn configuration: caller args, optional stdin
-/// detachment, and validated fd remaps. Used by both the sandboxed and direct
-/// spawn paths so they cannot drift.
-fn configure_command(
-    command: &mut Command,
-    args: &[String],
-    fd_remaps: Vec<capsa_sandbox::FdRemap>,
-    stdin_null: bool,
-) -> Result<()> {
-    command.args(args);
-    if stdin_null {
-        command.stdin(Stdio::null());
-    }
-    capsa_sandbox::configure_fd_remaps(command, fd_remaps)?;
-    Ok(())
 }
 
 fn sandbox_bypassed_by_env() -> bool {
@@ -216,13 +209,7 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
 
         let child = self
             .backend
-            .spawn(
-                &binary_path,
-                &spawn_spec.args,
-                &spawn_spec.sandbox,
-                spawn_spec.fd_remaps,
-                spawn_spec.stdin_null,
-            )
+            .spawn(&binary_path, spawn_spec)
             .with_context(|| format!("failed to spawn {} daemon", binary_info.daemon_name));
 
         let spawned = match child {
@@ -498,10 +485,7 @@ mod tests {
         fn spawn(
             &self,
             program: &Path,
-            args: &[String],
-            _sandbox: &capsa_sandbox::SandboxSpec,
-            fd_remaps: Vec<capsa_sandbox::FdRemap>,
-            stdin_null: bool,
+            spawn_spec: super::super::traits::DaemonSpawnSpec,
         ) -> Result<SpawnedProcess> {
             match self.mode {
                 BackendMode::SpawnError => anyhow::bail!("backend spawn error"),
@@ -509,8 +493,7 @@ mod tests {
                     // Tests exercise supervisor logic, not sandbox enforcement;
                     // spawn the child directly to keep tests hermetic and
                     // independent of whether `syd`/`sandbox-exec` is installed.
-                    spawn_direct(program, args, fd_remaps, stdin_null)
-                        .context("fake backend failed to spawn")
+                    spawn_direct(program, spawn_spec).context("fake backend failed to spawn")
                 }
             }
         }
@@ -605,8 +588,7 @@ mod tests {
 
             Ok(DaemonSpawnSpec {
                 args: vec!["-c".into(), "while true; do :; done".into()],
-                sandbox: capsa_sandbox::SandboxSpec::default(),
-                fd_remaps: vec![],
+                sandbox: capsa_sandbox::Sandbox::builder(),
                 stdin_null: false,
             })
         }

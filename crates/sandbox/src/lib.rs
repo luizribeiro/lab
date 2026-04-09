@@ -429,6 +429,19 @@ impl SandboxBuilder {
         Ok(raw)
     }
 
+    /// Consumes the builder and returns just the owned fds that were
+    /// registered via [`SandboxBuilder::inherit_fd`], discarding the
+    /// sandbox policy.
+    ///
+    /// This is intended for callers that decide at the last moment to
+    /// spawn the child without a sandbox wrapper (for example, a
+    /// debugging escape hatch) and want to apply fd inheritance to a
+    /// plain `std::process::Command` via [`configure_inherited_fds`]
+    /// instead of going through [`SandboxBuilder::build`].
+    pub fn into_inherited_fds(self) -> Vec<std::os::fd::OwnedFd> {
+        self.inherited_fds
+    }
+
     /// Consumes the builder and produces a `(Command, Sandbox)` pair
     /// ready to spawn `program`.
     ///

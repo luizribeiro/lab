@@ -1,19 +1,17 @@
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 
-use crate::daemon::constants::NETD_READY_FD;
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonReadiness, DaemonSpawnSpec};
 
 use crate::daemon::launch_spec_args::encode_launch_spec_args;
 
-use super::spec::NetLaunchSpec;
+use super::spec::{NetInterfaceSpec, NetLaunchSpec};
 
 const READY_SIGNAL: u8 = b'R';
-const MIN_REMAP_SOURCE_FD: i32 = 1000;
 const NETD_RUNTIME_READ_PATHS: &[&str] = &[
     "/etc/resolv.conf",
     "/proc/self/cgroup",
@@ -36,15 +34,10 @@ impl NetDaemonHandoff {
         readiness_reader: OwnedFd,
         readiness_writer: OwnedFd,
     ) -> Result<Self> {
-        let mut normalized_host_fds = Vec::with_capacity(host_fds.len());
-        for host_fd in host_fds {
-            normalized_host_fds.push(duplicate_fd_for_remap(&host_fd)?);
-        }
-
         Ok(Self {
-            host_fds: normalized_host_fds,
+            host_fds,
             readiness_reader: Some(readiness_reader),
-            readiness_writer: Some(duplicate_fd_for_remap(&readiness_writer)?),
+            readiness_writer: Some(readiness_writer),
         })
     }
 }
@@ -138,31 +131,40 @@ impl DaemonAdapter for NetDaemonAdapter {
             .take()
             .context("missing net daemon readiness writer fd")?;
 
-        let mut fd_remaps: Vec<capsa_sandbox::FdRemap> = handoff
-            .host_fds
-            .drain(..)
-            .zip(&spec.interfaces)
-            .map(|(host_fd, interface)| capsa_sandbox::FdRemap {
-                source: host_fd,
-                target_fd: interface.host_fd,
-            })
-            .collect();
+        let mut builder = capsa_sandbox::Sandbox::builder()
+            .allow_network(true)
+            .read_only_path(binary_path.to_path_buf());
+        for runtime_read_path in NETD_RUNTIME_READ_PATHS {
+            builder = builder.read_only_path(std::path::PathBuf::from(*runtime_read_path));
+        }
 
-        fd_remaps.push(capsa_sandbox::FdRemap {
-            source: readiness_writer,
-            target_fd: NETD_READY_FD,
-        });
+        // Drain the host socketpairs from the handoff and hand them to
+        // the sandbox builder. Each returned raw fd number is recorded
+        // in the launch spec so netd can open it by number.
+        let drained_host_fds: Vec<OwnedFd> = handoff.host_fds.drain(..).collect();
+        let mut host_interfaces = Vec::with_capacity(drained_host_fds.len());
+        for (host_fd, interface) in drained_host_fds.into_iter().zip(&spec.interfaces) {
+            let host_raw = builder.inherit_fd(host_fd)?;
+            host_interfaces.push(NetInterfaceSpec {
+                host_fd: host_raw,
+                mac: interface.mac,
+                policy: interface.policy.clone(),
+            });
+        }
 
-        let mut sandbox = capsa_sandbox::SandboxSpec::new().allow_network(true);
-        sandbox.read_only_paths.push(binary_path.to_path_buf());
-        sandbox
-            .read_only_paths
-            .extend(NETD_RUNTIME_READ_PATHS.iter().map(std::path::PathBuf::from));
+        let ready_raw = builder.inherit_fd(readiness_writer)?;
+
+        // Rebuild the launch spec with kernel-assigned fd numbers so
+        // netd can open each fd by the number it actually inherited.
+        let runtime_spec = NetLaunchSpec {
+            ready_fd: ready_raw,
+            interfaces: host_interfaces,
+            port_forwards: spec.port_forwards.clone(),
+        };
 
         Ok(DaemonSpawnSpec {
-            args: encode_launch_spec_args(spec)?,
-            sandbox,
-            fd_remaps,
+            args: encode_launch_spec_args(&runtime_spec)?,
+            sandbox: builder,
             stdin_null: true,
         })
     }
@@ -191,27 +193,12 @@ impl DaemonAdapter for NetDaemonAdapter {
     }
 }
 
-fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
-    // SAFETY: `fcntl(F_DUPFD_CLOEXEC, ..)` duplicates a valid owned fd and
-    // returns a new fd number owned by this process.
-    let duplicated =
-        unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, MIN_REMAP_SOURCE_FD) };
-
-    if duplicated < 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to duplicate net handoff fd");
-    }
-
-    // SAFETY: `duplicated` is a newly created fd from `fcntl` above.
-    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
     use std::os::unix::net::UnixDatagram;
 
-    use crate::daemon::constants::NETD_READY_FD;
     use crate::daemon::traits::{DaemonAdapter, DaemonReadiness};
 
     use super::{NetDaemonAdapter, NetDaemonHandoff, NetDaemonReadiness};
@@ -247,52 +234,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn netd_sandbox_enables_network_and_includes_runtime_read_paths() {
-        let spec = sample_spec();
-        let (ready_r, ready_w) = pipe();
-        let mut handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
-            .expect("handoff should build");
-
-        let spawn_spec = NetDaemonAdapter::spawn_spec(
-            &spec,
-            &mut handoff,
-            std::path::Path::new("/tmp/capsa-netd"),
-        )
-        .expect("spawn spec should build");
-
-        assert!(spawn_spec.sandbox.allow_network);
-        assert!(
-            !spawn_spec.sandbox.allow_kvm,
-            "netd must not request KVM access; that's vmm-only surface"
+    fn decode_runtime_spec(
+        spawn_spec: &crate::daemon::traits::DaemonSpawnSpec,
+    ) -> super::NetLaunchSpec {
+        assert_eq!(
+            spawn_spec.args[0], "--launch-spec-json",
+            "first arg should be the JSON flag"
         );
-        assert!(
-            !spawn_spec.sandbox.allow_interactive_tty,
-            "netd must not request interactive TTY access; it has no console"
-        );
-        assert!(spawn_spec
-            .sandbox
-            .read_only_paths
-            .contains(&std::path::PathBuf::from("/tmp/capsa-netd")));
-        for required_path in [
-            "/etc/resolv.conf",
-            "/proc/self/cgroup",
-            "/proc/stat",
-            "/sys/devices/system/cpu/online",
-        ] {
-            assert!(spawn_spec
-                .sandbox
-                .read_only_paths
-                .contains(&std::path::PathBuf::from(required_path)));
-        }
+        serde_json::from_str(&spawn_spec.args[1]).expect("spec args should be valid JSON")
     }
 
     #[test]
-    fn netd_fd_remaps_include_readiness_fd_and_no_overlap() {
+    fn netd_spawn_spec_encodes_runtime_fd_numbers_from_handoff() {
         let spec = sample_spec();
+        let host = sample_host_fd();
+        let host_raw = host.as_raw_fd();
         let (ready_r, ready_w) = pipe();
-        let mut handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
-            .expect("handoff should build");
+        let ready_raw = ready_w.as_raw_fd();
+        let mut handoff =
+            NetDaemonHandoff::new(vec![host], ready_r, ready_w).expect("handoff should build");
 
         let spawn_spec = NetDaemonAdapter::spawn_spec(
             &spec,
@@ -302,41 +262,18 @@ mod tests {
         .expect("spawn spec should build");
 
         assert!(spawn_spec.stdin_null);
-        assert_eq!(spawn_spec.fd_remaps.len(), 2);
-        assert!(spawn_spec
-            .fd_remaps
-            .iter()
-            .any(|remap| remap.target_fd == NETD_READY_FD));
 
-        let mut targets = std::collections::HashSet::new();
-        for remap in &spawn_spec.fd_remaps {
-            assert!(targets.insert(remap.target_fd));
-            assert_ne!(remap.source.as_raw_fd(), remap.target_fd);
-        }
-
-        assert_eq!(spawn_spec.args[0], "--launch-spec-json");
-    }
-
-    #[test]
-    fn handoff_normalizes_source_fds_away_from_reserved_targets() {
-        let host = sample_host_fd();
-        let host_fd = host.as_raw_fd();
-        let (ready_r, ready_w) = pipe();
-        let ready_w_fd = ready_w.as_raw_fd();
-        let mut handoff =
-            NetDaemonHandoff::new(vec![host], ready_r, ready_w).expect("handoff should build");
-
-        let spawn_spec = NetDaemonAdapter::spawn_spec(
-            &sample_spec(),
-            &mut handoff,
-            std::path::Path::new("/tmp/capsa-netd"),
-        )
-        .expect("spawn spec should build");
-
-        assert!(spawn_spec.fd_remaps.iter().all(|remap| {
-            let raw = remap.source.as_raw_fd();
-            raw != host_fd && raw != ready_w_fd
-        }));
+        let runtime = decode_runtime_spec(&spawn_spec);
+        // The runtime spec records the exact kernel-assigned fd
+        // numbers the child will inherit, not arbitrary target slots.
+        assert_eq!(runtime.ready_fd, ready_raw);
+        assert_eq!(runtime.interfaces.len(), 1);
+        assert_eq!(runtime.interfaces[0].host_fd, host_raw);
+        assert_eq!(runtime.interfaces[0].mac, spec.interfaces[0].mac);
+        // Sanity: the runtime spec passes its own validator.
+        runtime
+            .validate()
+            .expect("runtime spec should pass NetLaunchSpec::validate");
     }
 
     #[test]

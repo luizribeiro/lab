@@ -4,10 +4,7 @@ use std::os::unix::net::UnixDatagram;
 use anyhow::{ensure, Context, Result};
 use capsa_net::NetworkPolicy;
 
-use crate::{
-    daemon::constants::{NETD_HOST_FD_START, VMM_NET_FD_START},
-    ResolvedNetworkInterface, VmNetworkInterfaceConfig,
-};
+use crate::{ResolvedNetworkInterface, VmNetworkInterfaceConfig};
 
 #[derive(Debug)]
 pub(crate) struct InterfacePlan {
@@ -20,8 +17,6 @@ pub(crate) struct PlannedInterface {
     pub(crate) policy: NetworkPolicy,
     pub(crate) host_fd: OwnedFd,
     pub(crate) guest_fd: OwnedFd,
-    pub(crate) vmm_guest_target_fd: i32,
-    pub(crate) netd_host_target_fd: i32,
 }
 
 pub(crate) fn build_interface_plan(
@@ -38,8 +33,6 @@ pub(crate) fn build_interface_plan(
             policy: effective_interface_policy(interface),
             host_fd,
             guest_fd,
-            vmm_guest_target_fd: VMM_NET_FD_START + index as i32,
-            netd_host_target_fd: NETD_HOST_FD_START + index as i32,
         });
     }
 
@@ -110,26 +103,24 @@ pub(crate) fn generate_mac(index: usize) -> [u8; 6] {
 pub(crate) fn resolved_interfaces_for_plan(
     plan: &[PlannedInterface],
 ) -> Vec<ResolvedNetworkInterface> {
+    // The `guest_fd` field here is a placeholder; the VMM daemon
+    // adapter fills it in with the real kernel-assigned fd number
+    // when it drains the handoff in `spawn_spec`.
     plan.iter()
         .map(|interface| ResolvedNetworkInterface {
             mac: interface.mac,
-            guest_fd: interface.vmm_guest_target_fd,
+            guest_fd: 0,
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::{
         build_interface_plan, effective_interface_policy, resolve_interface_mac,
         resolved_interfaces_for_plan,
     };
-    use crate::{
-        daemon::constants::{NETD_HOST_FD_START, VMM_NET_FD_START},
-        VmNetworkInterfaceConfig,
-    };
+    use crate::VmNetworkInterfaceConfig;
     use capsa_net::{DomainPattern, NetworkPolicy};
 
     #[test]
@@ -172,46 +163,6 @@ mod tests {
     }
 
     #[test]
-    fn fd_targets_are_deterministic_and_unique() {
-        let interfaces = vec![
-            VmNetworkInterfaceConfig {
-                mac: None,
-                policy: None,
-                port_forwards: vec![],
-            },
-            VmNetworkInterfaceConfig {
-                mac: None,
-                policy: None,
-                port_forwards: vec![],
-            },
-        ];
-
-        let plan = build_interface_plan(&interfaces).expect("plan should build");
-
-        let guest_targets: Vec<i32> = plan
-            .interfaces
-            .iter()
-            .map(|iface| iface.vmm_guest_target_fd)
-            .collect();
-        let host_targets: Vec<i32> = plan
-            .interfaces
-            .iter()
-            .map(|iface| iface.netd_host_target_fd)
-            .collect();
-
-        assert_eq!(guest_targets, vec![VMM_NET_FD_START, VMM_NET_FD_START + 1]);
-        assert_eq!(
-            host_targets,
-            vec![NETD_HOST_FD_START, NETD_HOST_FD_START + 1]
-        );
-
-        let unique_guest: HashSet<i32> = guest_targets.iter().copied().collect();
-        let unique_host: HashSet<i32> = host_targets.iter().copied().collect();
-        assert_eq!(unique_guest.len(), guest_targets.len());
-        assert_eq!(unique_host.len(), host_targets.len());
-    }
-
-    #[test]
     fn policy_fallback_is_deny_all_when_omitted() {
         let iface = VmNetworkInterfaceConfig {
             mac: None,
@@ -226,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_interfaces_follow_planned_mac_and_guest_fd_targets() {
+    fn resolved_interfaces_preserve_mac_from_plan() {
         let explicit_mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
         let interfaces = vec![VmNetworkInterfaceConfig {
             mac: Some(explicit_mac),
@@ -239,7 +190,8 @@ mod tests {
 
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].mac, explicit_mac);
-        assert_eq!(resolved[0].guest_fd, VMM_NET_FD_START);
+        // guest_fd is a placeholder here; the VMM adapter fills in
+        // the real kernel-assigned number at spawn_spec time.
     }
 
     #[test]

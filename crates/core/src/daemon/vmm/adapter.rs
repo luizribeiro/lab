@@ -1,15 +1,14 @@
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Result};
 
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonSpawnSpec, NoReadiness};
 
 use crate::daemon::launch_spec_args::encode_launch_spec_args;
+use crate::ResolvedNetworkInterface;
 
 use super::spec::VmmLaunchSpec;
-
-const MIN_REMAP_SOURCE_FD: i32 = 1000;
 
 pub struct VmmDaemonAdapter;
 
@@ -20,14 +19,7 @@ pub struct VmmDaemonHandoff {
 
 impl VmmDaemonHandoff {
     pub fn new(guest_fds: Vec<OwnedFd>) -> Result<Self> {
-        let mut normalized = Vec::with_capacity(guest_fds.len());
-        for guest_fd in guest_fds {
-            normalized.push(duplicate_fd_for_remap(&guest_fd)?);
-        }
-
-        Ok(Self {
-            guest_fds: normalized,
-        })
+        Ok(Self { guest_fds })
     }
 }
 
@@ -56,21 +48,30 @@ impl DaemonAdapter for VmmDaemonAdapter {
             spec.resolved_interfaces.len()
         );
 
-        let args = encode_launch_spec_args(spec)?;
-        let fd_remaps: Vec<capsa_sandbox::FdRemap> = handoff
-            .guest_fds
-            .drain(..)
-            .zip(&spec.resolved_interfaces)
-            .map(|(guest_fd, interface)| capsa_sandbox::FdRemap {
-                source: guest_fd,
-                target_fd: interface.guest_fd,
-            })
-            .collect();
+        let mut builder = vmm_sandbox_builder(&spec.vm_config, binary_path);
+
+        // Drain the guest-side socketpair fds from the handoff and
+        // hand them to the sandbox builder. Each returned raw fd
+        // number is recorded in the VMM launch spec so libkrun can
+        // attach to it by number.
+        let drained_guest_fds: Vec<OwnedFd> = handoff.guest_fds.drain(..).collect();
+        let mut resolved_interfaces = Vec::with_capacity(drained_guest_fds.len());
+        for (guest_fd, interface) in drained_guest_fds.into_iter().zip(&spec.resolved_interfaces) {
+            let guest_raw = builder.inherit_fd(guest_fd)?;
+            resolved_interfaces.push(ResolvedNetworkInterface {
+                mac: interface.mac,
+                guest_fd: guest_raw,
+            });
+        }
+
+        let runtime_spec = VmmLaunchSpec {
+            vm_config: spec.vm_config.clone(),
+            resolved_interfaces,
+        };
 
         Ok(DaemonSpawnSpec {
-            args,
-            sandbox: vmm_sandbox_spec(&spec.vm_config, binary_path),
-            fd_remaps,
+            args: encode_launch_spec_args(&runtime_spec)?,
+            sandbox: builder,
             stdin_null: false,
         })
     }
@@ -93,41 +94,26 @@ impl DaemonAdapter for VmmDaemonAdapter {
     }
 }
 
-fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
-    // SAFETY: `fcntl(F_DUPFD_CLOEXEC, ..)` duplicates a valid owned fd and
-    // returns a new fd number owned by this process.
-    let duplicated =
-        unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, MIN_REMAP_SOURCE_FD) };
-
-    if duplicated < 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to duplicate vmm handoff fd");
-    }
-
-    // SAFETY: `duplicated` is a newly created fd from `fcntl` above.
-    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-}
-
-fn vmm_sandbox_spec(config: &crate::VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
-    let mut spec = capsa_sandbox::SandboxSpec::new()
+fn vmm_sandbox_builder(config: &crate::VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxBuilder {
+    let mut builder = capsa_sandbox::Sandbox::builder()
         .allow_network(false)
         .allow_kvm(true)
-        .allow_interactive_tty(true);
-
-    spec.read_only_paths.push(vmm_exe.to_path_buf());
+        .allow_interactive_tty(true)
+        .read_only_path(vmm_exe.to_path_buf());
 
     if let Some(root) = &config.root {
-        spec.read_write_paths.push(root.clone());
+        builder = builder.read_write_path(root.clone());
     }
 
     if let Some(kernel) = &config.kernel {
-        spec.read_only_paths.push(kernel.clone());
+        builder = builder.read_only_path(kernel.clone());
     }
 
     if let Some(initramfs) = &config.initramfs {
-        spec.read_only_paths.push(initramfs.clone());
+        builder = builder.read_only_path(initramfs.clone());
     }
 
-    spec
+    builder
 }
 
 #[cfg(test)]
@@ -136,7 +122,7 @@ mod tests {
     use std::os::unix::net::UnixDatagram;
 
     use crate::daemon::traits::DaemonAdapter;
-    use crate::{ResolvedNetworkInterface, VmConfig};
+    use crate::{ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
 
     use super::{VmmDaemonAdapter, VmmDaemonHandoff};
 
@@ -153,12 +139,12 @@ mod tests {
         }
     }
 
-    fn sample_spec() -> crate::VmmLaunchSpec {
-        crate::VmmLaunchSpec {
+    fn sample_spec() -> VmmLaunchSpec {
+        VmmLaunchSpec {
             vm_config: sample_vm_config(),
             resolved_interfaces: vec![ResolvedNetworkInterface {
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
-                guest_fd: 100,
+                guest_fd: 0, // placeholder; the adapter overwrites
             }],
         }
     }
@@ -168,51 +154,20 @@ mod tests {
         right.into()
     }
 
-    #[test]
-    fn vmm_sandbox_shape_matches_expected_paths_and_network_setting() {
-        let spec = sample_spec();
-        let mut handoff =
-            VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
-
-        let spawn_spec = VmmDaemonAdapter::spawn_spec(
-            &spec,
-            &mut handoff,
-            std::path::Path::new("/tmp/capsa-vmm"),
-        )
-        .expect("spawn spec should build");
-
-        assert!(!spawn_spec.sandbox.allow_network);
-        assert!(
-            spawn_spec.sandbox.allow_kvm,
-            "vmm sandbox must request KVM access so libkrun can open /dev/kvm"
+    fn decode_runtime_spec(spawn_spec: &crate::daemon::traits::DaemonSpawnSpec) -> VmmLaunchSpec {
+        assert_eq!(
+            spawn_spec.args[0], "--launch-spec-json",
+            "first arg should be the JSON flag"
         );
-        assert!(
-            spawn_spec.sandbox.allow_interactive_tty,
-            "vmm sandbox must request interactive TTY access for the guest console"
-        );
-        assert!(spawn_spec
-            .sandbox
-            .read_only_paths
-            .contains(&std::path::PathBuf::from("/tmp/capsa-vmm")));
-        assert!(spawn_spec
-            .sandbox
-            .read_only_paths
-            .contains(&std::path::PathBuf::from("/tmp/kernel")));
-        assert!(spawn_spec
-            .sandbox
-            .read_only_paths
-            .contains(&std::path::PathBuf::from("/tmp/initramfs")));
-        assert!(spawn_spec
-            .sandbox
-            .read_write_paths
-            .contains(&std::path::PathBuf::from("/tmp/root")));
+        serde_json::from_str(&spawn_spec.args[1]).expect("spec args should be valid JSON")
     }
 
     #[test]
-    fn vmm_fd_remaps_follow_resolved_interface_targets() {
+    fn vmm_spawn_spec_encodes_runtime_guest_fd_from_handoff() {
         let spec = sample_spec();
-        let mut handoff =
-            VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
+        let source = sample_guest_fd();
+        let source_raw = source.as_raw_fd();
+        let mut handoff = VmmDaemonHandoff::new(vec![source]).expect("handoff should build");
 
         let spawn_spec = VmmDaemonAdapter::spawn_spec(
             &spec,
@@ -222,25 +177,39 @@ mod tests {
         .expect("spawn spec should build");
 
         assert!(!spawn_spec.stdin_null);
-        assert_eq!(spawn_spec.fd_remaps.len(), 1);
-        assert_eq!(spawn_spec.fd_remaps[0].target_fd, 100);
-        assert_ne!(spawn_spec.fd_remaps[0].source.as_raw_fd(), 100);
-        assert_eq!(spawn_spec.args[0], "--launch-spec-json");
+
+        let runtime_spec = decode_runtime_spec(&spawn_spec);
+        assert_eq!(runtime_spec.resolved_interfaces.len(), 1);
+        assert_eq!(
+            runtime_spec.resolved_interfaces[0].mac,
+            [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]
+        );
+        // The runtime spec carries the same raw fd number that the
+        // OwnedFd had in the parent, because the sandbox builder
+        // inherits fds at their current numbers rather than remapping.
+        assert_eq!(runtime_spec.resolved_interfaces[0].guest_fd, source_raw);
+        assert!(
+            runtime_spec.resolved_interfaces[0].guest_fd >= 3,
+            "kernel-assigned fd should be >= 3"
+        );
     }
 
     #[test]
-    fn handoff_normalizes_source_fds_away_from_target_range() {
-        let original = sample_guest_fd();
-        let original_fd = original.as_raw_fd();
-        let mut handoff = VmmDaemonHandoff::new(vec![original]).expect("handoff should build");
+    fn vmm_spawn_spec_preserves_vm_config() {
+        let spec = sample_spec();
+        let mut handoff =
+            VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
 
         let spawn_spec = VmmDaemonAdapter::spawn_spec(
-            &sample_spec(),
+            &spec,
             &mut handoff,
             std::path::Path::new("/tmp/capsa-vmm"),
         )
         .expect("spawn spec should build");
 
-        assert_ne!(spawn_spec.fd_remaps[0].source.as_raw_fd(), original_fd);
+        let runtime_spec = decode_runtime_spec(&spawn_spec);
+        assert_eq!(runtime_spec.vm_config.kernel, spec.vm_config.kernel);
+        assert_eq!(runtime_spec.vm_config.root, spec.vm_config.root);
+        assert_eq!(runtime_spec.vm_config.vcpus, spec.vm_config.vcpus);
     }
 }

@@ -69,17 +69,17 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
     };
 
     let net_launch_spec = NetLaunchSpec {
-        // The net adapter's fd remapping pipeline still forces the
-        // readiness writer to NETD_READY_FD in the child, so we encode
-        // that target here. A later refactor will replace remapping
-        // with same-number fd inheritance and this field will carry
-        // the kernel-assigned fd instead.
-        ready_fd: crate::daemon::constants::NETD_READY_FD,
+        // `ready_fd` and per-interface `host_fd` are placeholders
+        // here; the net daemon adapter fills them in with the real
+        // kernel-assigned numbers when it drains the handoff in
+        // `spawn_spec`. The adapter builds a fresh NetLaunchSpec with
+        // correct values before serializing it into netd's argv.
+        ready_fd: 0,
         interfaces: plan
             .interfaces
             .iter()
             .map(|iface| NetInterfaceSpec {
-                host_fd: iface.netd_host_target_fd,
+                host_fd: 0,
                 mac: iface.mac,
                 policy: Some(iface.policy.clone()),
             })
@@ -220,8 +220,19 @@ mod tests {
     }
 
     fn make_temp_executable_script(prefix: &str, body: &str) -> PathBuf {
+        // Test scripts emulate netd, which receives its launch spec as
+        // the argument to `--launch-spec-json`. We extract ready_fd
+        // from that JSON here so body can reference it as $READY_FD
+        // without hardcoding a kernel-assigned fd number.
+        let prelude = r#"
+case "$1" in
+  --launch-spec-json)
+    READY_FD=$(printf '%s' "$2" | sed -n 's/.*"ready_fd":\([0-9]*\).*/\1/p')
+    ;;
+esac
+"#;
         let path = unique_temp_path(prefix);
-        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n"))
+        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{prelude}\n{body}\n"))
             .expect("script file should be written");
         #[cfg(unix)]
         {
@@ -438,7 +449,7 @@ mod tests {
         let netd = make_temp_executable_script(
             "capsa-netd-ready-loop",
             &format!(
-                "echo $$ > '{}'\nprintf 'R' >&30\nwhile true; do sleep 1; done",
+                "echo $$ > '{}'\neval \"printf 'R' >&${{READY_FD}}\"\nwhile true; do sleep 1; done",
                 netd_pid_file.display()
             ),
         );
@@ -477,7 +488,7 @@ mod tests {
         );
         let netd = make_temp_executable_script(
             "capsa-netd-ready-then-exit",
-            "printf 'R' >&30\nsleep 0.2\nexit 42",
+            "eval \"printf 'R' >&${READY_FD}\"\nsleep 0.2\nexit 42",
         );
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
@@ -507,7 +518,7 @@ mod tests {
         let netd = make_temp_executable_script(
             "capsa-netd-ready-loop",
             &format!(
-                "echo $$ > '{}'\nprintf 'R' >&30\nwhile true; do sleep 1; done",
+                "echo $$ > '{}'\neval \"printf 'R' >&${{READY_FD}}\"\nwhile true; do sleep 1; done",
                 netd_pid_file.display()
             ),
         );
