@@ -210,10 +210,13 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
             }
 
             if remap.source_fd != remap.target_fd {
-                // SAFETY: close is async-signal-safe (POSIX.1). Callers
-                // run `validate_fd_remaps` first, which rejects duplicate
-                // sources and overlapping source/target sets, so no other
-                // iteration of this loop can observe or close source_fd.
+                // SAFETY: close is async-signal-safe (POSIX.1). Passing an
+                // invalid fd is not UB — the kernel returns EBADF. The
+                // real hazard with `close` is closing an fd that another
+                // part of the program still believes it owns, but we run
+                // here in the freshly-forked child where the parent's
+                // ownership is irrelevant: after exec, the parent's
+                // `OwnedFd`s do not alias the child's fd table.
                 let rc = unsafe { libc::close(remap.source_fd) };
                 if rc == -1 {
                     return Err(std::io::Error::last_os_error());
@@ -224,9 +227,14 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     };
 
     // SAFETY: pre_exec runs `child_hook` in the child process after fork
-    // and before exec. The closure only performs libc::dup2 and
-    // libc::close on integer fds, both of which are async-signal-safe,
-    // and allocates nothing — satisfying pre_exec's contract.
+    // and before exec, where only async-signal-safe work is permitted.
+    // The closure's operations are all async-signal-safe:
+    //   - iterating a pre-allocated `Vec<FdRemap>` by reference (pointer
+    //     arithmetic over `Copy` i32 pairs; no allocation, no Drop),
+    //   - `libc::dup2` and `libc::close` (POSIX async-signal-safe list),
+    //   - `std::io::Error::last_os_error`, which reads `errno` and
+    //     constructs an `io::Error` without allocating.
+    // No locks are taken and no Rust destructors run on the happy path.
     unsafe {
         command.pre_exec(child_hook);
     }
