@@ -40,11 +40,12 @@ impl PathSets {
             paths.add_read_only(&dir);
         }
 
-        // Interactive terminal support for libkrun console handling.
-        for tty in stdio_tty_paths() {
-            paths.add_ioctl(&tty);
+        if spec.allow_interactive_tty {
+            for tty in stdio_tty_paths() {
+                paths.add_ioctl(&tty);
+            }
+            paths.add_ioctl(Path::new("/dev/tty"));
         }
-        paths.add_ioctl(Path::new("/dev/tty"));
 
         paths.add_read_write(private_tmp);
 

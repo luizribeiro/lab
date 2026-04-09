@@ -80,7 +80,7 @@ fn is_directory(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::SandboxSpec;
 
