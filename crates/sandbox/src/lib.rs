@@ -199,26 +199,36 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     use std::os::unix::process::CommandExt;
 
     let remaps = fd_remaps.to_vec();
-    // SAFETY: pre_exec runs in the child process after fork and before
-    // exec. We only call async-signal-safe libc operations here
-    // (dup2/close). The dup2-then-close sequence is safe against
-    // double-close because callers are expected to have run
-    // `validate_fd_remaps`, which rejects duplicate sources and
-    // overlapping source/target sets.
-    unsafe {
-        command.pre_exec(move || {
-            for remap in &remaps {
-                if libc::dup2(remap.source_fd, remap.target_fd) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
+    let child_hook = move || -> std::io::Result<()> {
+        for remap in &remaps {
+            // SAFETY: dup2 is async-signal-safe (POSIX.1) and takes two
+            // integer fds. It atomically replaces target_fd with a
+            // duplicate of source_fd, which is the intended effect.
+            let rc = unsafe { libc::dup2(remap.source_fd, remap.target_fd) };
+            if rc == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
 
-                if remap.source_fd != remap.target_fd && libc::close(remap.source_fd) == -1 {
+            if remap.source_fd != remap.target_fd {
+                // SAFETY: close is async-signal-safe (POSIX.1). Callers
+                // run `validate_fd_remaps` first, which rejects duplicate
+                // sources and overlapping source/target sets, so no other
+                // iteration of this loop can observe or close source_fd.
+                let rc = unsafe { libc::close(remap.source_fd) };
+                if rc == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
+        }
+        Ok(())
+    };
 
-            Ok(())
-        });
+    // SAFETY: pre_exec runs `child_hook` in the child process after fork
+    // and before exec. The closure only performs libc::dup2 and
+    // libc::close on integer fds, both of which are async-signal-safe,
+    // and allocates nothing — satisfying pre_exec's contract.
+    unsafe {
+        command.pre_exec(child_hook);
     }
 }
 
