@@ -1,10 +1,6 @@
 mod config;
-pub mod daemon;
-mod launcher;
-// `proc` lands in commit 7 of the rewrite plan and gets wired into
-// `VmConfig::start` in commit 8. Items are unused until then.
-#[allow(dead_code)]
-pub(crate) mod proc;
+mod proc;
+mod start;
 
 pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,

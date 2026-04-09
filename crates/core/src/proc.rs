@@ -132,20 +132,41 @@ pub(crate) struct ChildHandle {
 }
 
 impl ChildHandle {
+    #[cfg(test)]
     pub(crate) fn name(&self) -> &'static str {
         self.name
     }
 
-    pub(crate) fn pid(&self) -> i32 {
-        self.pid
-    }
-
+    #[cfg(test)]
     pub(crate) fn has_exited(&self) -> bool {
         self.exited.load(Ordering::Acquire)
     }
 
+    /// Block until the child exits on its own and return its status.
+    /// Does **not** send any signals. Use this when the caller expects
+    /// the child to exit without intervention; for teardown use
+    /// [`shutdown`](Self::shutdown) instead.
+    pub(crate) fn wait(mut self) -> Result<ExitStatus> {
+        let result = self
+            .status_rx
+            .recv()
+            .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?;
+        if let Some(reaper) = self.reaper.take() {
+            if reaper.join().is_err() {
+                tracing::warn!(daemon = self.name, "reaper thread panicked");
+            }
+        }
+        result
+    }
+
     /// Explicit teardown: request shutdown if the child is still
     /// running, wait for the reaper, and return its exit status.
+    ///
+    /// Only used by unit tests today; production teardown happens via
+    /// `Drop`, which uses the same `kill_with_timeout` helper under
+    /// the hood. If start.rs ever needs to observe shutdown errors
+    /// inline, drop this `cfg(test)` gate.
+    #[cfg(test)]
     pub(crate) fn shutdown(mut self) -> Result<ExitStatus> {
         if !self.exited.load(Ordering::Acquire) {
             kill_with_timeout(
