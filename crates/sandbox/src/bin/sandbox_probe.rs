@@ -126,7 +126,7 @@ fn effective_temp_dir() -> PathBuf {
     // Some sandbox/runtime combinations may clear TMPDIR while leaving TMP/TEMP.
     ["TMPDIR", "TMP", "TEMP"]
         .iter()
-        .filter_map(|key| std::env::var_os(key))
+        .filter_map(std::env::var_os)
         .find(|val| !val.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
