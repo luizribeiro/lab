@@ -218,6 +218,28 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     }
 }
 
+/// Returns whether `fd` currently refers to an open file description.
+///
+/// Encapsulates the only `unsafe` fcntl call in this module behind a safe
+/// API. `F_GETFD` is a read-only query that takes a raw fd (an integer)
+/// and cannot cause undefined behavior regardless of the value passed —
+/// invalid fds yield `EBADF`, which we report as `Ok(false)`.
+fn fd_is_open(fd: i32) -> std::io::Result<bool> {
+    // SAFETY: `fcntl(fd, F_GETFD)` is a read-only kernel query on an
+    // integer. It performs no memory access through `fd` and is safe to
+    // call with any i32; an invalid fd simply returns -1 with errno
+    // EBADF, which is handled below.
+    let rc = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if rc == -1 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EBADF) {
+            return Ok(false);
+        }
+        return Err(err);
+    }
+    Ok(true)
+}
+
 /// Validates that `fd_remaps` can be applied to a spawn.
 ///
 /// Returns an error if any source or target fd is negative, if there are
@@ -251,21 +273,18 @@ pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
             remap.target_fd
         );
 
-        // SAFETY: fcntl(F_GETFD) doesn't mutate memory and is used here only
-        // to validate that the fd currently refers to an open file description.
-        let rc = unsafe { libc::fcntl(remap.source_fd, libc::F_GETFD) };
-        if rc == -1 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EBADF) {
-                anyhow::bail!(
-                    "fd remap {index}: source_fd {} is not open",
-                    remap.source_fd
-                );
-            }
-            return Err(err).context(format!(
-                "fd remap {index}: failed to validate source_fd {}",
+        match fd_is_open(remap.source_fd) {
+            Ok(true) => {}
+            Ok(false) => anyhow::bail!(
+                "fd remap {index}: source_fd {} is not open",
                 remap.source_fd
-            ));
+            ),
+            Err(err) => {
+                return Err(err).context(format!(
+                    "fd remap {index}: failed to validate source_fd {}",
+                    remap.source_fd
+                ));
+            }
         }
     }
 
