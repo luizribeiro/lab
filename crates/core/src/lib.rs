@@ -1,5 +1,5 @@
 mod config;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod proc;
 mod start;
 
@@ -8,7 +8,7 @@ pub use capsa_net::{
 };
 pub use config::{VmConfig, VmNetworkInterfaceConfig};
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))

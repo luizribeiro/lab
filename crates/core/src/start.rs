@@ -1,35 +1,37 @@
 //! VM startup orchestration.
 //!
-//! On Linux this dispatches to the private `linux` submodule, which
-//! knows how to spawn `capsa-netd` and `capsa-vmm` inside sandboxes
-//! and wait for either one to exit. On other platforms `start()` is a
-//! stub that returns a clear error so downstream crates (`capsa-cli`,
-//! tests, etc.) still compile everywhere.
+//! Dispatches to the private `imp` submodule on Linux and macOS. The
+//! orchestration (spawn netd, wait for readiness, spawn vmm, wait
+//! either) is shared across both; only the per-platform sandbox
+//! policy details live behind cfg gates inside `imp`. On platforms
+//! other than Linux/macOS, `start()` returns a clear error so
+//! downstream crates (`capsa-cli`, tests, etc.) still compile.
 
 use anyhow::Result;
 
 use crate::config::VmConfig;
 
 impl VmConfig {
-    /// Start the VM. On Linux this spawns the daemon children and
-    /// blocks until one of them exits. On other platforms it returns
-    /// an error immediately because the VM launch path relies on
-    /// libkrun/KVM which are Linux-only.
+    /// Start the VM. On Linux and macOS this spawns the daemon
+    /// children and blocks until one of them exits. On other
+    /// platforms it returns an error immediately because the VM
+    /// launch path relies on libkrun, which only supports KVM
+    /// (Linux) and HVF (macOS) backends.
     pub fn start(&self) -> Result<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            linux::start(self)
+            imp::start(self)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = self;
-            anyhow::bail!("capsa VM launch is only supported on Linux")
+            anyhow::bail!("capsa VM launch is only supported on Linux and macOS")
         }
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod imp {
     use std::io::Read;
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::net::UnixDatagram;
@@ -53,12 +55,19 @@ mod linux {
     /// Paths netd needs to read at runtime (DNS config, cgroup/cpu
     /// info). Carried on the sandbox policy; not part of the
     /// launch-spec contract.
+    #[cfg(target_os = "linux")]
     const NETD_RUNTIME_READ_PATHS: &[&str] = &[
         "/etc/resolv.conf",
         "/proc/self/cgroup",
         "/proc/stat",
         "/sys/devices/system/cpu/online",
     ];
+
+    /// macOS has no /proc or /sys; DNS configuration lives in the
+    /// SystemConfiguration framework. The exact set of paths
+    /// `capsa-net` opens during a darwin run is not yet characterized.
+    #[cfg(target_os = "macos")]
+    const NETD_RUNTIME_READ_PATHS: &[&str] = &[];
 
     pub(super) fn start(config: &VmConfig) -> Result<()> {
         config.validate().context("invalid VM configuration")?;
@@ -189,7 +198,7 @@ mod linux {
     fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
         let mut builder = capsa_sandbox::Sandbox::builder()
             .allow_network(true)
-            .read_only_path(binary_path.to_path_buf());
+            .read_only_path(canonical_or_unchanged(binary_path));
         for runtime_read_path in NETD_RUNTIME_READ_PATHS {
             builder = builder.read_only_path(PathBuf::from(*runtime_read_path));
         }
@@ -298,19 +307,27 @@ mod linux {
             .allow_network(false)
             .allow_kvm(true)
             .allow_interactive_tty(true)
-            .read_only_path(vmm_exe.to_path_buf());
+            .read_only_path(canonical_or_unchanged(vmm_exe));
 
         if let Some(root) = &spec.root {
-            builder = builder.read_write_path(root.clone());
+            builder = builder.read_write_path(canonical_or_unchanged(root));
         }
         if let Some(kernel) = &spec.kernel {
-            builder = builder.read_only_path(kernel.clone());
+            builder = builder.read_only_path(canonical_or_unchanged(kernel));
         }
         if let Some(initramfs) = &spec.initramfs {
-            builder = builder.read_only_path(initramfs.clone());
+            builder = builder.read_only_path(canonical_or_unchanged(initramfs));
         }
 
         builder
+    }
+
+    /// Resolves symlinks before handing a path to the sandbox policy
+    /// layer so darwin's sandbox-exec sees the same path the kernel
+    /// will resolve at `open(2)` time. Falls back to the input for
+    /// paths that don't exist (test fixtures, etc.).
+    fn canonical_or_unchanged(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
     fn build_vmm_spec(
