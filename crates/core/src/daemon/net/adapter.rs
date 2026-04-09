@@ -291,6 +291,10 @@ mod tests {
             !spawn_spec.sandbox.allow_kvm,
             "netd must not request KVM access; that's vmm-only surface"
         );
+        assert!(
+            !spawn_spec.sandbox.allow_interactive_tty,
+            "netd must not request interactive TTY access; it has no console"
+        );
         assert!(spawn_spec
             .sandbox
             .read_only_paths

@@ -15,15 +15,17 @@ pub(super) fn build_policy(
     let mut policy = SeatbeltPolicy::new();
     policy.import_system();
 
-    policy.allow(&["pseudo-tty"]);
-    policy.allow_literal(
-        &["file-read*", "file-write*", "file-ioctl"],
-        Path::new("/dev/tty"),
-    );
-    policy.allow_regex(
-        &["file-read*", "file-write*", "file-ioctl"],
-        "^/dev/ttys[0-9]*",
-    );
+    if spec.allow_interactive_tty {
+        policy.allow(&["pseudo-tty"]);
+        policy.allow_literal(
+            &["file-read*", "file-write*", "file-ioctl"],
+            Path::new("/dev/tty"),
+        );
+        policy.allow_regex(
+            &["file-read*", "file-write*", "file-ioctl"],
+            "^/dev/ttys[0-9]*",
+        );
+    }
 
     for path in &paths.traversal_paths {
         policy.allow_literal(&["file-read-metadata"], path);
@@ -117,6 +119,43 @@ mod tests {
         assert!(
             rendered.contains(&ioctl_rule),
             "ioctl path missing ioctl rule: {ioctl_rule}"
+        );
+    }
+
+    #[test]
+    fn interactive_tty_rules_are_gated_on_allow_interactive_tty() {
+        let base = tempfile::Builder::new()
+            .prefix("capsa-sandbox-tty-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let without: String =
+            build_policy(Path::new("/bin/ls"), &SandboxSpec::new(), &private_tmp).into();
+        assert!(
+            !without.contains("pseudo-tty"),
+            "default spec should not grant pseudo-tty, got:\n{without}"
+        );
+        assert!(
+            !without.contains("/dev/tty"),
+            "default spec should not grant /dev/tty rules, got:\n{without}"
+        );
+        assert!(
+            !without.contains("/dev/ttys"),
+            "default spec should not grant /dev/ttys* rules, got:\n{without}"
+        );
+
+        let mut spec = SandboxSpec::new();
+        spec.allow_interactive_tty = true;
+        let with_tty: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+        assert!(
+            with_tty.contains("pseudo-tty"),
+            "allow_interactive_tty=true should grant pseudo-tty, got:\n{with_tty}"
+        );
+        assert!(
+            with_tty.contains("/dev/tty"),
+            "allow_interactive_tty=true should reference /dev/tty, got:\n{with_tty}"
         );
     }
 }

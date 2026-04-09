@@ -110,7 +110,8 @@ fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
 fn vmm_sandbox_spec(config: &crate::VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
     let mut spec = capsa_sandbox::SandboxSpec::new()
         .allow_network(false)
-        .allow_kvm(true);
+        .allow_kvm(true)
+        .allow_interactive_tty(true);
 
     spec.read_only_paths.push(vmm_exe.to_path_buf());
 
@@ -180,6 +181,10 @@ mod tests {
         assert!(
             spawn_spec.sandbox.allow_kvm,
             "vmm sandbox must request KVM access so libkrun can open /dev/kvm"
+        );
+        assert!(
+            spawn_spec.sandbox.allow_interactive_tty,
+            "vmm sandbox must request interactive TTY access for the guest console"
         );
         assert!(spawn_spec
             .sandbox

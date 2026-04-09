@@ -26,6 +26,16 @@ pub struct SandboxSpec {
     /// run a libkrun-based VMM should set this; other daemons should leave
     /// it `false`. No-op on other platforms.
     pub allow_kvm: bool,
+    /// Allow access to the caller's controlling terminal (`/dev/tty`,
+    /// `/dev/ttys*`) and the terminal-ioctl allowlist (`TCGETS*`,
+    /// `TIOCGWINSZ`, `FIONREAD`, ...).
+    ///
+    /// Callers that expose an interactive console to the user (e.g. a
+    /// libkrun VMM connecting the guest serial console to the host tty)
+    /// should set this; non-interactive daemons should leave it `false`.
+    /// Gates both the Linux seccomp ioctl allowlist and the macOS seatbelt
+    /// `/dev/tty*` path grants.
+    pub allow_interactive_tty: bool,
     /// Paths that should be readable from inside the sandbox.
     pub read_only_paths: Vec<PathBuf>,
     /// Paths that should be writable from inside the sandbox.
@@ -49,6 +59,11 @@ impl SandboxSpec {
 
     pub fn allow_kvm(mut self, allow: bool) -> Self {
         self.allow_kvm = allow;
+        self
+    }
+
+    pub fn allow_interactive_tty(mut self, allow: bool) -> Self {
+        self.allow_interactive_tty = allow;
         self
     }
 }

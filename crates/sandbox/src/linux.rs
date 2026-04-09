@@ -71,19 +71,22 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         rules.push(format!("allow/fs+{fs}"));
     }
 
-    // Terminal ioctls needed by libkrun's VMM console path.
-    for ioctl in [
-        "TCGETS",
-        "TCGETS2",
-        "TCSETS",
-        "TCSETS2",
-        "TCSETSW",
-        "TCSETSF",
-        "TIOCGWINSZ",
-        "TIOCSWINSZ",
-        "FIONREAD",
-    ] {
-        rules.push(format!("allow/ioctl+{ioctl}"));
+    if spec.allow_interactive_tty {
+        // Terminal ioctls needed by libkrun's VMM console path and any
+        // other caller that exposes an interactive TTY to the guest.
+        for ioctl in [
+            "TCGETS",
+            "TCGETS2",
+            "TCSETS",
+            "TCSETS2",
+            "TCSETSW",
+            "TCSETSF",
+            "TIOCGWINSZ",
+            "TIOCSWINSZ",
+            "FIONREAD",
+        ] {
+            rules.push(format!("allow/ioctl+{ioctl}"));
+        }
     }
 
     if spec.allow_kvm {
@@ -385,5 +388,29 @@ mod tests {
             !without.iter().any(|r| r.contains("/dev/kvm")),
             "default spec should not reference /dev/kvm, got: {without:?}"
         );
+    }
+
+    #[test]
+    fn tty_ioctls_are_gated_on_allow_interactive_tty() {
+        let mut allowed = SandboxSpec::new();
+        allowed.allow_interactive_tty = true;
+        let with_tty = rules_for(&allowed);
+
+        for ioctl in ["TCGETS", "TIOCGWINSZ", "FIONREAD"] {
+            let rule = format!("allow/ioctl+{ioctl}");
+            assert!(
+                with_tty.iter().any(|r| r == &rule),
+                "allow_interactive_tty=true should emit {rule}"
+            );
+        }
+
+        let without = rules_for(&SandboxSpec::new());
+        for ioctl in ["TCGETS", "TIOCGWINSZ", "FIONREAD"] {
+            let rule = format!("allow/ioctl+{ioctl}");
+            assert!(
+                !without.iter().any(|r| r == &rule),
+                "default spec should not emit {rule}, got: {without:?}"
+            );
+        }
     }
 }
