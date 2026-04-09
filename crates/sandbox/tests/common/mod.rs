@@ -25,22 +25,20 @@ impl TestDir {
 
 pub fn run_probe(spec: &capsa_sandbox::SandboxSpec, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let argv = args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
+    let sandbox = capsa_sandbox::Sandbox::new(spec.clone())
+        .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
 
-    let child = capsa_sandbox::spawn_sandboxed(&probe, &argv, spec).unwrap_or_else(|e| {
-        panic!(
-            "failed to spawn sandboxed probe {} with args {:?}: {e}",
-            probe.display(),
-            args
-        )
-    });
-
-    let status = child
-        .wait()
-        .unwrap_or_else(|e| panic!("failed to wait on sandboxed probe: {e}"));
+    let status = sandbox
+        .command(&probe)
+        .args(args)
+        .status()
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to run sandboxed probe {} with args {:?}: {e}",
+                probe.display(),
+                args
+            )
+        });
 
     status.success()
 }

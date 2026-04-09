@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-
-use anyhow::{Context, Result};
+use std::process::Command;
 
 use crate::discover::library_dirs;
-use crate::{configure_fd_remaps, FdRemap, SandboxSpec, SandboxedChild};
+use crate::SandboxSpec;
 
 /// Builds a `Command` that runs `program` under `syd` with rules derived from
 /// `spec`. `syd` must already be resolved (see [`find_in_path`]).
@@ -27,64 +25,6 @@ pub(crate) fn build_sandbox_command(
     command
 }
 
-/// Linux sandbox backend via `syd`.
-///
-/// This backend is fail-closed by default.
-pub fn spawn_with_syd(
-    program: &Path,
-    args: &[String],
-    spec: &SandboxSpec,
-    fd_remaps: &[FdRemap],
-    stdin_null: bool,
-) -> Result<SandboxedChild> {
-    let syd = find_in_path("syd").ok_or_else(|| {
-        anyhow::anyhow!(
-            "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`) or set CAPSA_DISABLE_SANDBOX=1 to disable sandboxing"
-        )
-    })?;
-
-    spawn_with_syd_binary(&syd, program, args, spec, fd_remaps, stdin_null)
-}
-
-fn spawn_with_syd_binary(
-    syd: &Path,
-    program: &Path,
-    args: &[String],
-    spec: &SandboxSpec,
-    fd_remaps: &[FdRemap],
-    stdin_null: bool,
-) -> Result<SandboxedChild> {
-    let private_tmp = create_private_tmp_dir()?;
-    let mut command = Command::new(syd);
-    if stdin_null {
-        command.stdin(Stdio::null());
-    }
-
-    for rule in syd_rules(program, spec, &private_tmp) {
-        command.arg("-m").arg(rule);
-    }
-
-    command
-        .env("TMPDIR", &private_tmp)
-        .env("TMP", &private_tmp)
-        .env("TEMP", &private_tmp)
-        .arg("--")
-        .arg(program)
-        .args(args);
-
-    configure_fd_remaps(&mut command, fd_remaps);
-
-    let child = command.spawn().with_context(|| {
-        format!(
-            "failed to spawn `syd` ({}) for program {}",
-            syd.display(),
-            program.display()
-        )
-    })?;
-
-    Ok(SandboxedChild::new(child, vec![private_tmp]))
-}
-
 fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<String> {
     // Keep policy focused on path-based controls plus fs/ioctl allowlists.
     let mut rules = vec![
@@ -105,12 +45,14 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "trace/force_cloexec:on".to_string(),
     ];
 
-    if spec.allow_network {
-        rules.push("sandbox/net:off".to_string());
-    } else {
-        rules.push("sandbox/net:on".to_string());
-        rules.push("default/net:deny".to_string());
-    }
+    // `Sandbox::new` rejects `allow_network = true` on Linux, so reaching
+    // this point always means the child should be network-isolated.
+    debug_assert!(
+        !spec.allow_network,
+        "Linux syd backend cannot serve allow_network=true specs"
+    );
+    rules.push("sandbox/net:on".to_string());
+    rules.push("default/net:deny".to_string());
 
     rules.push("sandbox/lock:on".to_string());
 
@@ -368,19 +310,6 @@ fn escape_syd_path(path: &Path) -> String {
         .replace('\\', "\\\\")
         .replace(':', "\\:")
         .replace(',', "\\,")
-}
-
-fn create_private_tmp_dir() -> Result<PathBuf> {
-    let base = std::env::temp_dir().join("capsa-sandbox");
-    std::fs::create_dir_all(&base)
-        .with_context(|| format!("failed to create sandbox temp base {}", base.display()))?;
-
-    let dir = tempfile::Builder::new()
-        .prefix("linux-")
-        .tempdir_in(&base)
-        .with_context(|| format!("failed to create private temp dir in {}", base.display()))?;
-
-    Ok(dir.keep())
 }
 
 pub(crate) fn find_in_path(binary_name: &str) -> Option<PathBuf> {
