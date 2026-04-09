@@ -283,7 +283,7 @@ pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::AsRawFd;
     use std::process::Command;
 
     use super::{validate_fd_remaps, FdRemap};
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn remapped_fd_is_accessible_in_child_process() {
-        let (read_end, mut write_end) = create_pipe();
+        let (read_end, mut write_end) = std::io::pipe().expect("failed to create pipe");
         writeln!(write_end, "ping").expect("failed to write to pipe");
         drop(write_end);
 
@@ -406,19 +406,5 @@ mod tests {
 
         let status = command.status().expect("failed to spawn child");
         assert!(status.success());
-    }
-
-    fn create_pipe() -> (OwnedFd, std::fs::File) {
-        let mut raw_fds = [0; 2];
-        // SAFETY: `pipe` initializes both elements of raw_fds on success.
-        let rc = unsafe { libc::pipe(raw_fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "failed to create pipe");
-
-        // SAFETY: raw_fds[0] is a valid owned fd from pipe.
-        let read_end = unsafe { OwnedFd::from_raw_fd(raw_fds[0]) };
-        // SAFETY: raw_fds[1] is a valid owned fd from pipe.
-        let write_end = unsafe { std::fs::File::from_raw_fd(raw_fds[1]) };
-
-        (read_end, write_end)
     }
 }
