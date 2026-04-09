@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 
-use capsa_core::daemon::constants::NETD_READY_FD;
 use capsa_core::daemon::launch_spec_args::parse_launch_spec_args;
 use capsa_core::daemon::net::spec::NetLaunchSpec;
 
 mod runtime;
 
-fn run<I, S>(args: I, ready_fd: i32) -> Result<()>
+fn run<I, S>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
     S: Into<String>,
@@ -15,6 +14,8 @@ where
     launch_spec
         .validate()
         .context("invalid net daemon launch spec")?;
+
+    let ready_fd = launch_spec.ready_fd;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -25,15 +26,16 @@ where
 }
 
 fn main() -> Result<()> {
-    run(std::env::args().skip(1), NETD_READY_FD)
+    run(std::env::args().skip(1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::run;
 
-    fn sample_launch_spec_json() -> String {
+    fn sample_launch_spec_json(ready_fd: i32) -> String {
         serde_json::json!({
+            "ready_fd": ready_fd,
             "interfaces": []
         })
         .to_string()
@@ -41,17 +43,17 @@ mod tests {
 
     #[test]
     fn argument_parsing_failure_path() {
-        let err = run(vec!["--bad-flag".to_string()], -1)
+        let err = run(vec!["--bad-flag".to_string()])
             .expect_err("invalid args should fail before runtime startup");
         assert_eq!(err.to_string(), "usage: --launch-spec-json <json>");
     }
 
     #[test]
     fn malformed_launch_spec_json_returns_parse_error_before_runtime() {
-        let err = run(
-            vec!["--launch-spec-json".to_string(), "{not-json".to_string()],
-            -1,
-        )
+        let err = run(vec![
+            "--launch-spec-json".to_string(),
+            "{not-json".to_string(),
+        ])
         .expect_err("malformed launch spec json should fail");
 
         assert!(err.to_string().contains("failed to parse launch spec JSON"));
@@ -60,6 +62,7 @@ mod tests {
     #[test]
     fn invalid_launch_spec_returns_validation_error_before_runtime() {
         let invalid_spec_json = serde_json::json!({
+            "ready_fd": 30,
             "interfaces": [
                 {
                     "host_fd": 200,
@@ -75,25 +78,34 @@ mod tests {
         })
         .to_string();
 
-        let err = run(
-            vec!["--launch-spec-json".to_string(), invalid_spec_json],
-            -1,
-        )
-        .expect_err("invalid launch spec should fail");
+        let err = run(vec!["--launch-spec-json".to_string(), invalid_spec_json])
+            .expect_err("invalid launch spec should fail");
 
         assert!(err.to_string().contains("invalid net daemon launch spec"));
     }
 
     #[test]
     fn valid_launch_spec_propagates_readiness_fd_error() {
-        let err = run(
-            vec!["--launch-spec-json".to_string(), sample_launch_spec_json()],
-            -1,
-        )
-        .expect_err("runtime should fail with invalid readiness fd in this unit test");
+        // Open /dev/null read-only and pass that fd as ready_fd. It
+        // passes spec validation (a real, non-negative fd >= 3) but
+        // writing the readiness byte will fail with EBADF since the
+        // fd is read-only. This exercises the "failed to signal net
+        // daemon readiness" error-wrapping path.
+        // SAFETY: open on /dev/null with O_RDONLY is well-defined.
+        let ready_fd =
+            unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        assert!(ready_fd >= 3, "/dev/null open should yield fd >= 3");
 
-        assert!(err
-            .to_string()
-            .contains("failed to signal net daemon readiness"));
+        let err = run(vec![
+            "--launch-spec-json".to_string(),
+            sample_launch_spec_json(ready_fd),
+        ])
+        .expect_err("runtime should fail writing readiness byte on read-only fd");
+
+        assert!(
+            err.to_string()
+                .contains("failed to signal net daemon readiness"),
+            "unexpected error: {err}"
+        );
     }
 }

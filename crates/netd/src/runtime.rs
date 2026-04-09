@@ -87,6 +87,7 @@ struct NetworkRuntime {
 impl NetworkRuntime {
     async fn start(launch_spec: NetLaunchSpec) -> Result<Self> {
         let NetLaunchSpec {
+            ready_fd: _,
             interfaces,
             port_forwards,
         } = launch_spec;
@@ -248,6 +249,7 @@ mod tests {
         let (mut reader, writer_fd) = pipe();
 
         let launch_spec = NetLaunchSpec {
+            ready_fd: writer_fd,
             interfaces: vec![sample_interface(host_fd, None)],
             port_forwards: vec![],
         };
@@ -269,12 +271,12 @@ mod tests {
     async fn readiness_emitted_once_after_startup_path() {
         let (host, _guest) = UnixDatagram::pair().expect("socketpair should be created");
         let host_fd = host.into_raw_fd();
+        let (mut reader, writer_fd) = pipe();
         let launch_spec = NetLaunchSpec {
+            ready_fd: writer_fd,
             interfaces: vec![sample_interface(host_fd, None)],
             port_forwards: vec![],
         };
-
-        let (mut reader, writer_fd) = pipe();
 
         let daemon = tokio::spawn(async move { run(launch_spec, writer_fd).await });
 

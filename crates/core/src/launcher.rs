@@ -69,6 +69,12 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
     };
 
     let net_launch_spec = NetLaunchSpec {
+        // The net adapter's fd remapping pipeline still forces the
+        // readiness writer to NETD_READY_FD in the child, so we encode
+        // that target here. A later refactor will replace remapping
+        // with same-number fd inheritance and this field will carry
+        // the kernel-assigned fd instead.
+        ready_fd: crate::daemon::constants::NETD_READY_FD,
         interfaces: plan
             .interfaces
             .iter()

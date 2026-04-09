@@ -237,6 +237,7 @@ mod tests {
 
     fn sample_spec() -> crate::daemon::net::spec::NetLaunchSpec {
         crate::daemon::net::spec::NetLaunchSpec {
+            ready_fd: 30,
             interfaces: vec![crate::daemon::net::spec::NetInterfaceSpec {
                 host_fd: 200,
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
