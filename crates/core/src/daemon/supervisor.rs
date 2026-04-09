@@ -40,7 +40,7 @@ pub(crate) trait SpawnBackend: Send + Sync + 'static {
         program: &Path,
         args: &[String],
         sandbox: &capsa_sandbox::SandboxSpec,
-        fd_remaps: &[capsa_sandbox::FdRemap],
+        fd_remaps: Vec<capsa_sandbox::FdRemap>,
         stdin_null: bool,
     ) -> Result<SpawnedProcess>;
 }
@@ -54,7 +54,7 @@ impl SpawnBackend for SandboxedSpawnBackend {
         program: &Path,
         args: &[String],
         spec: &capsa_sandbox::SandboxSpec,
-        fd_remaps: &[capsa_sandbox::FdRemap],
+        fd_remaps: Vec<capsa_sandbox::FdRemap>,
         stdin_null: bool,
     ) -> Result<SpawnedProcess> {
         // CAPSA_DISABLE_SANDBOX: dev/ops escape hatch so operators can bypass
@@ -90,7 +90,7 @@ impl SpawnBackend for SandboxedSpawnBackend {
 fn spawn_direct(
     program: &Path,
     args: &[String],
-    fd_remaps: &[capsa_sandbox::FdRemap],
+    fd_remaps: Vec<capsa_sandbox::FdRemap>,
     stdin_null: bool,
 ) -> Result<SpawnedProcess> {
     let mut command = Command::new(program);
@@ -112,7 +112,7 @@ fn spawn_direct(
 fn configure_command(
     command: &mut Command,
     args: &[String],
-    fd_remaps: &[capsa_sandbox::FdRemap],
+    fd_remaps: Vec<capsa_sandbox::FdRemap>,
     stdin_null: bool,
 ) -> Result<()> {
     command.args(args);
@@ -170,7 +170,7 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
                 )
             })?;
 
-        let spawn_spec = match D::spawn_spec(&spec, &handoff, &binary_path) {
+        let spawn_spec = match D::spawn_spec(&spec, &mut handoff, &binary_path) {
             Ok(spec) => spec,
             Err(primary_error) => {
                 let mut error = primary_error.context(format!(
@@ -220,7 +220,7 @@ impl<B: SpawnBackend> DaemonSupervisor<B> {
                 &binary_path,
                 &spawn_spec.args,
                 &spawn_spec.sandbox,
-                &spawn_spec.fd_remaps,
+                spawn_spec.fd_remaps,
                 spawn_spec.stdin_null,
             )
             .with_context(|| format!("failed to spawn {} daemon", binary_info.daemon_name));
@@ -500,7 +500,7 @@ mod tests {
             program: &Path,
             args: &[String],
             _sandbox: &capsa_sandbox::SandboxSpec,
-            fd_remaps: &[capsa_sandbox::FdRemap],
+            fd_remaps: Vec<capsa_sandbox::FdRemap>,
             stdin_null: bool,
         ) -> Result<SpawnedProcess> {
             match self.mode {
@@ -595,7 +595,7 @@ mod tests {
 
         fn spawn_spec(
             _spec: &Self::Spec,
-            _handoff: &Self::Handoff,
+            _handoff: &mut Self::Handoff,
             _binary_path: &Path,
         ) -> Result<DaemonSpawnSpec> {
             let state = adapter_state().lock().expect("state lock").clone();

@@ -1,4 +1,4 @@
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 
 use anyhow::{ensure, Context, Result};
@@ -118,23 +118,13 @@ pub(crate) fn resolved_interfaces_for_plan(
         .collect()
 }
 
-#[allow(dead_code)]
-pub(crate) fn vmm_fd_remaps_for_plan(plan: &[PlannedInterface]) -> Vec<capsa_sandbox::FdRemap> {
-    plan.iter()
-        .map(|interface| capsa_sandbox::FdRemap {
-            source_fd: interface.guest_fd.as_raw_fd(),
-            target_fd: interface.vmm_guest_target_fd,
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
     use super::{
         build_interface_plan, effective_interface_policy, resolve_interface_mac,
-        resolved_interfaces_for_plan, vmm_fd_remaps_for_plan,
+        resolved_interfaces_for_plan,
     };
     use crate::{
         daemon::constants::{NETD_HOST_FD_START, VMM_NET_FD_START},
@@ -250,21 +240,6 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].mac, explicit_mac);
         assert_eq!(resolved[0].guest_fd, VMM_NET_FD_START);
-    }
-
-    #[test]
-    fn vmm_fd_remaps_follow_planned_guest_fd_targets() {
-        let interfaces = vec![VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        }];
-        let plan = build_interface_plan(&interfaces).expect("plan should build");
-
-        let remaps = vmm_fd_remaps_for_plan(&plan.interfaces);
-
-        assert_eq!(remaps.len(), 1);
-        assert_eq!(remaps[0].target_fd, VMM_NET_FD_START);
     }
 
     #[test]

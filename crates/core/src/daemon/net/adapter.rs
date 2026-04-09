@@ -123,7 +123,7 @@ impl DaemonAdapter for NetDaemonAdapter {
 
     fn spawn_spec(
         spec: &Self::Spec,
-        handoff: &Self::Handoff,
+        handoff: &mut Self::Handoff,
         binary_path: &Path,
     ) -> Result<DaemonSpawnSpec> {
         ensure!(
@@ -135,21 +135,21 @@ impl DaemonAdapter for NetDaemonAdapter {
 
         let readiness_writer = handoff
             .readiness_writer
-            .as_ref()
+            .take()
             .context("missing net daemon readiness writer fd")?;
 
-        let mut fd_remaps = spec
-            .interfaces
-            .iter()
-            .zip(&handoff.host_fds)
-            .map(|(interface, host_fd)| capsa_sandbox::FdRemap {
-                source_fd: host_fd.as_raw_fd(),
+        let mut fd_remaps: Vec<capsa_sandbox::FdRemap> = handoff
+            .host_fds
+            .drain(..)
+            .zip(&spec.interfaces)
+            .map(|(host_fd, interface)| capsa_sandbox::FdRemap {
+                source: host_fd,
                 target_fd: interface.host_fd,
             })
-            .collect::<Vec<_>>();
+            .collect();
 
         fd_remaps.push(capsa_sandbox::FdRemap {
-            source_fd: readiness_writer.as_raw_fd(),
+            source: readiness_writer,
             target_fd: NETD_READY_FD,
         });
 
@@ -176,9 +176,9 @@ impl DaemonAdapter for NetDaemonAdapter {
         Ok(NetDaemonReadiness { ready_pipe_reader })
     }
 
-    fn on_spawned(_spec: &Self::Spec, handoff: &mut Self::Handoff) -> Result<()> {
-        handoff.host_fds.clear();
-        handoff.readiness_writer.take();
+    fn on_spawned(_spec: &Self::Spec, _handoff: &mut Self::Handoff) -> Result<()> {
+        // `spawn_spec` already drained `host_fds` and took
+        // `readiness_writer` into the fd remaps; nothing left to clean up.
         Ok(())
     }
 
@@ -250,12 +250,15 @@ mod tests {
     fn netd_sandbox_enables_network_and_includes_runtime_read_paths() {
         let spec = sample_spec();
         let (ready_r, ready_w) = pipe();
-        let handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
+        let mut handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
             .expect("handoff should build");
 
-        let spawn_spec =
-            NetDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-netd"))
-                .expect("spawn spec should build");
+        let spawn_spec = NetDaemonAdapter::spawn_spec(
+            &spec,
+            &mut handoff,
+            std::path::Path::new("/tmp/capsa-netd"),
+        )
+        .expect("spawn spec should build");
 
         assert!(spawn_spec.sandbox.allow_network);
         assert!(
@@ -287,12 +290,15 @@ mod tests {
     fn netd_fd_remaps_include_readiness_fd_and_no_overlap() {
         let spec = sample_spec();
         let (ready_r, ready_w) = pipe();
-        let handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
+        let mut handoff = NetDaemonHandoff::new(vec![sample_host_fd()], ready_r, ready_w)
             .expect("handoff should build");
 
-        let spawn_spec =
-            NetDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-netd"))
-                .expect("spawn spec should build");
+        let spawn_spec = NetDaemonAdapter::spawn_spec(
+            &spec,
+            &mut handoff,
+            std::path::Path::new("/tmp/capsa-netd"),
+        )
+        .expect("spawn spec should build");
 
         assert!(spawn_spec.stdin_null);
         assert_eq!(spawn_spec.fd_remaps.len(), 2);
@@ -304,7 +310,7 @@ mod tests {
         let mut targets = std::collections::HashSet::new();
         for remap in &spawn_spec.fd_remaps {
             assert!(targets.insert(remap.target_fd));
-            assert_ne!(remap.source_fd, remap.target_fd);
+            assert_ne!(remap.source.as_raw_fd(), remap.target_fd);
         }
 
         assert_eq!(spawn_spec.args[0], "--launch-spec-json");
@@ -316,20 +322,20 @@ mod tests {
         let host_fd = host.as_raw_fd();
         let (ready_r, ready_w) = pipe();
         let ready_w_fd = ready_w.as_raw_fd();
-        let handoff =
+        let mut handoff =
             NetDaemonHandoff::new(vec![host], ready_r, ready_w).expect("handoff should build");
 
         let spawn_spec = NetDaemonAdapter::spawn_spec(
             &sample_spec(),
-            &handoff,
+            &mut handoff,
             std::path::Path::new("/tmp/capsa-netd"),
         )
         .expect("spawn spec should build");
 
-        assert!(spawn_spec
-            .fd_remaps
-            .iter()
-            .all(|remap| remap.source_fd != host_fd && remap.source_fd != ready_w_fd));
+        assert!(spawn_spec.fd_remaps.iter().all(|remap| {
+            let raw = remap.source.as_raw_fd();
+            raw != host_fd && raw != ready_w_fd
+        }));
     }
 
     #[test]

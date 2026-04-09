@@ -46,7 +46,7 @@ impl DaemonAdapter for VmmDaemonAdapter {
 
     fn spawn_spec(
         spec: &Self::Spec,
-        handoff: &Self::Handoff,
+        handoff: &mut Self::Handoff,
         binary_path: &Path,
     ) -> Result<DaemonSpawnSpec> {
         ensure!(
@@ -57,12 +57,12 @@ impl DaemonAdapter for VmmDaemonAdapter {
         );
 
         let args = encode_launch_spec_args(spec)?;
-        let fd_remaps = spec
-            .resolved_interfaces
-            .iter()
-            .zip(&handoff.guest_fds)
-            .map(|(interface, guest_fd)| capsa_sandbox::FdRemap {
-                source_fd: guest_fd.as_raw_fd(),
+        let fd_remaps: Vec<capsa_sandbox::FdRemap> = handoff
+            .guest_fds
+            .drain(..)
+            .zip(&spec.resolved_interfaces)
+            .map(|(guest_fd, interface)| capsa_sandbox::FdRemap {
+                source: guest_fd,
                 target_fd: interface.guest_fd,
             })
             .collect();
@@ -79,8 +79,8 @@ impl DaemonAdapter for VmmDaemonAdapter {
         Ok(NoReadiness)
     }
 
-    fn on_spawned(_spec: &Self::Spec, handoff: &mut Self::Handoff) -> Result<()> {
-        handoff.guest_fds.clear();
+    fn on_spawned(_spec: &Self::Spec, _handoff: &mut Self::Handoff) -> Result<()> {
+        // `spawn_spec` already drained `guest_fds` into the fd remaps.
         Ok(())
     }
 
@@ -171,11 +171,15 @@ mod tests {
     #[test]
     fn vmm_sandbox_shape_matches_expected_paths_and_network_setting() {
         let spec = sample_spec();
-        let handoff = VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
+        let mut handoff =
+            VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
 
-        let spawn_spec =
-            VmmDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-vmm"))
-                .expect("spawn spec should build");
+        let spawn_spec = VmmDaemonAdapter::spawn_spec(
+            &spec,
+            &mut handoff,
+            std::path::Path::new("/tmp/capsa-vmm"),
+        )
+        .expect("spawn spec should build");
 
         assert!(!spawn_spec.sandbox.allow_network);
         assert!(
@@ -207,16 +211,20 @@ mod tests {
     #[test]
     fn vmm_fd_remaps_follow_resolved_interface_targets() {
         let spec = sample_spec();
-        let handoff = VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
+        let mut handoff =
+            VmmDaemonHandoff::new(vec![sample_guest_fd()]).expect("handoff should build");
 
-        let spawn_spec =
-            VmmDaemonAdapter::spawn_spec(&spec, &handoff, std::path::Path::new("/tmp/capsa-vmm"))
-                .expect("spawn spec should build");
+        let spawn_spec = VmmDaemonAdapter::spawn_spec(
+            &spec,
+            &mut handoff,
+            std::path::Path::new("/tmp/capsa-vmm"),
+        )
+        .expect("spawn spec should build");
 
         assert!(!spawn_spec.stdin_null);
         assert_eq!(spawn_spec.fd_remaps.len(), 1);
         assert_eq!(spawn_spec.fd_remaps[0].target_fd, 100);
-        assert_ne!(spawn_spec.fd_remaps[0].source_fd, 100);
+        assert_ne!(spawn_spec.fd_remaps[0].source.as_raw_fd(), 100);
         assert_eq!(spawn_spec.args[0], "--launch-spec-json");
     }
 
@@ -224,15 +232,15 @@ mod tests {
     fn handoff_normalizes_source_fds_away_from_target_range() {
         let original = sample_guest_fd();
         let original_fd = original.as_raw_fd();
-        let handoff = VmmDaemonHandoff::new(vec![original]).expect("handoff should build");
+        let mut handoff = VmmDaemonHandoff::new(vec![original]).expect("handoff should build");
 
         let spawn_spec = VmmDaemonAdapter::spawn_spec(
             &sample_spec(),
-            &handoff,
+            &mut handoff,
             std::path::Path::new("/tmp/capsa-vmm"),
         )
         .expect("spawn spec should build");
 
-        assert_ne!(spawn_spec.fd_remaps[0].source_fd, original_fd);
+        assert_ne!(spawn_spec.fd_remaps[0].source.as_raw_fd(), original_fd);
     }
 }

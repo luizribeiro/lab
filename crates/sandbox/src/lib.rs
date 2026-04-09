@@ -174,60 +174,69 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
         .with_context(|| format!("failed to create private temp dir in {}", base.display()))
 }
 
-/// An fd to inherit into the child process at a specific target fd number.
+/// An owned source fd to inherit into the child process at a specific
+/// target fd number.
 ///
-/// Each remap must use unique source and target fd numbers, and source/target
-/// fd sets must not overlap across remaps. This keeps remapping deterministic
-/// in the child pre-exec phase.
-#[derive(Debug, Clone)]
+/// Ownership of `source` is moved into the remap and, ultimately, into the
+/// `pre_exec` closure installed on the child [`Command`]. This keeps the
+/// source fd alive in the parent from construction until after the child
+/// has run its `dup2` hook — closing the TOCTOU window that a raw fd
+/// number would expose — and lets the type system guarantee that `source`
+/// is open, non-negative, and unique across remaps (since `OwnedFd` is
+/// non-`Copy` and represents exclusive ownership of an fd).
+#[derive(Debug)]
 pub struct FdRemap {
-    /// Source fd in the parent process.
-    pub source_fd: i32,
+    /// Source fd owned by this remap; duplicated into the child at
+    /// `target_fd`.
+    pub source: std::os::fd::OwnedFd,
     /// Target fd number in the child process.
-    pub target_fd: i32,
+    pub target_fd: std::os::fd::RawFd,
 }
 
 /// Validates `fd_remaps` and installs a `pre_exec` callback on `command`
-/// that remaps file descriptors into the child process accordingly. Use
-/// this alongside [`Sandbox::command`] when the sandboxed child needs
-/// specific fd numbers (for example, pre-opened sockets handed off from
-/// a parent).
+/// that remaps file descriptors into the child process accordingly. Takes
+/// the remaps by value: each [`FdRemap`]'s `OwnedFd` is moved into the
+/// child-side hook, which (a) keeps the source fds open in the parent
+/// until after spawn, (b) closes them in the child via explicit `close`
+/// after the `dup2`, and (c) closes them in the parent when the
+/// [`Command`] (and with it this closure) is dropped.
 ///
 /// Validation is performed via [`validate_fd_remaps`] before the hook is
-/// installed, so callers cannot accidentally skip it and let invalid
-/// remaps surface as cryptic `dup2` failures inside the child's
-/// `pre_exec` phase. Callers that want to fail earlier (e.g. while
-/// building a spawn spec) may still invoke [`validate_fd_remaps`]
-/// directly themselves.
-pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) -> Result<()> {
-    validate_fd_remaps(fd_remaps)?;
+/// installed; callers that want to fail earlier (e.g. while building a
+/// spawn spec) may still invoke [`validate_fd_remaps`] directly
+/// themselves.
+pub fn configure_fd_remaps(command: &mut Command, fd_remaps: Vec<FdRemap>) -> Result<()> {
+    validate_fd_remaps(&fd_remaps)?;
 
     if fd_remaps.is_empty() {
         return Ok(());
     }
 
+    use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
 
-    let remaps = fd_remaps.to_vec();
     let child_hook = move || -> std::io::Result<()> {
-        for remap in &remaps {
-            // SAFETY: dup2 is async-signal-safe (POSIX.1) and takes two
-            // integer fds. It atomically replaces target_fd with a
-            // duplicate of source_fd, which is the intended effect.
-            let rc = unsafe { libc::dup2(remap.source_fd, remap.target_fd) };
+        for remap in &fd_remaps {
+            let source = remap.source.as_raw_fd();
+            let target = remap.target_fd;
+
+            // SAFETY: dup2 is async-signal-safe (POSIX.1). `source` is a
+            // valid fd owned by this remap's `OwnedFd`; `target` is an
+            // integer and cannot cause UB regardless of value. dup2
+            // atomically replaces `target` with a duplicate of `source`
+            // in the child's fd table, which is the intended effect.
+            let rc = unsafe { libc::dup2(source, target) };
             if rc == -1 {
                 return Err(std::io::Error::last_os_error());
             }
 
-            if remap.source_fd != remap.target_fd {
-                // SAFETY: close is async-signal-safe (POSIX.1). Passing an
-                // invalid fd is not UB — the kernel returns EBADF. The
-                // real hazard with `close` is closing an fd that another
-                // part of the program still believes it owns, but we run
-                // here in the freshly-forked child where the parent's
-                // ownership is irrelevant: after exec, the parent's
-                // `OwnedFd`s do not alias the child's fd table.
-                let rc = unsafe { libc::close(remap.source_fd) };
+            if source != target {
+                // SAFETY: close is async-signal-safe (POSIX.1). We close
+                // the child-side `source` explicitly so it does not leak
+                // past `exec`; the parent's `OwnedFd` copy remains alive
+                // and will be closed when the `Command` (and with it
+                // this closure) is dropped in the parent.
+                let rc = unsafe { libc::close(source) };
                 if rc == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -236,15 +245,23 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) -> Resu
         Ok(())
     };
 
-    // SAFETY: pre_exec runs `child_hook` in the child process after fork
-    // and before exec, where only async-signal-safe work is permitted.
-    // The closure's operations are all async-signal-safe:
-    //   - iterating a pre-allocated `Vec<FdRemap>` by reference (pointer
-    //     arithmetic over `Copy` i32 pairs; no allocation, no Drop),
+    // SAFETY: pre_exec runs `child_hook` in the child after fork and
+    // before exec, where only async-signal-safe work is permitted. The
+    // closure's operations are all async-signal-safe:
+    //   - iterating a pre-allocated `Vec<FdRemap>` by reference (no
+    //     allocation; the only `Drop`-bearing field is `OwnedFd`, which
+    //     is not dropped during iteration),
+    //   - `OwnedFd::as_raw_fd` (reads an inline integer),
     //   - `libc::dup2` and `libc::close` (POSIX async-signal-safe list),
-    //   - `std::io::Error::last_os_error`, which reads `errno` and
-    //     constructs an `io::Error` without allocating.
-    // No locks are taken and no Rust destructors run on the happy path.
+    //   - `std::io::Error::last_os_error`, which in the current std
+    //     implementation just reads `errno` and stores it in an inline
+    //     `Os` variant (no allocation, no locks). This is an empirical
+    //     claim about current std; the API does not formally promise
+    //     async-signal safety.
+    // No Rust destructors run on the happy path: on success the child
+    // falls through to `exec`, discarding the Rust stack; on failure the
+    // error is returned to std's spawn machinery which reports it and
+    // calls `_exit`.
     unsafe {
         command.pre_exec(child_hook);
     }
@@ -252,82 +269,40 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) -> Resu
     Ok(())
 }
 
-/// Returns whether `fd` currently refers to an open file description.
-///
-/// Encapsulates the only `unsafe` fcntl call in this module behind a safe
-/// API. `F_GETFD` is a read-only query that takes a raw fd (an integer)
-/// and cannot cause undefined behavior regardless of the value passed —
-/// invalid fds yield `EBADF`, which we report as `Ok(false)`.
-fn fd_is_open(fd: i32) -> std::io::Result<bool> {
-    // SAFETY: `fcntl(fd, F_GETFD)` is a read-only kernel query on an
-    // integer. It performs no memory access through `fd` and is safe to
-    // call with any i32; an invalid fd simply returns -1 with errno
-    // EBADF, which is handled below.
-    let rc = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if rc == -1 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::EBADF) {
-            return Ok(false);
-        }
-        return Err(err);
-    }
-    Ok(true)
-}
-
 /// Validates that `fd_remaps` can be applied to a spawn.
 ///
-/// Returns an error if any source or target fd is negative, if there are
-/// duplicates, if source and target fd sets overlap, or if a source fd is
-/// not actually open. [`configure_fd_remaps`] calls this internally so
-/// callers do not need to invoke it explicitly; it is exposed for
-/// callers that want to validate remaps earlier than spawn time (e.g.
-/// while building a spawn spec).
+/// Checks that each `target_fd` is non-negative, that no two remaps share
+/// the same `target_fd`, and that no `target_fd` overlaps another remap's
+/// source fd (which would silently clobber that source during ordered
+/// processing). Source fds themselves are [`OwnedFd`]s, so the type
+/// system already guarantees they are open, non-negative, and unique
+/// across remaps — there is nothing left to check on the source side.
+///
+/// [`configure_fd_remaps`] calls this internally; callers do not need to
+/// invoke it explicitly unless they want to fail earlier than spawn time.
 pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
-    let mut seen_sources = std::collections::HashSet::new();
-    let mut seen_targets = std::collections::HashSet::new();
+    use std::collections::HashSet;
+    use std::os::fd::AsRawFd;
+
+    let sources: HashSet<std::os::fd::RawFd> =
+        fd_remaps.iter().map(|r| r.source.as_raw_fd()).collect();
+    let mut seen_targets = HashSet::new();
 
     for (index, remap) in fd_remaps.iter().enumerate() {
-        ensure!(
-            remap.source_fd >= 0,
-            "fd remap {index}: source_fd must be >= 0 (got {})",
-            remap.source_fd
-        );
         ensure!(
             remap.target_fd >= 0,
             "fd remap {index}: target_fd must be >= 0 (got {})",
             remap.target_fd
         );
         ensure!(
-            seen_sources.insert(remap.source_fd),
-            "fd remap {index}: duplicate source_fd {}",
-            remap.source_fd
-        );
-        ensure!(
             seen_targets.insert(remap.target_fd),
             "fd remap {index}: duplicate target_fd {}",
             remap.target_fd
         );
-
-        match fd_is_open(remap.source_fd) {
-            Ok(true) => {}
-            Ok(false) => anyhow::bail!(
-                "fd remap {index}: source_fd {} is not open",
-                remap.source_fd
-            ),
-            Err(err) => {
-                return Err(err).context(format!(
-                    "fd remap {index}: failed to validate source_fd {}",
-                    remap.source_fd
-                ));
-            }
-        }
-    }
-
-    for source_fd in &seen_sources {
         ensure!(
-            !seen_targets.contains(source_fd),
-            "fd remap: overlapping source/target fd {} is not supported",
-            source_fd
+            !sources.contains(&remap.target_fd),
+            "fd remap {index}: target_fd {} overlaps another remap's source fd",
+            remap.target_fd
         );
     }
 
@@ -337,33 +312,37 @@ pub fn validate_fd_remaps(fd_remaps: &[FdRemap]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::process::Command;
 
     use super::{validate_fd_remaps, FdRemap};
 
+    fn owned_tempfile() -> OwnedFd {
+        tempfile::tempfile()
+            .expect("failed to open temp file")
+            .into()
+    }
+
     #[test]
-    fn invalid_source_fd_is_rejected() {
-        let remaps = [FdRemap {
-            source_fd: -1,
-            target_fd: 42,
+    fn negative_target_fd_is_rejected() {
+        let remaps = vec![FdRemap {
+            source: owned_tempfile(),
+            target_fd: -1,
         }];
 
         let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
-        assert!(err.to_string().contains("source_fd must be >= 0"));
+        assert!(err.to_string().contains("target_fd must be >= 0"));
     }
 
     #[test]
     fn duplicate_target_fd_is_rejected() {
-        let source_a = tempfile::tempfile().expect("failed to open temp file a");
-        let source_b = tempfile::tempfile().expect("failed to open temp file b");
-        let remaps = [
+        let remaps = vec![
             FdRemap {
-                source_fd: source_a.as_raw_fd(),
+                source: owned_tempfile(),
                 target_fd: 42,
             },
             FdRemap {
-                source_fd: source_b.as_raw_fd(),
+                source: owned_tempfile(),
                 target_fd: 42,
             },
         ];
@@ -373,69 +352,44 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_source_fd_is_rejected() {
-        let file = tempfile::tempfile().expect("failed to open temp file");
-        let source_fd = file.as_raw_fd();
-        let remaps = [
+    fn target_overlapping_another_source_is_rejected() {
+        let source_a = owned_tempfile();
+        let source_b = owned_tempfile();
+        let source_b_raw = source_b.as_raw_fd();
+
+        // The first remap targets source_b's raw fd, which would silently
+        // clobber source_b before the second remap could read from it.
+        let remaps = vec![
             FdRemap {
-                source_fd,
+                source: source_a,
+                target_fd: source_b_raw,
+            },
+            FdRemap {
+                source: source_b,
+                target_fd: 200,
+            },
+        ];
+
+        let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
+        assert!(
+            err.to_string()
+                .contains("overlaps another remap's source fd"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn valid_remaps_pass_validation() {
+        let remaps = vec![
+            FdRemap {
+                source: owned_tempfile(),
+                target_fd: 44,
+            },
+            FdRemap {
+                source: owned_tempfile(),
                 target_fd: 45,
             },
-            FdRemap {
-                source_fd,
-                target_fd: 46,
-            },
         ];
-
-        let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
-        assert!(err.to_string().contains("duplicate source_fd"));
-    }
-
-    #[test]
-    fn overlapping_source_and_target_fds_are_rejected() {
-        let file_a = tempfile::tempfile().expect("failed to open temp file a");
-        let file_b = tempfile::tempfile().expect("failed to open temp file b");
-        let source_a = file_a.as_raw_fd();
-        let source_b = file_b.as_raw_fd();
-
-        let remaps = [
-            FdRemap {
-                source_fd: source_a,
-                target_fd: source_b,
-            },
-            FdRemap {
-                source_fd: source_b,
-                target_fd: 47,
-            },
-        ];
-
-        let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
-        assert!(err.to_string().contains("overlapping source/target fd"));
-    }
-
-    #[test]
-    fn closed_source_fd_is_rejected() {
-        let source_fd = {
-            let file = tempfile::tempfile().expect("failed to open temp file");
-            file.as_raw_fd()
-        };
-
-        let remaps = [FdRemap {
-            source_fd,
-            target_fd: 43,
-        }];
-
-        let err = validate_fd_remaps(&remaps).expect_err("expected validation to fail");
-        assert!(err.to_string().contains("is not open"));
-    }
-
-    #[test]
-    fn valid_remap_passes_validation() {
-        let file = tempfile::tempfile().expect("failed to open temp file");
-        let remaps = [FdRemap {
-            source_fd: file.as_raw_fd(),
-            target_fd: 44,
-        }];
 
         validate_fd_remaps(&remaps).expect("expected validation to pass");
     }
@@ -446,8 +400,8 @@ mod tests {
         writeln!(write_end, "ping").expect("failed to write to pipe");
         drop(write_end);
 
-        let remaps = [FdRemap {
-            source_fd: read_end.as_raw_fd(),
+        let remaps = vec![FdRemap {
+            source: read_end.into(),
             target_fd: 101,
         }];
 
@@ -455,7 +409,7 @@ mod tests {
         command
             .arg("-c")
             .arg("IFS= read -r line <&101; [ \"$line\" = \"ping\" ]");
-        super::configure_fd_remaps(&mut command, &remaps)
+        super::configure_fd_remaps(&mut command, remaps)
             .expect("expected configure_fd_remaps to succeed");
 
         let status = command.status().expect("failed to spawn child");

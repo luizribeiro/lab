@@ -43,7 +43,7 @@ pub trait DaemonAdapter: Send + Sync + 'static {
 
     fn spawn_spec(
         spec: &Self::Spec,
-        handoff: &Self::Handoff,
+        handoff: &mut Self::Handoff,
         binary_path: &Path,
     ) -> Result<DaemonSpawnSpec>;
 
