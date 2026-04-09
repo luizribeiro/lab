@@ -1,6 +1,6 @@
 mod interface_plan;
 
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -154,19 +154,13 @@ fn start_with_network_via_supervisor(config: &VmConfig) -> Result<()> {
 }
 
 fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
-    let mut fds = [0; 2];
-    // SAFETY: `fds` points to storage for exactly two fds.
-    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to create readiness pipe");
-    }
-
-    // SAFETY: `pipe` initialized both fds on success and ownership moves into `OwnedFd`.
-    let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    // SAFETY: same as above for write end.
-    let writer = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-    Ok((reader, writer))
+    // Use `std::io::pipe()` (stable since Rust 1.87) which creates the pipe
+    // with `O_CLOEXEC` set on both ends. The previous `libc::pipe()` call
+    // left them as inheritable, so any child the parent spawned between
+    // pipe creation and the intended `Command::spawn` would inherit these
+    // readiness fds unintentionally.
+    let (reader, writer) = std::io::pipe().context("failed to create readiness pipe")?;
+    Ok((reader.into(), writer.into()))
 }
 
 fn attach_cleanup_error(primary: anyhow::Error, cleanup: anyhow::Error) -> anyhow::Error {
