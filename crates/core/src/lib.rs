@@ -6,7 +6,6 @@ mod start;
 pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
 };
-pub use capsa_spec::{ResolvedNetworkInterface, VmmLaunchSpec};
 pub use config::{VmConfig, VmNetworkInterfaceConfig};
 
 #[cfg(test)]

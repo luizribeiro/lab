@@ -10,6 +10,7 @@ capsa-sandbox = { path = "../sandbox" }
 capsa-spec = { path = "../spec" }
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.45", features = ["rt-multi-thread", "time"] }
 tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1.0"
