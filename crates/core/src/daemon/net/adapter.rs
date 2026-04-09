@@ -287,6 +287,10 @@ mod tests {
                 .expect("spawn spec should build");
 
         assert!(spawn_spec.sandbox.allow_network);
+        assert!(
+            !spawn_spec.sandbox.allow_kvm,
+            "netd must not request KVM access; that's vmm-only surface"
+        );
         assert!(spawn_spec
             .sandbox
             .read_only_paths

@@ -18,6 +18,14 @@ pub mod tokio;
 pub struct SandboxSpec {
     /// Allow outbound/inbound networking from the sandboxed process.
     pub allow_network: bool,
+    /// Allow access to the KVM hypervisor device (`/dev/kvm`) and the
+    /// `KVM_*` ioctl set.
+    ///
+    /// Only meaningful on Linux, where it gates `/dev/kvm` read/write/ioctl
+    /// grants and the libkrun-specific `KVM_*` ioctl allowlist. Callers that
+    /// run a libkrun-based VMM should set this; other daemons should leave
+    /// it `false`. No-op on other platforms.
+    pub allow_kvm: bool,
     /// Paths that should be readable from inside the sandbox.
     pub read_only_paths: Vec<PathBuf>,
     /// Paths that should be writable from inside the sandbox.
@@ -36,6 +44,11 @@ impl SandboxSpec {
 
     pub fn allow_network(mut self, allow: bool) -> Self {
         self.allow_network = allow;
+        self
+    }
+
+    pub fn allow_kvm(mut self, allow: bool) -> Self {
+        self.allow_kvm = allow;
         self
     }
 }

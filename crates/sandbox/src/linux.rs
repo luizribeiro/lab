@@ -71,7 +71,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         rules.push(format!("allow/fs+{fs}"));
     }
 
-    // Allow terminal ioctls and the KVM ioctls used by libkrun's VMM path.
+    // Terminal ioctls needed by libkrun's VMM console path.
     for ioctl in [
         "TCGETS",
         "TCGETS2",
@@ -82,36 +82,46 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "TIOCGWINSZ",
         "TIOCSWINSZ",
         "FIONREAD",
-        "KVM_GET_API_VERSION",
-        "KVM_CHECK_EXTENSION",
-        "KVM_GET_VCPU_MMAP_SIZE",
-        "KVM_CREATE_VM",
-        "KVM_CREATE_VCPU",
-        "KVM_SET_TSS_ADDR",
-        "KVM_CREATE_IRQCHIP",
-        "KVM_CREATE_PIT2",
-        "KVM_IOEVENTFD",
-        "KVM_IRQFD",
-        "KVM_SET_USER_MEMORY_REGION",
-        "KVM_SET_CPUID2",
-        "KVM_GET_SUPPORTED_CPUID",
-        "KVM_GET_MSR_INDEX_LIST",
-        "KVM_SET_MSRS",
-        "KVM_GET_MSRS",
-        "KVM_SET_REGS",
-        "KVM_GET_REGS",
-        "KVM_SET_SREGS",
-        "KVM_GET_SREGS",
-        "KVM_SET_FPU",
-        "KVM_GET_FPU",
-        "KVM_GET_LAPIC",
-        "KVM_SET_LAPIC",
-        "KVM_SET_SIGNAL_MASK",
-        "KVM_SET_GSI_ROUTING",
-        "KVM_SET_CLOCK",
-        "KVM_RUN",
     ] {
         rules.push(format!("allow/ioctl+{ioctl}"));
+    }
+
+    if spec.allow_kvm {
+        // KVM ioctls issued by libkrun when running a VM. Gated behind
+        // `allow_kvm` so non-VMM daemons (e.g. capsa-netd) don't inherit
+        // the hypervisor attack surface.
+        for ioctl in [
+            "KVM_GET_API_VERSION",
+            "KVM_CHECK_EXTENSION",
+            "KVM_GET_VCPU_MMAP_SIZE",
+            "KVM_CREATE_VM",
+            "KVM_CREATE_VCPU",
+            "KVM_SET_TSS_ADDR",
+            "KVM_CREATE_IRQCHIP",
+            "KVM_CREATE_PIT2",
+            "KVM_IOEVENTFD",
+            "KVM_IRQFD",
+            "KVM_SET_USER_MEMORY_REGION",
+            "KVM_SET_CPUID2",
+            "KVM_GET_SUPPORTED_CPUID",
+            "KVM_GET_MSR_INDEX_LIST",
+            "KVM_SET_MSRS",
+            "KVM_GET_MSRS",
+            "KVM_SET_REGS",
+            "KVM_GET_REGS",
+            "KVM_SET_SREGS",
+            "KVM_GET_SREGS",
+            "KVM_SET_FPU",
+            "KVM_GET_FPU",
+            "KVM_GET_LAPIC",
+            "KVM_SET_LAPIC",
+            "KVM_SET_SIGNAL_MASK",
+            "KVM_SET_GSI_ROUTING",
+            "KVM_SET_CLOCK",
+            "KVM_RUN",
+        ] {
+            rules.push(format!("allow/ioctl+{ioctl}"));
+        }
     }
 
     let mut read_paths = Vec::new();
@@ -178,8 +188,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    for candidate in path_candidates(Path::new("/dev/kvm")) {
-        push_with_ancestors(&mut read_paths, &candidate);
+    if spec.allow_kvm {
+        for candidate in path_candidates(Path::new("/dev/kvm")) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
     }
 
     for candidate in path_candidates(private_tmp) {
@@ -208,7 +220,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         add_lock_allow_rule(&mut rules, "allow/lock/exec", &path);
     }
 
-    let mut lock_ioctl_paths = vec![PathBuf::from("/dev/kvm")];
+    let mut lock_ioctl_paths = Vec::new();
+    if spec.allow_kvm {
+        lock_ioctl_paths.push(PathBuf::from("/dev/kvm"));
+    }
     lock_ioctl_paths.extend(spec.ioctl_paths.iter().cloned());
 
     for path in lock_ioctl_paths {
@@ -219,7 +234,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
 
     rules.push("sandbox/write,create,truncate,delete:on".to_string());
 
-    let mut write_paths = vec![PathBuf::from("/dev/kvm"), private_tmp.to_path_buf()];
+    let mut write_paths = vec![private_tmp.to_path_buf()];
+    if spec.allow_kvm {
+        write_paths.push(PathBuf::from("/dev/kvm"));
+    }
     write_paths.extend(spec.read_write_paths.iter().cloned());
 
     for path in write_paths {
@@ -331,4 +349,41 @@ pub(crate) fn find_in_path(binary_name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SandboxSpec;
+
+    fn rules_for(spec: &SandboxSpec) -> Vec<String> {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        syd_rules(Path::new("/bin/sh"), spec, tmp.path())
+    }
+
+    #[test]
+    fn kvm_grants_are_gated_on_allow_kvm() {
+        let mut allowed = SandboxSpec::new();
+        allowed.allow_kvm = true;
+        let with_kvm = rules_for(&allowed);
+
+        assert!(
+            with_kvm.iter().any(|r| r == "allow/ioctl+KVM_RUN"),
+            "allow_kvm=true should emit KVM ioctl rules"
+        );
+        assert!(
+            with_kvm.iter().any(|r| r.contains("/dev/kvm")),
+            "allow_kvm=true should reference /dev/kvm in path rules"
+        );
+
+        let without = rules_for(&SandboxSpec::new());
+        assert!(
+            !without.iter().any(|r| r.contains("KVM_")),
+            "default spec should not emit any KVM ioctl rules, got: {without:?}"
+        );
+        assert!(
+            !without.iter().any(|r| r.contains("/dev/kvm")),
+            "default spec should not reference /dev/kvm, got: {without:?}"
+        );
+    }
 }

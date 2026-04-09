@@ -108,7 +108,9 @@ fn duplicate_fd_for_remap(fd: &OwnedFd) -> Result<OwnedFd> {
 }
 
 fn vmm_sandbox_spec(config: &crate::VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
-    let mut spec = capsa_sandbox::SandboxSpec::new().allow_network(false);
+    let mut spec = capsa_sandbox::SandboxSpec::new()
+        .allow_network(false)
+        .allow_kvm(true);
 
     spec.read_only_paths.push(vmm_exe.to_path_buf());
 
@@ -175,6 +177,10 @@ mod tests {
                 .expect("spawn spec should build");
 
         assert!(!spawn_spec.sandbox.allow_network);
+        assert!(
+            spawn_spec.sandbox.allow_kvm,
+            "vmm sandbox must request KVM access so libkrun can open /dev/kvm"
+        );
         assert!(spawn_spec
             .sandbox
             .read_only_paths
