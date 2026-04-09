@@ -55,6 +55,13 @@ fn main() {
             }
             fd_read_bytes(&pairs)
         }
+        "fd-write-byte" => {
+            let pairs: Vec<String> = args.collect();
+            if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
+                usage_and_exit();
+            }
+            fd_write_bytes(&pairs)
+        }
         _ => {
             usage_and_exit();
         }
@@ -111,36 +118,7 @@ fn can_connect(host: &str, port: &str) -> Result<(), String> {
 
 fn fd_read_bytes(pairs: &[String]) -> Result<(), String> {
     for pair in pairs.chunks_exact(2) {
-        let raw: RawFd = pair[0]
-            .parse()
-            .map_err(|e: std::num::ParseIntError| format!("invalid fd `{}`: {e}", pair[0]))?;
-        let expected_arg = &pair[1];
-        let expected_bytes = expected_arg.as_bytes();
-        if expected_bytes.len() != 1 {
-            return Err(format!(
-                "fd {raw}: expected a single-byte marker, got {} bytes",
-                expected_bytes.len()
-            ));
-        }
-        let expected = expected_bytes[0];
-
-        // Probe with F_GETFD first so a wrapper that closed the fd is
-        // reported as EBADF instead of being masked as a read error.
-        // SAFETY: F_GETFD on an integer fd is a read-only query; no
-        // UB for any value.
-        if unsafe { libc::fcntl(raw, libc::F_GETFD) } == -1 {
-            return Err(format!(
-                "fcntl(F_GETFD) on fd {raw} failed: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-
-        // SAFETY: F_GETFD above proved fd `raw` is open. This probe is
-        // single-threaded and each pair's `raw` is distinct (the
-        // builder rejects duplicates), so no other owner aliases it.
-        let owned = unsafe { OwnedFd::from_raw_fd(raw) };
-        let mut reader = std::fs::File::from(owned);
-
+        let (mut reader, raw, expected) = open_marked_fd(&pair[0], &pair[1])?;
         let mut buf = [0u8; 1];
         reader
             .read_exact(&mut buf)
@@ -148,12 +126,56 @@ fn fd_read_bytes(pairs: &[String]) -> Result<(), String> {
 
         if buf[0] != expected {
             return Err(format!(
-                "fd {raw}: expected byte 0x{expected:02x} (`{expected_arg}`), got 0x{:02x}",
+                "fd {raw}: expected byte 0x{expected:02x}, got 0x{:02x}",
                 buf[0]
             ));
         }
     }
     Ok(())
+}
+
+fn fd_write_bytes(pairs: &[String]) -> Result<(), String> {
+    for pair in pairs.chunks_exact(2) {
+        let (mut writer, raw, marker) = open_marked_fd(&pair[0], &pair[1])?;
+        writer
+            .write_all(&[marker])
+            .map_err(|e| format!("write to fd {raw} failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Parses a `(fd, single-byte-marker)` CLI argument pair, validates
+/// that the fd is still open via `F_GETFD`, and returns a `File` that
+/// owns the fd plus the marker byte. Shared by `fd-read-byte` and
+/// `fd-write-byte`.
+fn open_marked_fd(fd_arg: &str, marker_arg: &str) -> Result<(std::fs::File, RawFd, u8), String> {
+    let raw: RawFd = fd_arg
+        .parse()
+        .map_err(|e: std::num::ParseIntError| format!("invalid fd `{fd_arg}`: {e}"))?;
+    let marker_bytes = marker_arg.as_bytes();
+    if marker_bytes.len() != 1 {
+        return Err(format!(
+            "fd {raw}: expected a single-byte marker, got {} bytes",
+            marker_bytes.len()
+        ));
+    }
+
+    // Probe with F_GETFD first so a wrapper that closed the fd is
+    // reported as EBADF instead of being masked as a read/write error.
+    // SAFETY: F_GETFD on an integer fd is a read-only query; no UB
+    // for any value.
+    if unsafe { libc::fcntl(raw, libc::F_GETFD) } == -1 {
+        return Err(format!(
+            "fcntl(F_GETFD) on fd {raw} failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    // SAFETY: F_GETFD above proved fd `raw` is open. This probe is
+    // single-threaded and each pair's `raw` is distinct (the builder
+    // rejects duplicates), so no other owner aliases it.
+    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+    Ok((std::fs::File::from(owned), raw, marker_bytes[0]))
 }
 
 fn can_write_temp() -> Result<(), String> {
@@ -197,7 +219,8 @@ actions:\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
   can-write-temp\n\
-  fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]"
+  fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
+  fd-write-byte <fd> <byte> [<fd> <byte>...]"
     );
     std::process::exit(2);
 }
