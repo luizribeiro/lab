@@ -366,8 +366,10 @@ mod tests {
 
     #[test]
     fn kvm_grants_are_gated_on_allow_kvm() {
-        let mut allowed = SandboxSpec::default();
-        allowed.allow_kvm = true;
+        let allowed = SandboxSpec {
+            allow_kvm: true,
+            ..SandboxSpec::default()
+        };
         let with_kvm = rules_for(&allowed);
 
         assert!(
@@ -392,8 +394,10 @@ mod tests {
 
     #[test]
     fn tty_ioctls_are_gated_on_allow_interactive_tty() {
-        let mut allowed = SandboxSpec::default();
-        allowed.allow_interactive_tty = true;
+        let allowed = SandboxSpec {
+            allow_interactive_tty: true,
+            ..SandboxSpec::default()
+        };
         let with_tty = rules_for(&allowed);
 
         for ioctl in ["TCGETS", "TIOCGWINSZ", "FIONREAD"] {

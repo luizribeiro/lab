@@ -146,8 +146,10 @@ mod tests {
             "default spec should not grant /dev/ttys* rules, got:\n{without}"
         );
 
-        let mut spec = SandboxSpec::default();
-        spec.allow_interactive_tty = true;
+        let spec = SandboxSpec {
+            allow_interactive_tty: true,
+            ..SandboxSpec::default()
+        };
         let with_tty: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
         assert!(
             with_tty.contains("pseudo-tty"),
