@@ -59,10 +59,12 @@ fn netd_binary_signals_readiness_after_spawn() {
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
 
+    // configure_inherited_fds consumes the OwnedFds; the raw fd numbers
+    // baked into the spec JSON above must already be captured.
     configure_inherited_fds(&mut cmd, vec![ready_writer_owned, host_owned])
         .expect("configure_inherited_fds");
 
-    let child = ChildGuard(cmd.spawn().expect("spawn capsa-netd"));
+    let mut child = ChildGuard(cmd.spawn().expect("spawn capsa-netd"));
 
     let ready_byte = read_byte_with_timeout(ready_reader, READINESS_TIMEOUT);
     assert_eq!(
@@ -78,7 +80,6 @@ fn netd_binary_signals_readiness_after_spawn() {
     // fd handoff is actually broken, wait_fail_fast would observe a
     // task error within this window.
     thread::sleep(LIVENESS_PROBE_DELAY);
-    let mut child = child;
     assert!(
         child.0.try_wait().expect("try_wait").is_none(),
         "capsa-netd should still be running after readiness + interface traffic"
