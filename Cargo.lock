@@ -151,6 +151,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa-net",
+ "capsa-sandbox",
  "capsa-spec",
  "libc",
  "serde_json",
