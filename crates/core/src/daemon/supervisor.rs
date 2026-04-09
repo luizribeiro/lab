@@ -54,9 +54,9 @@ impl SpawnBackend for SandboxedSpawnBackend {
         // CAPSA_DISABLE_SANDBOX: dev/ops escape hatch so operators can bypass
         // sandboxing when debugging daemon behavior.
         if sandbox_bypassed_by_env() {
-            eprintln!(
-                "warning: sandbox disabled via CAPSA_DISABLE_SANDBOX; running {} without sandbox",
-                program.display()
+            tracing::warn!(
+                program = %program.display(),
+                "sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox"
             );
             return spawn_direct(program, spawn_spec);
         }
