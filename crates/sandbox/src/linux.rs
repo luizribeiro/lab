@@ -6,6 +6,27 @@ use anyhow::{Context, Result};
 use crate::discover::library_dirs;
 use crate::{configure_fd_remaps, FdRemap, SandboxSpec, SandboxedChild};
 
+/// Builds a `Command` that runs `program` under `syd` with rules derived from
+/// `spec`. `syd` must already be resolved (see [`find_in_path`]).
+pub(crate) fn build_sandbox_command(
+    spec: &SandboxSpec,
+    private_tmp: &Path,
+    syd: &Path,
+    program: &Path,
+) -> Command {
+    let mut command = Command::new(syd);
+    for rule in syd_rules(program, spec, private_tmp) {
+        command.arg("-m").arg(rule);
+    }
+    command
+        .env("TMPDIR", private_tmp)
+        .env("TMP", private_tmp)
+        .env("TEMP", private_tmp)
+        .arg("--")
+        .arg(program);
+    command
+}
+
 /// Linux sandbox backend via `syd`.
 ///
 /// This backend is fail-closed by default.
@@ -362,7 +383,7 @@ fn create_private_tmp_dir() -> Result<PathBuf> {
     Ok(dir.keep())
 }
 
-fn find_in_path(binary_name: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(binary_name: &str) -> Option<PathBuf> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(binary_name);

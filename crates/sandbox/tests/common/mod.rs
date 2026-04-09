@@ -45,7 +45,7 @@ pub fn run_probe(spec: &capsa_sandbox::SandboxSpec, args: &[&str]) -> bool {
     status.success()
 }
 
-fn probe_binary() -> PathBuf {
+pub fn probe_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_sandbox_probe") {
         return PathBuf::from(path);
     }

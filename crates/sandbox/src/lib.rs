@@ -37,6 +37,123 @@ impl SandboxSpec {
     }
 }
 
+/// A prepared sandbox environment: holds the private tmp directory and any
+/// per-platform state needed to build sandboxed commands.
+///
+/// Use [`Sandbox::new`] to construct one from a [`SandboxSpec`], then call
+/// [`Sandbox::command`] to mint a [`std::process::Command`] that runs a given
+/// program inside this sandbox. The caller must keep the `Sandbox` alive until
+/// the spawned child exits — dropping it earlier removes the private tmp
+/// directory out from under the child.
+///
+/// ```no_run
+/// use std::path::Path;
+/// use capsa_sandbox::{Sandbox, SandboxSpec};
+///
+/// let spec = SandboxSpec::new();
+/// let sandbox = Sandbox::new(spec).unwrap();
+/// let mut child = sandbox
+///     .command(Path::new("/bin/true"))
+///     .spawn()
+///     .unwrap();
+/// child.wait().unwrap();
+/// ```
+pub struct Sandbox {
+    spec: SandboxSpec,
+    private_tmp: tempfile::TempDir,
+    #[cfg(target_os = "linux")]
+    syd: PathBuf,
+}
+
+impl Sandbox {
+    /// Prepares a sandbox from `spec`.
+    ///
+    /// Fails if the platform backend cannot satisfy the spec. On Linux this
+    /// includes `spec.allow_network == true`, because the `syd` backend's
+    /// network mediation currently conflicts with capsa-netd.
+    #[cfg(target_os = "linux")]
+    pub fn new(spec: SandboxSpec) -> Result<Self> {
+        if spec.allow_network {
+            anyhow::bail!(
+                "capsa-sandbox: the Linux syd backend cannot currently sandbox processes that require \
+                 network access (syd's net mediation conflicts with capsa-netd). Callers that need \
+                 network access should either run the program without a sandbox or wait for the \
+                 backend to gain netd-compatible network mediation."
+            );
+        }
+
+        let syd = linux::find_in_path("syd").ok_or_else(|| {
+            anyhow::anyhow!(
+                "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`)"
+            )
+        })?;
+
+        let private_tmp = create_private_tmp()?;
+
+        Ok(Self {
+            spec,
+            private_tmp,
+            syd,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new(spec: SandboxSpec) -> Result<Self> {
+        let private_tmp = create_private_tmp()?;
+
+        Ok(Self { spec, private_tmp })
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub fn new(_spec: SandboxSpec) -> Result<Self> {
+        anyhow::bail!("capsa-sandbox: sandboxing is not implemented for this platform")
+    }
+
+    /// Returns the spec used to build this sandbox.
+    pub fn spec(&self) -> &SandboxSpec {
+        &self.spec
+    }
+
+    /// Path of the private tmp directory that the sandbox will expose to its
+    /// children as `$TMPDIR`.
+    pub fn private_tmp(&self) -> &Path {
+        self.private_tmp.path()
+    }
+
+    /// Builds a [`std::process::Command`] that runs `program` inside this
+    /// sandbox. The caller can configure `args`, `env`, `stdin`/`stdout`/
+    /// `stderr`, `current_dir` on the returned command as usual before calling
+    /// `spawn()`.
+    ///
+    /// `TMPDIR`/`TMP`/`TEMP` are pre-set to the sandbox's private tmp
+    /// directory; the caller may override them if desired.
+    #[cfg(target_os = "linux")]
+    pub fn command(&self, program: &Path) -> Command {
+        linux::build_sandbox_command(&self.spec, self.private_tmp.path(), &self.syd, program)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn command(&self, program: &Path) -> Command {
+        darwin::build_sandbox_command(&self.spec, self.private_tmp.path(), program)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub fn command(&self, _program: &Path) -> Command {
+        unreachable!("Sandbox::new fails on unsupported platforms")
+    }
+}
+
+fn create_private_tmp() -> Result<tempfile::TempDir> {
+    let base = std::env::temp_dir().join("capsa-sandbox");
+    std::fs::create_dir_all(&base)
+        .with_context(|| format!("failed to create sandbox temp base {}", base.display()))?;
+
+    tempfile::Builder::new()
+        .prefix("sbx-")
+        .tempdir_in(&base)
+        .with_context(|| format!("failed to create private temp dir in {}", base.display()))
+}
+
 /// An fd to inherit into the child process at a specific target fd number.
 ///
 /// Each remap must use unique source and target fd numbers, and source/target
@@ -195,7 +312,11 @@ pub fn spawn_sandboxed_with_fds(
     anyhow::bail!("sandboxing is not implemented for this platform")
 }
 
-pub(crate) fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
+/// Installs a `pre_exec` callback on `command` that remaps file descriptors
+/// into the child process according to `fd_remaps`. Use this alongside
+/// [`Sandbox::command`] when the sandboxed child needs specific fd numbers
+/// (for example, pre-opened sockets handed off from a parent).
+pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     if fd_remaps.is_empty() {
         return;
     }
