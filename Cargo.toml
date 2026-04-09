@@ -6,6 +6,7 @@ members = [
   "crates/net",
   "crates/netd",
   "crates/sandbox",
+  "crates/spec",
   "crates/vmm",
 ]
 default-members = ["crates/cli"]

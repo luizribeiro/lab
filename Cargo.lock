@@ -170,6 +170,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsa-spec"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capsa-net",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "capsa-vmm"
 version = "0.1.0"
 dependencies = [

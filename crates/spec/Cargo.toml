@@ -1,0 +1,16 @@
+[package]
+name = "capsa-spec"
+version = "0.1.0"
+edition = "2021"
+
+# `capsa-net` is a heavier dependency than this crate would ideally pull,
+# but `NetworkPolicy` lives there and the policy type needs to travel
+# inside `NetLaunchSpec`. Splitting policy types into their own leaf crate
+# is a larger refactor; revisit if the weight becomes a problem. For now
+# the spec crate still achieves its goal: daemon binaries avoid depending
+# on `capsa-core` (which brings `capsa-sandbox` and the libkrun build).
+[dependencies]
+anyhow = "1.0"
+capsa-net = { path = "../net" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
