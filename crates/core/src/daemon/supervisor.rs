@@ -67,16 +67,6 @@ impl SpawnBackend for SandboxedSpawnBackend {
             return spawn_direct(program, args, fd_remaps, stdin_null);
         }
 
-        // The Linux `syd` backend hard-errors when allow_network is true
-        // because syd's network mediation conflicts with capsa-netd's policy
-        // runtime. Fall back to unsandboxed spawn here so network-enabled
-        // daemons keep working until syd gains netd-compatible mediation.
-        // On macOS `Sandbox::new` accepts allow_network=true so this guard
-        // is intentionally Linux-only.
-        if cfg!(target_os = "linux") && spec.allow_network {
-            return spawn_direct(program, args, fd_remaps, stdin_null);
-        }
-
         let sandbox = capsa_sandbox::Sandbox::new(spec.clone())
             .with_context(|| format!("failed to prepare sandbox for {}", program.display()))?;
 

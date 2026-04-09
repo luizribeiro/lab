@@ -45,16 +45,26 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "trace/force_cloexec:on".to_string(),
     ];
 
-    // `Sandbox::new` rejects `allow_network = true` on Linux, so reaching
-    // this point always means the child should be network-isolated.
-    debug_assert!(
-        !spec.allow_network,
-        "Linux syd backend cannot serve allow_network=true specs"
-    );
-    rules.push("sandbox/net:on".to_string());
-    rules.push("default/net:deny".to_string());
-
-    rules.push("sandbox/lock:on".to_string());
+    if spec.allow_network {
+        // Network-enabled daemons (e.g. capsa-netd) need two relaxations:
+        //
+        // 1. `sandbox/net:off` — disables syd's seccomp-level network
+        //    mediation so the daemon can own outbound traffic policy.
+        //
+        // 2. No `sandbox/lock:on` — `sandbox/lock:on` activates Landlock
+        //    as a second enforcement layer, and on recent kernels
+        //    Landlock's network ruleset denies `connect()` with EACCES
+        //    for any locked child regardless of the seccomp mediator
+        //    state. syd 3.49 does not expose Landlock network-allow
+        //    rules, so the only way to permit outbound connections is
+        //    to skip Landlock for these daemons. Seccomp-based
+        //    read/exec/fs/ioctl mediation still applies.
+        rules.push("sandbox/net:off".to_string());
+    } else {
+        rules.push("sandbox/net:on".to_string());
+        rules.push("default/net:deny".to_string());
+        rules.push("sandbox/lock:on".to_string());
+    }
 
     // Allow common filesystem types touched by capsa-vmm and host runtime.
     for fs in ["ext", "tmpfs", "proc", "sysfs", "cgroup"] {

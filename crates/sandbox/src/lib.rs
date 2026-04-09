@@ -71,20 +71,9 @@ pub struct Sandbox {
 impl Sandbox {
     /// Prepares a sandbox from `spec`.
     ///
-    /// Fails if the platform backend cannot satisfy the spec. On Linux this
-    /// includes `spec.allow_network == true`, because the `syd` backend's
-    /// network mediation currently conflicts with capsa-netd.
+    /// Fails if the platform backend cannot satisfy the spec.
     #[cfg(target_os = "linux")]
     pub fn new(spec: SandboxSpec) -> Result<Self> {
-        if spec.allow_network {
-            anyhow::bail!(
-                "capsa-sandbox: the Linux syd backend cannot currently sandbox processes that require \
-                 network access (syd's net mediation conflicts with capsa-netd). Callers that need \
-                 network access should either run the program without a sandbox or wait for the \
-                 backend to gain netd-compatible network mediation."
-            );
-        }
-
         let syd = linux::find_in_path("syd").ok_or_else(|| {
             anyhow::anyhow!(
                 "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`)"

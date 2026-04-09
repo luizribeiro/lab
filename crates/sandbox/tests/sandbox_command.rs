@@ -2,18 +2,14 @@
 //! contract tests go through `common::run_probe` and live in the other test
 //! files in this directory.
 
-#[cfg(target_os = "linux")]
 #[test]
-fn sandbox_new_rejects_allow_network_on_linux() {
+fn sandbox_new_accepts_allow_network() {
+    // Sandbox::new must succeed for network-enabled specs on every
+    // supported platform; backends that cannot enforce network isolation
+    // (e.g. Linux `syd` on kernels with Landlock network rules) fall back
+    // to seccomp-only sandboxing rather than erroring.
     let spec = capsa_sandbox::SandboxSpec::new().allow_network(true);
-    let err = capsa_sandbox::Sandbox::new(spec)
-        .err()
-        .expect("Sandbox::new must reject allow_network=true on Linux");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("network"),
-        "error should mention the network conflict, got: {msg}"
-    );
+    capsa_sandbox::Sandbox::new(spec).expect("Sandbox::new must accept allow_network=true");
 }
 
 #[test]

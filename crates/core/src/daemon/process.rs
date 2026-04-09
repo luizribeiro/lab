@@ -13,9 +13,7 @@ pub struct DaemonProcess {
     // ordering is a defense-in-depth for panic/unwinding paths.
     child: Child,
     // Held to keep the sandbox's private tmp directory alive until the child
-    // exits. `None` when sandboxing was bypassed (CAPSA_DISABLE_SANDBOX or a
-    // platform combination the backend can't handle, such as Linux +
-    // allow_network).
+    // exits. `None` when sandboxing was bypassed (CAPSA_DISABLE_SANDBOX).
     _sandbox: Option<Sandbox>,
 }
 

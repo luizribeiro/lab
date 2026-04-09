@@ -19,11 +19,6 @@ fn network_is_blocked_when_disabled() {
     ));
 }
 
-// Linux's `syd` backend cannot currently sandbox processes that also need
-// network access; `Sandbox::new` hard-errors on that combination and callers
-// must fall back to unsandboxed spawn. On macOS the seatbelt backend supports
-// `allow_network` natively, so this test only runs there.
-#[cfg(target_os = "macos")]
 #[test]
 fn network_is_allowed_when_enabled() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind local listener");
