@@ -5,11 +5,9 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 
+use capsa_spec::{encode_launch_spec_args, NetInterfaceSpec, NetLaunchSpec};
+
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonReadiness, DaemonSpawnSpec};
-
-use crate::daemon::launch_spec_args::encode_launch_spec_args;
-
-use super::spec::{NetInterfaceSpec, NetLaunchSpec};
 
 const READY_SIGNAL: u8 = b'R';
 const NETD_RUNTIME_READ_PATHS: &[&str] = &[
@@ -222,10 +220,10 @@ mod tests {
         (reader, writer)
     }
 
-    fn sample_spec() -> crate::daemon::net::spec::NetLaunchSpec {
-        crate::daemon::net::spec::NetLaunchSpec {
+    fn sample_spec() -> capsa_spec::NetLaunchSpec {
+        capsa_spec::NetLaunchSpec {
             ready_fd: 30,
-            interfaces: vec![crate::daemon::net::spec::NetInterfaceSpec {
+            interfaces: vec![capsa_spec::NetInterfaceSpec {
                 host_fd: 200,
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 policy: None,

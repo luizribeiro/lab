@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use capsa_core::{ResolvedNetworkInterface, VmmLaunchSpec};
+use capsa_spec::{ResolvedNetworkInterface, VmmLaunchSpec};
 
 mod boot;
 mod libkrun;
@@ -91,7 +91,7 @@ impl KernelCmdline {
 #[cfg(test)]
 mod tests {
     use super::{effective_kernel_cmdline, network_call_params};
-    use capsa_core::{ResolvedNetworkInterface, VmmLaunchSpec};
+    use capsa_spec::{ResolvedNetworkInterface, VmmLaunchSpec};
 
     fn base_spec() -> VmmLaunchSpec {
         VmmLaunchSpec {

@@ -3,12 +3,9 @@ use std::path::Path;
 
 use anyhow::{ensure, Result};
 
+use capsa_spec::{encode_launch_spec_args, ResolvedNetworkInterface, VmmLaunchSpec};
+
 use crate::daemon::traits::{DaemonAdapter, DaemonBinaryInfo, DaemonSpawnSpec, NoReadiness};
-
-use crate::daemon::launch_spec_args::encode_launch_spec_args;
-use crate::ResolvedNetworkInterface;
-
-use super::spec::VmmLaunchSpec;
 
 pub struct VmmDaemonAdapter;
 

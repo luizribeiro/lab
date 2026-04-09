@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 
-use capsa_core::daemon::launch_spec_args::parse_launch_spec_args;
-use capsa_core::daemon::net::spec::NetLaunchSpec;
+use capsa_spec::{parse_launch_spec_args, NetLaunchSpec};
 
 mod runtime;
 

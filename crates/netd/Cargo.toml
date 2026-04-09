@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-capsa-core = { path = "../core" }
 capsa-net = { path = "../net" }
+capsa-spec = { path = "../spec" }
 libc = "0.2"
 tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1"

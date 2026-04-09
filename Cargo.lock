@@ -122,7 +122,6 @@ dependencies = [
  "capsa-sandbox",
  "capsa-spec",
  "libc",
- "pkg-config",
  "serde",
  "serde_json",
  "tokio",
@@ -151,8 +150,8 @@ name = "capsa-netd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "capsa-core",
  "capsa-net",
+ "capsa-spec",
  "libc",
  "serde_json",
  "tokio",
@@ -185,8 +184,8 @@ name = "capsa-vmm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "capsa-core",
- "serde_json",
+ "capsa-spec",
+ "pkg-config",
 ]
 
 [[package]]

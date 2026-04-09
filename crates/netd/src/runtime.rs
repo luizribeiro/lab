@@ -3,11 +3,11 @@ use std::io;
 use std::os::fd::{FromRawFd, OwnedFd};
 
 use anyhow::{anyhow, Context, Result};
-use capsa_core::daemon::net::spec::{NetInterfaceSpec, NetLaunchSpec};
 use capsa_net::{
     bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, PortForwardRequest,
     VirtualSwitch,
 };
+use capsa_spec::{NetInterfaceSpec, NetLaunchSpec};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -187,8 +187,8 @@ impl NetworkRuntime {
 #[cfg(test)]
 mod tests {
     use super::run;
-    use capsa_core::daemon::net::spec::{NetInterfaceSpec, NetLaunchSpec};
     use capsa_net::{DomainPattern, NetworkPolicy};
+    use capsa_spec::{NetInterfaceSpec, NetLaunchSpec};
     use std::io::Read;
     use std::os::fd::{FromRawFd, IntoRawFd};
     use std::os::unix::net::UnixDatagram;

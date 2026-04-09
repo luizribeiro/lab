@@ -5,17 +5,13 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+use capsa_spec::{NetInterfaceSpec, NetLaunchSpec, VmmLaunchSpec};
+
 use crate::{
     daemon::{
-        net::{
-            adapter::{NetDaemonAdapter, NetDaemonHandoff},
-            spec::{NetInterfaceSpec, NetLaunchSpec},
-        },
+        net::adapter::{NetDaemonAdapter, NetDaemonHandoff},
         supervisor::DaemonSupervisor,
-        vmm::{
-            adapter::{VmmDaemonAdapter, VmmDaemonHandoff},
-            spec::VmmLaunchSpec,
-        },
+        vmm::adapter::{VmmDaemonAdapter, VmmDaemonHandoff},
     },
     VmConfig,
 };
