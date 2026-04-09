@@ -199,8 +199,12 @@ pub fn configure_fd_remaps(command: &mut Command, fd_remaps: &[FdRemap]) {
     use std::os::unix::process::CommandExt;
 
     let remaps = fd_remaps.to_vec();
-    // SAFETY: pre_exec runs in the child process after fork and before exec.
-    // We only call async-signal-safe libc operations here (dup2/close).
+    // SAFETY: pre_exec runs in the child process after fork and before
+    // exec. We only call async-signal-safe libc operations here
+    // (dup2/close). The dup2-then-close sequence is safe against
+    // double-close because callers are expected to have run
+    // `validate_fd_remaps`, which rejects duplicate sources and
+    // overlapping source/target sets.
     unsafe {
         command.pre_exec(move || {
             for remap in &remaps {
