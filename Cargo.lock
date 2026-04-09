@@ -111,6 +111,7 @@ dependencies = [
  "anyhow",
  "capsa",
  "clap",
+ "libc",
 ]
 
 [[package]]
