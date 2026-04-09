@@ -2,6 +2,8 @@ mod common;
 
 use common::{run_probe, TestDir};
 
+use capsa_sandbox::Sandbox;
+
 #[test]
 fn read_allowlist_on_single_file_does_not_grant_siblings() {
     let temp = TestDir::new("read-contract");
@@ -11,15 +13,12 @@ fn read_allowlist_on_single_file_does_not_grant_siblings() {
     std::fs::write(&allowed, b"allowed").expect("failed to write allowed fixture");
     std::fs::write(&sibling, b"sibling").expect("failed to write sibling fixture");
 
-    let mut spec = capsa_sandbox::SandboxSpec::new();
-    spec.read_only_paths.push(allowed.clone());
-
     assert!(run_probe(
-        &spec,
+        Sandbox::builder().read_only_path(allowed.clone()),
         &["can-read", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        &spec,
+        Sandbox::builder().read_only_path(allowed.clone()),
         &["can-read", &sibling.display().to_string()]
     ));
 }
@@ -33,15 +32,12 @@ fn stat_allowlist_on_single_file_does_not_grant_siblings() {
     std::fs::write(&allowed, b"allowed").expect("failed to write allowed fixture");
     std::fs::write(&sibling, b"sibling").expect("failed to write sibling fixture");
 
-    let mut spec = capsa_sandbox::SandboxSpec::new();
-    spec.read_only_paths.push(allowed.clone());
-
     assert!(run_probe(
-        &spec,
+        Sandbox::builder().read_only_path(allowed.clone()),
         &["can-stat", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        &spec,
+        Sandbox::builder().read_only_path(allowed.clone()),
         &["can-stat", &sibling.display().to_string()]
     ));
 }
@@ -54,15 +50,12 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
     std::fs::write(&allowed_file, b"seed").expect("failed to seed allowed file");
     std::fs::write(&denied_file, b"seed").expect("failed to seed denied file");
 
-    let mut spec = capsa_sandbox::SandboxSpec::new();
-    spec.read_write_paths.push(allowed_file.clone());
-
     assert!(run_probe(
-        &spec,
+        Sandbox::builder().read_write_path(allowed_file.clone()),
         &["can-write", &allowed_file.display().to_string()]
     ));
     assert!(!run_probe(
-        &spec,
+        Sandbox::builder().read_write_path(allowed_file.clone()),
         &["can-write", &denied_file.display().to_string()]
     ));
 

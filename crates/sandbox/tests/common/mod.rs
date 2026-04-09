@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use capsa_sandbox::SandboxBuilder;
+
 pub struct TestDir {
     dir: tempfile::TempDir,
 }
@@ -27,22 +29,22 @@ impl TestDir {
     }
 }
 
-pub fn run_probe(spec: &capsa_sandbox::SandboxSpec, args: &[&str]) -> bool {
+/// Runs the sandbox probe with `args` under the sandbox configured by
+/// `builder`. The builder is consumed; callers should construct a fresh
+/// one per invocation.
+pub fn run_probe(builder: SandboxBuilder, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let sandbox = capsa_sandbox::Sandbox::new(spec.clone())
+    let (mut command, _sandbox) = builder
+        .build(&probe)
         .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
 
-    let status = sandbox
-        .command(&probe)
-        .args(args)
-        .status()
-        .unwrap_or_else(|e| {
-            panic!(
-                "failed to run sandboxed probe {} with args {:?}: {e}",
-                probe.display(),
-                args
-            )
-        });
+    let status = command.args(args).status().unwrap_or_else(|e| {
+        panic!(
+            "failed to run sandboxed probe {} with args {:?}: {e}",
+            probe.display(),
+            args
+        )
+    });
 
     status.success()
 }

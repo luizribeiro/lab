@@ -4,6 +4,8 @@ use std::net::TcpListener;
 
 use common::{run_probe, TestDir};
 
+use capsa_sandbox::Sandbox;
+
 #[test]
 fn network_is_blocked_when_disabled() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind local listener");
@@ -12,9 +14,8 @@ fn network_is_blocked_when_disabled() {
         .expect("failed to read local addr")
         .port();
 
-    let spec = capsa_sandbox::SandboxSpec::new().allow_network(false);
     assert!(!run_probe(
-        &spec,
+        Sandbox::builder().allow_network(false),
         &["can-connect", "127.0.0.1", &port.to_string()]
     ));
 }
@@ -31,9 +32,8 @@ fn network_is_allowed_when_enabled() {
         let _ = listener.accept();
     });
 
-    let spec = capsa_sandbox::SandboxSpec::new().allow_network(true);
     assert!(run_probe(
-        &spec,
+        Sandbox::builder().allow_network(true),
         &["can-connect", "127.0.0.1", &port.to_string()]
     ));
 
@@ -46,16 +46,13 @@ fn writes_do_not_target_global_tmp_without_explicit_allowlist() {
     let host_tmp_file = temp.join("host-tmp-target.txt");
     std::fs::write(&host_tmp_file, b"seed").expect("failed to seed host tmp file");
 
-    let spec = capsa_sandbox::SandboxSpec::new();
-
     assert!(!run_probe(
-        &spec,
+        Sandbox::builder(),
         &["can-write", &host_tmp_file.display().to_string()]
     ));
 }
 
 #[test]
 fn writes_can_target_private_tmpdir() {
-    let spec = capsa_sandbox::SandboxSpec::new();
-    assert!(run_probe(&spec, &["can-write-temp"]));
+    assert!(run_probe(Sandbox::builder(), &["can-write-temp"]));
 }

@@ -102,7 +102,7 @@ mod tests {
         let private_tmp = base.path().join("tmp");
         std::fs::create_dir_all(&private_tmp).expect("create private tmp");
 
-        let mut spec = SandboxSpec::new();
+        let mut spec = SandboxSpec::default();
         spec.read_write_paths.push(rw_file.clone());
         spec.ioctl_paths.push(ioctl_file.clone());
 
@@ -132,7 +132,7 @@ mod tests {
         std::fs::create_dir_all(&private_tmp).expect("create private tmp");
 
         let without: String =
-            build_policy(Path::new("/bin/ls"), &SandboxSpec::new(), &private_tmp).into();
+            build_policy(Path::new("/bin/ls"), &SandboxSpec::default(), &private_tmp).into();
         assert!(
             !without.contains("pseudo-tty"),
             "default spec should not grant pseudo-tty, got:\n{without}"
@@ -146,7 +146,7 @@ mod tests {
             "default spec should not grant /dev/ttys* rules, got:\n{without}"
         );
 
-        let mut spec = SandboxSpec::new();
+        let mut spec = SandboxSpec::default();
         spec.allow_interactive_tty = true;
         let with_tty: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
         assert!(

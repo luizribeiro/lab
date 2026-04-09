@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn kvm_grants_are_gated_on_allow_kvm() {
-        let mut allowed = SandboxSpec::new();
+        let mut allowed = SandboxSpec::default();
         allowed.allow_kvm = true;
         let with_kvm = rules_for(&allowed);
 
@@ -379,7 +379,7 @@ mod tests {
             "allow_kvm=true should reference /dev/kvm in path rules"
         );
 
-        let without = rules_for(&SandboxSpec::new());
+        let without = rules_for(&SandboxSpec::default());
         assert!(
             !without.iter().any(|r| r.contains("KVM_")),
             "default spec should not emit any KVM ioctl rules, got: {without:?}"
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn tty_ioctls_are_gated_on_allow_interactive_tty() {
-        let mut allowed = SandboxSpec::new();
+        let mut allowed = SandboxSpec::default();
         allowed.allow_interactive_tty = true;
         let with_tty = rules_for(&allowed);
 
@@ -404,7 +404,7 @@ mod tests {
             );
         }
 
-        let without = rules_for(&SandboxSpec::new());
+        let without = rules_for(&SandboxSpec::default());
         for ioctl in ["TCGETS", "TIOCGWINSZ", "FIONREAD"] {
             let rule = format!("allow/ioctl+{ioctl}");
             assert!(
