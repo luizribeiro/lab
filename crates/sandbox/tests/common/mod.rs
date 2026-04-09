@@ -1,3 +1,7 @@
+// Individual test binaries compile this shared module in isolation and may
+// not exercise every item, so silence the resulting dead-code noise.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 pub struct TestDir {

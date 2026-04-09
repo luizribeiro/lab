@@ -10,6 +10,9 @@ mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(feature = "tokio")]
+pub mod tokio;
+
 /// Cross-platform sandbox configuration.
 #[derive(Debug, Clone, Default)]
 pub struct SandboxSpec {
