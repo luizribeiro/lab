@@ -74,6 +74,13 @@ let (mut cmd, _sandbox) = Sandbox::builder()
 # Ok::<(), anyhow::Error>(())
 ```
 
+**Privilege hardening** (Linux only; no-op on macOS):
+
+- `no_new_privs(bool)` — enabled by default. Calls
+  `prctl(PR_SET_NO_NEW_PRIVS)` to block setuid/file-capability escalation.
+- `drop_all_capabilities()` — clears all Linux capability sets
+  (effective, permitted, inheritable, ambient, bounding).
+
 ### Tokio async (`--features tokio`)
 
 ```rust,no_run
