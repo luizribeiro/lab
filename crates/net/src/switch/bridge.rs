@@ -101,16 +101,19 @@ pub async fn bridge_to_switch(host_fd: OwnedFd, port: SwitchPort) -> io::Result<
                     match async_fd.writable().await {
                         Ok(mut guard) => {
                             match guard.try_io(|inner| {
-                                let n =
+                                let result =
                                     send(inner.get_ref().as_raw_fd(), &frame, MsgFlags::empty())
-                                        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-                                if n != frame.len() {
-                                    Err(io::Error::new(
+                                        .map_err(|e| io::Error::from_raw_os_error(e as i32));
+                                match result {
+                                    Err(e) if e.raw_os_error() == Some(libc::ENOBUFS) => {
+                                        Err(io::ErrorKind::WouldBlock.into())
+                                    }
+                                    Err(e) => Err(e),
+                                    Ok(n) if n != frame.len() => Err(io::Error::new(
                                         io::ErrorKind::WriteZero,
                                         "incomplete frame send",
-                                    ))
-                                } else {
-                                    Ok(())
+                                    )),
+                                    Ok(_) => Ok(()),
                                 }
                             }) {
                                 Ok(Ok(())) => break,
@@ -131,20 +134,32 @@ pub async fn bridge_to_switch(host_fd: OwnedFd, port: SwitchPort) -> io::Result<
         })
     };
 
-    // Wait for any task to complete, then stop the remaining tasks.
+    // Wait for any task to complete, then abort and join the others.
+    // Each branch only awaits the handles that did NOT complete in the
+    // select — re-awaiting a completed JoinHandle panics in tokio.
     tokio::select! {
-        _ = &mut vm_to_switch => debug!("bridge: VM→switch task completed"),
-        _ = &mut switch_to_vm => debug!("bridge: switch→VM task completed"),
-        _ = &mut vm_writer => debug!("bridge: VM writer task completed"),
+        _ = &mut vm_to_switch => {
+            debug!("bridge: VM→switch task completed");
+            switch_to_vm.abort();
+            vm_writer.abort();
+            let _ = switch_to_vm.await;
+            let _ = vm_writer.await;
+        }
+        _ = &mut switch_to_vm => {
+            debug!("bridge: switch→VM task completed");
+            vm_to_switch.abort();
+            vm_writer.abort();
+            let _ = vm_to_switch.await;
+            let _ = vm_writer.await;
+        }
+        _ = &mut vm_writer => {
+            debug!("bridge: VM writer task completed");
+            vm_to_switch.abort();
+            switch_to_vm.abort();
+            let _ = vm_to_switch.await;
+            let _ = switch_to_vm.await;
+        }
     }
-
-    vm_to_switch.abort();
-    switch_to_vm.abort();
-    vm_writer.abort();
-
-    let _ = vm_to_switch.await;
-    let _ = switch_to_vm.await;
-    let _ = vm_writer.await;
 
     Ok(())
 }
