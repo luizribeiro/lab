@@ -104,7 +104,7 @@ fn generate_mac(index: usize) -> [u8; 6] {
         .unwrap_or_default()
         .as_nanos();
     seed ^= (std::process::id() as u128) << 32;
-    seed ^= index as u128;
+    seed ^= (index as u128) << 8;
 
     let mut mac = [0u8; 6];
     mac[0] = 0x02; // locally administered, unicast
@@ -137,6 +137,22 @@ mod tests {
     #[test]
     fn generated_mac_is_non_zero() {
         assert_ne!(generate_mac(0), [0u8; 6]);
+    }
+
+    #[test]
+    fn generated_mac_has_local_admin_bit_and_unicast() {
+        let mac = generate_mac(0);
+        assert_eq!(mac[0] & 0x02, 0x02, "locally administered bit must be set");
+        assert_eq!(mac[0] & 0x01, 0x00, "multicast bit must be clear");
+    }
+
+    #[test]
+    fn generated_macs_differ_across_indexes() {
+        assert_ne!(
+            generate_mac(0),
+            generate_mac(1),
+            "different indexes should produce different MACs"
+        );
     }
 
     #[test]

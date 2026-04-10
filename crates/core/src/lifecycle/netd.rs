@@ -152,3 +152,48 @@ pub(super) fn wait_ready(reader: OwnedFd, timeout: Duration) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pipe_with_byte(byte: u8) -> OwnedFd {
+        let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+        std::io::Write::write_all(&mut write_end, &[byte]).expect("write byte");
+        drop(write_end);
+        read_end.into()
+    }
+
+    #[test]
+    fn wait_ready_accepts_correct_signal() {
+        let reader = pipe_with_byte(READY_SIGNAL);
+        wait_ready(reader, Duration::from_secs(1)).expect("correct byte should succeed");
+    }
+
+    #[test]
+    fn wait_ready_rejects_wrong_byte() {
+        let reader = pipe_with_byte(b'X');
+        let err = wait_ready(reader, Duration::from_secs(1)).expect_err("wrong byte should fail");
+        assert!(
+            err.to_string()
+                .contains("invalid net daemon readiness byte"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_ready_fails_on_closed_pipe() {
+        let (read_end, write_end) = std::io::pipe().expect("create pipe");
+        drop(write_end);
+        let err = wait_ready(read_end.into(), Duration::from_secs(1))
+            .expect_err("closed pipe should fail");
+        let msg = err.to_string();
+        // Linux returns POLLHUP (no POLLIN) → hits the revents guard;
+        // macOS returns POLLIN|POLLHUP → read_exact sees EOF. Both
+        // are correct platform behavior for a closed write end.
+        assert!(
+            msg.contains("failed reading") || msg.contains("readiness"),
+            "unexpected error: {err}"
+        );
+    }
+}

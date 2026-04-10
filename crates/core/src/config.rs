@@ -60,6 +60,17 @@ mod tests {
     }
 
     #[test]
+    fn vm_config_validate_accepts_single_interface() {
+        let mut config = sample_vm_config();
+        config.interfaces = vec![VmNetworkInterfaceConfig {
+            mac: None,
+            policy: None,
+            port_forwards: vec![],
+        }];
+        config.validate().expect("single interface should be valid");
+    }
+
+    #[test]
     fn vm_config_validate_rejects_multiple_interfaces() {
         let mut config = sample_vm_config();
         config.interfaces = vec![
