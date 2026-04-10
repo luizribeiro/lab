@@ -50,8 +50,7 @@ pub(super) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 ///
 /// The resolved candidate must be a regular file with at least one
 /// executable bit set. Directories and non-executable files are
-/// rejected with a clear error, which replaces the audit-flagged
-/// "exists() only" behavior of the old resolver.
+/// rejected with a clear error.
 pub(super) fn resolve_binary(env_override: &str, binary_name: &str) -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os(env_override) {
         let candidate = PathBuf::from(raw);
@@ -163,11 +162,8 @@ impl ChildHandle {
 
     /// Explicit teardown: request shutdown if the child is still
     /// running, wait for the reaper, and return its exit status.
-    ///
-    /// Only used by unit tests today; production teardown happens via
-    /// `Drop`, which uses the same `kill_with_timeout` helper under
-    /// the hood. If start.rs ever needs to observe shutdown errors
-    /// inline, drop this `cfg(test)` gate.
+    /// Production teardown happens via `Drop`, which uses the same
+    /// `kill_with_timeout` helper.
     #[cfg(test)]
     pub(super) fn shutdown(mut self) -> Result<ExitStatus> {
         if !self.exited.load(Ordering::Acquire) {
@@ -368,7 +364,6 @@ pub(super) fn wait_either(a: &mut ChildHandle, b: &mut ChildHandle) -> Exited {
 
 /// Send SIGTERM, wait up to `shutdown_timeout` for the reaper to flip
 /// `exited`, then escalate to SIGKILL if the child is still running.
-/// Ported from the behavior of the old supervisor.rs:422-459 helper.
 fn kill_with_timeout(
     pid: i32,
     exited: &AtomicBool,

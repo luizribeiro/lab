@@ -67,14 +67,6 @@ fn run_with_network(config: &VmConfig) -> Result<()> {
     }
 }
 
-// ── integration tests ────────────────────────────────────────
-//
-// These tests exercise the entire VmConfig::start path through
-// real sandboxed (or bypass) spawns against shell-script fake
-// daemons. They replace the ~450 lines of generic
-// `DaemonSupervisor` tests that lived under the old
-// `daemon/supervisor.rs` module.
-
 #[cfg(test)]
 mod tests {
     // Tests drive the public `VmConfig::start` entry point through

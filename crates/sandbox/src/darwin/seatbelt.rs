@@ -83,19 +83,11 @@ pub(super) struct SeatbeltPolicy {
 }
 
 impl SeatbeltPolicy {
-    pub(super) fn new() -> Self {
-        Self::default()
-    }
-
-    pub(super) fn import<S: Into<String>>(&mut self, profile: S) {
-        let profile = profile.into();
+    pub(super) fn import_system(&mut self) {
+        let profile = "system.sb".to_string();
         if !self.imports.iter().any(|existing| existing == &profile) {
             self.imports.push(profile);
         }
-    }
-
-    pub(super) fn import_system(&mut self) {
-        self.import("system.sb");
     }
 
     pub(super) fn allow(&mut self, operations: &[&'static str]) {

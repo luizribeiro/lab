@@ -12,7 +12,7 @@ pub(super) fn build_policy(
 ) -> SeatbeltPolicy {
     let paths = PathSets::from_inputs(program, spec, private_tmp);
 
-    let mut policy = SeatbeltPolicy::new();
+    let mut policy = SeatbeltPolicy::default();
     policy.import_system();
 
     if spec.allow_interactive_tty {

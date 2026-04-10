@@ -344,10 +344,15 @@ fn escape_syd_path(path: &Path) -> String {
 }
 
 pub(crate) fn find_in_path(binary_name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(binary_name);
-        if candidate.exists() {
+        let Ok(meta) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if meta.is_file() && (meta.permissions().mode() & 0o111) != 0 {
             return Some(candidate);
         }
     }
