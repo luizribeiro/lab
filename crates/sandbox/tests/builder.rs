@@ -1,6 +1,5 @@
-//! Tests for `SandboxBuilder::build` and the sandbox lifetime contract.
-//! Path/network contract tests go through `common::run_probe` and live
-//! in the other test files in this directory.
+//! Builder lifecycle: can we build a sandbox, and does the private
+//! tmp directory outlive the child?
 
 use std::path::Path;
 
@@ -8,10 +7,6 @@ use capsa_sandbox::Sandbox;
 
 #[test]
 fn build_accepts_allow_network() {
-    // SandboxBuilder::build must succeed for network-enabled sandboxes on
-    // every supported platform; backends that cannot enforce network
-    // isolation (e.g. Linux `syd` on kernels with Landlock network
-    // rules) fall back to seccomp-only sandboxing rather than erroring.
     Sandbox::builder()
         .allow_network(true)
         .build(Path::new("/bin/true"))
@@ -19,7 +14,7 @@ fn build_accepts_allow_network() {
 }
 
 #[test]
-fn sandbox_private_tmp_lives_until_drop() {
+fn private_tmp_lives_until_drop() {
     let (_cmd, sandbox) = Sandbox::builder()
         .build(Path::new("/bin/true"))
         .expect("build sandbox");

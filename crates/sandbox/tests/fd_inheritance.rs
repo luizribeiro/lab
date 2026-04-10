@@ -1,15 +1,13 @@
-//! Spike E: a byte traverses two independently sandboxed children
-//! through a shared `UnixDatagram` socketpair.
-//!
-//! This mirrors the production capsa-netd / capsa-vmm fd chain on a
-//! simpler scale: both daemons hold one end of a socketpair and run
-//! under separate `SandboxBuilder` policies. Spikes A–D covered each
-//! piece in isolation; this test exercises the concurrent-two-sandbox
-//! topology end-to-end so Phase 1 orchestration can assume it works.
+//! Inherited file descriptor contract: fds registered via
+//! `SandboxBuilder::inherit_fd` survive the sandbox wrapper exec
+//! (sandbox-exec on macOS, syd on Linux), and two independently
+//! sandboxed children can exchange data through a shared kernel
+//! object (UnixDatagram socketpair).
 
 mod common;
 
-use std::os::fd::OwnedFd;
+use std::io::Write;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 use std::process::{ExitStatus, Stdio};
 use std::thread;
@@ -19,12 +17,68 @@ use capsa_sandbox::Sandbox;
 
 use common::{probe_binary, ChildGuard};
 
+// ── single-process fd inheritance ────────────────────────────
+
+fn pipe_with_byte(byte: u8) -> OwnedFd {
+    let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+    write_end.write_all(&[byte]).expect("write marker byte");
+    drop(write_end);
+    read_end.into()
+}
+
+fn run_probe_with_fd_pairs(pairs: Vec<(u8, OwnedFd)>) {
+    let mut builder = Sandbox::builder();
+    let mut pair_args: Vec<String> = Vec::with_capacity(pairs.len() * 2);
+    for (expected_byte, owned) in pairs {
+        let pre_raw = owned.as_raw_fd();
+        let raw = builder
+            .inherit_fd(owned)
+            .unwrap_or_else(|e| panic!("inherit_fd({pre_raw}): {e}"));
+        assert_eq!(raw, pre_raw);
+        pair_args.push(raw.to_string());
+        pair_args.push(std::str::from_utf8(&[expected_byte]).unwrap().to_string());
+    }
+
+    let probe = probe_binary();
+    let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox for probe");
+    cmd.arg("fd-read-byte")
+        .args(&pair_args)
+        .stderr(Stdio::inherit())
+        .stdout(Stdio::inherit());
+
+    let status = cmd.status().expect("spawn sandboxed probe");
+    assert!(
+        status.success(),
+        "probe failed for inherited fds {pair_args:?}; status = {status:?}"
+    );
+}
+
+#[test]
+fn single_inherited_fd_survives_sandbox_wrapper() {
+    run_probe_with_fd_pairs(vec![(b'K', pipe_with_byte(b'K'))]);
+}
+
+#[test]
+fn multiple_inherited_fds_survive_sandbox_wrapper() {
+    run_probe_with_fd_pairs(vec![
+        (b'A', pipe_with_byte(b'A')),
+        (b'B', pipe_with_byte(b'B')),
+        (b'C', pipe_with_byte(b'C')),
+    ]);
+}
+
+// ── cross-sandbox IPC via socketpair ─────────────────────────
+//
+// Two sandboxed probes share a UnixDatagram::pair. The writer
+// sends a marker byte; the reader verifies it arrives intact.
+// Mirrors the production capsa-netd / capsa-vmm fd chain topology.
+
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MARKER: &str = "X";
 
 #[test]
-fn socketpair_byte_traverses_two_sandboxes() {
+fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
     let (writer_end, reader_end) = UnixDatagram::pair().expect("unix datagram pair");
     let writer_owned: OwnedFd = writer_end.into();
     let reader_owned: OwnedFd = reader_end.into();
@@ -59,8 +113,6 @@ fn socketpair_byte_traverses_two_sandboxes() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    // Spawn both before waiting on either: we want both sandboxes
-    // concurrent to mirror the production netd+vmm topology.
     let mut writer_child = ChildGuard::new(writer_cmd.spawn().expect("spawn writer probe"));
     let mut reader_child = ChildGuard::new(reader_cmd.spawn().expect("spawn reader probe"));
 

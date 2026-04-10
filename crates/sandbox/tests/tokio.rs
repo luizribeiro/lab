@@ -1,6 +1,7 @@
-//! Integration tests for the tokio flavor of `SandboxBuilder::build`.
+//! Async factory parity: the tokio build path enforces the same
+//! filesystem contracts as the sync `SandboxBuilder::build`.
 //!
-//! Run with `cargo test -p capsa-sandbox --features tokio --test sandbox_tokio`.
+//! Run with `cargo test -p capsa-sandbox --features tokio --test tokio`.
 
 mod common;
 
@@ -9,7 +10,7 @@ use common::{probe_binary, TestDir};
 use capsa_sandbox::{Sandbox, SandboxBuilder};
 
 #[tokio::test]
-async fn tokio_command_factory_enforces_read_allowlist() {
+async fn read_allowlist_enforced() {
     let temp = TestDir::new("tokio-read");
     let allowed = temp.join("allowed.txt");
     let sibling = temp.join("sibling.txt");
@@ -34,7 +35,7 @@ async fn tokio_command_factory_enforces_read_allowlist() {
 }
 
 #[tokio::test]
-async fn tokio_command_factory_grants_write_to_private_tmp() {
+async fn private_tmpdir_is_writable() {
     assert!(run_probe(Sandbox::builder(), &["can-write-temp"]).await);
 }
 

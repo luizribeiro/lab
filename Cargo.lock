@@ -169,7 +169,6 @@ dependencies = [
  "capsa-test-support",
  "lddtree",
  "libc",
- "serde_json",
  "tempfile",
  "tokio",
 ]

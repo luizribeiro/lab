@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use capsa_sandbox::SandboxBuilder;
 
-pub use capsa_test_support::{spawn_drain, ChildGuard};
+pub use capsa_test_support::ChildGuard;
 
 pub struct TestDir {
     dir: tempfile::TempDir,
