@@ -15,9 +15,6 @@ mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[cfg(feature = "tokio")]
-pub mod tokio;
-
 /// Internal representation of sandbox policy. Not part of the public
 /// API; use [`SandboxBuilder`] to configure a sandbox.
 #[derive(Debug, Clone, Default)]
@@ -263,21 +260,11 @@ impl SandboxBuilder {
     /// directory), so callers no longer need to hold a separate
     /// `_sandbox` binding to keep the tmp directory alive.
     pub fn command(self, program: &Path) -> Result<SandboxCommand> {
-        let (command, sandbox) = self.build_inner(program)?;
+        let (command, sandbox) = self.build(program)?;
         Ok(SandboxCommand { command, sandbox })
     }
 
-    /// Consumes the builder and produces a `(Command, Sandbox)` pair
-    /// ready to spawn `program`.
-    ///
-    /// Prefer [`SandboxBuilder::command`] for most use cases. This
-    /// method is available for callers that need the raw `Command`
-    /// and `Sandbox` separately.
-    pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
-        self.build_inner(program)
-    }
-
-    fn build_inner(self, program: &Path) -> Result<(Command, Sandbox)> {
+    fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
         #[cfg(not(target_os = "linux"))]
         let rlimits = self.spec.rlimits.clone();
 

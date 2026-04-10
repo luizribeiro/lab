@@ -102,18 +102,22 @@ async fn network_allowed_when_enabled() {
 
 async fn run_probe(builder: SandboxBuilder, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let (mut command, _sandbox) = builder
-        .build(&probe)
+    let mut sandbox_cmd = builder
+        .command(&probe)
         .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
+    sandbox_cmd.args(args);
 
-    let mut command = tokio::process::Command::from(command);
-    let status = command.args(args).status().await.unwrap_or_else(|e| {
-        panic!(
-            "failed to run sandboxed probe {} with args {:?}: {e}",
-            probe.display(),
-            args
-        )
-    });
+    let (command, _sandbox) = sandbox_cmd.into_parts();
+    let status = tokio::process::Command::from(command)
+        .status()
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to run sandboxed probe {} with args {:?}: {e}",
+                probe.display(),
+                args
+            )
+        });
 
     status.success()
 }

@@ -99,19 +99,3 @@ let status = Sandbox::builder()
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
-
-## Tokio support
-
-Enable with `--features tokio`.
-
-```rust,ignore
-use std::path::Path;
-use capsa_sandbox::Sandbox;
-
-let status = Sandbox::builder()
-    .allow_network(true)
-    .command(Path::new("/usr/bin/env"))?
-    .status()?;
-assert!(status.success());
-# Ok::<(), anyhow::Error>(())
-```
