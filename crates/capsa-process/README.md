@@ -1,29 +1,36 @@
 # capsa-process
 
-Extension trait for `std::process::Command` that provides fd inheritance
-and sealing for child processes.
+Extension trait for `std::process::Command` that provides fd
+inheritance and sealing for child processes.
+
+When you `fork+exec` in Rust, fds are marked `FD_CLOEXEC` by default
+and get closed at exec. This crate lets you explicitly pass specific
+fds to the child while sealing everything else.
 
 ## Usage
 
-```rust
-use std::os::fd::OwnedFd;
+```rust,no_run
+use std::os::unix::net::UnixDatagram;
 use std::process::Command;
 use capsa_process::CommandFdExt;
 
-let (read_end, write_end) = std::io::pipe().unwrap();
-let read_fd: OwnedFd = read_end.into();
-let raw = std::os::fd::AsRawFd::as_raw_fd(&read_fd);
+let (parent_sock, child_sock) = UnixDatagram::pair()?;
 
 let mut cmd = Command::new("/usr/bin/my-daemon");
-cmd.arg(format!("--control-fd={raw}"))
-    .map_fd(read_fd, 10)   // remap to fd 10 in child
-    .seal_fds();            // close all other fds >= 3
+cmd.seal_fds()                      // close all fds >= 3 at exec
+   .keep_fd(child_sock.into());     // except this one
 
-let child = cmd.spawn().unwrap();
+cmd.spawn()?;
+# Ok::<(), std::io::Error>(())
 ```
 
-### Methods
+## Methods
 
-- **`map_fd(fd, child_fd)`** — map an owned fd to a specific number in the child
+- **`map_fd(fd, child_fd)`** — remap an fd to a specific number in the child
 - **`keep_fd(fd)`** — keep an fd at its current number in the child
-- **`seal_fds()`** — close all fds >= 3 not registered via `map_fd`/`keep_fd`
+- **`seal_fds()`** — set `FD_CLOEXEC` on all fds `>= 3` not registered
+  via `map_fd`/`keep_fd`
+
+Call `seal_fds()` before `map_fd`/`keep_fd` — the hooks run in
+registration order, so sealing first then keeping specific fds
+composes correctly.
