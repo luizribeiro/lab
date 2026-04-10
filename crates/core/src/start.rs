@@ -52,23 +52,6 @@ mod imp {
     const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
     const READY_SIGNAL: u8 = b'R';
 
-    /// Paths netd needs to read at runtime (DNS config, cgroup/cpu
-    /// info). Carried on the sandbox policy; not part of the
-    /// launch-spec contract.
-    #[cfg(target_os = "linux")]
-    const NETD_RUNTIME_READ_PATHS: &[&str] = &[
-        "/etc/resolv.conf",
-        "/proc/self/cgroup",
-        "/proc/stat",
-        "/sys/devices/system/cpu/online",
-    ];
-
-    /// macOS has no /proc or /sys; DNS configuration lives in the
-    /// SystemConfiguration framework. The exact set of paths
-    /// `capsa-net` opens during a darwin run is not yet characterized.
-    #[cfg(target_os = "macos")]
-    const NETD_RUNTIME_READ_PATHS: &[&str] = &[];
-
     pub(super) fn start(config: &VmConfig) -> Result<()> {
         config.validate().context("invalid VM configuration")?;
 
@@ -199,7 +182,7 @@ mod imp {
         let mut builder = capsa_sandbox::Sandbox::builder()
             .allow_network(true)
             .read_only_path(canonical_or_unchanged(binary_path));
-        for runtime_read_path in NETD_RUNTIME_READ_PATHS {
+        for runtime_read_path in capsa_net::runtime_read_paths() {
             builder = builder.read_only_path(PathBuf::from(*runtime_read_path));
         }
         builder
