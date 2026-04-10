@@ -1,5 +1,5 @@
 //! Async factory parity: the tokio build path enforces the same
-//! contracts as the sync `SandboxBuilder::build`.
+//! contracts as the sync `SandboxBuilder::command`.
 //!
 //! Run with `cargo test -p capsa-sandbox --features tokio --test tokio`.
 
@@ -9,8 +9,7 @@ use std::net::TcpListener;
 
 use common::{probe_binary, TestDir};
 
-use capsa_sandbox::Sandbox;
-use capsa_sandbox::SandboxBuilder;
+use capsa_sandbox::{Sandbox, SandboxBuilder};
 
 #[tokio::test]
 async fn read_allowlist_enforced() {
@@ -102,22 +101,18 @@ async fn network_allowed_when_enabled() {
 
 async fn run_probe(builder: SandboxBuilder, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let mut sandbox_cmd = builder
-        .command(&probe)
+    let mut cmd = builder
+        .tokio_command(&probe)
         .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
-    sandbox_cmd.args(args);
+    cmd.args(args);
 
-    let (command, _sandbox) = sandbox_cmd.into_parts();
-    let status = tokio::process::Command::from(command)
-        .status()
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "failed to run sandboxed probe {} with args {:?}: {e}",
-                probe.display(),
-                args
-            )
-        });
+    let status = cmd.status().await.unwrap_or_else(|e| {
+        panic!(
+            "failed to run sandboxed probe {} with args {:?}: {e}",
+            probe.display(),
+            args
+        )
+    });
 
     status.success()
 }

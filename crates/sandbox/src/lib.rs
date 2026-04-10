@@ -10,6 +10,9 @@ use capsa_process::CommandFdExt;
 mod discover;
 mod paths;
 
+#[cfg(feature = "tokio")]
+pub mod tokio;
+
 #[cfg(target_os = "macos")]
 mod darwin;
 #[cfg(target_os = "linux")]
