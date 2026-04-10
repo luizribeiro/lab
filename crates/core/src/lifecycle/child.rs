@@ -279,7 +279,8 @@ fn build_and_spawn(
         if stdin_null {
             command.stdin(Stdio::null());
         }
-        capsa_sandbox::configure_inherited_fds(&mut command, builder.into_inherited_fds())?;
+        let (inherited_fds, close_non_inherited) = builder.into_inherited_fds();
+        capsa_sandbox::configure_inherited_fds(&mut command, inherited_fds, close_non_inherited)?;
         let child = command.spawn().with_context(|| {
             format!("failed to spawn {name} daemon binary {}", binary.display())
         })?;

@@ -51,7 +51,7 @@ fn netd_binary_signals_readiness_after_spawn() {
 
     // configure_inherited_fds consumes the OwnedFds; the raw fd numbers
     // baked into the spec JSON above must already be captured.
-    configure_inherited_fds(&mut cmd, vec![ready_writer_owned, host_owned])
+    configure_inherited_fds(&mut cmd, vec![ready_writer_owned, host_owned], false)
         .expect("configure_inherited_fds");
 
     let mut child = ChildGuard::new(cmd.spawn().expect("spawn capsa-netd"));

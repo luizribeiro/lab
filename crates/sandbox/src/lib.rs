@@ -16,14 +16,29 @@ pub mod tokio;
 
 /// Internal representation of sandbox policy. Not part of the public
 /// API; use [`SandboxBuilder`] to configure a sandbox.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct SandboxSpec {
     pub(crate) allow_network: bool,
     pub(crate) allow_kvm: bool,
     pub(crate) allow_interactive_tty: bool,
+    pub(crate) close_non_inherited_fds: bool,
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
+}
+
+impl Default for SandboxSpec {
+    fn default() -> Self {
+        Self {
+            allow_network: false,
+            allow_kvm: false,
+            allow_interactive_tty: false,
+            close_non_inherited_fds: true,
+            read_only_paths: Vec::new(),
+            read_write_paths: Vec::new(),
+            ioctl_paths: Vec::new(),
+        }
+    }
 }
 
 /// A prepared sandbox environment: holds the private tmp directory and
@@ -207,6 +222,16 @@ impl SandboxBuilder {
         self
     }
 
+    /// Controls whether the pre_exec hook closes all file descriptors
+    /// `>= 3` that were **not** registered via [`SandboxBuilder::inherit_fd`].
+    ///
+    /// Enabled by default. This prevents leaked privileged fds from
+    /// becoming sandbox escape vectors.
+    pub fn close_non_inherited_fds(mut self, close: bool) -> Self {
+        self.spec.close_non_inherited_fds = close;
+        self
+    }
+
     /// Hands an owned file descriptor to the sandbox to be inherited
     /// into the child at its current raw fd number.
     ///
@@ -238,8 +263,9 @@ impl SandboxBuilder {
         Ok(raw)
     }
 
-    /// Consumes the builder and returns just the owned fds that were
-    /// registered via [`SandboxBuilder::inherit_fd`], discarding the
+    /// Consumes the builder and returns the owned fds registered via
+    /// [`SandboxBuilder::inherit_fd`] together with the
+    /// `close_non_inherited_fds` setting, discarding the rest of the
     /// sandbox policy.
     ///
     /// This is intended for callers that decide at the last moment to
@@ -247,8 +273,8 @@ impl SandboxBuilder {
     /// debugging escape hatch) and want to apply fd inheritance to a
     /// plain `std::process::Command` via [`configure_inherited_fds`]
     /// instead of going through [`SandboxBuilder::build`].
-    pub fn into_inherited_fds(self) -> Vec<std::os::fd::OwnedFd> {
-        self.inherited_fds
+    pub fn into_inherited_fds(self) -> (Vec<std::os::fd::OwnedFd>, bool) {
+        (self.inherited_fds, self.spec.close_non_inherited_fds)
     }
 
     /// Consumes the builder and produces a `(Command, Sandbox)` pair
@@ -262,9 +288,10 @@ impl SandboxBuilder {
     /// outlive the spawned `Child`; the caller should store it next to
     /// the `Child` handle (e.g. via `DaemonProcess` in capsa-core).
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
+        let close_non_inherited = self.spec.close_non_inherited_fds;
         let sandbox = Sandbox::new(self.spec)?;
         let mut command = sandbox.command(program);
-        configure_inherited_fds(&mut command, self.inherited_fds)?;
+        configure_inherited_fds(&mut command, self.inherited_fds, close_non_inherited)?;
         Ok((command, sandbox))
     }
 }
@@ -288,9 +315,46 @@ impl Sandbox {
     }
 }
 
+/// Reads `/dev/fd` (macOS) or `/proc/self/fd` (Linux) to discover
+/// currently-open fds, then returns those `>= 3` that are NOT in
+/// `inherited`. Called in the parent before fork so directory I/O
+/// is safe.
+fn enumerate_non_inherited_fds(
+    inherited: &std::collections::HashSet<i32>,
+) -> Vec<std::os::fd::RawFd> {
+    let fd_dir = if cfg!(target_os = "linux") {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+
+    let entries = match std::fs::read_dir(fd_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    entries
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name();
+            let fd: i32 = name.to_str()?.parse().ok()?;
+            if fd >= 3 && !inherited.contains(&fd) {
+                Some(fd)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Installs a `pre_exec` hook on `command` that makes the given
 /// owned fds survive `exec` in the child at their current raw fd
 /// numbers, by clearing `FD_CLOEXEC` on each one.
+///
+/// When `close_non_inherited` is true, the hook also sets `FD_CLOEXEC`
+/// on every fd `>= 3` that is **not** in the inherited set, so they
+/// are closed at exec time. This prevents leaked privileged fds from
+/// becoming sandbox escape vectors without disturbing Rust std's
+/// internal error-reporting pipe.
 ///
 /// This is the lower-level primitive used by [`SandboxBuilder::build`].
 /// It is exposed separately so callers that need fd inheritance
@@ -311,12 +375,13 @@ impl Sandbox {
 pub fn configure_inherited_fds(
     command: &mut Command,
     fds: Vec<std::os::fd::OwnedFd>,
+    close_non_inherited: bool,
 ) -> Result<()> {
     use std::collections::HashSet;
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
 
-    if fds.is_empty() {
+    if fds.is_empty() && !close_non_inherited {
         return Ok(());
     }
 
@@ -332,6 +397,19 @@ pub fn configure_inherited_fds(
             "configure_inherited_fds[{index}]: fd {raw} already present; each fd can only be inherited once"
         );
     }
+
+    let inherited_set: HashSet<i32> = fds.iter().map(|fd| fd.as_raw_fd()).collect();
+
+    // Snapshot the set of fds to mark FD_CLOEXEC in the parent
+    // (before fork) by reading /dev/fd (macOS) or /proc/self/fd
+    // (Linux). This is O(open_fds) rather than O(max_fd), avoiding
+    // the multi-second stall from iterating sysconf(_SC_OPEN_MAX)
+    // which can be ~1M on macOS.
+    let fds_to_cloexec = if close_non_inherited {
+        enumerate_non_inherited_fds(&inherited_set)
+    } else {
+        Vec::new()
+    };
 
     let child_hook = move || -> std::io::Result<()> {
         for fd in &fds {
@@ -354,14 +432,28 @@ pub fn configure_inherited_fds(
                 return Err(std::io::Error::last_os_error());
             }
         }
+
+        for &fd in &fds_to_cloexec {
+            // Set FD_CLOEXEC rather than close() so that Rust std's
+            // internal error-reporting pipe (used to propagate exec
+            // failures back to the parent) survives pre_exec. The
+            // fd will be closed automatically at exec time.
+            //
+            // SAFETY: fcntl with F_SETFD is async-signal-safe per
+            // POSIX.1. EBADF on fds closed between snapshot and
+            // fork is harmless.
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+        }
+
         Ok(())
     };
 
     // SAFETY: pre_exec runs `child_hook` in the child after fork and
     // before exec, where only async-signal-safe work is permitted.
     // The closure's operations are all async-signal-safe:
-    //   - iterating a pre-allocated `Vec<OwnedFd>` by reference (no
-    //     allocation; `OwnedFd` Drop does not run during iteration),
+    //   - iterating pre-allocated `Vec`s by reference (no allocation),
     //   - `OwnedFd::as_raw_fd` (reads an inline integer),
     //   - `libc::fcntl` with `F_GETFD` / `F_SETFD` (POSIX
     //     async-signal-safe list),
@@ -433,7 +525,7 @@ mod tests {
         cmd.arg("-c").arg(format!(
             "IFS= read -r line <&{read_raw}; [ \"$line\" = \"hello\" ]"
         ));
-        super::configure_inherited_fds(&mut cmd, vec![read_owned])
+        super::configure_inherited_fds(&mut cmd, vec![read_owned], false)
             .expect("configure_inherited_fds should succeed");
 
         let status = cmd.status().expect("spawn should succeed");
