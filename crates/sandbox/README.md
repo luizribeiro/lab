@@ -109,5 +109,3 @@ let builder = Sandbox::builder().allow_network(true);
 let (_cmd, _sandbox) = sandbox_tokio::build(builder, Path::new("/bin/true"))?;
 # Ok::<(), anyhow::Error>(())
 ```
-
-Platform support: Linux (`syd`) and macOS (`sandbox-exec`).
