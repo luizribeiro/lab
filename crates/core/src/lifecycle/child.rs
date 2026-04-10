@@ -286,6 +286,7 @@ fn build_and_spawn(
             cfg.close_non_inherited_fds,
         )?;
         capsa_sandbox::configure_rlimits(&mut command, cfg.rlimits)?;
+        #[cfg(target_os = "linux")]
         capsa_sandbox::configure_privilege_hardening(
             &mut command,
             cfg.no_new_privs,
