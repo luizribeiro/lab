@@ -5,8 +5,7 @@ Build and run a child process inside an OS sandbox.
 - Linux backend: `syd`
 - macOS backend: `sandbox-exec`
 
-`Sandbox::builder()` provides one cross-platform API and returns
-`(std::process::Command, Sandbox)`.
+`Sandbox::builder()` provides one cross-platform API.
 
 ## Quick start
 
@@ -14,10 +13,9 @@ Build and run a child process inside an OS sandbox.
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (mut cmd, _sandbox) = Sandbox::builder()
-    .build(Path::new("/usr/bin/env"))?;
-
-let status = cmd.status()?;
+let status = Sandbox::builder()
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
@@ -33,18 +31,17 @@ assert!(status.success());
 ## Filesystem policy
 
 A private `$TMPDIR` is created for the child and removed when
-`Sandbox` is dropped.
+the sandbox is dropped.
 
 ```rust
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (mut cmd, _sandbox) = Sandbox::builder()
+let status = Sandbox::builder()
     .read_only_path("/usr")
     .read_only_path("/etc")
-    .build(Path::new("/usr/bin/env"))?;
-
-let status = cmd.status()?;
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
@@ -55,11 +52,10 @@ assert!(status.success());
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (mut cmd, _sandbox) = Sandbox::builder()
+let status = Sandbox::builder()
     .allow_network(true)
-    .build(Path::new("/usr/bin/env"))?;
-
-let status = cmd.status()?;
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
@@ -80,9 +76,9 @@ let fd = reader.as_raw_fd();
 let mut builder = Sandbox::builder();
 builder.inherit_fd(reader.into());
 
-let (mut cmd, _sandbox) = builder.build(Path::new("/usr/bin/env"))?;
-
-let status = cmd.status()?;
+let status = builder
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
@@ -93,14 +89,13 @@ assert!(status.success());
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (mut cmd, _sandbox) = Sandbox::builder()
+let status = Sandbox::builder()
     .max_open_files(64)
     .max_cpu_time(30)
     .max_processes(32)
     .disable_core_dumps()
-    .build(Path::new("/usr/bin/env"))?;
-
-let status = cmd.status()?;
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
 assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
@@ -111,10 +106,12 @@ Enable with `--features tokio`.
 
 ```rust,ignore
 use std::path::Path;
-use capsa_sandbox::{Sandbox, tokio as sandbox_tokio};
+use capsa_sandbox::Sandbox;
 
-let builder = Sandbox::builder().allow_network(true);
-let (mut cmd, _sandbox) = sandbox_tokio::build(builder, Path::new("/usr/bin/env"))?;
-let status = cmd.status().await?;
+let status = Sandbox::builder()
+    .allow_network(true)
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
+assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```

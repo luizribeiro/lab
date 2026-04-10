@@ -9,7 +9,8 @@ use std::net::TcpListener;
 
 use common::{probe_binary, TestDir};
 
-use capsa_sandbox::{Sandbox, SandboxBuilder};
+use capsa_sandbox::Sandbox;
+use capsa_sandbox::SandboxBuilder;
 
 #[tokio::test]
 async fn read_allowlist_enforced() {
@@ -101,9 +102,11 @@ async fn network_allowed_when_enabled() {
 
 async fn run_probe(builder: SandboxBuilder, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let (mut command, _sandbox) = capsa_sandbox::tokio::build(builder, &probe)
+    let (mut command, _sandbox) = builder
+        .build(&probe)
         .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
 
+    let mut command = tokio::process::Command::from(command);
     let status = command.args(args).status().await.unwrap_or_else(|e| {
         panic!(
             "failed to run sandboxed probe {} with args {:?}: {e}",

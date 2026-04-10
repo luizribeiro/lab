@@ -1,7 +1,8 @@
 #![doc = include_str!("../README.md")]
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 
 use anyhow::{Context, Result};
 use capsa_process::CommandFdExt;
@@ -33,21 +34,19 @@ pub(crate) struct SandboxSpec {
 /// A prepared sandbox environment: holds the private tmp directory and
 /// any per-platform state needed to build sandboxed commands.
 ///
-/// Construct one via [`Sandbox::builder`] and finalize it into a
-/// `(Command, Sandbox)` pair with [`SandboxBuilder::build`]. The caller
-/// must keep the `Sandbox` alive until the spawned child exits;
-/// dropping it earlier removes the private tmp directory out from
-/// under the child.
+/// Construct one via [`Sandbox::builder`] and
+/// [`SandboxBuilder::command`].
 ///
 /// ```
 /// use std::path::Path;
 /// use capsa_sandbox::Sandbox;
 ///
-/// let (mut cmd, _sandbox) = Sandbox::builder()
-///     .build(Path::new("/usr/bin/env"))
+/// let status = Sandbox::builder()
+///     .command(Path::new("/usr/bin/env"))
+///     .unwrap()
+///     .status()
 ///     .unwrap();
-/// let mut child = cmd.spawn().unwrap();
-/// child.wait().unwrap();
+/// assert!(status.success());
 /// ```
 pub struct Sandbox {
     spec: SandboxSpec,
@@ -98,17 +97,17 @@ impl Sandbox {
     /// `program` inside this sandbox. Called by
     /// [`SandboxBuilder::build`]; not part of the public API.
     #[cfg(target_os = "linux")]
-    pub(crate) fn command(&self, program: &Path) -> Command {
+    pub(crate) fn build_command(&self, program: &Path) -> Command {
         linux::build_sandbox_command(&self.spec, self.private_tmp.path(), &self.syd, program)
     }
 
     #[cfg(target_os = "macos")]
-    pub(crate) fn command(&self, program: &Path) -> Command {
+    pub(crate) fn build_command(&self, program: &Path) -> Command {
         darwin::build_sandbox_command(&self.spec, self.private_tmp.path(), program)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    pub(crate) fn command(&self, _program: &Path) -> Command {
+    pub(crate) fn build_command(&self, _program: &Path) -> Command {
         unreachable!("Sandbox::new fails on unsupported platforms")
     }
 }
@@ -126,12 +125,9 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 
 /// Fluent builder for a sandboxed child command.
 ///
-/// This is the preferred entry point for the crate. Configure the
-/// sandbox policy and any fds to inherit into the child, then call
-/// [`SandboxBuilder::build`] to get back a `(Command, Sandbox)` pair.
-/// The caller runs `Command::spawn` as usual and keeps the `Sandbox`
-/// alive alongside the returned `Child` so the sandbox's private tmp
-/// directory outlives the child process.
+/// Configure the sandbox policy and any fds to inherit into the
+/// child, then call [`SandboxBuilder::command`] to get a
+/// [`SandboxCommand`] ready to spawn.
 ///
 /// # Example
 ///
@@ -146,9 +142,9 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 ///     let mut builder = Sandbox::builder().allow_network(true);
 ///     builder.inherit_fd(ready_writer);
 ///
-///     let (mut cmd, _sandbox) = builder.build(Path::new("/usr/bin/capsa-netd"))?;
+///     let mut cmd = builder.command(Path::new("/usr/bin/capsa-netd"))?;
 ///     cmd.arg(format!("--ready-fd={ready_raw}"));
-///     let _child = cmd.spawn()?;
+///     cmd.spawn()?;
 ///     Ok(())
 /// }
 /// ```
@@ -259,21 +255,34 @@ impl SandboxBuilder {
         raw
     }
 
+    /// Consumes the builder and produces a [`SandboxCommand`] ready
+    /// to spawn `program`.
+    ///
+    /// The returned `SandboxCommand` owns both the configured
+    /// [`std::process::Command`] and the [`Sandbox`] (private tmp
+    /// directory), so callers no longer need to hold a separate
+    /// `_sandbox` binding to keep the tmp directory alive.
+    pub fn command(self, program: &Path) -> Result<SandboxCommand> {
+        let (command, sandbox) = self.build_inner(program)?;
+        Ok(SandboxCommand { command, sandbox })
+    }
+
     /// Consumes the builder and produces a `(Command, Sandbox)` pair
     /// ready to spawn `program`.
     ///
-    /// The `Command` is pre-wired with the sandbox wrapping (syd on
-    /// Linux, sandbox-exec on macOS) and with `seal_fds` +
-    /// `keep_fd` hooks via `capsa-process::CommandFdExt` so that
-    /// registered fds survive `exec` while all other fds >= 3 are
-    /// closed. The returned `Sandbox` owns a private tmp directory
-    /// that must outlive the spawned `Child`.
+    /// Prefer [`SandboxBuilder::command`] for most use cases. This
+    /// method is available for callers that need the raw `Command`
+    /// and `Sandbox` separately.
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
+        self.build_inner(program)
+    }
+
+    fn build_inner(self, program: &Path) -> Result<(Command, Sandbox)> {
         #[cfg(not(target_os = "linux"))]
         let rlimits = self.spec.rlimits.clone();
 
         let sandbox = Sandbox::new(self.spec)?;
-        let mut command = sandbox.command(program);
+        let mut command = sandbox.build_command(program);
 
         command.seal_fds();
         for (fd, _raw) in self.fds {
@@ -296,13 +305,155 @@ impl Default for SandboxBuilder {
 impl Sandbox {
     /// Entry point for the fluent sandbox builder API.
     ///
-    /// Equivalent to [`SandboxBuilder::new`]. This is the preferred
-    /// way to construct a sandbox: configure policy and inherited fds
-    /// on the returned builder, then call [`SandboxBuilder::build`] to
-    /// realize the sandbox into a `(Command, Sandbox)` pair ready to
-    /// spawn.
+    /// Equivalent to [`SandboxBuilder::new`]. Configure policy and
+    /// inherited fds on the returned builder, then call
+    /// [`SandboxBuilder::command`] to get a [`SandboxCommand`]
+    /// ready to spawn.
     pub fn builder() -> SandboxBuilder {
         SandboxBuilder::new()
+    }
+}
+
+/// A sandboxed command ready to spawn.
+///
+/// Wraps a [`std::process::Command`] together with the [`Sandbox`]
+/// that owns the private tmp directory. The sandbox stays alive as
+/// long as this value does, so callers don't need a separate
+/// `_sandbox` binding.
+///
+/// Methods mirror [`std::process::Command`]'s API. For anything not
+/// forwarded, use [`as_command_mut`](SandboxCommand::as_command_mut).
+pub struct SandboxCommand {
+    command: Command,
+    sandbox: Sandbox,
+}
+
+impl SandboxCommand {
+    pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.command.arg(arg);
+        self
+    }
+
+    pub fn args(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> &mut Self {
+        self.command.args(args);
+        self
+    }
+
+    pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
+        self.command.env(key, val);
+        self
+    }
+
+    pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.command.envs(vars);
+        self
+    }
+
+    pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.command.env_remove(key);
+        self
+    }
+
+    pub fn env_clear(&mut self) -> &mut Self {
+        self.command.env_clear();
+        self
+    }
+
+    pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.command.current_dir(dir);
+        self
+    }
+
+    pub fn stdin(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
+        self.command.stdin(cfg);
+        self
+    }
+
+    pub fn stdout(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
+        self.command.stdout(cfg);
+        self
+    }
+
+    pub fn stderr(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
+        self.command.stderr(cfg);
+        self
+    }
+
+    pub fn status(&mut self) -> std::io::Result<ExitStatus> {
+        self.command.status()
+    }
+
+    pub fn output(&mut self) -> std::io::Result<Output> {
+        self.command.output()
+    }
+
+    /// Spawns the sandboxed child, transferring sandbox ownership to
+    /// the returned [`SandboxChild`].
+    pub fn spawn(mut self) -> std::io::Result<SandboxChild> {
+        let child = self.command.spawn()?;
+        Ok(SandboxChild {
+            child,
+            sandbox: self.sandbox,
+        })
+    }
+
+    pub fn as_command(&self) -> &Command {
+        &self.command
+    }
+
+    pub fn as_command_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
+    pub fn into_parts(self) -> (Command, Sandbox) {
+        (self.command, self.sandbox)
+    }
+}
+
+/// A running sandboxed child process.
+///
+/// Wraps a [`std::process::Child`] together with the [`Sandbox`]
+/// whose private tmp directory must outlive the child. Dropping
+/// this value cleans up the tmp directory (but does **not**
+/// kill the child — call [`kill`](SandboxChild::kill) first if
+/// needed).
+pub struct SandboxChild {
+    child: Child,
+    sandbox: Sandbox,
+}
+
+impl SandboxChild {
+    pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        self.child.wait()
+    }
+
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.child.try_wait()
+    }
+
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()
+    }
+
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub fn as_child(&self) -> &Child {
+        &self.child
+    }
+
+    pub fn as_child_mut(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    pub fn into_parts(self) -> (Child, Sandbox) {
+        (self.child, self.sandbox)
     }
 }
 

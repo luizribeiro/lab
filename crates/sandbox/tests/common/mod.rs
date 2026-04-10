@@ -36,8 +36,8 @@ impl TestDir {
 /// one per invocation.
 pub fn run_probe(builder: SandboxBuilder, args: &[&str]) -> bool {
     let probe = probe_binary();
-    let (mut command, _sandbox) = builder
-        .build(&probe)
+    let mut command = builder
+        .command(&probe)
         .unwrap_or_else(|e| panic!("failed to build sandbox for probe {}: {e}", probe.display()));
 
     let status = command.args(args).status().unwrap_or_else(|e| {

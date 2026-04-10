@@ -298,19 +298,20 @@ fn build_and_spawn(
     for fd in fds {
         builder.inherit_fd(fd);
     }
-    let (mut command, sandbox) = builder
-        .build(binary)
+    let mut sandbox_cmd = builder
+        .command(binary)
         .with_context(|| format!("failed to prepare sandbox for {}", binary.display()))?;
-    command.args(args);
+    sandbox_cmd.args(args);
     if stdin_null {
-        command.stdin(Stdio::null());
+        sandbox_cmd.stdin(Stdio::null());
     }
-    let child = command.spawn().with_context(|| {
+    let sandbox_child = sandbox_cmd.spawn().with_context(|| {
         format!(
             "failed to spawn sandboxed {name} daemon binary {}",
             binary.display()
         )
     })?;
+    let (child, sandbox) = sandbox_child.into_parts();
     Ok((child, Some(sandbox)))
 }
 

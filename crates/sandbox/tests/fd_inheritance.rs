@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 
 use capsa_sandbox::Sandbox;
 
-use common::{probe_binary, ChildGuard};
+use capsa_sandbox::SandboxChild;
+
+use common::probe_binary;
 
 // ── single-process fd inheritance ────────────────────────────
 
@@ -41,7 +43,7 @@ fn run_probe_with_fd_pairs(pairs: Vec<(u8, OwnedFd)>) {
     }
 
     let probe = probe_binary();
-    let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox for probe");
+    let mut cmd = builder.command(&probe).expect("build sandbox for probe");
     cmd.arg("fd-read-byte")
         .args(&pair_args)
         .stderr(Stdio::inherit())
@@ -88,8 +90,9 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
 
     let mut writer_builder = Sandbox::builder();
     let writer_raw = writer_builder.inherit_fd(writer_owned);
-    let (mut writer_cmd, _writer_sandbox_guard) =
-        writer_builder.build(&probe).expect("build writer sandbox");
+    let mut writer_cmd = writer_builder
+        .command(&probe)
+        .expect("build writer sandbox");
     writer_cmd
         .arg("fd-write-byte")
         .arg(writer_raw.to_string())
@@ -100,8 +103,9 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
 
     let mut reader_builder = Sandbox::builder();
     let reader_raw = reader_builder.inherit_fd(reader_owned);
-    let (mut reader_cmd, _reader_sandbox_guard) =
-        reader_builder.build(&probe).expect("build reader sandbox");
+    let mut reader_cmd = reader_builder
+        .command(&probe)
+        .expect("build reader sandbox");
     reader_cmd
         .arg("fd-read-byte")
         .arg(reader_raw.to_string())
@@ -110,8 +114,8 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    let mut writer_child = ChildGuard::new(writer_cmd.spawn().expect("spawn writer probe"));
-    let mut reader_child = ChildGuard::new(reader_cmd.spawn().expect("spawn reader probe"));
+    let mut writer_child = writer_cmd.spawn().expect("spawn writer probe");
+    let mut reader_child = reader_cmd.spawn().expect("spawn reader probe");
 
     let writer_status = wait_within(&mut writer_child, EXCHANGE_TIMEOUT, "writer");
     assert!(
@@ -126,10 +130,10 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
     );
 }
 
-fn wait_within(child: &mut ChildGuard, timeout: Duration, label: &str) -> ExitStatus {
+fn wait_within(child: &mut SandboxChild, timeout: Duration, label: &str) -> ExitStatus {
     let deadline = Instant::now() + timeout;
     loop {
-        match child.child.try_wait() {
+        match child.try_wait() {
             Ok(Some(status)) => return status,
             Ok(None) => {}
             Err(e) => panic!("{label} try_wait failed: {e}"),
@@ -157,7 +161,7 @@ fn non_inherited_fd_is_sealed_in_child() {
     // child, causing fd-read-byte to fail with EBADF.
     let probe = probe_binary();
     let builder = Sandbox::builder();
-    let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox");
+    let mut cmd = builder.command(&probe).expect("build sandbox");
     cmd.arg("fd-read-byte")
         .arg(leak_raw.to_string())
         .arg("Z")
@@ -194,7 +198,7 @@ fn inherited_fd_survives_seal() {
     let probe = probe_binary();
     let mut builder = Sandbox::builder();
     builder.inherit_fd(read_owned);
-    let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox");
+    let mut cmd = builder.command(&probe).expect("build sandbox");
     cmd.arg("fd-read-byte")
         .arg(read_raw.to_string())
         .arg("Q")

@@ -65,8 +65,8 @@ fn netd_signals_readiness_under_real_sandbox() {
     })
     .to_string();
 
-    let (mut cmd, _sandbox) = builder
-        .build(&netd_bin)
+    let mut cmd = builder
+        .command(&netd_bin)
         .expect("build sandboxed netd command");
     cmd.arg("--launch-spec-json")
         .arg(&spec)
@@ -74,7 +74,9 @@ fn netd_signals_readiness_under_real_sandbox() {
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
 
-    let _child = ChildGuard::new(cmd.spawn().expect("spawn sandboxed netd"));
+    let sandbox_child = cmd.spawn().expect("spawn sandboxed netd");
+    let (child, _sandbox) = sandbox_child.into_parts();
+    let _child = ChildGuard::new(child);
 
     let ready_byte = read_byte_with_timeout(ready_reader, READINESS_TIMEOUT);
     assert_eq!(

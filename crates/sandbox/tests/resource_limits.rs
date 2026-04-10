@@ -16,10 +16,10 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
     // Allow 16 fds total. The child starts with stdin/stdout/stderr (3)
     // plus a few internal fds, so asking for 20 opens should fail.
     // /dev/null is the target of open-many-fds; the sandbox must allow it.
-    let (mut cmd, _sandbox) = Sandbox::builder()
+    let mut cmd = Sandbox::builder()
         .max_open_files(16)
         .read_only_path("/dev/null")
-        .build(&probe)
+        .command(&probe)
         .expect("build sandbox");
 
     cmd.arg("open-many-fds")
@@ -44,10 +44,10 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
 fn max_open_files_allows_child_within_limit() {
     let probe = probe_binary();
 
-    let (mut cmd, _sandbox) = Sandbox::builder()
+    let mut cmd = Sandbox::builder()
         .max_open_files(64)
         .read_only_path("/dev/null")
-        .build(&probe)
+        .command(&probe)
         .expect("build sandbox");
 
     cmd.arg("open-many-fds")
