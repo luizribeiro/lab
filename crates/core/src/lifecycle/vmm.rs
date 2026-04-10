@@ -1,76 +1,96 @@
 //! capsa-vmm spawn path: builds the vmm sandbox policy, inherits
-//! each guest socketpair fd into the sandboxed VMM, and finalizes
-//! the launch spec with the kernel-assigned raw fd numbers before
-//! exec.
+//! each guest socketpair fd into the sandboxed VMM, and produces
+//! the launch spec with kernel-assigned raw fd numbers in one
+//! pass — no placeholder values exist along the way.
 
-use std::os::fd::OwnedFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result};
 use capsa_sandbox::SandboxBuilder;
 use capsa_spec::{encode_launch_spec_args, ResolvedNetworkInterface, VmmLaunchSpec};
 
+use crate::config::VmConfig;
+
 use super::child::{self, ChildHandle};
-use super::plan;
+use super::plan::{self, VmmInterfaceBinding};
 
-pub(super) fn spawn_vmm(spec: &VmmLaunchSpec, guest_fds: Vec<OwnedFd>) -> Result<ChildHandle> {
-    ensure!(
-        spec.resolved_interfaces.len() == guest_fds.len(),
-        "vmm guest_fds count ({}) must match resolved_interfaces ({})",
-        guest_fds.len(),
-        spec.resolved_interfaces.len()
-    );
-
+pub(super) fn spawn_vmm(
+    config: &VmConfig,
+    bindings: Vec<VmmInterfaceBinding>,
+) -> Result<ChildHandle> {
     let binary = child::resolve_binary("CAPSA_VMM_PATH", "capsa-vmm")
         .context("failed to resolve VMM binary")?;
 
-    let mut builder = vmm_sandbox_builder(spec, &binary);
+    let paths = VmmPaths::from_config(config);
+    let mut builder = vmm_sandbox_builder(&paths, &binary);
 
-    // Inherit each guest fd and record its kernel-assigned number
-    // on the final spec. One-stage replacement for the older
-    // "placeholder zeros then adapter overwrites" pattern.
-    let mut resolved = Vec::with_capacity(guest_fds.len());
-    for (guest_fd, interface) in guest_fds.into_iter().zip(&spec.resolved_interfaces) {
+    let mut resolved = Vec::with_capacity(bindings.len());
+    for binding in bindings {
         let guest_raw = builder
-            .inherit_fd(guest_fd)
+            .inherit_fd(binding.guest_fd)
             .context("failed to inherit vmm guest fd")?;
         resolved.push(ResolvedNetworkInterface {
-            mac: interface.mac,
+            mac: binding.mac,
             guest_fd: guest_raw,
         });
     }
 
-    let runtime_spec = VmmLaunchSpec {
+    let spec = VmmLaunchSpec {
+        root: paths.root,
+        kernel: paths.kernel,
+        initramfs: paths.initramfs,
+        kernel_cmdline: config.kernel_cmdline.clone(),
+        vcpus: config.vcpus,
+        memory_mib: config.memory_mib,
+        verbosity: config.verbosity,
         resolved_interfaces: resolved,
-        ..spec.clone()
     };
-    runtime_spec.validate().context("invalid vmm launch spec")?;
+    spec.validate().context("invalid vmm launch spec")?;
 
-    let args = encode_launch_spec_args(&runtime_spec)?;
+    let args = encode_launch_spec_args(&spec)?;
     child::spawn_sandboxed("vmm", &binary, builder, &args, false)
         .context("failed to spawn sandboxed VMM process")
 }
 
-fn vmm_sandbox_builder(spec: &VmmLaunchSpec, vmm_exe: &Path) -> SandboxBuilder {
-    // The spec's paths were canonicalized in `plan::build_vmm_spec`,
-    // so they match the path the macOS kernel resolves at open(2)
-    // time and the sandbox policy doesn't need to canonicalize
-    // again here. The vmm binary path comes from `resolve_binary`
-    // which doesn't canonicalize, so it gets the canonical
-    // treatment via `plan::canonical_or_unchanged`.
+/// Canonicalized VMM paths shared between the sandbox policy and
+/// the launch spec; built once per `spawn_vmm` call. Private to
+/// this file because no other site needs the post-symlink form.
+struct VmmPaths {
+    root: Option<PathBuf>,
+    kernel: Option<PathBuf>,
+    initramfs: Option<PathBuf>,
+}
+
+impl VmmPaths {
+    fn from_config(config: &VmConfig) -> Self {
+        Self {
+            root: config.root.as_deref().map(plan::canonical_or_unchanged),
+            kernel: config.kernel.as_deref().map(plan::canonical_or_unchanged),
+            initramfs: config
+                .initramfs
+                .as_deref()
+                .map(plan::canonical_or_unchanged),
+        }
+    }
+}
+
+fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
+    // `paths` is already canonicalized; the macOS kernel resolves
+    // the symlink chain at open(2) time, so the policy must list
+    // the post-resolution path or the open hits EPERM.
     let mut builder = capsa_sandbox::Sandbox::builder()
         .allow_network(false)
         .allow_kvm(true)
         .allow_interactive_tty(true)
         .read_only_path(plan::canonical_or_unchanged(vmm_exe));
 
-    if let Some(root) = &spec.root {
+    if let Some(root) = &paths.root {
         builder = builder.read_write_path(root.clone());
     }
-    if let Some(kernel) = &spec.kernel {
+    if let Some(kernel) = &paths.kernel {
         builder = builder.read_only_path(kernel.clone());
     }
-    if let Some(initramfs) = &spec.initramfs {
+    if let Some(initramfs) = &paths.initramfs {
         builder = builder.read_only_path(initramfs.clone());
     }
 

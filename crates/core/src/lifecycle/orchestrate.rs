@@ -1,12 +1,8 @@
 //! High-level VM launch flow. Decides whether to run with or
-//! without networking, sequences the netd and vmm spawns, and
-//! supervises the pair until one exits.
-
-use std::os::fd::OwnedFd;
-use std::os::unix::net::UnixDatagram;
+//! without networking, threads each interface through the typed
+//! phases in `plan`, and supervises the pair until one exits.
 
 use anyhow::{bail, Context, Result};
-use capsa_spec::ResolvedNetworkInterface;
 
 use crate::config::VmConfig;
 
@@ -26,8 +22,7 @@ pub(super) fn run(config: &VmConfig) -> Result<()> {
 }
 
 fn run_vmm_only(config: &VmConfig) -> Result<()> {
-    let spec = plan::build_vmm_spec(config, vec![]);
-    let vmm_child = vmm::spawn_vmm(&spec, vec![])?;
+    let vmm_child = vmm::spawn_vmm(config, vec![])?;
     let status = vmm_child
         .wait()
         .context("failed to wait on sandboxed VMM child")?;
@@ -39,46 +34,25 @@ fn run_vmm_only(config: &VmConfig) -> Result<()> {
 }
 
 fn run_with_network(config: &VmConfig) -> Result<()> {
-    // Single-interface only; `VmConfig::validate` bails on more.
-    // When multi-interface support lands, turn this into a loop
-    // over `config.interfaces` that builds `Vec<NetInterfaceSpec>`
-    // and `Vec<ResolvedNetworkInterface>` in lockstep.
-    debug_assert_eq!(
-        config.interfaces.len(),
-        1,
-        "run_with_network assumes single-interface; config validation should have bailed"
-    );
-    let iface = &config.interfaces[0];
+    let plans = plan::plan_interfaces(config)?;
+    let sockets = plan::open_interface_sockets(plans)?;
 
-    let (host_sock, guest_sock) =
-        UnixDatagram::pair().context("failed to create interface socketpair")?;
-    let host_fd: OwnedFd = host_sock.into();
-    let guest_fd: OwnedFd = guest_sock.into();
-
-    let mac = plan::resolve_mac(iface)?;
-    let policy = iface.policy.clone();
-    let port_forwards = iface.port_forwards.clone();
-
-    let NetdSpawn {
-        child: mut netd_child,
-        ready_reader,
-    } = netd::spawn_netd(host_fd, mac, policy, port_forwards)?;
+    let (
+        NetdSpawn {
+            child: mut netd_child,
+            ready_reader,
+        },
+        bindings,
+    ) = netd::spawn_netd(sockets)?;
 
     netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
         .context("netd readiness check failed")?;
 
     // If spawn_vmm errors below, `netd_child` is dropped here and
-    // its ChildHandle::Drop tears down the netd child. No explicit
-    // cleanup needed -- this is the whole point of RAII handles.
-    let vmm_spec = plan::build_vmm_spec(
-        config,
-        vec![ResolvedNetworkInterface {
-            mac,
-            guest_fd: 0, // placeholder; vmm::spawn_vmm rewrites with the kernel-assigned number
-        }],
-    );
-    let mut vmm_child = vmm::spawn_vmm(&vmm_spec, vec![guest_fd])
-        .context("failed to spawn sandboxed VMM process")?;
+    // its `ChildHandle::Drop` tears down the netd child. No
+    // explicit cleanup needed — this is the whole point of RAII.
+    let mut vmm_child =
+        vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
 
     match child::wait_either(&mut vmm_child, &mut netd_child) {
         Exited::First(Ok(status)) if status.success() => Ok(()),

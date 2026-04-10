@@ -8,12 +8,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_net::NetworkPolicy;
 use capsa_sandbox::SandboxBuilder;
 use capsa_spec::{encode_launch_spec_args, NetInterfaceSpec, NetLaunchSpec};
 
 use super::child::{self, ChildHandle};
-use super::plan;
+use super::plan::{self, InterfacePlan, InterfaceSockets, VmmInterfaceBinding};
 
 pub(super) const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_SIGNAL: u8 = b'R';
@@ -23,32 +22,54 @@ pub(super) struct NetdSpawn {
     pub(super) ready_reader: OwnedFd,
 }
 
+/// Each interface's `port_forwards` are merged into a single
+/// daemon-wide list because `NetLaunchSpec.port_forwards` is at the
+/// top level of the spec, not per-interface.
 pub(super) fn spawn_netd(
-    host_fd: OwnedFd,
-    mac: [u8; 6],
-    policy: Option<NetworkPolicy>,
-    port_forwards: Vec<(u16, u16)>,
-) -> Result<NetdSpawn> {
+    sockets: Vec<InterfaceSockets>,
+) -> Result<(NetdSpawn, Vec<VmmInterfaceBinding>)> {
     let binary = child::resolve_binary("CAPSA_NETD_PATH", "capsa-netd")
         .context("failed to resolve net daemon binary")?;
     let (ready_reader, ready_writer) =
         std::io::pipe().context("failed to create netd readiness pipe")?;
 
     let mut builder = netd_sandbox_builder(&binary);
-    let host_fd_num = builder
-        .inherit_fd(host_fd)
-        .context("failed to inherit netd host fd")?;
+
+    let mut net_specs = Vec::with_capacity(sockets.len());
+    let mut bindings = Vec::with_capacity(sockets.len());
+    let mut port_forwards = Vec::new();
+
+    for socket in sockets {
+        let InterfaceSockets {
+            plan:
+                InterfacePlan {
+                    mac,
+                    policy,
+                    port_forwards: iface_forwards,
+                },
+            host_fd,
+            guest_fd,
+        } = socket;
+
+        let host_fd_num = builder
+            .inherit_fd(host_fd)
+            .context("failed to inherit netd host fd")?;
+        net_specs.push(NetInterfaceSpec {
+            host_fd: host_fd_num,
+            mac,
+            policy,
+        });
+        port_forwards.extend(iface_forwards);
+        bindings.push(VmmInterfaceBinding { mac, guest_fd });
+    }
+
     let ready_fd_num = builder
         .inherit_fd(OwnedFd::from(ready_writer))
         .context("failed to inherit netd readiness pipe")?;
 
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
-        interfaces: vec![NetInterfaceSpec {
-            host_fd: host_fd_num,
-            mac,
-            policy,
-        }],
+        interfaces: net_specs,
         port_forwards,
     };
     spec.validate().context("invalid netd launch spec")?;
@@ -57,10 +78,13 @@ pub(super) fn spawn_netd(
     let process = child::spawn_sandboxed("netd", &binary, builder, &args, true)
         .context("failed to spawn network daemon")?;
 
-    Ok(NetdSpawn {
-        child: process,
-        ready_reader: OwnedFd::from(ready_reader),
-    })
+    Ok((
+        NetdSpawn {
+            child: process,
+            ready_reader: OwnedFd::from(ready_reader),
+        },
+        bindings,
+    ))
 }
 
 fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
