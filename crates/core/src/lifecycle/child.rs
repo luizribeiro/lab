@@ -231,16 +231,20 @@ impl Drop for ChildHandle {
 
 /// Spawns `binary` under a `capsa_sandbox` sandbox (or bypassed via
 /// `CAPSA_DISABLE_SANDBOX`), starts a reaper thread, and returns a
-/// [`ChildHandle`]. The passed `SandboxBuilder` should already carry
-/// any inherited fds and policy the child needs.
+/// [`ChildHandle`].
+///
+/// `fds` are file descriptors to inherit into the child. In sandbox
+/// mode they are registered on the builder via `inherit_fd`; in
+/// bypass mode they are applied directly via `CommandFdExt`.
 pub(super) fn spawn_sandboxed(
     name: &'static str,
     binary: &Path,
     builder: SandboxBuilder,
+    fds: Vec<std::os::fd::OwnedFd>,
     args: &[String],
     stdin_null: bool,
 ) -> Result<ChildHandle> {
-    let (child, sandbox) = build_and_spawn(name, binary, builder, args, stdin_null)?;
+    let (child, sandbox) = build_and_spawn(name, binary, builder, fds, args, stdin_null)?;
     let pid = child.id() as i32;
 
     let exited = Arc::new(AtomicBool::new(false));
@@ -264,7 +268,8 @@ pub(super) fn spawn_sandboxed(
 fn build_and_spawn(
     name: &'static str,
     binary: &Path,
-    builder: SandboxBuilder,
+    mut builder: SandboxBuilder,
+    fds: Vec<std::os::fd::OwnedFd>,
     args: &[String],
     stdin_null: bool,
 ) -> Result<(Child, Option<Sandbox>)> {
@@ -279,14 +284,20 @@ fn build_and_spawn(
         if stdin_null {
             command.stdin(Stdio::null());
         }
-        let (fds, close_non_inherited) = builder.into_inherited_fds_config();
-        capsa_sandbox::configure_inherited_fds(&mut command, fds, close_non_inherited)?;
+        use capsa_process::CommandFdExt;
+        command.seal_fds();
+        for fd in fds {
+            command.keep_fd(fd);
+        }
         let child = command.spawn().with_context(|| {
             format!("failed to spawn {name} daemon binary {}", binary.display())
         })?;
         return Ok((child, None));
     }
 
+    for fd in fds {
+        builder.inherit_fd(fd);
+    }
     let (mut command, sandbox) = builder
         .build(binary)
         .with_context(|| format!("failed to prepare sandbox for {}", binary.display()))?;
@@ -517,7 +528,7 @@ mod tests {
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("true");
 
-        let handle = spawn_sandboxed("test", &binary, bypass_builder(), &[], false)
+        let handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
             .expect("spawn should succeed");
         wait_for_exit(&handle);
 
@@ -533,7 +544,7 @@ mod tests {
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("false");
 
-        let handle = spawn_sandboxed("test", &binary, bypass_builder(), &[], false)
+        let handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
             .expect("spawn should succeed");
         wait_for_exit(&handle);
 
@@ -570,7 +581,7 @@ mod tests {
             "trap '' TERM\nwhile true; do sleep 1; done",
         );
 
-        let mut handle = spawn_sandboxed("stubborn", &script, bypass_builder(), &[], false)
+        let mut handle = spawn_sandboxed("stubborn", &script, bypass_builder(), vec![], &[], false)
             .expect("spawn should succeed");
         // Shorten timeouts so the test does not block for 2 seconds.
         handle.shutdown_timeout = Duration::from_millis(250);
@@ -605,8 +616,8 @@ mod tests {
         let fast = find_binary_on_path("true");
         let slow = write_executable_script("capsa-slow", "sleep 5");
 
-        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), &[], false).unwrap();
-        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), &[], false).unwrap();
+        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
+        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
 
         match wait_either(&mut a, &mut b) {
             Exited::First(Ok(status)) => assert!(status.success()),
@@ -628,8 +639,8 @@ mod tests {
         let fast = find_binary_on_path("true");
         let slow = write_executable_script("capsa-slow", "sleep 5");
 
-        let mut a = spawn_sandboxed("slow", &slow, bypass_builder(), &[], false).unwrap();
-        let mut b = spawn_sandboxed("fast", &fast, bypass_builder(), &[], false).unwrap();
+        let mut a = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
+        let mut b = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
 
         match wait_either(&mut a, &mut b) {
             Exited::Second(Ok(status)) => assert!(status.success()),
@@ -650,8 +661,8 @@ mod tests {
         let fast = find_binary_on_path("true");
         let slow = write_executable_script("capsa-slow2", "sleep 5");
 
-        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), &[], false).unwrap();
-        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), &[], false).unwrap();
+        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
+        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
 
         // Give the fast child time to exit and the reaper to flip the
         // flag before calling wait_either. wait_either must still
@@ -680,7 +691,8 @@ mod tests {
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("true");
 
-        let handle = spawn_sandboxed("test", &binary, bypass_builder(), &[], false).unwrap();
+        let handle =
+            spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false).unwrap();
 
         // Wait for the reaper to mark the child as exited.
         while !handle.has_exited() {

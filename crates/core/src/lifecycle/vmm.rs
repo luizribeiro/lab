@@ -3,6 +3,7 @@
 //! the launch spec with kernel-assigned raw fd numbers in one
 //! pass — no placeholder values exist along the way.
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -22,13 +23,13 @@ pub(super) fn spawn_vmm(
         .context("failed to resolve VMM binary")?;
 
     let paths = VmmPaths::from_config(config);
-    let mut builder = vmm_sandbox_builder(&paths, &binary);
+    let builder = vmm_sandbox_builder(&paths, &binary);
 
     let mut resolved = Vec::with_capacity(bindings.len());
+    let mut fds = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let guest_raw = builder
-            .inherit_fd(binding.guest_fd)
-            .context("failed to inherit vmm guest fd")?;
+        let guest_raw = binding.guest_fd.as_raw_fd();
+        fds.push(binding.guest_fd);
         resolved.push(ResolvedNetworkInterface {
             mac: binding.mac,
             guest_fd: guest_raw,
@@ -48,7 +49,7 @@ pub(super) fn spawn_vmm(
     spec.validate().context("invalid vmm launch spec")?;
 
     let args = encode_launch_spec_args(&spec)?;
-    child::spawn_sandboxed("vmm", &binary, builder, &args, false)
+    child::spawn_sandboxed("vmm", &binary, builder, fds, &args, false)
         .context("failed to spawn sandboxed VMM process")
 }
 

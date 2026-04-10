@@ -33,11 +33,12 @@ pub(super) fn spawn_netd(
     let (ready_reader, ready_writer) =
         std::io::pipe().context("failed to create netd readiness pipe")?;
 
-    let mut builder = netd_sandbox_builder(&binary);
+    let builder = netd_sandbox_builder(&binary);
 
     let mut net_specs = Vec::with_capacity(sockets.len());
     let mut bindings = Vec::with_capacity(sockets.len());
     let mut port_forwards = Vec::new();
+    let mut fds = Vec::new();
 
     for socket in sockets {
         let InterfaceSockets {
@@ -51,9 +52,8 @@ pub(super) fn spawn_netd(
             guest_fd,
         } = socket;
 
-        let host_fd_num = builder
-            .inherit_fd(host_fd)
-            .context("failed to inherit netd host fd")?;
+        let host_fd_num = host_fd.as_raw_fd();
+        fds.push(host_fd);
         net_specs.push(NetInterfaceSpec {
             host_fd: host_fd_num,
             mac,
@@ -63,9 +63,9 @@ pub(super) fn spawn_netd(
         bindings.push(VmmInterfaceBinding { mac, guest_fd });
     }
 
-    let ready_fd_num = builder
-        .inherit_fd(OwnedFd::from(ready_writer))
-        .context("failed to inherit netd readiness pipe")?;
+    let ready_writer_owned = OwnedFd::from(ready_writer);
+    let ready_fd_num = ready_writer_owned.as_raw_fd();
+    fds.push(ready_writer_owned);
 
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
@@ -75,7 +75,7 @@ pub(super) fn spawn_netd(
     spec.validate().context("invalid netd launch spec")?;
 
     let args = encode_launch_spec_args(&spec)?;
-    let process = child::spawn_sandboxed("netd", &binary, builder, &args, true)
+    let process = child::spawn_sandboxed("netd", &binary, builder, fds, &args, true)
         .context("failed to spawn network daemon")?;
 
     Ok((

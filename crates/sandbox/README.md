@@ -13,7 +13,7 @@ Builds a `Command` that runs a child process inside an OS sandbox
 - **Embeddable crate, not a service**: no daemon, no IPC — `build()`
   returns a configured `(std::process::Command, Sandbox)`.
 - **Hardened by default**: deny-all filesystem/network posture,
-  `close_non_inherited_fds(true)`, and privilege hardening handled
+  fd sealing via `capsa-process`, and privilege hardening handled
   automatically by the sandbox backend.
 - **Relaxed explicitly, not implicitly**: callers opt into
   network/path/ioctl access.
@@ -66,9 +66,9 @@ let (mut cmd, _sandbox) = Sandbox::builder()
 
 ## File descriptors
 
-Pass fds into the child via `inherit_fd`. By default, all other fds
-`>= 3` get `FD_CLOEXEC` at exec time to prevent leaking privileged
-handles. Disable with `close_non_inherited_fds(false)`.
+Pass fds into the child via `inherit_fd`. All other fds `>= 3` are
+sealed (`FD_CLOEXEC`) at exec time to prevent leaking privileged
+handles.
 
 ```rust,no_run
 use std::io::Write;
@@ -81,7 +81,7 @@ writeln!(write_end, "hello")?;
 drop(write_end);
 
 let mut builder = Sandbox::builder();
-let fd = builder.inherit_fd(read_end.into())?;
+let fd = builder.inherit_fd(read_end.into());
 
 let (mut cmd, _sandbox) = builder.build(Path::new("/bin/sh"))?;
 cmd.arg("-c").arg(format!("IFS= read -r line <&{fd}; [ \"$line\" = \"hello\" ]"));

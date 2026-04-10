@@ -55,10 +55,8 @@ impl CommandFdExt for Command {
             self.pre_exec(move || {
                 let _keep_alive = &fd;
 
-                if src_fd != child_fd {
-                    if libc::dup2(src_fd, child_fd) == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
+                if src_fd != child_fd && libc::dup2(src_fd, child_fd) == -1 {
+                    return Err(std::io::Error::last_os_error());
                 }
 
                 let flags = libc::fcntl(child_fd, libc::F_GETFD);

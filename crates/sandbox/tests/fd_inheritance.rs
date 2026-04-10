@@ -4,8 +4,8 @@
 //! sandboxed children can exchange data through a shared kernel
 //! object (UnixDatagram socketpair).
 //!
-//! Also verifies that non-inherited fds >= 3 are closed in the child
-//! when `close_non_inherited_fds` is enabled (the default).
+//! Also verifies that non-inherited fds >= 3 are sealed (closed at
+//! exec) by default.
 
 mod common;
 
@@ -34,9 +34,7 @@ fn run_probe_with_fd_pairs(pairs: Vec<(u8, OwnedFd)>) {
     let mut pair_args: Vec<String> = Vec::with_capacity(pairs.len() * 2);
     for (expected_byte, owned) in pairs {
         let pre_raw = owned.as_raw_fd();
-        let raw = builder
-            .inherit_fd(owned)
-            .unwrap_or_else(|e| panic!("inherit_fd({pre_raw}): {e}"));
+        let raw = builder.inherit_fd(owned);
         assert_eq!(raw, pre_raw);
         pair_args.push(raw.to_string());
         pair_args.push(std::str::from_utf8(&[expected_byte]).unwrap().to_string());
@@ -89,9 +87,7 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
     let probe = probe_binary();
 
     let mut writer_builder = Sandbox::builder();
-    let writer_raw = writer_builder
-        .inherit_fd(writer_owned)
-        .expect("inherit writer fd");
+    let writer_raw = writer_builder.inherit_fd(writer_owned);
     let (mut writer_cmd, _writer_sandbox_guard) =
         writer_builder.build(&probe).expect("build writer sandbox");
     writer_cmd
@@ -103,9 +99,7 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
         .stderr(Stdio::inherit());
 
     let mut reader_builder = Sandbox::builder();
-    let reader_raw = reader_builder
-        .inherit_fd(reader_owned)
-        .expect("inherit reader fd");
+    let reader_raw = reader_builder.inherit_fd(reader_owned);
     let (mut reader_cmd, _reader_sandbox_guard) =
         reader_builder.build(&probe).expect("build reader sandbox");
     reader_cmd
@@ -147,10 +141,10 @@ fn wait_within(child: &mut ChildGuard, timeout: Duration, label: &str) -> ExitSt
     }
 }
 
-// ── close_non_inherited_fds ─────────────────────────────────
+// ── fd sealing ──────────────────────────────────────────────
 
 #[test]
-fn non_inherited_fd_is_closed_in_child() {
+fn non_inherited_fd_is_sealed_in_child() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
     write_end.write_all(b"Z").expect("write marker");
     drop(write_end);
@@ -159,8 +153,8 @@ fn non_inherited_fd_is_closed_in_child() {
     let leak_raw = leak_fd.as_raw_fd();
 
     // Keep the fd alive in the parent but do NOT register it via
-    // inherit_fd. The default close_non_inherited_fds=true should
-    // close it in the child, causing fd-read-byte to fail with EBADF.
+    // inherit_fd. seal_fds (called by build) should close it in the
+    // child, causing fd-read-byte to fail with EBADF.
     let probe = probe_binary();
     let builder = Sandbox::builder();
     let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox");
@@ -175,7 +169,7 @@ fn non_inherited_fd_is_closed_in_child() {
     assert!(
         !output.status.success(),
         "probe should have failed reading non-inherited fd {leak_raw}, \
-         but exited successfully; close_non_inherited_fds did not close it"
+         but exited successfully; seal_fds did not close it"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -185,13 +179,11 @@ fn non_inherited_fd_is_closed_in_child() {
         "expected EBADF error for fd {leak_raw} in stderr, got: {stderr}"
     );
 
-    // Keep the fd alive until after the child exits so the kernel
-    // doesn't recycle the fd number.
     drop(leak_fd);
 }
 
 #[test]
-fn inherited_fd_survives_with_close_non_inherited_enabled() {
+fn inherited_fd_survives_seal() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
     write_end.write_all(b"Q").expect("write marker");
     drop(write_end);
@@ -201,9 +193,7 @@ fn inherited_fd_survives_with_close_non_inherited_enabled() {
 
     let probe = probe_binary();
     let mut builder = Sandbox::builder();
-    builder
-        .inherit_fd(read_owned)
-        .expect("inherit_fd should succeed");
+    builder.inherit_fd(read_owned);
     let (mut cmd, _sandbox) = builder.build(&probe).expect("build sandbox");
     cmd.arg("fd-read-byte")
         .arg(read_raw.to_string())
@@ -214,7 +204,6 @@ fn inherited_fd_survives_with_close_non_inherited_enabled() {
     let status = cmd.status().expect("spawn probe");
     assert!(
         status.success(),
-        "inherited fd {read_raw} should survive close_non_inherited_fds; \
-         probe exited with {status:?}"
+        "inherited fd {read_raw} should survive seal; probe exited with {status:?}"
     );
 }

@@ -120,6 +120,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa-net",
+ "capsa-process",
  "capsa-sandbox",
  "capsa-spec",
  "libc",
@@ -152,6 +153,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa-net",
+ "capsa-process",
  "capsa-sandbox",
  "capsa-spec",
  "capsa-test-support",
@@ -173,6 +175,7 @@ name = "capsa-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "capsa-process",
  "capsa-test-support",
  "lddtree",
  "libc",

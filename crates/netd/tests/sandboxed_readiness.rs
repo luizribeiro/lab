@@ -51,10 +51,8 @@ fn netd_signals_readiness_under_real_sandbox() {
     for runtime_path in capsa_net::runtime_read_paths() {
         builder = builder.read_only_path(PathBuf::from(*runtime_path));
     }
-    let host_fd = builder.inherit_fd(host_owned).expect("inherit host fd");
-    let ready_fd = builder
-        .inherit_fd(ready_writer_owned)
-        .expect("inherit ready fd");
+    let host_fd = builder.inherit_fd(host_owned);
+    let ready_fd = builder.inherit_fd(ready_writer_owned);
 
     let spec = serde_json::json!({
         "ready_fd": ready_fd,
