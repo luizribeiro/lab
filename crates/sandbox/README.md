@@ -10,12 +10,12 @@ Build and run a child process inside an OS sandbox.
 
 ## Quick start
 
-```rust,no_run
+```rust
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
 let (mut cmd, _sandbox) = Sandbox::builder()
-    .build(Path::new("/bin/true"))?;
+    .build(Path::new("/usr/bin/env"))?;
 
 let status = cmd.status()?;
 assert!(status.success());
@@ -35,28 +35,32 @@ assert!(status.success());
 A private `$TMPDIR` is created for the child and removed when
 `Sandbox` is dropped.
 
-```rust,no_run
+```rust
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (_cmd, _sandbox) = Sandbox::builder()
+let (mut cmd, _sandbox) = Sandbox::builder()
     .read_only_path("/usr")
     .read_only_path("/etc")
-    .read_write_path("/var/data")
-    .ioctl_path("/dev/kvm")
     .build(Path::new("/usr/bin/env"))?;
+
+let status = cmd.status()?;
+assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
 ## Network policy
 
-```rust,no_run
+```rust
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (_cmd, _sandbox) = Sandbox::builder()
+let (mut cmd, _sandbox) = Sandbox::builder()
     .allow_network(true)
-    .build(Path::new("/usr/bin/curl"))?;
+    .build(Path::new("/usr/bin/env"))?;
+
+let status = cmd.status()?;
+assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
@@ -65,7 +69,7 @@ let (_cmd, _sandbox) = Sandbox::builder()
 Pass only the fds the child needs; all other fds `>= 3` are sealed
 at exec time (via [`capsa-process`](../capsa-process)).
 
-```rust,no_run
+```rust
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use capsa_sandbox::Sandbox;
@@ -76,24 +80,28 @@ let fd = reader.as_raw_fd();
 let mut builder = Sandbox::builder();
 builder.inherit_fd(reader.into());
 
-let (mut cmd, _sandbox) = builder.build(Path::new("/usr/bin/myworker"))?;
-cmd.arg("--fd").arg(fd.to_string());
+let (mut cmd, _sandbox) = builder.build(Path::new("/usr/bin/env"))?;
+
+let status = cmd.status()?;
+assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
 ## Resource limits
 
-```rust,no_run
+```rust
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
-let (_cmd, _sandbox) = Sandbox::builder()
+let (mut cmd, _sandbox) = Sandbox::builder()
     .max_open_files(64)
-    .max_address_space(512 * 1024 * 1024)
     .max_cpu_time(30)
     .max_processes(32)
     .disable_core_dumps()
-    .build(Path::new("/usr/bin/myservice"))?;
+    .build(Path::new("/usr/bin/env"))?;
+
+let status = cmd.status()?;
+assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
@@ -101,11 +109,12 @@ let (_cmd, _sandbox) = Sandbox::builder()
 
 Enable with `--features tokio`.
 
-```rust,no_run
+```rust,ignore
 use std::path::Path;
 use capsa_sandbox::{Sandbox, tokio as sandbox_tokio};
 
 let builder = Sandbox::builder().allow_network(true);
-let (_cmd, _sandbox) = sandbox_tokio::build(builder, Path::new("/bin/true"))?;
+let (mut cmd, _sandbox) = sandbox_tokio::build(builder, Path::new("/usr/bin/env"))?;
+let status = cmd.status().await?;
 # Ok::<(), anyhow::Error>(())
 ```

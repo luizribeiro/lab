@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -37,12 +39,12 @@ pub(crate) struct SandboxSpec {
 /// dropping it earlier removes the private tmp directory out from
 /// under the child.
 ///
-/// ```no_run
+/// ```
 /// use std::path::Path;
 /// use capsa_sandbox::Sandbox;
 ///
 /// let (mut cmd, _sandbox) = Sandbox::builder()
-///     .build(Path::new("/bin/true"))
+///     .build(Path::new("/usr/bin/env"))
 ///     .unwrap();
 /// let mut child = cmd.spawn().unwrap();
 /// child.wait().unwrap();

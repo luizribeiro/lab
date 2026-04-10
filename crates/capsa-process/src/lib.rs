@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;

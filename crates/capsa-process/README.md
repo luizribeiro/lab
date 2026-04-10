@@ -10,18 +10,19 @@ else.
 
 ## Usage
 
-```rust,no_run
+```rust
 use std::os::unix::net::UnixDatagram;
 use std::process::Command;
 use capsa_process::CommandFdExt;
 
 let (_parent, child) = UnixDatagram::pair()?;
 
-let mut cmd = Command::new("/usr/bin/my-daemon");
+let mut cmd = Command::new("/bin/sh");
 cmd.seal_fds()               // close all fds >= 3 at exec
    .keep_fd(child.into());   // except this one
 
-cmd.spawn()?;
+cmd.arg("-c").arg("true");
+cmd.status()?;
 # Ok::<(), std::io::Error>(())
 ```
 
