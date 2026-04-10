@@ -36,6 +36,45 @@ fn read_allowlist_does_not_grant_siblings() {
     ));
 }
 
+// ── directory read scoping ────────────────────────────────────
+
+#[test]
+fn read_only_directory_grants_access_to_children() {
+    let temp = TestDir::new("read-dir");
+    let child_file = temp.join("nested.txt");
+    std::fs::write(&child_file, b"nested content").expect("write nested file");
+
+    let dir = temp.join("");
+    assert!(run_probe(
+        Sandbox::builder().read_only_path(dir),
+        &["can-read", &child_file.display().to_string()]
+    ));
+}
+
+// ── read-only enforcement ────────────────────────────────────
+
+#[test]
+fn read_only_path_blocks_writes() {
+    let temp = TestDir::new("ro-enforce");
+    let target = temp.join("readonly.txt");
+    std::fs::write(&target, b"seed").expect("seed target");
+
+    assert!(
+        run_probe(
+            Sandbox::builder().read_only_path(target.clone()),
+            &["can-read", &target.display().to_string()]
+        ),
+        "read should succeed on read_only_path"
+    );
+    assert!(
+        !run_probe(
+            Sandbox::builder().read_only_path(target.clone()),
+            &["can-write", &target.display().to_string()]
+        ),
+        "write should fail on read_only_path"
+    );
+}
+
 // ── stat scoping ─────────────────────────────────────────────
 
 #[test]
