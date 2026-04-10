@@ -1,5 +1,5 @@
-//! Privilege-hardening tests for `no_new_privs` and
-//! `drop_all_capabilities`.
+//! Privilege-hardening tests for `no_new_privs` and capability
+//! allowlisting.
 //!
 //! On Linux these exercise the actual prctl/capset paths. On macOS
 //! both features are no-ops, so the tests verify compilation and that
@@ -17,9 +17,6 @@ use common::probe_binary;
 
 #[test]
 fn no_new_privs_is_enabled_by_default() {
-    // The builder defaults to no_new_privs=true. On Linux the child
-    // can verify via /proc/self/status; on macOS this is a no-op so
-    // we just verify the sandbox runs successfully.
     let probe = probe_binary();
     let (mut cmd, _sandbox) = Sandbox::builder().build(&probe).expect("build sandbox");
 
@@ -35,8 +32,6 @@ fn no_new_privs_is_enabled_by_default() {
             String::from_utf8_lossy(&output.stderr)
         );
     } else {
-        // macOS: just verify the sandbox builds and runs a trivial
-        // command without error.
         cmd.arg("can-stat")
             .arg("/dev/null")
             .stderr(Stdio::inherit())
@@ -64,8 +59,6 @@ fn no_new_privs_can_be_disabled() {
             .stdout(Stdio::inherit());
 
         let output = cmd.output().expect("spawn probe");
-        // When disabled, the probe should report that no_new_privs
-        // is NOT set (exit non-zero).
         assert!(
             !output.status.success(),
             "no_new_privs should NOT be set when disabled"
@@ -81,24 +74,109 @@ fn no_new_privs_can_be_disabled() {
     }
 }
 
-// ── drop_all_capabilities ───────────────────────────────────
+// ── capability allowlist ────────────────────────────────────
 
 #[test]
-fn drop_all_capabilities_runs_without_error() {
+fn default_drops_all_capabilities() {
     let probe = probe_binary();
+    let (mut cmd, _sandbox) = Sandbox::builder().build(&probe).expect("build sandbox");
+
+    if cfg!(target_os = "linux") {
+        cmd.arg("check-has-cap")
+            .arg("0")
+            .stderr(Stdio::piped())
+            .stdout(Stdio::inherit());
+
+        let output = cmd.output().expect("spawn probe");
+        assert!(
+            !output.status.success(),
+            "CAP_CHOWN should be dropped by default; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    } else {
+        cmd.arg("can-stat")
+            .arg("/dev/null")
+            .stderr(Stdio::inherit())
+            .stdout(Stdio::inherit());
+
+        let status = cmd.status().expect("spawn probe");
+        assert!(status.success(), "capability dropping is a no-op on macOS");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn allow_capability_retains_it_in_bounding_set() {
+    use capsa_sandbox::Capability;
+
+    let probe = probe_binary();
+    let cap_num = u32::from(Capability::NetRaw).to_string();
+
     let (mut cmd, _sandbox) = Sandbox::builder()
-        .drop_all_capabilities()
+        .allow_capability(Capability::NetRaw)
         .build(&probe)
         .expect("build sandbox");
 
-    cmd.arg("can-stat")
-        .arg("/dev/null")
-        .stderr(Stdio::inherit())
+    cmd.arg("check-has-cap")
+        .arg(&cap_num)
+        .stderr(Stdio::piped())
         .stdout(Stdio::inherit());
 
-    let status = cmd.status().expect("spawn probe");
+    let output = cmd.output().expect("spawn probe");
     assert!(
-        status.success(),
-        "drop_all_capabilities should not prevent reading /dev/null"
+        output.status.success(),
+        "CAP_NET_RAW should be retained in bounding set; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn allow_capability_retains_it_in_effective_set() {
+    use capsa_sandbox::Capability;
+
+    let probe = probe_binary();
+    let cap_num = u32::from(Capability::NetRaw).to_string();
+
+    let (mut cmd, _sandbox) = Sandbox::builder()
+        .allow_capability(Capability::NetRaw)
+        .build(&probe)
+        .expect("build sandbox");
+
+    cmd.arg("check-has-effective-cap")
+        .arg(&cap_num)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit());
+
+    let output = cmd.output().expect("spawn probe");
+    assert!(
+        output.status.success(),
+        "CAP_NET_RAW should be retained in effective set; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn non_allowed_capability_is_dropped() {
+    use capsa_sandbox::Capability;
+
+    let probe = probe_binary();
+    let sys_admin_num = u32::from(Capability::SysAdmin).to_string();
+
+    let (mut cmd, _sandbox) = Sandbox::builder()
+        .allow_capability(Capability::NetRaw)
+        .build(&probe)
+        .expect("build sandbox");
+
+    cmd.arg("check-has-cap")
+        .arg(&sys_admin_num)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit());
+
+    let output = cmd.output().expect("spawn probe");
+    assert!(
+        !output.status.success(),
+        "CAP_SYS_ADMIN should be dropped when only CAP_NET_RAW is allowed"
     );
 }

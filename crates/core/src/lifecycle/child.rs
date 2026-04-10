@@ -289,7 +289,7 @@ fn build_and_spawn(
         capsa_sandbox::configure_privilege_hardening(
             &mut command,
             cfg.no_new_privs,
-            cfg.drop_capabilities,
+            cfg.allowed_capabilities,
         )?;
         let child = command.spawn().with_context(|| {
             format!("failed to spawn {name} daemon binary {}", binary.display())

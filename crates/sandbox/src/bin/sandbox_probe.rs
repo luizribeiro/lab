@@ -63,6 +63,18 @@ fn main() {
             fd_write_bytes(&pairs)
         }
         "check-no-new-privs" => check_no_new_privs(),
+        "check-has-cap" => {
+            let Some(cap_str) = args.next() else {
+                usage_and_exit();
+            };
+            check_has_cap(&cap_str)
+        }
+        "check-has-effective-cap" => {
+            let Some(cap_str) = args.next() else {
+                usage_and_exit();
+            };
+            check_has_effective_cap(&cap_str)
+        }
         "open-many-fds" => {
             let Some(count_str) = args.next() else {
                 usage_and_exit();
@@ -240,6 +252,95 @@ fn check_no_new_privs() -> Result<(), String> {
     Err("check-no-new-privs is only supported on Linux".to_string())
 }
 
+fn check_has_cap(cap_str: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let cap: u32 = cap_str
+            .parse()
+            .map_err(|e: std::num::ParseIntError| format!("invalid cap number `{cap_str}`: {e}"))?;
+        // SAFETY: prctl(PR_CAPBSET_READ) is a read-only query.
+        let val = unsafe { libc::prctl(libc::PR_CAPBSET_READ, cap, 0, 0, 0) };
+        if val == 1 {
+            Ok(())
+        } else if val == 0 {
+            Err(format!("capability {cap} is NOT in the bounding set"))
+        } else {
+            Err(format!(
+                "prctl(PR_CAPBSET_READ, {cap}) failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cap_str;
+        Err("check-has-cap is only supported on Linux".to_string())
+    }
+}
+
+fn check_has_effective_cap(cap_str: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let cap: u32 = cap_str
+            .parse()
+            .map_err(|e: std::num::ParseIntError| format!("invalid cap number `{cap_str}`: {e}"))?;
+
+        #[repr(C)]
+        struct CapHeader {
+            version: u32,
+            pid: i32,
+        }
+        #[repr(C)]
+        struct CapData {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+        let header = CapHeader {
+            version: 0x20080522_u32,
+            pid: 0,
+        };
+        let mut data = [
+            CapData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+            CapData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+        ];
+        // SAFETY: SYS_capget is a direct syscall; the structs are stack-local.
+        let rc =
+            unsafe { libc::syscall(libc::SYS_capget, &header as *const _, &mut data as *mut _) };
+        if rc == -1 {
+            return Err(format!(
+                "capget failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let (word, bit) = if cap < 32 {
+            (data[0].effective, 1u32 << cap)
+        } else {
+            (data[1].effective, 1u32 << (cap - 32))
+        };
+
+        if word & bit != 0 {
+            Ok(())
+        } else {
+            Err(format!("capability {cap} is NOT in the effective set"))
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cap_str;
+        Err("check-has-effective-cap is only supported on Linux".to_string())
+    }
+}
+
 fn open_many_fds(count: usize) -> Result<(), String> {
     let mut opened = Vec::new();
     for i in 0..count {
@@ -266,7 +367,9 @@ actions:\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
   open-many-fds <count>\n\
-  check-no-new-privs"
+  check-no-new-privs\n\
+  check-has-cap <cap-number>\n\
+  check-has-effective-cap <cap-number>"
     );
     std::process::exit(2);
 }

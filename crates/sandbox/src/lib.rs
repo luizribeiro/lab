@@ -3,6 +3,11 @@ use std::process::Command;
 
 use anyhow::{ensure, Context, Result};
 
+#[cfg(target_os = "linux")]
+mod capability;
+#[cfg(target_os = "linux")]
+pub use capability::Capability;
+
 mod discover;
 mod paths;
 
@@ -27,7 +32,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) ioctl_paths: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
     pub(crate) no_new_privs: bool,
-    pub(crate) drop_capabilities: bool,
+    pub(crate) allowed_capabilities: std::collections::HashSet<u32>,
 }
 
 impl Default for SandboxSpec {
@@ -42,7 +47,7 @@ impl Default for SandboxSpec {
             ioctl_paths: Vec::new(),
             rlimits: Vec::new(),
             no_new_privs: true,
-            drop_capabilities: false,
+            allowed_capabilities: std::collections::HashSet::new(),
         }
     }
 }
@@ -277,12 +282,14 @@ impl SandboxBuilder {
         self
     }
 
-    /// Drops all Linux capabilities (effective, permitted, inheritable,
-    /// ambient, and bounding sets) in the child before exec.
+    /// Retains a specific Linux capability in the child instead of
+    /// dropping it. By default all capabilities are dropped; call this
+    /// for each capability the child actually needs.
     ///
-    /// Not enabled by default. Only effective on Linux; a no-op on macOS.
-    pub fn drop_all_capabilities(mut self) -> Self {
-        self.spec.drop_capabilities = true;
+    /// Only available on Linux; does not exist in the macOS API.
+    #[cfg(target_os = "linux")]
+    pub fn allow_capability(mut self, cap: Capability) -> Self {
+        self.spec.allowed_capabilities.insert(u32::from(cap));
         self
     }
 
@@ -331,7 +338,7 @@ impl SandboxBuilder {
             close_non_inherited_fds: self.spec.close_non_inherited_fds,
             rlimits: self.spec.rlimits,
             no_new_privs: self.spec.no_new_privs,
-            drop_capabilities: self.spec.drop_capabilities,
+            allowed_capabilities: self.spec.allowed_capabilities,
         }
     }
 
@@ -349,12 +356,12 @@ impl SandboxBuilder {
         let close_non_inherited = self.spec.close_non_inherited_fds;
         let rlimits = self.spec.rlimits.clone();
         let no_new_privs = self.spec.no_new_privs;
-        let drop_capabilities = self.spec.drop_capabilities;
+        let allowed_capabilities = self.spec.allowed_capabilities.clone();
         let sandbox = Sandbox::new(self.spec)?;
         let mut command = sandbox.command(program);
         configure_inherited_fds(&mut command, self.inherited_fds, close_non_inherited)?;
         configure_rlimits(&mut command, rlimits)?;
-        configure_privilege_hardening(&mut command, no_new_privs, drop_capabilities)?;
+        configure_privilege_hardening(&mut command, no_new_privs, allowed_capabilities)?;
         Ok((command, sandbox))
     }
 }
@@ -385,7 +392,7 @@ pub struct BypassConfig {
     pub close_non_inherited_fds: bool,
     pub rlimits: Vec<(i32, u64)>,
     pub no_new_privs: bool,
-    pub drop_capabilities: bool,
+    pub allowed_capabilities: std::collections::HashSet<u32>,
 }
 
 /// Reads `/dev/fd` (macOS) or `/proc/self/fd` (Linux) to discover
@@ -595,10 +602,9 @@ pub fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Res
 /// When `no_new_privs` is true, calls `prctl(PR_SET_NO_NEW_PRIVS)` to
 /// prevent privilege escalation via setuid or file-capability exec.
 ///
-/// When `drop_capabilities` is true, drops all Linux capabilities from
-/// the effective, permitted, inheritable, ambient, and bounding sets.
-///
-/// Both operations are no-ops on macOS (neither concept exists there).
+/// Drops all Linux capabilities NOT in `allowed_capabilities` from the
+/// effective, permitted, inheritable, ambient, and bounding sets. An
+/// empty set means all capabilities are dropped.
 ///
 /// This is the lower-level primitive used by [`SandboxBuilder::build`].
 /// It is exposed separately for the `CAPSA_DISABLE_SANDBOX` bypass
@@ -606,11 +612,11 @@ pub fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Res
 pub fn configure_privilege_hardening(
     command: &mut Command,
     no_new_privs: bool,
-    drop_capabilities: bool,
+    allowed_capabilities: std::collections::HashSet<u32>,
 ) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (command, no_new_privs, drop_capabilities);
+        let _ = (command, no_new_privs, allowed_capabilities);
         Ok(())
     }
 
@@ -618,79 +624,93 @@ pub fn configure_privilege_hardening(
     {
         use std::os::unix::process::CommandExt;
 
-        if !no_new_privs && !drop_capabilities {
-            return Ok(());
-        }
+        let allowed = allowed_capabilities;
 
         let child_hook = move || -> std::io::Result<()> {
-            if drop_capabilities {
-                // SAFETY: prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL)
-                // is a direct syscall; async-signal-safe in practice.
-                let rc = unsafe {
-                    libc::prctl(
-                        libc::PR_CAP_AMBIENT,
-                        libc::PR_CAP_AMBIENT_CLEAR_ALL,
-                        0,
-                        0,
-                        0,
-                    )
-                };
-                if rc == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
+            // SAFETY: prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL)
+            // is a direct syscall; async-signal-safe in practice.
+            let rc = unsafe {
+                libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_CLEAR_ALL,
+                    0,
+                    0,
+                    0,
+                )
+            };
+            if rc == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
 
-                // Drop all capabilities from the bounding set.
-                // CAP_LAST_CAP is ~41 today; iterate to 63 to be
-                // forward-compatible. EINVAL for caps above
-                // CAP_LAST_CAP is expected and ignored.
-                for cap in 0..=63 {
-                    // SAFETY: prctl(PR_CAPBSET_DROP) is a direct syscall.
-                    let rc = unsafe { libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) };
-                    if rc == -1 {
-                        let err = std::io::Error::last_os_error();
-                        if err.raw_os_error() != Some(libc::EINVAL) {
-                            return Err(err);
-                        }
+            // Drop capabilities NOT in the allowed set from the
+            // bounding set. CAP_LAST_CAP is ~41 today; iterate to 63
+            // to be forward-compatible. EINVAL (cap above CAP_LAST_CAP)
+            // and EPERM (missing CAP_SETPCAP, typical for unprivileged
+            // users) are both non-fatal — if we lack CAP_SETPCAP we
+            // cannot drop from the bounding set, but we also cannot
+            // gain those capabilities, so the security posture is
+            // equivalent.
+            for cap in 0..=63u32 {
+                if allowed.contains(&cap) {
+                    continue;
+                }
+                // SAFETY: prctl(PR_CAPBSET_DROP) is a direct syscall.
+                let rc = unsafe { libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) };
+                if rc == -1 {
+                    let err = std::io::Error::last_os_error();
+                    if !matches!(err.raw_os_error(), Some(libc::EINVAL) | Some(libc::EPERM)) {
+                        return Err(err);
                     }
                 }
+            }
 
-                // Clear effective/permitted/inheritable via capset(2).
-                // The structs mirror <linux/capability.h>.
-                #[repr(C)]
-                struct CapHeader {
-                    version: u32,
-                    pid: i32,
+            // Build capability bitmasks for capset(2). Capabilities
+            // are split into two 32-bit words: low (0–31) and high
+            // (32–63).
+            let (mut lo, mut hi) = (0u32, 0u32);
+            for &cap in &allowed {
+                if cap < 32 {
+                    lo |= 1 << cap;
+                } else if cap < 64 {
+                    hi |= 1 << (cap - 32);
                 }
-                #[repr(C)]
-                struct CapData {
-                    effective: u32,
-                    permitted: u32,
-                    inheritable: u32,
-                }
-                let header = CapHeader {
-                    version: 0x20080522_u32, // _LINUX_CAPABILITY_VERSION_3
-                    pid: 0,
-                };
-                let data = [
-                    CapData {
-                        effective: 0,
-                        permitted: 0,
-                        inheritable: 0,
-                    },
-                    CapData {
-                        effective: 0,
-                        permitted: 0,
-                        inheritable: 0,
-                    },
-                ];
-                // SAFETY: SYS_capset is a direct syscall; the structs are
-                // stack-local with no heap allocation.
-                let rc = unsafe {
-                    libc::syscall(libc::SYS_capset, &header as *const _, &data as *const _)
-                };
-                if rc == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
+            }
+
+            // Set effective/permitted/inheritable via capset(2).
+            // The structs mirror <linux/capability.h>.
+            #[repr(C)]
+            struct CapHeader {
+                version: u32,
+                pid: i32,
+            }
+            #[repr(C)]
+            struct CapData {
+                effective: u32,
+                permitted: u32,
+                inheritable: u32,
+            }
+            let header = CapHeader {
+                version: 0x20080522_u32, // _LINUX_CAPABILITY_VERSION_3
+                pid: 0,
+            };
+            let data = [
+                CapData {
+                    effective: lo,
+                    permitted: lo,
+                    inheritable: lo,
+                },
+                CapData {
+                    effective: hi,
+                    permitted: hi,
+                    inheritable: hi,
+                },
+            ];
+            // SAFETY: SYS_capset is a direct syscall; the structs are
+            // stack-local with no heap allocation.
+            let rc =
+                unsafe { libc::syscall(libc::SYS_capset, &header as *const _, &data as *const _) };
+            if rc == -1 {
+                return Err(std::io::Error::last_os_error());
             }
 
             if no_new_privs {
