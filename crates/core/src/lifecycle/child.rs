@@ -1,8 +1,10 @@
-//! Process helpers for spawning and supervising capsa daemon children.
+//! Generic child-process primitives used by `super::netd` and
+//! `super::vmm`. The only file in `lifecycle/` that knows nothing
+//! about VMs: it speaks `Child`, `pid`, signals, and reaper threads.
 //!
-//! This module is the replacement for the generic supervisor + adapter
-//! machinery under `daemon/`. It is intentionally small and concrete:
-//! two daemon binaries (vmm, netd) do not justify a trait hierarchy.
+//! Intentionally small and concrete: two daemon binaries do not
+//! justify a trait hierarchy. Don't reach for crossbeam, async, or
+//! pidfd here unless a real requirement forces the change.
 //!
 //! The ownership story:
 //!
@@ -38,8 +40,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use capsa_sandbox::{Sandbox, SandboxBuilder};
 
-pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub(super) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Resolve a daemon binary path. Checks, in order:
 ///   1. `env_override` (an environment variable name like `CAPSA_VMM_PATH`)
@@ -50,7 +52,7 @@ pub(crate) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// executable bit set. Directories and non-executable files are
 /// rejected with a clear error, which replaces the audit-flagged
 /// "exists() only" behavior of the old resolver.
-pub(crate) fn resolve_binary(env_override: &str, binary_name: &str) -> Result<PathBuf> {
+pub(super) fn resolve_binary(env_override: &str, binary_name: &str) -> Result<PathBuf> {
     if let Some(raw) = std::env::var_os(env_override) {
         let candidate = PathBuf::from(raw);
         ensure_executable(&candidate).with_context(|| {
@@ -106,7 +108,7 @@ fn ensure_executable(path: &Path) -> Result<()> {
 }
 
 /// Which of the two children `wait_either` saw exit first.
-pub(crate) enum Exited {
+pub(super) enum Exited {
     First(Result<ExitStatus>),
     Second(Result<ExitStatus>),
 }
@@ -116,7 +118,7 @@ pub(crate) enum Exited {
 /// Created by [`spawn_sandboxed`]. The caller should either call
 /// [`ChildHandle::shutdown`] (explicit teardown) or let the handle
 /// drop (implicit teardown that logs any errors via `tracing::warn`).
-pub(crate) struct ChildHandle {
+pub(super) struct ChildHandle {
     name: &'static str,
     pid: i32,
     exited: Arc<AtomicBool>,
@@ -133,12 +135,12 @@ pub(crate) struct ChildHandle {
 
 impl ChildHandle {
     #[cfg(test)]
-    pub(crate) fn name(&self) -> &'static str {
+    pub(super) fn name(&self) -> &'static str {
         self.name
     }
 
     #[cfg(test)]
-    pub(crate) fn has_exited(&self) -> bool {
+    pub(super) fn has_exited(&self) -> bool {
         self.exited.load(Ordering::Acquire)
     }
 
@@ -146,7 +148,7 @@ impl ChildHandle {
     /// Does **not** send any signals. Use this when the caller expects
     /// the child to exit without intervention; for teardown use
     /// [`shutdown`](Self::shutdown) instead.
-    pub(crate) fn wait(mut self) -> Result<ExitStatus> {
+    pub(super) fn wait(mut self) -> Result<ExitStatus> {
         let result = self
             .status_rx
             .recv()
@@ -167,7 +169,7 @@ impl ChildHandle {
     /// the hood. If start.rs ever needs to observe shutdown errors
     /// inline, drop this `cfg(test)` gate.
     #[cfg(test)]
-    pub(crate) fn shutdown(mut self) -> Result<ExitStatus> {
+    pub(super) fn shutdown(mut self) -> Result<ExitStatus> {
         if !self.exited.load(Ordering::Acquire) {
             kill_with_timeout(
                 self.pid,
@@ -235,7 +237,7 @@ impl Drop for ChildHandle {
 /// `CAPSA_DISABLE_SANDBOX`), starts a reaper thread, and returns a
 /// [`ChildHandle`]. The passed `SandboxBuilder` should already carry
 /// any inherited fds and policy the child needs.
-pub(crate) fn spawn_sandboxed(
+pub(super) fn spawn_sandboxed(
     name: &'static str,
     binary: &Path,
     builder: SandboxBuilder,
@@ -336,7 +338,7 @@ fn sandbox_bypassed_by_env() -> bool {
 /// of whichever one finished first. The other handle stays alive and
 /// its child is torn down implicitly when the caller drops the handle
 /// (or explicitly via `shutdown()`).
-pub(crate) fn wait_either(a: &mut ChildHandle, b: &mut ChildHandle) -> Exited {
+pub(super) fn wait_either(a: &mut ChildHandle, b: &mut ChildHandle) -> Exited {
     loop {
         match a.status_rx.try_recv() {
             Ok(status) => return Exited::First(status),

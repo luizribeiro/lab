@@ -1,7 +1,5 @@
 mod config;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod proc;
-mod start;
+mod lifecycle;
 
 pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
