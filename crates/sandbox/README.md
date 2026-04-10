@@ -3,6 +3,24 @@
 Builds a `Command` that runs a child process inside an OS sandbox
 (Linux: `syd`, macOS: `sandbox-exec`).
 
+## Design principles
+
+- **Policy compiler, not enforcer**: translates `SandboxSpec` into
+  native rules (`syd` on Linux, `sandbox-exec` on macOS) and relies
+  on those backends for enforcement.
+- **Cross-platform by default**: `Sandbox::builder()` works on both
+  Linux and macOS; Linux-only privilege controls are
+  `cfg(target_os = "linux")` so they don't appear on macOS.
+- **Embeddable crate, not a service**: no daemon, no IPC — `build()`
+  returns a configured `(std::process::Command, Sandbox)`.
+- **Hardened by default**: deny-all filesystem/network posture,
+  `close_non_inherited_fds(true)`, and on Linux `no_new_privs(true)`
+  with capabilities dropped unless explicitly allowed.
+- **Relaxed explicitly, not implicitly**: callers opt into
+  network/path/ioctl/capability access.
+- **Fails fast on unsupported setups**: missing `syd`, unsupported OS,
+  invalid fd inheritance — all return errors, never silently continue.
+
 ## Basic usage
 
 ```rust,no_run
