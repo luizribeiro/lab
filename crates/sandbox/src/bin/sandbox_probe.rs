@@ -62,6 +62,7 @@ fn main() {
             }
             fd_write_bytes(&pairs)
         }
+        "check-no-new-privs" => check_no_new_privs(),
         "open-many-fds" => {
             let Some(count_str) = args.next() else {
                 usage_and_exit();
@@ -219,6 +220,26 @@ fn effective_temp_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+fn check_no_new_privs() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: prctl(PR_GET_NO_NEW_PRIVS) is a read-only query.
+        let val = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+        if val == 1 {
+            Ok(())
+        } else if val == 0 {
+            Err("NoNewPrivs is not set".to_string())
+        } else {
+            Err(format!(
+                "prctl(PR_GET_NO_NEW_PRIVS) failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err("check-no-new-privs is only supported on Linux".to_string())
+}
+
 fn open_many_fds(count: usize) -> Result<(), String> {
     let mut opened = Vec::new();
     for i in 0..count {
@@ -244,7 +265,8 @@ actions:\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
-  open-many-fds <count>"
+  open-many-fds <count>\n\
+  check-no-new-privs"
     );
     std::process::exit(2);
 }
