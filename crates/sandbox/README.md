@@ -54,17 +54,23 @@ assert!(cmd.status()?.success());
 
 ### Security hardening
 
-By default, `SandboxBuilder` sets `FD_CLOEXEC` on every fd `>= 3` that
-was **not** registered via `inherit_fd`, so leaked privileged fds are
-closed at exec time. Opt out with `close_non_inherited_fds(false)`:
+**FD sealing** — by default, `SandboxBuilder` sets `FD_CLOEXEC` on
+every fd `>= 3` not registered via `inherit_fd`, so leaked privileged
+fds are closed at exec time. Disable with `close_non_inherited_fds(false)`.
+
+**Resource limits** — enforce POSIX rlimits in the child via `setrlimit`:
 
 ```rust,no_run
 use std::path::Path;
 use capsa_sandbox::Sandbox;
 
 let (mut cmd, _sandbox) = Sandbox::builder()
-    .close_non_inherited_fds(false) // disable; true is the default
-    .build(Path::new("/bin/true"))?;
+    .max_open_files(64)
+    .max_address_space(512 * 1024 * 1024) // 512 MiB
+    .max_cpu_time(30)                     // seconds
+    .max_processes(32)
+    .disable_core_dumps()
+    .build(Path::new("/usr/bin/myservice"))?;
 # Ok::<(), anyhow::Error>(())
 ```
 
