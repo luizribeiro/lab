@@ -303,6 +303,12 @@ mod imp {
     }
 
     fn vmm_sandbox_builder(spec: &VmmLaunchSpec, vmm_exe: &Path) -> SandboxBuilder {
+        // The spec's paths were canonicalized in `build_vmm_spec`, so
+        // they match the path the macOS kernel resolves at open(2)
+        // time and the sandbox policy doesn't need to canonicalize
+        // again here. The vmm binary path comes from `resolve_binary`
+        // which doesn't canonicalize, so it gets the canonical
+        // treatment via `canonical_or_unchanged`.
         let mut builder = capsa_sandbox::Sandbox::builder()
             .allow_network(false)
             .allow_kvm(true)
@@ -310,22 +316,23 @@ mod imp {
             .read_only_path(canonical_or_unchanged(vmm_exe));
 
         if let Some(root) = &spec.root {
-            builder = builder.read_write_path(canonical_or_unchanged(root));
+            builder = builder.read_write_path(root.clone());
         }
         if let Some(kernel) = &spec.kernel {
-            builder = builder.read_only_path(canonical_or_unchanged(kernel));
+            builder = builder.read_only_path(kernel.clone());
         }
         if let Some(initramfs) = &spec.initramfs {
-            builder = builder.read_only_path(canonical_or_unchanged(initramfs));
+            builder = builder.read_only_path(initramfs.clone());
         }
 
         builder
     }
 
-    /// Resolves symlinks before handing a path to the sandbox policy
-    /// layer so darwin's sandbox-exec sees the same path the kernel
-    /// will resolve at `open(2)` time. Falls back to the input for
-    /// paths that don't exist (test fixtures, etc.).
+    /// Resolves symlinks before a path is handed across a process
+    /// boundary so capsa-vmm and the darwin sandbox-exec policy
+    /// agree on the post-resolution path the kernel will see at
+    /// `open(2)` time. Falls back to the input for paths that
+    /// don't exist (test fixtures, etc.).
     fn canonical_or_unchanged(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }
@@ -334,10 +341,14 @@ mod imp {
         config: &VmConfig,
         resolved_interfaces: Vec<ResolvedNetworkInterface>,
     ) -> VmmLaunchSpec {
+        // Canonicalize before encoding into the launch spec so the
+        // child VMM opens the same on-disk path the sandbox policy
+        // will allow. Without this, `/tmp/...` and `/private/tmp/...`
+        // diverge on darwin and the open hits EPERM.
         VmmLaunchSpec {
-            root: config.root.clone(),
-            kernel: config.kernel.clone(),
-            initramfs: config.initramfs.clone(),
+            root: config.root.as_deref().map(canonical_or_unchanged),
+            kernel: config.kernel.as_deref().map(canonical_or_unchanged),
+            initramfs: config.initramfs.as_deref().map(canonical_or_unchanged),
             kernel_cmdline: config.kernel_cmdline.clone(),
             vcpus: config.vcpus,
             memory_mib: config.memory_mib,
