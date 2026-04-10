@@ -2,11 +2,22 @@
 //! through the real `start::macos` path so a regression in the
 //! sandbox + fd-chain orchestration would fail this test.
 //!
-//! Ignored by default because the signed `capsa-vmm` (which carries
-//! the `com.apple.security.hypervisor` entitlement) is only produced
-//! by `nix build .#capsa`. CI / local runs opt in by setting
-//! `CAPSA_VMM_PATH`, `CAPSA_NETD_PATH`, `CAPSA_KERNEL`, and
-//! `CAPSA_INITRAMFS` and invoking `cargo test --ignored`.
+//! Ignored by default because libkrun on macOS requires the signed
+//! `capsa-vmm` (which carries `com.apple.security.hypervisor`) plus
+//! a kernel + initramfs. Both come from the nix build:
+//!
+//!     nix build .#capsa
+//!     nix build -o /tmp/capsa-vm-assets .#vm-assets
+//!
+//! With those in place a bare `cargo test -p capsa-cli --ignored
+//! -- --test-threads=1` runs the test against the workspace's
+//! `result/libexec/capsa/` and `/tmp/capsa-vm-assets/`. CI can
+//! override any path via `CAPSA_VMM_PATH`, `CAPSA_NETD_PATH`,
+//! `CAPSA_KERNEL`, and `CAPSA_INITRAMFS`.
+//!
+//! `--test-threads=1` is required: HVF does not multiplex two
+//! independent guests on a single host efficiently and the second
+//! to start times out.
 
 #![cfg(target_os = "macos")]
 
@@ -44,28 +55,61 @@ struct RequiredEnv {
     initramfs: PathBuf,
 }
 
-/// Reads the four env vars the harness needs. Panics with an
-/// instructional message if any are missing: opting in via
-/// `--ignored` without setting the envs is always operator error,
-/// and a silent pass would mask CI misconfiguration.
+/// Resolves the four required artifact paths. Each one is an env-var
+/// override if set, otherwise a default location populated by the
+/// nix build. Panics loudly with build instructions if a path is
+/// neither set nor present, so a misconfigured CI run fails fast
+/// instead of silently passing.
 fn required_env() -> RequiredEnv {
+    let nix_capsa_dir = workspace_root().join("result/libexec/capsa");
+    let nix_assets_dir = PathBuf::from("/tmp/capsa-vm-assets");
+
     RequiredEnv {
-        vmm: required_path("CAPSA_VMM_PATH"),
-        netd: required_path("CAPSA_NETD_PATH"),
-        kernel: required_path("CAPSA_KERNEL"),
-        initramfs: required_path("CAPSA_INITRAMFS"),
+        vmm: resolve_path(
+            "CAPSA_VMM_PATH",
+            nix_capsa_dir.join("capsa-vmm"),
+            "nix build .#capsa",
+        ),
+        netd: resolve_path(
+            "CAPSA_NETD_PATH",
+            nix_capsa_dir.join("capsa-netd"),
+            "nix build .#capsa",
+        ),
+        kernel: resolve_path(
+            "CAPSA_KERNEL",
+            nix_assets_dir.join("vmlinuz"),
+            "nix build -o /tmp/capsa-vm-assets .#vm-assets",
+        ),
+        initramfs: resolve_path(
+            "CAPSA_INITRAMFS",
+            nix_assets_dir.join("initramfs.cpio.lz4"),
+            "nix build -o /tmp/capsa-vm-assets .#vm-assets",
+        ),
     }
 }
 
-fn required_path(key: &str) -> PathBuf {
-    match std::env::var_os(key) {
+fn resolve_path(env_key: &str, default: PathBuf, build_hint: &str) -> PathBuf {
+    let candidate = match std::env::var_os(env_key) {
         Some(raw) if !raw.is_empty() => PathBuf::from(raw),
-        _ => panic!(
-            "{key} must be set for darwin e2e tests. Run via /tmp/phase3_darwin_e2e.sh, \
-             or set CAPSA_VMM_PATH / CAPSA_NETD_PATH / CAPSA_KERNEL / CAPSA_INITRAMFS \
-             to the nix-built signed binaries and vm-assets."
-        ),
+        _ => default,
+    };
+    if !candidate.exists() {
+        panic!(
+            "darwin e2e test artifact missing at {}. Either set {env_key} \
+             or run `{build_hint}` from the workspace root.",
+            candidate.display()
+        );
     }
+    candidate
+}
+
+fn workspace_root() -> PathBuf {
+    // CARGO_MANIFEST_DIR points at crates/cli; the workspace root is two up.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("CARGO_MANIFEST_DIR has at least two ancestors")
+        .to_path_buf()
 }
 
 fn drive_cli(env: &RequiredEnv, extra_args: &[&str], success_marker: &str) {
