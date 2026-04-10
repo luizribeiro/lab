@@ -1,22 +1,12 @@
 // Individual test binaries compile this shared module in isolation and may
-// not exercise every item, so silence the resulting dead-code noise.
-#![allow(dead_code)]
+// not exercise every item, so silence the resulting unused-symbol noise.
+#![allow(dead_code, unused_imports)]
 
 use std::path::PathBuf;
-use std::process::Child;
 
 use capsa_sandbox::SandboxBuilder;
 
-/// RAII wrapper that SIGKILLs and reaps a spawned child on drop, so a
-/// panicking `#[test]` body never leaks a subprocess.
-pub struct ChildGuard(pub Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
+pub use capsa_test_support::{spawn_drain, ChildGuard};
 
 pub struct TestDir {
     dir: tempfile::TempDir,

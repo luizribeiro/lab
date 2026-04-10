@@ -61,8 +61,8 @@ fn socketpair_byte_traverses_two_sandboxes() {
 
     // Spawn both before waiting on either: we want both sandboxes
     // concurrent to mirror the production netd+vmm topology.
-    let mut writer_child = ChildGuard(writer_cmd.spawn().expect("spawn writer probe"));
-    let mut reader_child = ChildGuard(reader_cmd.spawn().expect("spawn reader probe"));
+    let mut writer_child = ChildGuard::new(writer_cmd.spawn().expect("spawn writer probe"));
+    let mut reader_child = ChildGuard::new(reader_cmd.spawn().expect("spawn reader probe"));
 
     let writer_status = wait_within(&mut writer_child, EXCHANGE_TIMEOUT, "writer");
     assert!(
@@ -80,7 +80,7 @@ fn socketpair_byte_traverses_two_sandboxes() {
 fn wait_within(child: &mut ChildGuard, timeout: Duration, label: &str) -> ExitStatus {
     let deadline = Instant::now() + timeout;
     loop {
-        match child.0.try_wait() {
+        match child.child.try_wait() {
             Ok(Some(status)) => return status,
             Ok(None) => {}
             Err(e) => panic!("{label} try_wait failed: {e}"),

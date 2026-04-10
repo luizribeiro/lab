@@ -14,4 +14,4 @@ capsa = { path = "../capsa" }
 clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-libc = "0.2"
+capsa-test-support = { path = "../test-support" }

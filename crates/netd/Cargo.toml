@@ -13,4 +13,5 @@ tracing = "0.1"
 
 [dev-dependencies]
 capsa-sandbox = { path = "../sandbox" }
+capsa-test-support = { path = "../test-support" }
 serde_json = "1.0"

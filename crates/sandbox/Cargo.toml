@@ -15,6 +15,7 @@ tempfile = "3.13"
 tokio = { version = "1", features = ["process"], optional = true }
 
 [dev-dependencies]
+capsa-test-support = { path = "../test-support" }
 serde_json = "1.0"
 tokio = { version = "1", features = ["macros", "process", "rt"] }
 

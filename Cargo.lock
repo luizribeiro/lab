@@ -110,8 +110,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa",
+ "capsa-test-support",
  "clap",
- "libc",
 ]
 
 [[package]]
@@ -154,6 +154,7 @@ dependencies = [
  "capsa-net",
  "capsa-sandbox",
  "capsa-spec",
+ "capsa-test-support",
  "libc",
  "serde_json",
  "tokio",
@@ -165,6 +166,7 @@ name = "capsa-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "capsa-test-support",
  "lddtree",
  "libc",
  "serde_json",
@@ -180,6 +182,13 @@ dependencies = [
  "capsa-net",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "capsa-test-support"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

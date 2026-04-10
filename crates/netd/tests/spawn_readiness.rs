@@ -9,27 +9,17 @@
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use capsa_sandbox::configure_inherited_fds;
+use capsa_test_support::ChildGuard;
 
 const PROBE_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
 const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const LIVENESS_PROBE_DELAY: Duration = Duration::from_millis(200);
-
-/// Kills + reaps the child on drop so panics inside the test body
-/// (notably readiness-timeout panics) never leak a capsa-netd process.
-struct ChildGuard(Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
 
 #[test]
 fn netd_binary_signals_readiness_after_spawn() {
@@ -64,7 +54,7 @@ fn netd_binary_signals_readiness_after_spawn() {
     configure_inherited_fds(&mut cmd, vec![ready_writer_owned, host_owned])
         .expect("configure_inherited_fds");
 
-    let mut child = ChildGuard(cmd.spawn().expect("spawn capsa-netd"));
+    let mut child = ChildGuard::new(cmd.spawn().expect("spawn capsa-netd"));
 
     let ready_byte = read_byte_with_timeout(ready_reader, READINESS_TIMEOUT);
     assert_eq!(
@@ -81,7 +71,7 @@ fn netd_binary_signals_readiness_after_spawn() {
     // task error within this window.
     thread::sleep(LIVENESS_PROBE_DELAY);
     assert!(
-        child.0.try_wait().expect("try_wait").is_none(),
+        child.child.try_wait().expect("try_wait").is_none(),
         "capsa-netd should still be running after readiness + interface traffic"
     );
 }

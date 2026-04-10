@@ -5,7 +5,6 @@
 
 #![cfg(target_os = "macos")]
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -15,7 +14,7 @@ use std::time::{Duration, Instant};
 use capsa_sandbox::Sandbox;
 
 mod common;
-use common::ChildGuard;
+use common::{spawn_drain, ChildGuard};
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -50,7 +49,7 @@ fn sandboxed_vmm_boots_under_hvf() {
     let mut child = cmd.spawn().expect("spawn sandboxed capsa-vmm");
     let stdout = child.stdout.take().expect("stdout pipe");
     let stderr = child.stderr.take().expect("stderr pipe");
-    let mut guard = ChildGuard(child);
+    let mut guard = ChildGuard::new(child);
 
     let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
     let out_handle = spawn_drain(stdout, Arc::clone(&captured));
@@ -64,7 +63,7 @@ fn sandboxed_vmm_boots_under_hvf() {
         if contains_boot_marker(&captured.lock().unwrap()) {
             break true;
         }
-        if let Ok(Some(_)) = guard.0.try_wait() {
+        if let Ok(Some(_)) = guard.child.try_wait() {
             break contains_boot_marker(&captured.lock().unwrap());
         }
         if Instant::now() >= deadline {
@@ -75,7 +74,7 @@ fn sandboxed_vmm_boots_under_hvf() {
 
     // Kill before joining the drain threads: they only see EOF once
     // the child closes its pipes.
-    let _ = guard.0.kill();
+    guard.kill_now();
     let _ = out_handle.join();
     let _ = err_handle.join();
 
@@ -110,23 +109,4 @@ fn build_launch_spec(kernel: &std::path::Path, initramfs: &std::path::Path) -> S
         "resolved_interfaces": [],
     })
     .to_string()
-}
-
-fn spawn_drain<R: Read + Send + 'static>(
-    mut reader: R,
-    sink: Arc<Mutex<Vec<u8>>>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Ok(mut guard) = sink.lock() {
-                        guard.extend_from_slice(&buf[..n]);
-                    }
-                }
-            }
-        }
-    })
 }

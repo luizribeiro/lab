@@ -10,49 +10,20 @@
 
 #![cfg(target_os = "macos")]
 
-use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use capsa_test_support::{spawn_drain, ChildGuard};
 
 const CLI_BIN: &str = env!("CARGO_BIN_EXE_capsa");
 const BOOT_TIMEOUT: Duration = Duration::from_secs(45);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const BOOT_MARKER: &str = "Run /init as init process";
 const DHCP_MARKER: &str = "udhcpc: lease of";
-
-/// RAII guard that kills the entire process group on drop. The
-/// capsa CLI spawns capsa-vmm and capsa-netd as grandchildren that
-/// inherit its stdio pipes; killing only the CLI leaves the pipes
-/// open and deadlocks the drain threads. Killing the pgroup is the
-/// only way to release them in one shot.
-struct ChildGuard {
-    child: Child,
-    pgid: i32,
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        // wait() reaps the CLI's own exit status and does not block
-        // on the grandchildren or on any pipe state, so it returns
-        // promptly once killpg has delivered SIGKILL.
-        kill_pgroup(self.pgid);
-        let _ = self.child.wait();
-    }
-}
-
-fn kill_pgroup(pgid: i32) {
-    // SAFETY: `pgid` was set via `process_group(0)` so it equals the
-    // CLI's own pid and names a real process group. killpg is
-    // async-signal-safe; ESRCH (group already empty) is the only
-    // expected error and is harmless, so we discard the result.
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
-    }
-}
 
 #[test]
 #[ignore]
@@ -122,7 +93,7 @@ fn drive_cli(env: &RequiredEnv, extra_args: &[&str], success_marker: &str) {
     let pgid = child.id() as i32;
     let stdout = child.stdout.take().expect("stdout pipe");
     let stderr = child.stderr.take().expect("stderr pipe");
-    let mut guard = ChildGuard { child, pgid };
+    let mut guard = ChildGuard::with_pgroup(child, pgid);
 
     let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
     let out_handle = spawn_drain(stdout, Arc::clone(&captured));
@@ -149,7 +120,7 @@ fn drive_cli(env: &RequiredEnv, extra_args: &[&str], success_marker: &str) {
     // capsa-netd are grandchildren that hold the same stdio pipes,
     // so killing only the CLI leaves the pipes open and the drain
     // threads block on read() forever.
-    kill_pgroup(guard.pgid);
+    guard.kill_now();
     let _ = out_handle.join();
     let _ = err_handle.join();
 
@@ -162,23 +133,4 @@ fn drive_cli(env: &RequiredEnv, extra_args: &[&str], success_marker: &str) {
 
 fn contains(buf: &[u8], needle: &str) -> bool {
     String::from_utf8_lossy(buf).contains(needle)
-}
-
-fn spawn_drain<R: Read + Send + 'static>(
-    mut reader: R,
-    sink: Arc<Mutex<Vec<u8>>>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Ok(mut guard) = sink.lock() {
-                        guard.extend_from_slice(&buf[..n]);
-                    }
-                }
-            }
-        }
-    })
 }
