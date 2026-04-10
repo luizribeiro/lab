@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::discover::library_dirs;
+use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
 use crate::SandboxSpec;
 
 /// Builds a `Command` that runs `program` under `syd` with rules derived from
@@ -185,7 +186,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    for path in stdio_tty_paths() {
+    for path in stdio_tty_paths("/proc/self/fd") {
         for candidate in path_candidates(&path) {
             push_with_ancestors(&mut read_paths, &candidate);
         }
@@ -285,53 +286,12 @@ fn add_lock_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
     rules.push(format!("{prefix}+{escaped}"));
 }
 
-fn stdio_tty_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-
-    for fd in [0, 1, 2] {
-        let fd_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-        if let Ok(target) = std::fs::canonicalize(&fd_path) {
-            if target.starts_with("/dev/") {
-                push_unique(&mut out, target);
-            }
-        }
-    }
-
-    out
-}
-
-fn path_candidates(path: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else if let Ok(cwd) = std::env::current_dir() {
-        cwd.join(path)
-    } else {
-        path.to_path_buf()
-    };
-
-    push_unique(&mut out, absolute.clone());
-
-    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
-        push_unique(&mut out, canonical);
-    }
-
-    out
-}
-
 fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
     for ancestor in path.ancestors() {
         if ancestor == Path::new("/") {
             break;
         }
         push_unique(paths, ancestor.to_path_buf());
-    }
-}
-
-fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|p| p == &path) {
-        paths.push(path);
     }
 }
 

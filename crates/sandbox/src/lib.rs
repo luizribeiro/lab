@@ -4,6 +4,7 @@ use std::process::Command;
 use anyhow::{ensure, Context, Result};
 
 mod discover;
+mod paths;
 
 #[cfg(target_os = "macos")]
 mod darwin;

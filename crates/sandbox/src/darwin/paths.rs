@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::discover::library_dirs;
+use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
 use crate::SandboxSpec;
 
 #[derive(Debug, Default)]
@@ -16,8 +17,8 @@ impl PathSets {
     pub(super) fn from_inputs(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Self {
         let mut paths = Self::default();
 
-        for candidate in Self::path_candidates(program) {
-            Self::push_unique(&mut paths.executable_paths, candidate);
+        for candidate in path_candidates(program) {
+            push_unique(&mut paths.executable_paths, candidate);
         }
         paths.add_read_only(program);
 
@@ -41,7 +42,7 @@ impl PathSets {
         }
 
         if spec.allow_interactive_tty {
-            for tty in stdio_tty_paths() {
+            for tty in stdio_tty_paths("/dev/fd") {
                 paths.add_ioctl(&tty);
             }
             paths.add_ioctl(Path::new("/dev/tty"));
@@ -53,44 +54,24 @@ impl PathSets {
     }
 
     fn add_read_only(&mut self, path: &Path) {
-        for candidate in Self::path_candidates(path) {
-            Self::push_unique(&mut self.read_only_paths, candidate.clone());
+        for candidate in path_candidates(path) {
+            push_unique(&mut self.read_only_paths, candidate.clone());
             self.add_traversal_ancestors(&candidate);
         }
     }
 
     fn add_read_write(&mut self, path: &Path) {
-        for candidate in Self::path_candidates(path) {
-            Self::push_unique(&mut self.read_write_paths, candidate.clone());
+        for candidate in path_candidates(path) {
+            push_unique(&mut self.read_write_paths, candidate.clone());
             self.add_traversal_ancestors(&candidate);
         }
     }
 
     fn add_ioctl(&mut self, path: &Path) {
-        for candidate in Self::path_candidates(path) {
-            Self::push_unique(&mut self.ioctl_paths, candidate.clone());
+        for candidate in path_candidates(path) {
+            push_unique(&mut self.ioctl_paths, candidate.clone());
             self.add_traversal_ancestors(&candidate);
         }
-    }
-
-    fn path_candidates(path: &Path) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else if let Ok(cwd) = std::env::current_dir() {
-            cwd.join(path)
-        } else {
-            path.to_path_buf()
-        };
-
-        Self::push_unique(&mut out, absolute.clone());
-
-        if let Ok(canonical) = std::fs::canonicalize(&absolute) {
-            Self::push_unique(&mut out, canonical);
-        }
-
-        out
     }
 
     fn add_traversal_ancestors(&mut self, path: &Path) {
@@ -99,29 +80,8 @@ impl PathSets {
                 if ancestor == Path::new("/") {
                     break;
                 }
-                Self::push_unique(&mut self.traversal_paths, ancestor.to_path_buf());
+                push_unique(&mut self.traversal_paths, ancestor.to_path_buf());
             }
         }
     }
-
-    fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
-        if !paths.iter().any(|p| p == &path) {
-            paths.push(path);
-        }
-    }
-}
-
-fn stdio_tty_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-
-    for fd in [0, 1, 2] {
-        let fd_path = PathBuf::from(format!("/dev/fd/{fd}"));
-        if let Ok(target) = std::fs::canonicalize(&fd_path) {
-            if target.starts_with("/dev/") {
-                PathSets::push_unique(&mut out, target);
-            }
-        }
-    }
-
-    out
 }
