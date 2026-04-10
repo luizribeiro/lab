@@ -73,21 +73,9 @@ fn child_sees_rlimit_nofile_via_getrlimit() {
 
 #[test]
 fn disable_core_dumps_sets_zero_limit() {
-    use std::process::Command;
-
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg("[ \"$(ulimit -c)\" = \"0\" ]")
-        .stderr(Stdio::inherit())
-        .stdout(Stdio::inherit());
-
-    #[allow(clippy::unnecessary_cast)]
-    let rlimits = vec![(libc::RLIMIT_CORE as i32, 0)];
-    capsa_sandbox::configure_rlimits(&mut cmd, rlimits).expect("configure_rlimits");
-
-    let status = cmd.status().expect("spawn shell");
+    let builder = Sandbox::builder().disable_core_dumps();
     assert!(
-        status.success(),
-        "ulimit -c should report 0 after disable_core_dumps()"
+        run_probe(builder, &["check-rlimit", "core", "0"]),
+        "child should see RLIMIT_CORE=0 via getrlimit"
     );
 }

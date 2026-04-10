@@ -3,11 +3,6 @@ use std::process::Command;
 
 use anyhow::{ensure, Context, Result};
 
-#[cfg(target_os = "linux")]
-mod capability;
-#[cfg(target_os = "linux")]
-pub use capability::Capability;
-
 mod discover;
 mod paths;
 
@@ -31,10 +26,6 @@ pub(crate) struct SandboxSpec {
     pub(crate) read_write_paths: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
-    #[cfg(target_os = "linux")]
-    pub(crate) no_new_privs: bool,
-    #[cfg(target_os = "linux")]
-    pub(crate) allowed_capabilities: std::collections::HashSet<u32>,
 }
 
 impl Default for SandboxSpec {
@@ -48,10 +39,6 @@ impl Default for SandboxSpec {
             read_write_paths: Vec::new(),
             ioctl_paths: Vec::new(),
             rlimits: Vec::new(),
-            #[cfg(target_os = "linux")]
-            no_new_privs: true,
-            #[cfg(target_os = "linux")]
-            allowed_capabilities: std::collections::HashSet::new(),
         }
     }
 }
@@ -282,27 +269,6 @@ impl SandboxBuilder {
         self
     }
 
-    /// Controls whether the child calls `prctl(PR_SET_NO_NEW_PRIVS)`
-    /// to prevent privilege escalation via setuid/file-capability exec.
-    ///
-    /// Enabled by default. Only available on Linux.
-    #[cfg(target_os = "linux")]
-    pub fn no_new_privs(mut self, enable: bool) -> Self {
-        self.spec.no_new_privs = enable;
-        self
-    }
-
-    /// Retains a specific Linux capability in the child instead of
-    /// dropping it. By default all capabilities are dropped; call this
-    /// for each capability the child actually needs.
-    ///
-    /// Only available on Linux; does not exist in the macOS API.
-    #[cfg(target_os = "linux")]
-    pub fn allow_capability(mut self, cap: Capability) -> Self {
-        self.spec.allowed_capabilities.insert(u32::from(cap));
-        self
-    }
-
     /// Hands an owned file descriptor to the sandbox to be inherited
     /// into the child at its current raw fd number.
     ///
@@ -334,24 +300,14 @@ impl SandboxBuilder {
         Ok(raw)
     }
 
-    /// Consumes the builder and returns the settings needed by the
-    /// sandbox-bypass path as a [`BypassConfig`].
+    /// Consumes the builder and returns the inherited fds and the
+    /// `close_non_inherited_fds` flag for the sandbox-bypass path.
     ///
-    /// This is intended for callers that decide at the last moment to
-    /// spawn the child without a sandbox wrapper (for example, a
-    /// debugging escape hatch) and want to apply fd inheritance,
-    /// rlimits, and privilege hardening to a plain
-    /// `std::process::Command`.
-    pub fn into_bypass_config(self) -> BypassConfig {
-        BypassConfig {
-            inherited_fds: self.inherited_fds,
-            close_non_inherited_fds: self.spec.close_non_inherited_fds,
-            rlimits: self.spec.rlimits,
-            #[cfg(target_os = "linux")]
-            no_new_privs: self.spec.no_new_privs,
-            #[cfg(target_os = "linux")]
-            allowed_capabilities: self.spec.allowed_capabilities,
-        }
+    /// Intended for callers that skip the sandbox wrapper (e.g. the
+    /// `CAPSA_DISABLE_SANDBOX` escape hatch) but still need fd
+    /// inheritance for socketpair communication.
+    pub fn into_inherited_fds_config(self) -> (Vec<std::os::fd::OwnedFd>, bool) {
+        (self.inherited_fds, self.spec.close_non_inherited_fds)
     }
 
     /// Consumes the builder and produces a `(Command, Sandbox)` pair
@@ -365,25 +321,6 @@ impl SandboxBuilder {
     /// outlive the spawned `Child`; the caller should store it next to
     /// the `Child` handle (e.g. via `DaemonProcess` in capsa-core).
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
-        // On Linux, syd manages rlimits natively via its own
-        // directives, so they are emitted as syd rules in
-        // linux::syd_rules() rather than applied via pre_exec.
-        // Privilege hardening (NNP + capability drop) is likewise
-        // managed by syd; reject unsupported overrides early.
-        #[cfg(target_os = "linux")]
-        {
-            ensure!(
-                self.spec.no_new_privs,
-                "cannot disable no_new_privs when syd is the sandbox wrapper; \
-                 syd always sets NO_NEW_PRIVS"
-            );
-            ensure!(
-                self.spec.allowed_capabilities.is_empty(),
-                "per-capability allowlisting is not supported when syd is the \
-                 sandbox wrapper; syd manages capabilities internally"
-            );
-        }
-
         let close_non_inherited = self.spec.close_non_inherited_fds;
 
         // On non-Linux platforms, rlimits are enforced via a pre_exec
@@ -420,18 +357,6 @@ impl Sandbox {
     pub fn builder() -> SandboxBuilder {
         SandboxBuilder::new()
     }
-}
-
-/// Configuration extracted from a [`SandboxBuilder`] for use on the
-/// sandbox-bypass path (e.g. `CAPSA_DISABLE_SANDBOX`).
-pub struct BypassConfig {
-    pub inherited_fds: Vec<std::os::fd::OwnedFd>,
-    pub close_non_inherited_fds: bool,
-    pub rlimits: Vec<(i32, u64)>,
-    #[cfg(target_os = "linux")]
-    pub no_new_privs: bool,
-    #[cfg(target_os = "linux")]
-    pub allowed_capabilities: std::collections::HashSet<u32>,
 }
 
 /// Reads `/dev/fd` (macOS) or `/proc/self/fd` (Linux) to discover
@@ -599,10 +524,10 @@ pub fn configure_inherited_fds(
 /// `libc::RLIMIT_*` constant and `limit` is the value to set for both
 /// the soft and hard limits.
 ///
-/// This is the lower-level primitive used by [`SandboxBuilder::build`].
-/// It is exposed separately for the `CAPSA_DISABLE_SANDBOX` bypass
-/// path so rlimits are still enforced without a sandbox wrapper.
-pub fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Result<()> {
+/// Used by [`SandboxBuilder::build`] on non-Linux platforms where
+/// there is no sandbox wrapper that handles rlimits natively.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
     if rlimits.is_empty() {
@@ -629,136 +554,6 @@ pub fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Res
     // SAFETY: the closure only calls setrlimit (direct syscall on
     // Linux/macOS, no heap or locks) and iterates a pre-allocated Vec
     // by reference (no allocation).
-    unsafe {
-        command.pre_exec(child_hook);
-    }
-
-    Ok(())
-}
-
-/// Installs a `pre_exec` hook that applies Linux privilege hardening.
-///
-/// When `no_new_privs` is true, calls `prctl(PR_SET_NO_NEW_PRIVS)` to
-/// prevent privilege escalation via setuid or file-capability exec.
-///
-/// Drops all Linux capabilities NOT in `allowed_capabilities` from the
-/// effective, permitted, inheritable, ambient, and bounding sets. An
-/// empty set means all capabilities are dropped.
-///
-/// This is the lower-level primitive used by [`SandboxBuilder::build`].
-/// It is exposed separately for the `CAPSA_DISABLE_SANDBOX` bypass
-/// path.
-#[cfg(target_os = "linux")]
-pub fn configure_privilege_hardening(
-    command: &mut Command,
-    no_new_privs: bool,
-    allowed_capabilities: std::collections::HashSet<u32>,
-) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    let allowed = allowed_capabilities;
-
-    let child_hook = move || -> std::io::Result<()> {
-        // SAFETY: prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL)
-        // is a direct syscall; async-signal-safe in practice.
-        let rc = unsafe {
-            libc::prctl(
-                libc::PR_CAP_AMBIENT,
-                libc::PR_CAP_AMBIENT_CLEAR_ALL,
-                0,
-                0,
-                0,
-            )
-        };
-        if rc == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        // Drop capabilities NOT in the allowed set from the
-        // bounding set. CAP_LAST_CAP is ~41 today; iterate to 63
-        // to be forward-compatible. EINVAL (cap above CAP_LAST_CAP)
-        // and EPERM (missing CAP_SETPCAP, typical for unprivileged
-        // users) are both non-fatal — if we lack CAP_SETPCAP we
-        // cannot drop from the bounding set, but we also cannot
-        // gain those capabilities, so the security posture is
-        // equivalent.
-        for cap in 0..=63u32 {
-            if allowed.contains(&cap) {
-                continue;
-            }
-            // SAFETY: prctl(PR_CAPBSET_DROP) is a direct syscall.
-            let rc = unsafe { libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) };
-            if rc == -1 {
-                let err = std::io::Error::last_os_error();
-                if !matches!(err.raw_os_error(), Some(libc::EINVAL) | Some(libc::EPERM)) {
-                    return Err(err);
-                }
-            }
-        }
-
-        // Build capability bitmasks for capset(2). Capabilities
-        // are split into two 32-bit words: low (0–31) and high
-        // (32–63).
-        let (mut lo, mut hi) = (0u32, 0u32);
-        for &cap in &allowed {
-            if cap < 32 {
-                lo |= 1 << cap;
-            } else if cap < 64 {
-                hi |= 1 << (cap - 32);
-            }
-        }
-
-        // Set effective/permitted/inheritable via capset(2).
-        // The structs mirror <linux/capability.h>.
-        #[repr(C)]
-        struct CapHeader {
-            version: u32,
-            pid: i32,
-        }
-        #[repr(C)]
-        struct CapData {
-            effective: u32,
-            permitted: u32,
-            inheritable: u32,
-        }
-        let header = CapHeader {
-            version: 0x20080522_u32, // _LINUX_CAPABILITY_VERSION_3
-            pid: 0,
-        };
-        let data = [
-            CapData {
-                effective: lo,
-                permitted: lo,
-                inheritable: lo,
-            },
-            CapData {
-                effective: hi,
-                permitted: hi,
-                inheritable: hi,
-            },
-        ];
-        // SAFETY: SYS_capset is a direct syscall; the structs are
-        // stack-local with no heap allocation.
-        let rc = unsafe { libc::syscall(libc::SYS_capset, &header as *const _, &data as *const _) };
-        if rc == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        if no_new_privs {
-            // SAFETY: prctl(PR_SET_NO_NEW_PRIVS) is a direct syscall;
-            // async-signal-safe in practice (no heap, no locks).
-            let rc = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-            if rc == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-
-        Ok(())
-    };
-
-    // SAFETY: the closure only calls prctl and the capset syscall —
-    // both are direct syscalls on Linux (no heap, no locks). All data
-    // is stack-local or captured by value from pre-allocated state.
     unsafe {
         command.pre_exec(child_hook);
     }

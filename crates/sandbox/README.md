@@ -9,15 +9,14 @@ Builds a `Command` that runs a child process inside an OS sandbox
   native rules (`syd` on Linux, `sandbox-exec` on macOS) and relies
   on those backends for enforcement.
 - **Cross-platform by default**: `Sandbox::builder()` works on both
-  Linux and macOS; Linux-only privilege controls are
-  `cfg(target_os = "linux")` so they don't appear on macOS.
+  Linux and macOS with the same API surface.
 - **Embeddable crate, not a service**: no daemon, no IPC — `build()`
   returns a configured `(std::process::Command, Sandbox)`.
 - **Hardened by default**: deny-all filesystem/network posture,
-  `close_non_inherited_fds(true)`, and on Linux `no_new_privs(true)`
-  with capabilities dropped unless explicitly allowed.
+  `close_non_inherited_fds(true)`, and privilege hardening handled
+  automatically by the sandbox backend.
 - **Relaxed explicitly, not implicitly**: callers opt into
-  network/path/ioctl/capability access.
+  network/path/ioctl access.
 - **No privileges required**: runs as a regular unprivileged user on
   both Linux and macOS. No root, no setuid, no ambient capabilities.
 - **Fails fast on unsupported setups**: missing `syd`, unsupported OS,
@@ -110,36 +109,11 @@ let (mut cmd, _sandbox) = Sandbox::builder()
 # Ok::<(), anyhow::Error>(())
 ```
 
-## Privilege controls (Linux)
+## Privilege controls
 
-These methods only exist on Linux (`cfg(target_os = "linux")`).
-
-When using the default sandbox path (`Sandbox::builder().build()`), syd
-manages `NO_NEW_PRIVS` and capabilities internally. `build()` will
-return an error if you try to disable `no_new_privs` or use
-`allow_capability` — these overrides are only available on the bypass
-path (`into_bypass_config` + `configure_privilege_hardening`).
-
-- `no_new_privs(bool)` — enabled by default. On the bypass path, calls
-  `prctl(PR_SET_NO_NEW_PRIVS)` to block setuid/file-capability
-  escalation.
-- `allow_capability(Capability)` — by default all Linux capabilities
-  are dropped. Only available on the bypass path; syd manages
-  capabilities internally when used as the sandbox wrapper.
-
-```rust,no_run
-# #[cfg(target_os = "linux")]
-# {
-use std::path::Path;
-use capsa_sandbox::{Capability, Sandbox};
-
-// Bypass path: privilege hardening applied directly to the child.
-let bypass = Sandbox::builder()
-    .allow_capability(Capability::NetBindService)
-    .into_bypass_config();
-# }
-# Ok::<(), anyhow::Error>(())
-```
+On Linux, syd drops all capabilities and sets `NO_NEW_PRIVS`
+automatically. On macOS, `sandbox-exec` provides equivalent process
+isolation. These protections are not configurable through the builder.
 
 ## Async (tokio)
 
