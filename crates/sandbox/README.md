@@ -52,6 +52,22 @@ assert!(cmd.status()?.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
+### Security hardening
+
+By default, `SandboxBuilder` sets `FD_CLOEXEC` on every fd `>= 3` that
+was **not** registered via `inherit_fd`, so leaked privileged fds are
+closed at exec time. Opt out with `close_non_inherited_fds(false)`:
+
+```rust,no_run
+use std::path::Path;
+use capsa_sandbox::Sandbox;
+
+let (mut cmd, _sandbox) = Sandbox::builder()
+    .close_non_inherited_fds(false) // disable; true is the default
+    .build(Path::new("/bin/true"))?;
+# Ok::<(), anyhow::Error>(())
+```
+
 ### Tokio async (`--features tokio`)
 
 ```rust,no_run
