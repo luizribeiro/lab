@@ -25,6 +25,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
+    pub(crate) rlimits: Vec<(i32, u64)>,
 }
 
 impl Default for SandboxSpec {
@@ -37,6 +38,7 @@ impl Default for SandboxSpec {
             read_only_paths: Vec::new(),
             read_write_paths: Vec::new(),
             ioctl_paths: Vec::new(),
+            rlimits: Vec::new(),
         }
     }
 }
@@ -232,6 +234,36 @@ impl SandboxBuilder {
         self
     }
 
+    /// Sets `RLIMIT_NOFILE` (max open file descriptors) for the child.
+    pub fn max_open_files(mut self, n: u64) -> Self {
+        self.spec.rlimits.push((libc::RLIMIT_NOFILE, n));
+        self
+    }
+
+    /// Sets `RLIMIT_AS` (max virtual address space in bytes) for the child.
+    pub fn max_address_space(mut self, bytes: u64) -> Self {
+        self.spec.rlimits.push((libc::RLIMIT_AS, bytes));
+        self
+    }
+
+    /// Sets `RLIMIT_CPU` (max CPU time in seconds) for the child.
+    pub fn max_cpu_time(mut self, seconds: u64) -> Self {
+        self.spec.rlimits.push((libc::RLIMIT_CPU, seconds));
+        self
+    }
+
+    /// Sets `RLIMIT_CORE` to 0, preventing the child from dumping core.
+    pub fn disable_core_dumps(mut self) -> Self {
+        self.spec.rlimits.push((libc::RLIMIT_CORE, 0));
+        self
+    }
+
+    /// Sets `RLIMIT_NPROC` (max number of processes) for the child.
+    pub fn max_processes(mut self, n: u64) -> Self {
+        self.spec.rlimits.push((libc::RLIMIT_NPROC, n));
+        self
+    }
+
     /// Hands an owned file descriptor to the sandbox to be inherited
     /// into the child at its current raw fd number.
     ///
@@ -263,18 +295,21 @@ impl SandboxBuilder {
         Ok(raw)
     }
 
-    /// Consumes the builder and returns the owned fds registered via
-    /// [`SandboxBuilder::inherit_fd`] together with the
-    /// `close_non_inherited_fds` setting, discarding the rest of the
-    /// sandbox policy.
+    /// Consumes the builder and returns the owned fds, the
+    /// `close_non_inherited_fds` setting, and any resource limits,
+    /// discarding the rest of the sandbox policy.
     ///
     /// This is intended for callers that decide at the last moment to
     /// spawn the child without a sandbox wrapper (for example, a
-    /// debugging escape hatch) and want to apply fd inheritance to a
-    /// plain `std::process::Command` via [`configure_inherited_fds`]
-    /// instead of going through [`SandboxBuilder::build`].
-    pub fn into_inherited_fds(self) -> (Vec<std::os::fd::OwnedFd>, bool) {
-        (self.inherited_fds, self.spec.close_non_inherited_fds)
+    /// debugging escape hatch) and want to apply fd inheritance and
+    /// rlimits to a plain `std::process::Command` via
+    /// [`configure_inherited_fds`] and [`configure_rlimits`].
+    pub fn into_bypass_config(self) -> (Vec<std::os::fd::OwnedFd>, bool, Vec<(i32, u64)>) {
+        (
+            self.inherited_fds,
+            self.spec.close_non_inherited_fds,
+            self.spec.rlimits,
+        )
     }
 
     /// Consumes the builder and produces a `(Command, Sandbox)` pair
@@ -289,9 +324,11 @@ impl SandboxBuilder {
     /// the `Child` handle (e.g. via `DaemonProcess` in capsa-core).
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
         let close_non_inherited = self.spec.close_non_inherited_fds;
+        let rlimits = self.spec.rlimits.clone();
         let sandbox = Sandbox::new(self.spec)?;
         let mut command = sandbox.command(program);
         configure_inherited_fds(&mut command, self.inherited_fds, close_non_inherited)?;
+        configure_rlimits(&mut command, rlimits)?;
         Ok((command, sandbox))
     }
 }
@@ -466,6 +503,50 @@ pub fn configure_inherited_fds(
     // falls through to `exec`, discarding the Rust stack; on failure
     // the error is returned to std's spawn machinery which reports it
     // and calls `_exit`.
+    unsafe {
+        command.pre_exec(child_hook);
+    }
+
+    Ok(())
+}
+
+/// Installs a `pre_exec` hook that applies POSIX resource limits via
+/// `setrlimit` in the child before `exec`.
+///
+/// Each entry is a `(resource, limit)` pair where `resource` is a
+/// `libc::RLIMIT_*` constant and `limit` is the value to set for both
+/// the soft and hard limits.
+///
+/// This is the lower-level primitive used by [`SandboxBuilder::build`].
+/// It is exposed separately for the `CAPSA_DISABLE_SANDBOX` bypass
+/// path so rlimits are still enforced without a sandbox wrapper.
+pub fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    if rlimits.is_empty() {
+        return Ok(());
+    }
+
+    let child_hook = move || -> std::io::Result<()> {
+        for &(resource, limit) in &rlimits {
+            let rlim = libc::rlimit {
+                rlim_cur: limit as libc::rlim_t,
+                rlim_max: limit as libc::rlim_t,
+            };
+            // SAFETY: setrlimit is not on the POSIX async-signal-safe
+            // list but is a direct syscall (no heap, no locks) on both
+            // Linux and macOS. Stack-local rlimit struct; no allocation.
+            let rc = unsafe { libc::setrlimit(resource as _, &rlim) };
+            if rc == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    };
+
+    // SAFETY: the closure only calls setrlimit (direct syscall on
+    // Linux/macOS, no heap or locks) and iterates a pre-allocated Vec
+    // by reference (no allocation).
     unsafe {
         command.pre_exec(child_hook);
     }

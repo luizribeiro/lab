@@ -62,6 +62,16 @@ fn main() {
             }
             fd_write_bytes(&pairs)
         }
+        "open-many-fds" => {
+            let Some(count_str) = args.next() else {
+                usage_and_exit();
+            };
+            let count: usize = count_str.parse().unwrap_or_else(|e| {
+                eprintln!("invalid count `{count_str}`: {e}");
+                std::process::exit(2);
+            });
+            open_many_fds(count)
+        }
         _ => {
             usage_and_exit();
         }
@@ -209,6 +219,19 @@ fn effective_temp_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+fn open_many_fds(count: usize) -> Result<(), String> {
+    let mut opened = Vec::new();
+    for i in 0..count {
+        match std::fs::File::open("/dev/null") {
+            Ok(f) => opened.push(f),
+            Err(e) => {
+                return Err(format!("failed to open fd #{i}: {e}"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn usage_and_exit() -> ! {
     eprintln!(
         "usage: sandbox_probe <action> [args...]\n\
@@ -220,7 +243,8 @@ actions:\n\
   can-connect <host> <port>\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
-  fd-write-byte <fd> <byte> [<fd> <byte>...]"
+  fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
+  open-many-fds <count>"
     );
     std::process::exit(2);
 }
