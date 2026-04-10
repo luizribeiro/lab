@@ -248,32 +248,37 @@ impl SandboxBuilder {
     }
 
     /// Sets `RLIMIT_NOFILE` (max open file descriptors) for the child.
+    #[allow(clippy::unnecessary_cast)] // i32 on macOS, u32 on Linux
     pub fn max_open_files(mut self, n: u64) -> Self {
-        self.spec.rlimits.push((libc::RLIMIT_NOFILE, n));
+        self.spec.rlimits.push((libc::RLIMIT_NOFILE as i32, n));
         self
     }
 
     /// Sets `RLIMIT_AS` (max virtual address space in bytes) for the child.
+    #[allow(clippy::unnecessary_cast)]
     pub fn max_address_space(mut self, bytes: u64) -> Self {
-        self.spec.rlimits.push((libc::RLIMIT_AS, bytes));
+        self.spec.rlimits.push((libc::RLIMIT_AS as i32, bytes));
         self
     }
 
     /// Sets `RLIMIT_CPU` (max CPU time in seconds) for the child.
+    #[allow(clippy::unnecessary_cast)]
     pub fn max_cpu_time(mut self, seconds: u64) -> Self {
-        self.spec.rlimits.push((libc::RLIMIT_CPU, seconds));
+        self.spec.rlimits.push((libc::RLIMIT_CPU as i32, seconds));
         self
     }
 
     /// Sets `RLIMIT_CORE` to 0, preventing the child from dumping core.
+    #[allow(clippy::unnecessary_cast)]
     pub fn disable_core_dumps(mut self) -> Self {
-        self.spec.rlimits.push((libc::RLIMIT_CORE, 0));
+        self.spec.rlimits.push((libc::RLIMIT_CORE as i32, 0));
         self
     }
 
     /// Sets `RLIMIT_NPROC` (max number of processes) for the child.
+    #[allow(clippy::unnecessary_cast)]
     pub fn max_processes(mut self, n: u64) -> Self {
-        self.spec.rlimits.push((libc::RLIMIT_NPROC, n));
+        self.spec.rlimits.push((libc::RLIMIT_NPROC as i32, n));
         self
     }
 
@@ -362,16 +367,19 @@ impl SandboxBuilder {
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
         let close_non_inherited = self.spec.close_non_inherited_fds;
         let rlimits = self.spec.rlimits.clone();
-        #[cfg(target_os = "linux")]
-        let no_new_privs = self.spec.no_new_privs;
-        #[cfg(target_os = "linux")]
-        let allowed_capabilities = self.spec.allowed_capabilities.clone();
         let sandbox = Sandbox::new(self.spec)?;
         let mut command = sandbox.command(program);
         configure_inherited_fds(&mut command, self.inherited_fds, close_non_inherited)?;
         configure_rlimits(&mut command, rlimits)?;
-        #[cfg(target_os = "linux")]
-        configure_privilege_hardening(&mut command, no_new_privs, allowed_capabilities)?;
+        // Privilege hardening (NNP + capability drop) is NOT applied
+        // here because the Command targets the sandbox wrapper
+        // (syd on Linux, sandbox-exec on macOS), not the final
+        // program. Dropping capabilities before the wrapper starts
+        // would prevent it from setting up Landlock/seccomp. The
+        // wrapper is responsible for its own privilege posture.
+        // Callers using the bypass path (into_bypass_config +
+        // configure_privilege_hardening) DO get privilege hardening
+        // applied directly to the target process.
         Ok((command, sandbox))
     }
 }

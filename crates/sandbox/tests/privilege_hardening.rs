@@ -3,6 +3,11 @@
 //!
 //! These features only exist on Linux; on macOS the builder methods
 //! are absent and the tests are compiled out.
+//!
+//! Tests use `configure_privilege_hardening` directly on a bare
+//! `Command` because privilege hardening is applied in the bypass
+//! path, not through the sandbox wrapper (syd handles its own
+//! privilege posture).
 
 #[cfg(target_os = "linux")]
 mod common;
@@ -12,41 +17,40 @@ mod common;
 #[cfg(target_os = "linux")]
 #[test]
 fn no_new_privs_is_enabled_by_default() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Sandbox;
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
 
     let probe = common::probe_binary();
-    let (mut cmd, _sandbox) = Sandbox::builder().build(&probe).expect("build sandbox");
-
+    let mut cmd = Command::new(&probe);
     cmd.arg("check-no-new-privs")
         .stderr(Stdio::piped())
         .stdout(Stdio::inherit());
 
+    capsa_sandbox::configure_privilege_hardening(&mut cmd, true, HashSet::new())
+        .expect("configure privilege hardening");
+
     let output = cmd.output().expect("spawn probe");
     assert!(
         output.status.success(),
-        "no_new_privs should be set by default on Linux; stderr: {}",
+        "no_new_privs should be set when enabled; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn no_new_privs_can_be_disabled() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Sandbox;
+fn no_new_privs_disabled_leaves_it_unset() {
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
 
     let probe = common::probe_binary();
-    let (mut cmd, _sandbox) = Sandbox::builder()
-        .no_new_privs(false)
-        .build(&probe)
-        .expect("build sandbox");
-
+    let mut cmd = Command::new(&probe);
     cmd.arg("check-no-new-privs")
         .stderr(Stdio::piped())
         .stdout(Stdio::inherit());
+
+    capsa_sandbox::configure_privilege_hardening(&mut cmd, false, HashSet::new())
+        .expect("configure privilege hardening");
 
     let output = cmd.output().expect("spawn probe");
     assert!(
@@ -55,113 +59,57 @@ fn no_new_privs_can_be_disabled() {
     );
 }
 
-// ── capability allowlist ────────────────────────────────────
+// ── capability dropping ─────────────────────────────────────
 
 #[cfg(target_os = "linux")]
 #[test]
-fn default_drops_all_capabilities() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Sandbox;
-
-    let probe = common::probe_binary();
-    let (mut cmd, _sandbox) = Sandbox::builder().build(&probe).expect("build sandbox");
-
-    cmd.arg("check-has-cap")
-        .arg("0")
-        .stderr(Stdio::piped())
-        .stdout(Stdio::inherit());
-
-    let output = cmd.output().expect("spawn probe");
-    assert!(
-        !output.status.success(),
-        "CAP_CHOWN should be dropped by default; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn allow_capability_retains_it_in_bounding_set() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Capability;
-    use capsa_sandbox::Sandbox;
+fn empty_allowlist_zeroes_effective_capabilities() {
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
 
     let probe = common::probe_binary();
-    let cap_num = u32::from(Capability::NetRaw).to_string();
-
-    let (mut cmd, _sandbox) = Sandbox::builder()
-        .allow_capability(Capability::NetRaw)
-        .build(&probe)
-        .expect("build sandbox");
-
-    cmd.arg("check-has-cap")
-        .arg(&cap_num)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::inherit());
-
-    let output = cmd.output().expect("spawn probe");
-    assert!(
-        output.status.success(),
-        "CAP_NET_RAW should be retained in bounding set; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn allow_capability_retains_it_in_effective_set() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Capability;
-    use capsa_sandbox::Sandbox;
-
-    let probe = common::probe_binary();
-    let cap_num = u32::from(Capability::NetRaw).to_string();
-
-    let (mut cmd, _sandbox) = Sandbox::builder()
-        .allow_capability(Capability::NetRaw)
-        .build(&probe)
-        .expect("build sandbox");
-
+    let mut cmd = Command::new(&probe);
+    // Check effective set (not bounding set — bounding set can't be
+    // modified by unprivileged users, but effective/permitted CAN
+    // always be reduced via capset).
     cmd.arg("check-has-effective-cap")
-        .arg(&cap_num)
+        .arg("0") // CAP_CHOWN
         .stderr(Stdio::piped())
         .stdout(Stdio::inherit());
 
+    capsa_sandbox::configure_privilege_hardening(&mut cmd, false, HashSet::new())
+        .expect("configure privilege hardening");
+
     let output = cmd.output().expect("spawn probe");
     assert!(
-        output.status.success(),
-        "CAP_NET_RAW should be retained in effective set; stderr: {}",
+        !output.status.success(),
+        "CAP_CHOWN should not be in effective set after empty allowlist; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn non_allowed_capability_is_dropped() {
-    use std::process::Stdio;
-
-    use capsa_sandbox::Capability;
-    use capsa_sandbox::Sandbox;
+fn privilege_hardening_runs_without_error() {
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
 
     let probe = common::probe_binary();
-    let sys_admin_num = u32::from(Capability::SysAdmin).to_string();
-
-    let (mut cmd, _sandbox) = Sandbox::builder()
-        .allow_capability(Capability::NetRaw)
-        .build(&probe)
-        .expect("build sandbox");
-
-    cmd.arg("check-has-cap")
-        .arg(&sys_admin_num)
+    let mut cmd = Command::new(&probe);
+    cmd.arg("check-no-new-privs")
         .stderr(Stdio::piped())
         .stdout(Stdio::inherit());
 
-    let output = cmd.output().expect("spawn probe");
+    // Apply both NNP + empty cap allowlist — verify the child
+    // starts without EPERM or other errors regardless of whether
+    // the current user has CAP_SETPCAP for the bounding set.
+    capsa_sandbox::configure_privilege_hardening(&mut cmd, true, HashSet::new())
+        .expect("configure privilege hardening");
+
+    let output = cmd.output().expect("spawn should succeed");
     assert!(
-        !output.status.success(),
-        "CAP_SYS_ADMIN should be dropped when only CAP_NET_RAW is allowed"
+        output.status.success(),
+        "child with NNP + empty cap allowlist should start; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

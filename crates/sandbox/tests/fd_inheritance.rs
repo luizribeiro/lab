@@ -152,7 +152,7 @@ fn wait_within(child: &mut ChildGuard, timeout: Duration, label: &str) -> ExitSt
 #[test]
 fn non_inherited_fd_is_closed_in_child() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
-    write_end.write_all(&[b'Z']).expect("write marker");
+    write_end.write_all(b"Z").expect("write marker");
     drop(write_end);
 
     let leak_fd: OwnedFd = read_end.into();
@@ -193,7 +193,7 @@ fn non_inherited_fd_is_closed_in_child() {
 #[test]
 fn inherited_fd_survives_with_close_non_inherited_enabled() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
-    write_end.write_all(&[b'Q']).expect("write marker");
+    write_end.write_all(b"Q").expect("write marker");
     drop(write_end);
 
     let read_owned: OwnedFd = read_end.into();

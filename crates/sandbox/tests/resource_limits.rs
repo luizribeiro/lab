@@ -15,8 +15,10 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
 
     // Allow 16 fds total. The child starts with stdin/stdout/stderr (3)
     // plus a few internal fds, so asking for 20 opens should fail.
+    // /dev/null is the target of open-many-fds; the sandbox must allow it.
     let (mut cmd, _sandbox) = Sandbox::builder()
         .max_open_files(16)
+        .read_only_path("/dev/null")
         .build(&probe)
         .expect("build sandbox");
 
@@ -44,6 +46,7 @@ fn max_open_files_allows_child_within_limit() {
 
     let (mut cmd, _sandbox) = Sandbox::builder()
         .max_open_files(64)
+        .read_only_path("/dev/null")
         .build(&probe)
         .expect("build sandbox");
 
@@ -69,8 +72,9 @@ fn disable_core_dumps_sets_zero_limit() {
         .stderr(Stdio::inherit())
         .stdout(Stdio::inherit());
 
-    capsa_sandbox::configure_rlimits(&mut cmd, vec![(libc::RLIMIT_CORE, 0)])
-        .expect("configure_rlimits");
+    #[allow(clippy::unnecessary_cast)]
+    let rlimits = vec![(libc::RLIMIT_CORE as i32, 0)];
+    capsa_sandbox::configure_rlimits(&mut cmd, rlimits).expect("configure_rlimits");
 
     let status = cmd.status().expect("spawn shell");
     assert!(
