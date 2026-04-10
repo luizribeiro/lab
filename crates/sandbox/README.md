@@ -18,6 +18,8 @@ Builds a `Command` that runs a child process inside an OS sandbox
   with capabilities dropped unless explicitly allowed.
 - **Relaxed explicitly, not implicitly**: callers opt into
   network/path/ioctl/capability access.
+- **No privileges required**: runs as a regular unprivileged user on
+  both Linux and macOS. No root, no setuid, no ambient capabilities.
 - **Fails fast on unsupported setups**: missing `syd`, unsupported OS,
   invalid fd inheritance — all return errors, never silently continue.
 
