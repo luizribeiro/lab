@@ -92,7 +92,9 @@ assert!(cmd.status()?.success());
 
 ## Resource limits
 
-Enforce POSIX rlimits in the child via `setrlimit`:
+Enforce POSIX rlimits in the child. On Linux, rlimits are enforced by
+syd natively via its `rlimit/` directives. On macOS, they are applied
+via `setrlimit` in a `pre_exec` hook.
 
 ```rust,no_run
 use std::path::Path;
@@ -112,11 +114,18 @@ let (mut cmd, _sandbox) = Sandbox::builder()
 
 These methods only exist on Linux (`cfg(target_os = "linux")`).
 
-- `no_new_privs(bool)` — enabled by default. Calls
+When using the default sandbox path (`Sandbox::builder().build()`), syd
+manages `NO_NEW_PRIVS` and capabilities internally. `build()` will
+return an error if you try to disable `no_new_privs` or use
+`allow_capability` — these overrides are only available on the bypass
+path (`into_bypass_config` + `configure_privilege_hardening`).
+
+- `no_new_privs(bool)` — enabled by default. On the bypass path, calls
   `prctl(PR_SET_NO_NEW_PRIVS)` to block setuid/file-capability
   escalation.
 - `allow_capability(Capability)` — by default all Linux capabilities
-  are dropped. Call this for each capability the child needs.
+  are dropped. Only available on the bypass path; syd manages
+  capabilities internally when used as the sandbox wrapper.
 
 ```rust,no_run
 # #[cfg(target_os = "linux")]
@@ -124,9 +133,10 @@ These methods only exist on Linux (`cfg(target_os = "linux")`).
 use std::path::Path;
 use capsa_sandbox::{Capability, Sandbox};
 
-let (mut cmd, _sandbox) = Sandbox::builder()
+// Bypass path: privilege hardening applied directly to the child.
+let bypass = Sandbox::builder()
     .allow_capability(Capability::NetBindService)
-    .build(Path::new("/usr/bin/myservice"))?;
+    .into_bypass_config();
 # }
 # Ok::<(), anyhow::Error>(())
 ```
