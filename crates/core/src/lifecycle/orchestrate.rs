@@ -69,45 +69,12 @@ fn run_with_network(config: &VmConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    // Tests drive the public `VmConfig::start` entry point through
-    // bypass-mode spawns; nothing in this `tests` module needs the
-    // private orchestration helpers.
+    use crate::lifecycle::test_helpers::{
+        env_lock, find_binary_on_path, unique_temp_path, EnvVarGuard,
+    };
     use crate::{VmConfig, VmNetworkInterfaceConfig};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
-
-    fn env_lock() -> &'static std::sync::Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set_path(key: &'static str, value: &Path) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn set_raw(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(old) = self.old.take() {
-                std::env::set_var(self.key, old);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 
     fn make_temp_file(prefix: &str, contents: &[u8]) -> PathBuf {
         let path = unique_temp_path(prefix);
@@ -137,27 +104,6 @@ esac
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).expect("script should be executable");
         path
-    }
-
-    fn unique_temp_path(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time should be after epoch")
-                .as_nanos()
-        ))
-    }
-
-    fn find_binary_in_path(name: &str) -> PathBuf {
-        for dir in std::env::split_paths(&std::env::var_os("PATH").expect("PATH should be set")) {
-            let candidate = dir.join(name);
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-        panic!("binary `{name}` should be available in PATH for tests");
     }
 
     fn sample_config() -> VmConfig {
@@ -252,9 +198,9 @@ esac
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let vmm_true = find_binary_in_path("true");
+        let vmm_true = find_binary_on_path("true");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         sample_config()
             .start()
@@ -266,11 +212,11 @@ esac
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let vmm_true = find_binary_in_path("true");
+        let vmm_true = find_binary_on_path("true");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
         let _netd_guard =
             EnvVarGuard::set_path("CAPSA_NETD_PATH", Path::new("/definitely/missing/netd"));
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         sample_config()
             .start()
@@ -284,7 +230,7 @@ esac
             .unwrap_or_else(|poison| poison.into_inner());
         let non_executable = make_temp_file("capsa-vmm-non-executable", b"not executable");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_config()
             .start()
@@ -307,9 +253,9 @@ esac
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let vmm_false = find_binary_in_path("false");
+        let vmm_false = find_binary_on_path("false");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_false);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_config()
             .start()
@@ -327,10 +273,10 @@ esac
             .unwrap_or_else(|poison| poison.into_inner());
         let netd =
             make_temp_executable_script("capsa-netd-timeout", "while true; do sleep 1; done");
-        let vmm = find_binary_in_path("true");
+        let vmm = find_binary_on_path("true");
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_networked_config()
             .start()
@@ -358,7 +304,7 @@ esac
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable_vmm);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_networked_config()
             .start()
@@ -399,7 +345,7 @@ esac
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_networked_config()
             .start()
@@ -428,11 +374,11 @@ esac
                 netd_pid_file.display()
             ),
         );
-        let vmm = find_binary_in_path("true");
+        let vmm = find_binary_on_path("true");
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
-        let _sandbox_guard = EnvVarGuard::set_raw("CAPSA_DISABLE_SANDBOX", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         sample_networked_config()
             .start()

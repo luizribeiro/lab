@@ -32,6 +32,8 @@ mod netd;
 mod orchestrate;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod plan;
+#[cfg(test)]
+mod test_helpers;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vmm;
 

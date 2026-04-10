@@ -416,61 +416,12 @@ fn wait_for_flag(flag: &AtomicBool, timeout: Duration, interval: Duration) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::test_helpers::{
+        env_lock, find_binary_on_path, unique_temp_path, EnvVarGuard,
+    };
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
     use std::time::Instant;
-
-    fn env_lock() -> &'static Mutex<()> {
-        crate::test_env_lock()
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn set_path(key: &'static str, value: &Path) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, old }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let old = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(old) = self.old.take() {
-                std::env::set_var(self.key, old);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
-    fn unique_temp_path(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time should be after epoch")
-                .as_nanos()
-        ))
-    }
 
     fn write_executable_script(prefix: &str, body: &str) -> PathBuf {
         let path = unique_temp_path(prefix);
@@ -485,17 +436,6 @@ mod tests {
         writeln!(file, "set -eu").unwrap();
         writeln!(file, "{body}").unwrap();
         path
-    }
-
-    fn find_binary_on_path(name: &str) -> PathBuf {
-        let path_var = std::env::var_os("PATH").expect("PATH should be set");
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(name);
-            if is_executable_file(&candidate) {
-                return candidate;
-            }
-        }
-        panic!("binary `{name}` should be on PATH for tests");
     }
 
     fn bypass_builder() -> SandboxBuilder {
