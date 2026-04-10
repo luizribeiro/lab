@@ -365,21 +365,40 @@ impl SandboxBuilder {
     /// outlive the spawned `Child`; the caller should store it next to
     /// the `Child` handle (e.g. via `DaemonProcess` in capsa-core).
     pub fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
+        // On Linux, syd manages rlimits natively via its own
+        // directives, so they are emitted as syd rules in
+        // linux::syd_rules() rather than applied via pre_exec.
+        // Privilege hardening (NNP + capability drop) is likewise
+        // managed by syd; reject unsupported overrides early.
+        #[cfg(target_os = "linux")]
+        {
+            ensure!(
+                self.spec.no_new_privs,
+                "cannot disable no_new_privs when syd is the sandbox wrapper; \
+                 syd always sets NO_NEW_PRIVS"
+            );
+            ensure!(
+                self.spec.allowed_capabilities.is_empty(),
+                "per-capability allowlisting is not supported when syd is the \
+                 sandbox wrapper; syd manages capabilities internally"
+            );
+        }
+
         let close_non_inherited = self.spec.close_non_inherited_fds;
+
+        // On non-Linux platforms, rlimits are enforced via a pre_exec
+        // setrlimit hook since there is no sandbox wrapper that
+        // handles them natively.
+        #[cfg(not(target_os = "linux"))]
         let rlimits = self.spec.rlimits.clone();
+
         let sandbox = Sandbox::new(self.spec)?;
         let mut command = sandbox.command(program);
         configure_inherited_fds(&mut command, self.inherited_fds, close_non_inherited)?;
+
+        #[cfg(not(target_os = "linux"))]
         configure_rlimits(&mut command, rlimits)?;
-        // Privilege hardening (NNP + capability drop) is NOT applied
-        // here because the Command targets the sandbox wrapper
-        // (syd on Linux, sandbox-exec on macOS), not the final
-        // program. Dropping capabilities before the wrapper starts
-        // would prevent it from setting up Landlock/seccomp. The
-        // wrapper is responsible for its own privilege posture.
-        // Callers using the bypass path (into_bypass_config +
-        // configure_privilege_hardening) DO get privilege hardening
-        // applied directly to the target process.
+
         Ok((command, sandbox))
     }
 }

@@ -7,7 +7,7 @@ use std::process::Stdio;
 
 use capsa_sandbox::Sandbox;
 
-use common::probe_binary;
+use common::{probe_binary, run_probe};
 
 #[test]
 fn max_open_files_prevents_child_from_opening_beyond_limit() {
@@ -59,6 +59,15 @@ fn max_open_files_allows_child_within_limit() {
     assert!(
         status.success(),
         "probe should succeed opening 10 fds with a limit of 64"
+    );
+}
+
+#[test]
+fn child_sees_rlimit_nofile_via_getrlimit() {
+    let builder = Sandbox::builder().max_open_files(64);
+    assert!(
+        run_probe(builder, &["check-rlimit", "nofile", "64"]),
+        "child should see RLIMIT_NOFILE=64 via getrlimit"
     );
 }
 

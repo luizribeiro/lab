@@ -75,6 +75,15 @@ fn main() {
             };
             check_has_effective_cap(&cap_str)
         }
+        "check-rlimit" => {
+            let Some(resource_name) = args.next() else {
+                usage_and_exit();
+            };
+            let Some(expected_str) = args.next() else {
+                usage_and_exit();
+            };
+            check_rlimit(&resource_name, &expected_str)
+        }
         "open-many-fds" => {
             let Some(count_str) = args.next() else {
                 usage_and_exit();
@@ -341,6 +350,42 @@ fn check_has_effective_cap(cap_str: &str) -> Result<(), String> {
     }
 }
 
+#[allow(clippy::unnecessary_cast)]
+fn check_rlimit(resource_name: &str, expected_str: &str) -> Result<(), String> {
+    let resource = match resource_name {
+        "nofile" => libc::RLIMIT_NOFILE,
+        "as" => libc::RLIMIT_AS,
+        "cpu" => libc::RLIMIT_CPU,
+        "core" => libc::RLIMIT_CORE,
+        "nproc" => libc::RLIMIT_NPROC,
+        _ => return Err(format!("unknown rlimit resource `{resource_name}`")),
+    };
+    let expected: u64 = expected_str.parse().map_err(|e: std::num::ParseIntError| {
+        format!("invalid expected value `{expected_str}`: {e}")
+    })?;
+
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit is a direct syscall with a stack-local struct.
+    let rc = unsafe { libc::getrlimit(resource as _, &mut rlim) };
+    if rc == -1 {
+        return Err(format!(
+            "getrlimit({resource_name}) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    if rlim.rlim_cur != expected as libc::rlim_t {
+        return Err(format!(
+            "rlimit {resource_name}: expected rlim_cur={expected}, got {}",
+            rlim.rlim_cur
+        ));
+    }
+    Ok(())
+}
+
 fn open_many_fds(count: usize) -> Result<(), String> {
     let mut opened = Vec::new();
     for i in 0..count {
@@ -366,6 +411,7 @@ actions:\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
+  check-rlimit <resource-name> <expected-value>\n\
   open-many-fds <count>\n\
   check-no-new-privs\n\
   check-has-cap <cap-number>\n\

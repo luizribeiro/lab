@@ -260,7 +260,25 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
+    for &(resource, value) in &spec.rlimits {
+        if let Some(name) = rlimit_syd_name(resource) {
+            rules.push(format!("rlimit/{name}:{value}"));
+        }
+    }
+
     rules
+}
+
+#[allow(clippy::unnecessary_cast)]
+fn rlimit_syd_name(resource: i32) -> Option<&'static str> {
+    match resource {
+        x if x == libc::RLIMIT_NOFILE as i32 => Some("nofile"),
+        x if x == libc::RLIMIT_AS as i32 => Some("as"),
+        x if x == libc::RLIMIT_CPU as i32 => Some("cpu"),
+        x if x == libc::RLIMIT_CORE as i32 => Some("core"),
+        x if x == libc::RLIMIT_NPROC as i32 => Some("nproc"),
+        _ => None,
+    }
 }
 
 fn add_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
@@ -354,6 +372,20 @@ mod tests {
         assert!(
             !without.iter().any(|r| r.contains("/dev/kvm")),
             "default spec should not reference /dev/kvm, got: {without:?}"
+        );
+    }
+
+    #[test]
+    fn rlimits_are_emitted_as_syd_directives() {
+        #[allow(clippy::unnecessary_cast)]
+        let spec = SandboxSpec {
+            rlimits: vec![(libc::RLIMIT_NOFILE as i32, 64)],
+            ..SandboxSpec::default()
+        };
+        let rules = rules_for(&spec);
+        assert!(
+            rules.iter().any(|r| r == "rlimit/nofile:64"),
+            "expected rlimit/nofile:64 in rules, got: {rules:?}"
         );
     }
 

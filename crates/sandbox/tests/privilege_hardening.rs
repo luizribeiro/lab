@@ -12,6 +12,41 @@
 #[cfg(target_os = "linux")]
 mod common;
 
+// ── unsupported toggle validation ───────────────────────────
+
+#[cfg(target_os = "linux")]
+#[test]
+fn build_rejects_no_new_privs_disabled() {
+    let builder = capsa_sandbox::Sandbox::builder().no_new_privs(false);
+    match builder.build(std::path::Path::new("/bin/true")) {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("cannot disable no_new_privs"),
+                "unexpected error message: {msg}"
+            );
+        }
+        Ok(_) => panic!("build should fail with no_new_privs=false"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn build_rejects_per_capability_allowlisting() {
+    let builder =
+        capsa_sandbox::Sandbox::builder().allow_capability(capsa_sandbox::Capability::NetRaw);
+    match builder.build(std::path::Path::new("/bin/true")) {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("per-capability allowlisting is not supported"),
+                "unexpected error message: {msg}"
+            );
+        }
+        Ok(_) => panic!("build should fail with allow_capability"),
+    }
+}
+
 // ── no_new_privs ────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
