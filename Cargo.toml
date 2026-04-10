@@ -4,6 +4,7 @@ members = [
   "crates/cli",
   "crates/core",
   "crates/net",
+  "crates/capsa-process",
   "crates/netd",
   "crates/sandbox",
   "crates/spec",
