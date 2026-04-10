@@ -285,13 +285,6 @@ fn build_and_spawn(
             cfg.inherited_fds,
             cfg.close_non_inherited_fds,
         )?;
-        capsa_sandbox::configure_rlimits(&mut command, cfg.rlimits)?;
-        #[cfg(target_os = "linux")]
-        capsa_sandbox::configure_privilege_hardening(
-            &mut command,
-            cfg.no_new_privs,
-            cfg.allowed_capabilities,
-        )?;
         let child = command.spawn().with_context(|| {
             format!("failed to spawn {name} daemon binary {}", binary.display())
         })?;
@@ -335,6 +328,10 @@ fn spawn_reaper(
         .expect("spawning reaper thread should not fail")
 }
 
+/// Nix VM integration tests and CI environments where syd cannot run
+/// inside the outer Nix sandbox set `CAPSA_DISABLE_SANDBOX=1` to skip
+/// the sandbox wrapper.  The child runs without filesystem/network/
+/// privilege restrictions in this mode.
 fn sandbox_bypassed_by_env() -> bool {
     matches!(
         std::env::var("CAPSA_DISABLE_SANDBOX").as_deref(),
