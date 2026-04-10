@@ -1,7 +1,17 @@
 //! Spike D: boot libkrun+HVF through the darwin SandboxBuilder.
 //!
-//! Ignored by default; driven by `/tmp/spike_d_sandboxed_vmm.sh`, which
-//! builds the nix artifacts and points the env vars below at them.
+//! Ignored by default because libkrun on macOS requires the signed
+//! `capsa-vmm` (which carries `com.apple.security.hypervisor`) plus
+//! a kernel + initramfs. Both come from the nix build:
+//!
+//!     nix build .#capsa
+//!     nix build -o /tmp/capsa-vm-assets .#vm-assets
+//!
+//! After those, `cargo test -p capsa-sandbox --test spike_d_sandboxed_vmm
+//! -- --ignored` finds the artifacts at the workspace's
+//! `result/libexec/capsa/capsa-vmm` and `/tmp/capsa-vm-assets/`. Each
+//! path can be overridden via `CAPSA_VMM_BIN`, `CAPSA_KERNEL`, and
+//! `CAPSA_INITRAMFS` for CI flexibility.
 
 #![cfg(target_os = "macos")]
 
@@ -22,9 +32,24 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[test]
 #[ignore]
 fn sandboxed_vmm_boots_under_hvf() {
-    let vmm = env_path("CAPSA_VMM_BIN");
-    let kernel = env_path("CAPSA_KERNEL");
-    let initramfs = env_path("CAPSA_INITRAMFS");
+    let nix_capsa_dir = workspace_root().join("result/libexec/capsa");
+    let nix_assets_dir = PathBuf::from("/tmp/capsa-vm-assets");
+
+    let vmm = resolve_path(
+        "CAPSA_VMM_BIN",
+        nix_capsa_dir.join("capsa-vmm"),
+        "nix build .#capsa",
+    );
+    let kernel = resolve_path(
+        "CAPSA_KERNEL",
+        nix_assets_dir.join("vmlinuz"),
+        "nix build -o /tmp/capsa-vm-assets .#vm-assets",
+    );
+    let initramfs = resolve_path(
+        "CAPSA_INITRAMFS",
+        nix_assets_dir.join("initramfs.cpio.lz4"),
+        "nix build -o /tmp/capsa-vm-assets .#vm-assets",
+    );
 
     let spec = build_launch_spec(&kernel, &initramfs);
 
@@ -91,10 +116,36 @@ fn contains_boot_marker(buf: &[u8]) -> bool {
     text.contains("Run /init as init process") || text.contains("Freeing unused kernel memory")
 }
 
-fn env_path(key: &str) -> PathBuf {
-    let value =
-        std::env::var(key).unwrap_or_else(|_| panic!("{key} env var required for spike D test"));
-    PathBuf::from(value)
+fn resolve_path(env_key: &str, default: PathBuf, build_hint: &str) -> PathBuf {
+    let candidate = match std::env::var_os(env_key) {
+        Some(raw) if !raw.is_empty() => PathBuf::from(raw),
+        _ => default,
+    };
+    if !candidate.exists() {
+        panic!(
+            "spike D artifact missing at {}. Either set {env_key} \
+             or run `{build_hint}` from the workspace root.",
+            candidate.display()
+        );
+    }
+    // Resolve symlinks before handing the path to the sandbox builder
+    // and to capsa-vmm: macOS resolves the chain at open(2) time, so
+    // a `/tmp/...` input crosses through `/private/tmp/...` and
+    // hits EPERM unless the policy allow-lists every step. The
+    // production fix lives in `capsa-core::start::imp` for the
+    // VmConfig::start path; this test wires the sandbox up directly.
+    candidate
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("failed to canonicalize {}: {e}", candidate.display()))
+}
+
+fn workspace_root() -> PathBuf {
+    // CARGO_MANIFEST_DIR points at crates/sandbox; the workspace root is two up.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("CARGO_MANIFEST_DIR has at least two ancestors")
+        .to_path_buf()
 }
 
 fn build_launch_spec(kernel: &std::path::Path, initramfs: &std::path::Path) -> String {
