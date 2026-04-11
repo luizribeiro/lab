@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use capsa_sandbox::Sandbox;
+mod common;
 
 #[test]
 fn command_accepts_allow_network() {
-    Sandbox::builder()
+    common::sandbox_builder()
         .allow_network(true)
         .command(Path::new("/usr/bin/env"))
         .expect("builder.command must accept allow_network=true");
@@ -15,7 +15,7 @@ fn command_accepts_allow_network() {
 
 #[test]
 fn private_tmp_lives_until_drop() {
-    let (_, sandbox) = Sandbox::builder()
+    let (_, sandbox) = common::sandbox_builder()
         .command(Path::new("/usr/bin/env"))
         .expect("build sandbox")
         .into_parts();
