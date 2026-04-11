@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use capsa_test_support::{spawn_drain, ChildGuard};
+use capsa_testkit::{spawn_drain, ChildGuard};
 
 const CLI_BIN: &str = env!("CARGO_BIN_EXE_capsa");
 const BOOT_TIMEOUT: Duration = Duration::from_secs(45);

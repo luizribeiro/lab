@@ -6,7 +6,7 @@ members = [
   "crates/net",
   "crates/netd",
   "crates/spec",
-  "crates/test-support",
+  "crates/testkit",
   "crates/vmm",
 ]
 default-members = ["crates/cli"]

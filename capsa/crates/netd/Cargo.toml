@@ -14,5 +14,5 @@ tracing = "0.1"
 [dev-dependencies]
 lockin = { path = "../../../lockin/crates/sandbox" }
 lockin-process = { path = "../../../lockin/crates/process" }
-capsa-test-support = { path = "../test-support" }
+capsa-testkit = { path = "../testkit" }
 serde_json = "1.0"

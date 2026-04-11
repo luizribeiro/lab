@@ -110,7 +110,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa",
- "capsa-test-support",
+ "capsa-testkit",
  "clap",
 ]
 
@@ -154,7 +154,7 @@ dependencies = [
  "anyhow",
  "capsa-net",
  "capsa-spec",
- "capsa-test-support",
+ "capsa-testkit",
  "libc",
  "lockin",
  "lockin-process",
@@ -174,7 +174,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "capsa-test-support"
+name = "capsa-testkit"
 version = "0.1.0"
 dependencies = [
  "lockin",
