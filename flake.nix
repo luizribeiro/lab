@@ -114,9 +114,15 @@
               inherit inputs pkgs;
               modules = [
                 ./shared/nix/git-hooks.nix
-                {
+                ({ lib, ... }: {
                   languages.rust.enable = true;
-                }
+
+                  env = {
+                    CAPSA_LIBRARY_DIRS = capsaPaths.libraryDirs;
+                  } // lib.optionalAttrs (capsaPaths.sydPath != null) {
+                    CAPSA_SYD_PATH = capsaPaths.sydPath;
+                  };
+                })
               ];
             };
 
