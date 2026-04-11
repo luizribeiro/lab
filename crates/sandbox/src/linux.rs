@@ -336,7 +336,7 @@ fn escape_syd_path(path: &Path) -> String {
     let mut escaped = String::with_capacity(raw.len());
     for ch in raw.chars() {
         match ch {
-            '\\' | '+' | ':' | ',' => {
+            '\\' | '+' | ':' | ',' | '*' | '?' | '[' | ']' => {
                 escaped.push('\\');
                 escaped.push(ch);
             }
@@ -367,6 +367,14 @@ mod tests {
             (
                 r"/tmp/evil+allow/exec+/bin/sh",
                 r"/tmp/evil\+allow/exec\+/bin/sh",
+            ),
+            ("/has*star", "/has\\*star"),
+            ("/has?question", "/has\\?question"),
+            ("/has[bracket]", "/has\\[bracket\\]"),
+            ("/path/with]only", "/path/with\\]only"),
+            (
+                "/tmp/read*[all]+/etc/shadow",
+                "/tmp/read\\*\\[all\\]\\+/etc/shadow",
             ),
         ];
         for (input, expected) in cases {
