@@ -2,5 +2,6 @@
 members = [
   "crates/sandbox",
   "crates/process",
+  "crates/testkit",
 ]
 resolver = "2"

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use lockin::SandboxBuilder;
 
-pub use capsa_test_support::{sandbox_builder, ChildGuard};
+pub use lockin_testkit::{sandbox_builder, ChildGuard};
 
 pub struct TestDir {
     dir: tempfile::TempDir,

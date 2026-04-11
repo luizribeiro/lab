@@ -177,8 +177,8 @@ dependencies = [
 name = "capsa-test-support"
 version = "0.1.0"
 dependencies = [
- "libc",
  "lockin",
+ "lockin-testkit",
 ]
 
 [[package]]
@@ -461,6 +461,14 @@ name = "lockin-process"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "lockin-testkit"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "lockin",
 ]
 
 [[package]]

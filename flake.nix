@@ -33,6 +33,17 @@
             ];
           };
 
+          # --- shared library discovery ---
+          runtimeLibDirs = seedPkg: import ./shared/nix/runtime-lib-dirs.nix {
+            inherit lib pkgs seedPkg;
+          };
+
+          # --- lockin paths ---
+          lockinLibraryDirs = runtimeLibDirs (
+            if pkgs.stdenv.isDarwin then pkgs.libiconv
+            else pkgs.stdenv.cc.cc
+          );
+
           # --- capsa build infrastructure ---
           capsaPaths = import ./capsa/nix/paths.nix { inherit lib pkgs; };
 
@@ -92,8 +103,10 @@
 
                   env = {
                     LIBKRUN_LIB_DIR = capsaPaths.libkrunLibDir;
+                    LOCKIN_LIBRARY_DIRS = lockinLibraryDirs;
                     CAPSA_LIBRARY_DIRS = capsaPaths.libraryDirs;
                   } // lib.optionalAttrs (capsaPaths.sydPath != null) {
+                    LOCKIN_SYD_PATH = capsaPaths.sydPath;
                     CAPSA_SYD_PATH = capsaPaths.sydPath;
                   };
                 })
@@ -114,13 +127,13 @@
               inherit inputs pkgs;
               modules = [
                 ./shared/nix/git-hooks.nix
-                ({ lib, ... }: {
+                ({ lib, pkgs, ... }: {
                   languages.rust.enable = true;
 
                   env = {
-                    CAPSA_LIBRARY_DIRS = capsaPaths.libraryDirs;
-                  } // lib.optionalAttrs (capsaPaths.sydPath != null) {
-                    CAPSA_SYD_PATH = capsaPaths.sydPath;
+                    LOCKIN_LIBRARY_DIRS = lockinLibraryDirs;
+                  } // lib.optionalAttrs pkgs.stdenv.isLinux {
+                    LOCKIN_SYD_PATH = "${pkgs.sydbox}/bin/syd";
                   };
                 })
               ];

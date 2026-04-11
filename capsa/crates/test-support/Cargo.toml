@@ -9,4 +9,4 @@ path = "src/lib.rs"
 
 [dependencies]
 lockin = { path = "../../../lockin/crates/sandbox" }
-libc = "0.2"
+lockin-testkit = { path = "../../../lockin/crates/testkit" }
