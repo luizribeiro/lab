@@ -44,9 +44,8 @@ let status = Sandbox::builder()
 # Ok::<(), anyhow::Error>(())
 ```
 
-In production the Nix wrapper sets `CAPSA_SYD_PATH`; in `nix develop`
-it is exported in the shell hook. Callers read the env var and pass
-it through the builder.
+Callers typically read an environment variable (e.g. `CAPSA_SYD_PATH`)
+and pass it through the builder.
 
 ## Library paths
 
