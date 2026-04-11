@@ -19,7 +19,7 @@
           pkgs = import nixpkgs {
             system = hostSystem;
             overlays = [
-              (final: prev:
+              (_final: prev:
                 lib.optionalAttrs prev.stdenv.isLinux {
                   # Nixpkgs builds libkrun with networking disabled by default.
                   # Enable NET=1 so krun_add_net_unixstream is available.
@@ -104,9 +104,11 @@
               preCommitCheck.shellHook
               (lib.optionalString pkgs.stdenv.isLinux ''
                 export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs.libkrun}/lib}"
+                export CAPSA_LIBRARY_DIRS="''${CAPSA_LIBRARY_DIRS:-${lib.getLib pkgs.glibc}/lib:${lib.getLib pkgs.stdenv.cc.cc}/lib:${lib.getLib pkgs.libkrun}/lib}"
               '')
               (lib.optionalString pkgs.stdenv.isDarwin ''
                 export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs."libkrun-efi"}/lib}"
+                export CAPSA_LIBRARY_DIRS="''${CAPSA_LIBRARY_DIRS:-${lib.getLib pkgs.libiconv}/lib:${lib.getLib pkgs."libkrun-efi"}/lib}"
               '')
             ];
           };
