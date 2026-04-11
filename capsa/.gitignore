@@ -1,0 +1,13 @@
+# Rust
+/target
+**/*.rs.bk
+
+# direnv
+.direnv
+
+# pre-commit
+# Intentionally local-only for now while hooks are still being iterated.
+.pre-commit-config.yaml
+
+# nix build output symlink
+result

@@ -1,0 +1,15 @@
+[workspace]
+members = [
+  "crates/capsa",
+  "crates/cli",
+  "crates/core",
+  "crates/net",
+  "crates/capsa-process",
+  "crates/netd",
+  "crates/sandbox",
+  "crates/spec",
+  "crates/test-support",
+  "crates/vmm",
+]
+default-members = ["crates/cli"]
+resolver = "2"

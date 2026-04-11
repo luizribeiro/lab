@@ -1,0 +1,11 @@
+[package]
+name = "capsa-vmm"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[dependencies]
+anyhow = "1.0"
+capsa-spec = { path = "../spec" }

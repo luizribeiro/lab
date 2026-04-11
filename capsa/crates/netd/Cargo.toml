@@ -1,0 +1,18 @@
+[package]
+name = "capsa-netd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+capsa-net = { path = "../net" }
+capsa-spec = { path = "../spec" }
+libc = "0.2"
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+capsa-process = { path = "../capsa-process" }
+capsa-sandbox = { path = "../sandbox" }
+capsa-test-support = { path = "../test-support" }
+serde_json = "1.0"

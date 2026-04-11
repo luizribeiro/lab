@@ -1,0 +1,17 @@
+[package]
+name = "capsa-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+capsa-net = { path = "../net" }
+capsa-process = { path = "../capsa-process" }
+capsa-sandbox = { path = "../sandbox" }
+capsa-spec = { path = "../spec" }
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+
+[dev-dependencies]
+serde_json = "1.0"
