@@ -46,24 +46,30 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     ];
 
     if spec.allow_network {
-        // Network-enabled daemons (e.g. capsa-netd) need two relaxations:
-        //
-        // 1. `sandbox/net:off` — disables syd's seccomp-level network
-        //    mediation so the daemon can own outbound traffic policy.
-        //
-        // 2. No `sandbox/lock:on` — `sandbox/lock:on` activates Landlock
-        //    as a second enforcement layer, and on recent kernels
-        //    Landlock's network ruleset denies `connect()` with EACCES
-        //    for any locked child regardless of the seccomp mediator
-        //    state. syd 3.49 does not expose Landlock network-allow
-        //    rules, so the only way to permit outbound connections is
-        //    to skip Landlock for these daemons. Seccomp-based
-        //    read/exec/fs/ioctl mediation still applies.
+        // Network-enabled daemons (e.g. capsa-netd) disable syd's
+        // seccomp-level network mediation so the daemon can own
+        // outbound traffic policy. Landlock is still enabled (below)
+        // with an all-ports allowlist so filesystem enforcement
+        // remains two-layer.
         rules.push("sandbox/net:off".to_string());
     } else {
         rules.push("sandbox/net:on".to_string());
         rules.push("default/net:deny".to_string());
-        rules.push("sandbox/lock:on".to_string());
+    }
+
+    // Landlock is always enabled as a second enforcement layer for
+    // filesystem access. On kernels with Landlock ABI v4+ (6.7+),
+    // network rules are also enforced; on older kernels syd
+    // degrades gracefully to filesystem-only Landlock.
+    rules.push("sandbox/lock:on".to_string());
+
+    if spec.allow_network {
+        // Permit all TCP connect/bind via Landlock so network-enabled
+        // daemons are not blocked by the Landlock network ruleset.
+        for family in ["inet", "inet6"] {
+            rules.push(format!("allow/lock/connect+{family}:0-65535"));
+            rules.push(format!("allow/lock/bind+{family}:0-65535"));
+        }
     }
 
     // Allow common filesystem types touched by capsa-vmm and host runtime.
@@ -438,5 +444,53 @@ mod tests {
                 "default spec should not emit {rule}, got: {without:?}"
             );
         }
+    }
+
+    #[test]
+    fn landlock_is_always_enabled() {
+        let without_net = rules_for(&SandboxSpec::default());
+        assert!(
+            without_net.iter().any(|r| r == "sandbox/lock:on"),
+            "default spec should enable Landlock, got: {without_net:?}"
+        );
+
+        let with_net = rules_for(&SandboxSpec {
+            allow_network: true,
+            ..SandboxSpec::default()
+        });
+        assert!(
+            with_net.iter().any(|r| r == "sandbox/lock:on"),
+            "allow_network=true should still enable Landlock, got: {with_net:?}"
+        );
+    }
+
+    #[test]
+    fn landlock_network_allowlist_is_gated_on_allow_network() {
+        let with_net = rules_for(&SandboxSpec {
+            allow_network: true,
+            ..SandboxSpec::default()
+        });
+        assert!(
+            with_net
+                .iter()
+                .any(|r| r == "allow/lock/connect+inet:0-65535"),
+            "allow_network=true should emit Landlock connect allowlist"
+        );
+        assert!(
+            with_net
+                .iter()
+                .any(|r| r == "allow/lock/bind+inet6:0-65535"),
+            "allow_network=true should emit Landlock bind allowlist"
+        );
+
+        let without = rules_for(&SandboxSpec::default());
+        assert!(
+            !without.iter().any(|r| r.starts_with("allow/lock/connect")),
+            "default spec should not emit Landlock connect rules"
+        );
+        assert!(
+            !without.iter().any(|r| r.starts_with("allow/lock/bind")),
+            "default spec should not emit Landlock bind rules"
+        );
     }
 }
