@@ -65,6 +65,7 @@ pkgs.rustPlatform.buildRustPackage ({
     export CAPSA_LIBRARY_DIRS="${capsaPaths.libraryDirs}"
     ${lib.optionalString (capsaPaths.sydPath != null) ''
     export CAPSA_SYD_PATH="${capsaPaths.sydPath}"
+    export PATH="${lib.getBin pkgs.sydbox}/bin''${PATH:+:\$PATH}"
     ''}
     exec "$out/libexec/capsa/capsa" "\$@"
     EOF
