@@ -1,24 +1,11 @@
 { lib
 , pkgs
+, capsaPaths
 , src
 , version ? "0.1.0"
 }:
 let
   entitlements = src + "/entitlements/capsa.entitlements";
-
-  libraryDirs =
-    if pkgs.stdenv.isDarwin then
-      lib.concatStringsSep ":" [
-        "${lib.getLib pkgs.libiconv}/lib"
-        "${lib.getLib pkgs."libkrun-efi"}/lib"
-      ]
-    else
-      lib.concatStringsSep ":" [
-        "${lib.getLib pkgs.glibc}/lib"
-        "${lib.getLib pkgs.stdenv.cc.cc}/lib"
-        "${pkgs.stdenv.cc.cc.libgcc}/lib"
-        "${lib.getLib pkgs.libkrun}/lib"
-      ];
 in
 pkgs.rustPlatform.buildRustPackage {
   pname = "capsa";
@@ -39,11 +26,7 @@ pkgs.rustPlatform.buildRustPackage {
 
   doCheck = false;
 
-  LIBKRUN_LIB_DIR =
-    if pkgs.stdenv.isDarwin then
-      "${lib.getLib pkgs."libkrun-efi"}/lib"
-    else
-      "${lib.getLib pkgs.libkrun}/lib";
+  LIBKRUN_LIB_DIR = capsaPaths.libkrunLibDir;
 
   nativeBuildInputs = [ pkgs.pkg-config ];
   buildInputs =
@@ -77,9 +60,9 @@ pkgs.rustPlatform.buildRustPackage {
 
     export CAPSA_VMM_PATH="$out/libexec/capsa/capsa-vmm"
     export CAPSA_NETD_PATH="$out/libexec/capsa/capsa-netd"
-    export CAPSA_LIBRARY_DIRS="${libraryDirs}"
-    ${lib.optionalString pkgs.stdenv.isLinux ''
-    export CAPSA_SYD_PATH="${pkgs.sydbox}/bin/syd"
+    export CAPSA_LIBRARY_DIRS="${capsaPaths.libraryDirs}"
+    ${lib.optionalString (capsaPaths.sydPath != null) ''
+    export CAPSA_SYD_PATH="${capsaPaths.sydPath}"
     ''}
     exec "$out/libexec/capsa/capsa" "\$@"
     EOF

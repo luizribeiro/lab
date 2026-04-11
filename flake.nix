@@ -30,8 +30,10 @@
             ];
           };
 
+          capsaPaths = import ./nix/paths.nix { inherit lib pkgs; };
+
           capsaPackage = import ./nix/package.nix {
-            inherit lib pkgs;
+            inherit lib pkgs capsaPaths;
             src = ./.;
           };
 
@@ -102,14 +104,12 @@
 
             shellHook = lib.concatStringsSep "\n" [
               preCommitCheck.shellHook
-              (lib.optionalString pkgs.stdenv.isLinux ''
-                export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs.libkrun}/lib}"
-                export CAPSA_LIBRARY_DIRS="''${CAPSA_LIBRARY_DIRS:-${lib.getLib pkgs.glibc}/lib:${lib.getLib pkgs.stdenv.cc.cc}/lib:${pkgs.stdenv.cc.cc.libgcc}/lib:${lib.getLib pkgs.libkrun}/lib}"
-                export CAPSA_SYD_PATH="''${CAPSA_SYD_PATH:-${pkgs.sydbox}/bin/syd}"
-              '')
-              (lib.optionalString pkgs.stdenv.isDarwin ''
-                export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${lib.getLib pkgs."libkrun-efi"}/lib}"
-                export CAPSA_LIBRARY_DIRS="''${CAPSA_LIBRARY_DIRS:-${lib.getLib pkgs.libiconv}/lib:${lib.getLib pkgs."libkrun-efi"}/lib}"
+              ''
+                export LIBKRUN_LIB_DIR="''${LIBKRUN_LIB_DIR:-${capsaPaths.libkrunLibDir}}"
+                export CAPSA_LIBRARY_DIRS="''${CAPSA_LIBRARY_DIRS:-${capsaPaths.libraryDirs}}"
+              ''
+              (lib.optionalString (capsaPaths.sydPath != null) ''
+                export CAPSA_SYD_PATH="''${CAPSA_SYD_PATH:-${capsaPaths.sydPath}}"
               '')
             ];
           };
