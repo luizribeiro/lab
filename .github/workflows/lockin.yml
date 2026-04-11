@@ -1,0 +1,38 @@
+name: lockin
+
+on:
+  push:
+    paths:
+      - "lockin/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/lockin.yml"
+  pull_request:
+    paths:
+      - "lockin/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/lockin.yml"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Run tests
+        run: |
+          nix develop --impure --command \
+            cargo test --manifest-path lockin/Cargo.toml --workspace &&
+          nix develop --impure --command \
+            cargo test --manifest-path lockin/Cargo.toml -p lockin --features tokio --test tokio
