@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 
 use anyhow::{Context, Result};
-use capsa_process::CommandFdExt;
+use lockin_process::CommandFdExt;
 
 mod paths;
 
@@ -43,7 +43,7 @@ pub(crate) struct SandboxSpec {
 ///
 /// ```
 /// use std::path::Path;
-/// use capsa_sandbox::Sandbox;
+/// use lockin::Sandbox;
 ///
 /// let status = Sandbox::builder()
 ///     .command(Path::new("/usr/bin/env"))
@@ -89,7 +89,7 @@ impl Sandbox {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn new(_spec: SandboxSpec) -> Result<Self> {
-        anyhow::bail!("capsa-sandbox: sandboxing is not implemented for this platform")
+        anyhow::bail!("lockin: sandboxing is not implemented for this platform")
     }
 
     /// Path of the private tmp directory that the sandbox will expose
@@ -118,7 +118,7 @@ impl Sandbox {
 }
 
 fn create_private_tmp() -> Result<tempfile::TempDir> {
-    let base = std::env::temp_dir().join("capsa-sandbox");
+    let base = std::env::temp_dir().join("lockin");
     std::fs::create_dir_all(&base)
         .with_context(|| format!("failed to create sandbox temp base {}", base.display()))?;
 
@@ -139,7 +139,7 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 /// ```no_run
 /// use std::os::fd::{AsRawFd, OwnedFd};
 /// use std::path::Path;
-/// use capsa_sandbox::Sandbox;
+/// use lockin::Sandbox;
 ///
 /// fn spawn_with_ready_pipe(ready_writer: OwnedFd) -> anyhow::Result<()> {
 ///     let ready_raw = ready_writer.as_raw_fd();

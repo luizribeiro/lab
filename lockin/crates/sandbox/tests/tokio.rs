@@ -1,7 +1,7 @@
 //! Async factory parity: the tokio build path enforces the same
 //! contracts as the sync `SandboxBuilder::command`.
 //!
-//! Run with `cargo test -p capsa-sandbox --features tokio --test tokio`.
+//! Run with `cargo test -p lockin --features tokio --test tokio`.
 
 mod common;
 
@@ -9,7 +9,7 @@ use std::net::TcpListener;
 
 use common::{probe_binary, TestDir};
 
-use capsa_sandbox::SandboxBuilder;
+use lockin::SandboxBuilder;
 
 #[tokio::test]
 async fn read_allowlist_enforced() {

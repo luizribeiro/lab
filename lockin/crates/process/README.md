@@ -1,4 +1,4 @@
-# capsa-process
+# lockin-process
 
 `Command` extensions for safe fd passing across `exec` on Unix.
 
@@ -13,7 +13,7 @@ else.
 ```rust
 use std::os::unix::net::UnixDatagram;
 use std::process::Command;
-use capsa_process::CommandFdExt;
+use lockin_process::CommandFdExt;
 
 let (_parent, child) = UnixDatagram::pair()?;
 

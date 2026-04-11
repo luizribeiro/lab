@@ -12,7 +12,7 @@ tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1"
 
 [dev-dependencies]
-capsa-process = { path = "../capsa-process" }
-capsa-sandbox = { path = "../sandbox" }
+lockin = { path = "../../../lockin/crates/sandbox" }
+lockin-process = { path = "../../../lockin/crates/process" }
 capsa-test-support = { path = "../test-support" }
 serde_json = "1.0"

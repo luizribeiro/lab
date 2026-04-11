@@ -117,7 +117,7 @@ fn can_write(path: &Path) -> Result<(), String> {
         .write(true)
         .open(path)
         .map_err(|e| e.to_string())?;
-    file.write_all(b"capsa-sandbox-probe\n")
+    file.write_all(b"lockin-probe\n")
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -213,7 +213,7 @@ fn open_marked_fd(fd_arg: &str, marker_arg: &str) -> Result<(std::fs::File, RawF
 fn can_write_temp() -> Result<(), String> {
     let mut path = effective_temp_dir();
     path.push(format!(
-        "capsa-sandbox-probe-{}-{}",
+        "lockin-probe-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -226,7 +226,7 @@ fn can_write_temp() -> Result<(), String> {
 
     let mut file = options.open(&path).map_err(|e| e.to_string())?;
 
-    file.write_all(b"capsa-sandbox-probe-temp\n")
+    file.write_all(b"lockin-probe-temp\n")
         .map_err(|e| e.to_string())?;
     Ok(())
 }

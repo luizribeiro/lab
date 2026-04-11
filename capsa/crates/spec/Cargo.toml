@@ -8,7 +8,7 @@ edition = "2021"
 # inside `NetLaunchSpec`. Splitting policy types into their own leaf crate
 # is a larger refactor; revisit if the weight becomes a problem. For now
 # the spec crate still achieves its goal: daemon binaries avoid depending
-# on `capsa-core` (which brings `capsa-sandbox` and the libkrun build).
+# on `capsa-core` (which brings `lockin` and the libkrun build).
 [dependencies]
 anyhow = "1.0"
 capsa-net = { path = "../net" }

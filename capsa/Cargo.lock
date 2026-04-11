@@ -120,10 +120,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa-net",
- "capsa-process",
- "capsa-sandbox",
  "capsa-spec",
  "libc",
+ "lockin",
+ "lockin-process",
  "serde",
  "serde_json",
  "tracing",
@@ -153,33 +153,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capsa-net",
- "capsa-process",
- "capsa-sandbox",
  "capsa-spec",
  "capsa-test-support",
  "libc",
+ "lockin",
+ "lockin-process",
  "serde_json",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "capsa-process"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "capsa-sandbox"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "capsa-process",
- "capsa-test-support",
- "libc",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -196,8 +177,8 @@ dependencies = [
 name = "capsa-test-support"
 version = "0.1.0"
 dependencies = [
- "capsa-sandbox",
  "libc",
+ "lockin",
 ]
 
 [[package]]
@@ -466,6 +447,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lockin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "lockin-process",
+ "tempfile",
+]
+
+[[package]]
+name = "lockin-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -715,16 +713,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signal-hook-registry"
-version = "1.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
-dependencies = [
- "errno",
- "libc",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -839,7 +827,6 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2 0.6.3",
  "tokio-macros",
  "windows-sys 0.61.2",

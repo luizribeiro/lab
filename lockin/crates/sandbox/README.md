@@ -1,4 +1,4 @@
-# capsa-sandbox
+# lockin
 
 Build and run a child process inside an OS sandbox.
 
@@ -11,7 +11,7 @@ Build and run a child process inside an OS sandbox.
 
 ```rust
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .command(Path::new("/usr/bin/env"))?
@@ -35,7 +35,7 @@ supply the absolute path to the `syd` binary via `.syd_path()`:
 
 ```rust,ignore
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .syd_path("/nix/store/.../bin/syd")
@@ -55,7 +55,7 @@ exec) access:
 
 ```rust,ignore
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .library_path("/usr/lib")
@@ -71,7 +71,7 @@ the sandbox is dropped.
 
 ```rust
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .read_only_dir("/usr")
@@ -87,7 +87,7 @@ assert!(status.success());
 
 ```rust
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .allow_network(true)
@@ -100,12 +100,12 @@ assert!(status.success());
 ## File descriptor policy
 
 Pass only the fds the child needs; all other fds `>= 3` are sealed
-at exec time (via [`capsa-process`](../capsa-process)).
+at exec time (via [`lockin-process`](../lockin-process)).
 
 ```rust
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let (reader, _writer) = std::os::unix::net::UnixDatagram::pair()?;
 let fd = reader.as_raw_fd();
@@ -124,7 +124,7 @@ assert!(status.success());
 
 ```rust
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .max_open_files(64)
@@ -143,7 +143,7 @@ Enable with `--features tokio`.
 
 ```rust,ignore
 use std::path::Path;
-use capsa_sandbox::Sandbox;
+use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .allow_network(true)

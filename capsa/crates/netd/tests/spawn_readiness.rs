@@ -14,8 +14,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use capsa_process::CommandFdExt;
 use capsa_test_support::ChildGuard;
+use lockin_process::CommandFdExt;
 
 const PROBE_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
 const READINESS_TIMEOUT: Duration = Duration::from_secs(5);

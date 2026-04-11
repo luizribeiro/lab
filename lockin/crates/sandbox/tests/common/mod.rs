@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use capsa_sandbox::SandboxBuilder;
+use lockin::SandboxBuilder;
 
 pub use capsa_test_support::{sandbox_builder, ChildGuard};
 
@@ -14,7 +14,7 @@ pub struct TestDir {
 
 impl TestDir {
     pub fn new(prefix: &str) -> Self {
-        let base = std::env::temp_dir().join("capsa-sandbox-tests");
+        let base = std::env::temp_dir().join("lockin-tests");
         std::fs::create_dir_all(&base)
             .unwrap_or_else(|e| panic!("failed to create test base dir {}: {e}", base.display()));
 

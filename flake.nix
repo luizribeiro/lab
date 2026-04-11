@@ -5,7 +5,6 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     devenv.url = "github:cachix/devenv";
-    git-hooks.url = "github:cachix/git-hooks.nix";
   };
 
   nixConfig = {
@@ -13,7 +12,7 @@
     extra-substituters = "https://devenv.cachix.org";
   };
 
-  outputs = { self, nixpkgs, flake-utils, devenv, git-hooks, ... } @ inputs:
+  outputs = { self, nixpkgs, flake-utils, devenv, ... } @ inputs:
     flake-utils.lib.eachSystem [
       "aarch64-darwin"
       "aarch64-linux"
@@ -39,7 +38,8 @@
 
           capsaPackage = import ./capsa/nix/package.nix {
             inherit lib pkgs capsaPaths;
-            src = ./capsa;
+            src = ./.;
+            cargoRoot = "capsa";
           };
 
           vmLib = import ./capsa/nix/vm {
@@ -101,6 +101,16 @@
             };
 
             fittings = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/git-hooks.nix
+                {
+                  languages.rust.enable = true;
+                }
+              ];
+            };
+
+            lockin = devenv.lib.mkShell {
               inherit inputs pkgs;
               modules = [
                 ./shared/nix/git-hooks.nix

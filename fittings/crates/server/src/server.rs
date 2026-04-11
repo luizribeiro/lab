@@ -575,7 +575,7 @@ mod tests {
         let second = parse_response_fixture(&client.recv().await.expect("recv second"))
             .expect("parse second response");
 
-        let mut errors = vec![
+        let mut errors = [
             first.error.expect("first response should be an error"),
             second.error.expect("second response should be an error"),
         ];
@@ -734,9 +734,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    type FrameQueue = Arc<Mutex<VecDeque<Result<Vec<u8>, FittingsError>>>>;
+
     #[derive(Clone)]
     struct ScriptTransport {
-        recv_frames: Arc<Mutex<VecDeque<Result<Vec<u8>, FittingsError>>>>,
+        recv_frames: FrameQueue,
         sent_frames: Arc<Mutex<Vec<Vec<u8>>>>,
         fail_on_send: Arc<AtomicBool>,
     }

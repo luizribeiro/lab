@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn ioctl_is_only_granted_for_ioctl_paths() {
         let base = tempfile::Builder::new()
-            .prefix("capsa-sandbox-policy-test-")
+            .prefix("lockin-policy-test-")
             .tempdir()
             .expect("create test base dir");
 
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn interactive_tty_rules_are_gated_on_allow_interactive_tty() {
         let base = tempfile::Builder::new()
-            .prefix("capsa-sandbox-tty-test-")
+            .prefix("lockin-tty-test-")
             .tempdir()
             .expect("create test base dir");
         let private_tmp = base.path().join("tmp");

@@ -8,5 +8,5 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-capsa-sandbox = { path = "../sandbox" }
+lockin = { path = "../../../lockin/crates/sandbox" }
 libc = "0.2"

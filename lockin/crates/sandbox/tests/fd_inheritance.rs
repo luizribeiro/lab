@@ -16,7 +16,7 @@ use std::process::{ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use capsa_sandbox::SandboxChild;
+use lockin::SandboxChild;
 
 use common::probe_binary;
 

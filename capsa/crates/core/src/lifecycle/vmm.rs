@@ -7,8 +7,8 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use capsa_sandbox::SandboxBuilder;
 use capsa_spec::{encode_launch_spec_args, ResolvedNetworkInterface, VmmLaunchSpec};
+use lockin::SandboxBuilder;
 
 use crate::config::VmConfig;
 
@@ -76,7 +76,7 @@ impl VmmPaths {
 }
 
 fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
-    let mut builder = capsa_sandbox::Sandbox::builder()
+    let mut builder = lockin::Sandbox::builder()
         .allow_network(false)
         .allow_kvm(true)
         .allow_interactive_tty(true)

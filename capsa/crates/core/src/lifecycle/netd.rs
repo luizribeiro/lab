@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_sandbox::SandboxBuilder;
 use capsa_spec::{encode_launch_spec_args, NetInterfaceSpec, NetLaunchSpec};
+use lockin::SandboxBuilder;
 
 use super::child::{self, ChildHandle};
 use super::plan::{self, InterfacePlan, InterfaceSockets, VmmInterfaceBinding};
@@ -88,7 +88,7 @@ pub(super) fn spawn_netd(
 }
 
 fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
-    let mut builder = capsa_sandbox::Sandbox::builder()
+    let mut builder = lockin::Sandbox::builder()
         .allow_network(true)
         .read_only_path(plan::canonical_or_unchanged(binary_path));
     builder = child::apply_syd_path(builder);

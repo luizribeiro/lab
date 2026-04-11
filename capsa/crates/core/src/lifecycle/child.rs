@@ -38,7 +38,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use capsa_sandbox::{Sandbox, SandboxBuilder};
+use lockin::{Sandbox, SandboxBuilder};
 
 pub(super) fn apply_syd_path(builder: SandboxBuilder) -> SandboxBuilder {
     match std::env::var_os("CAPSA_SYD_PATH") {
@@ -247,7 +247,7 @@ impl Drop for ChildHandle {
     }
 }
 
-/// Spawns `binary` under a `capsa_sandbox` sandbox (or bypassed via
+/// Spawns `binary` under a `lockin` sandbox (or bypassed via
 /// `CAPSA_DISABLE_SANDBOX`), starts a reaper thread, and returns a
 /// [`ChildHandle`].
 ///
@@ -302,7 +302,7 @@ fn build_and_spawn(
         if stdin_null {
             command.stdin(Stdio::null());
         }
-        use capsa_process::CommandFdExt;
+        use lockin_process::CommandFdExt;
         command.seal_fds();
         for fd in fds {
             command.keep_fd(fd);
@@ -476,7 +476,7 @@ mod tests {
     // Shell scripts don't need library paths — /bin/sh is always
     // accessible to the sandbox without explicit grants.
     fn bypass_builder() -> SandboxBuilder {
-        capsa_sandbox::Sandbox::builder()
+        lockin::Sandbox::builder()
     }
 
     // ── resolve_binary ───────────────────────────────────────────────

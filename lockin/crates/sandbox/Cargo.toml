@@ -1,5 +1,5 @@
 [package]
-name = "capsa-sandbox"
+name = "lockin"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,13 +9,13 @@ tokio = ["dep:tokio"]
 
 [dependencies]
 anyhow = "1.0"
-capsa-process = { path = "../capsa-process" }
+lockin-process = { path = "../process" }
 libc = "0.2"
 tempfile = "3.13"
 tokio = { version = "1", features = ["process"], optional = true }
 
 [dev-dependencies]
-capsa-test-support = { path = "../test-support" }
+capsa-test-support = { path = "../../../capsa/crates/test-support" }
 tokio = { version = "1", features = ["macros", "process", "rt"] }
 
 [[test]]
