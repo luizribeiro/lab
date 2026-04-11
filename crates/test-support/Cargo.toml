@@ -8,4 +8,5 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+capsa-sandbox = { path = "../sandbox" }
 libc = "0.2"

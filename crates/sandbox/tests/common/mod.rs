@@ -4,19 +4,9 @@
 
 use std::path::PathBuf;
 
-use capsa_sandbox::{Sandbox, SandboxBuilder};
+use capsa_sandbox::SandboxBuilder;
 
-pub use capsa_test_support::ChildGuard;
-
-pub fn sandbox_builder() -> SandboxBuilder {
-    let mut builder = Sandbox::builder();
-    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
-        for dir in val.split(':').filter(|s| !s.is_empty()) {
-            builder = builder.library_path(dir);
-        }
-    }
-    builder
-}
+pub use capsa_test_support::{sandbox_builder, ChildGuard};
 
 pub struct TestDir {
     dir: tempfile::TempDir,

@@ -196,6 +196,7 @@ dependencies = [
 name = "capsa-test-support"
 version = "0.1.0"
 dependencies = [
+ "capsa-sandbox",
  "libc",
 ]
 

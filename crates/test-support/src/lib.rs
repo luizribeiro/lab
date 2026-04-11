@@ -11,6 +11,19 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Returns a [`capsa_sandbox::SandboxBuilder`] with library paths from
+/// `CAPSA_LIBRARY_DIRS` applied. Use this in integration tests that
+/// spawn dynamically-linked binaries inside the sandbox.
+pub fn sandbox_builder() -> capsa_sandbox::SandboxBuilder {
+    let mut builder = capsa_sandbox::Sandbox::builder();
+    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
+        for dir in val.split(':').filter(|s| !s.is_empty()) {
+            builder = builder.library_path(dir);
+        }
+    }
+    builder
+}
+
 /// RAII guard that SIGKILLs and reaps a spawned child on drop, so a
 /// panicking `#[test]` body never leaks a subprocess. Two flavors:
 ///

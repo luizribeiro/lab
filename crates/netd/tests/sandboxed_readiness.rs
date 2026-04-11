@@ -25,18 +25,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use capsa_sandbox::{Sandbox, SandboxBuilder};
-use capsa_test_support::ChildGuard;
-
-fn sandbox_builder() -> SandboxBuilder {
-    let mut builder = Sandbox::builder();
-    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
-        for dir in val.split(':').filter(|s| !s.is_empty()) {
-            builder = builder.library_path(dir);
-        }
-    }
-    builder
-}
+use capsa_test_support::{sandbox_builder, ChildGuard};
 
 const PROBE_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
 const READINESS_TIMEOUT: Duration = Duration::from_secs(10);
