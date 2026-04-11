@@ -10,7 +10,6 @@ tokio = ["dep:tokio"]
 [dependencies]
 anyhow = "1.0"
 capsa-process = { path = "../capsa-process" }
-lddtree = "0.5"
 libc = "0.2"
 tempfile = "3.13"
 tokio = { version = "1", features = ["process"], optional = true }

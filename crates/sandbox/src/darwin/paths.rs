@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::discover::library_dirs;
 use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
 use crate::SandboxSpec;
 
@@ -34,11 +33,8 @@ impl PathSets {
             paths.add_ioctl(path);
         }
 
-        // Grant read on each directory the dynamic linker will search for
-        // `program`. Covers the link-time closure as well as any runtime
-        // `dlopen` of siblings in the same directory.
-        for dir in library_dirs(program) {
-            paths.add_read_only(&dir);
+        for dir in &spec.library_paths {
+            paths.add_read_only(dir);
         }
 
         if spec.allow_interactive_tty {

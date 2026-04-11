@@ -7,7 +7,6 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use anyhow::{Context, Result};
 use capsa_process::CommandFdExt;
 
-mod discover;
 mod paths;
 
 #[cfg(feature = "tokio")]
@@ -25,6 +24,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_network: bool,
     pub(crate) allow_kvm: bool,
     pub(crate) allow_interactive_tty: bool,
+    pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
@@ -153,12 +153,34 @@ pub struct SandboxBuilder {
     fds: Vec<(std::os::fd::OwnedFd, std::os::fd::RawFd)>,
 }
 
+fn parse_library_dirs_env() -> Vec<PathBuf> {
+    let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") else {
+        return Vec::new();
+    };
+    parse_library_dirs(&val)
+}
+
+fn parse_library_dirs(val: &str) -> Vec<PathBuf> {
+    val.split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .collect()
+}
+
 impl SandboxBuilder {
     /// Creates a new builder with an empty sandbox policy and no
     /// inherited fds.
+    ///
+    /// If `CAPSA_LIBRARY_DIRS` is set (colon-separated list of
+    /// directories), those paths are added as library paths
+    /// automatically.
     pub fn new() -> Self {
         Self {
-            spec: SandboxSpec::default(),
+            spec: SandboxSpec {
+                library_paths: parse_library_dirs_env(),
+                ..SandboxSpec::default()
+            },
             fds: Vec::new(),
         }
     }
@@ -181,6 +203,18 @@ impl SandboxBuilder {
     /// and the terminal ioctl allowlist.
     pub fn allow_interactive_tty(mut self, allow: bool) -> Self {
         self.spec.allow_interactive_tty = allow;
+        self
+    }
+
+    /// Adds a directory that the dynamic linker needs to load shared
+    /// libraries from. On Linux the sandbox grants recursive read+exec;
+    /// on macOS it grants recursive read.
+    pub fn library_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        debug_assert!(path.is_absolute(), "library_path must be absolute");
+        if path.is_absolute() {
+            self.spec.library_paths.push(path);
+        }
         self
     }
 
@@ -514,5 +548,55 @@ mod tests {
         let b_raw = builder.inherit_fd(b);
         assert_eq!(a_raw, a_raw_before);
         assert_eq!(b_raw, b_raw_before);
+    }
+
+    #[test]
+    fn parse_library_dirs_splits_on_colon() {
+        let dirs = super::parse_library_dirs("/usr/lib:/lib");
+        assert_eq!(
+            dirs,
+            vec![
+                std::path::PathBuf::from("/usr/lib"),
+                std::path::PathBuf::from("/lib"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_library_dirs_skips_empty_segments() {
+        let dirs = super::parse_library_dirs("/usr/lib::/lib:");
+        assert_eq!(
+            dirs,
+            vec![
+                std::path::PathBuf::from("/usr/lib"),
+                std::path::PathBuf::from("/lib"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_library_dirs_rejects_relative_paths() {
+        let dirs = super::parse_library_dirs("/usr/lib:relative/path:../sneaky");
+        assert_eq!(dirs, vec![std::path::PathBuf::from("/usr/lib")]);
+    }
+
+    #[test]
+    fn parse_library_dirs_empty_string() {
+        let dirs = super::parse_library_dirs("");
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn library_path_builder_rejects_relative() {
+        let builder = super::SandboxBuilder::new().library_path("/usr/lib");
+        assert_eq!(
+            builder.spec.library_paths.len(),
+            builder
+                .spec
+                .library_paths
+                .iter()
+                .filter(|p| p.is_absolute())
+                .count()
+        );
     }
 }

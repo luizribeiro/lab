@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::discover::library_dirs;
 use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
 use crate::SandboxSpec;
 
@@ -162,12 +161,8 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    // Grant read+exec recursively on each directory the dynamic linker will
-    // search for `program`. Covers the link-time closure as well as any
-    // runtime `dlopen` of siblings in the same directory (NSS modules,
-    // locale data, ICU plugins, ...).
-    for dir in library_dirs(program) {
-        for candidate in path_candidates(&dir) {
+    for dir in &spec.library_paths {
+        for candidate in path_candidates(dir) {
             push_with_ancestors(&mut read_paths, &candidate);
             if candidate.is_dir() {
                 push_unique(&mut read_recursive_paths, candidate.clone());
