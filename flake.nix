@@ -1,5 +1,5 @@
 {
-  description = "lab: monorepo for capsa, fittings, and friends";
+  description = "lab monorepo";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
@@ -12,7 +12,7 @@
     extra-substituters = "https://devenv.cachix.org";
   };
 
-  outputs = { self, nixpkgs, flake-utils, devenv, ... } @ inputs:
+  outputs = { nixpkgs, flake-utils, devenv, ... } @ inputs:
     flake-utils.lib.eachSystem [
       "aarch64-darwin"
       "aarch64-linux"
@@ -33,113 +33,26 @@
             ];
           };
 
-          # --- shared library discovery ---
-          runtimeLibDirs = seedPkg: import ./shared/nix/runtime-lib-dirs.nix {
-            inherit lib pkgs seedPkg;
-          };
-
-          # --- lockin paths ---
-          lockinLibraryDirs = runtimeLibDirs (
-            if pkgs.stdenv.isDarwin then pkgs.libiconv
-            else pkgs.stdenv.cc.cc
-          );
-
-          # --- capsa build infrastructure ---
-          capsaPaths = import ./capsa/nix/paths.nix { inherit lib pkgs; };
-
-          capsaPackage = import ./capsa/nix/package.nix {
-            inherit lib pkgs capsaPaths;
-            src = ./.;
-            cargoRoot = "capsa";
-          };
-
-          vmLib = import ./capsa/nix/vm {
-            inherit lib pkgs nixpkgs hostSystem capsaPackage capsaPaths;
-          };
-
-          defaultVmAssets = vmLib.mkVMAssets { name = "capsa"; };
-          defaultVm = vmLib.mkVM { name = "capsa"; };
-
-          capsaChecks = import ./capsa/nix/checks {
-            inherit vmLib pkgs capsaPaths;
+          capsa = import ./capsa/nix {
+            inherit lib pkgs nixpkgs hostSystem;
           };
         in
         {
-          # --- capsa library outputs ---
-          lib = {
-            inherit (vmLib) mkVMAssets mkVM mkVMCheck;
+          inherit (capsa) lib;
+
+          packages = capsa.packages // {
+            default = capsa.packages.capsa;
           };
 
-          # --- packages ---
-          packages = {
-            capsa = capsaPackage;
-            vm-assets = defaultVmAssets.vmAssets;
-            vm = defaultVm;
-            default = self.packages.${hostSystem}.capsa;
-          };
+          inherit (capsa) checks;
 
-          # --- checks ---
-          checks = capsaChecks;
-
-          # --- dev shells ---
-          devShells = {
-            capsa = devenv.lib.mkShell {
-              inherit inputs pkgs;
-              modules = [
-                ./shared/nix/git-hooks.nix
-                ({ lib, pkgs, ... }: {
-                  languages.rust.enable = true;
-
-                  packages = [ pkgs.pkg-config ]
-                    ++ lib.optionals pkgs.stdenv.isLinux [
-                    pkgs.libkrun
-                    pkgs.sydbox
-                  ]
-                    ++ lib.optionals pkgs.stdenv.isDarwin [
-                    pkgs."libkrun-efi"
-                    pkgs.libepoxy
-                    pkgs.virglrenderer
-                  ];
-
-                  env = {
-                    LIBKRUN_LIB_DIR = capsaPaths.libkrunLibDir;
-                    LOCKIN_LIBRARY_DIRS = lockinLibraryDirs;
-                    CAPSA_LIBRARY_DIRS = capsaPaths.libraryDirs;
-                  } // lib.optionalAttrs (capsaPaths.sydPath != null) {
-                    LOCKIN_SYD_PATH = capsaPaths.sydPath;
-                    CAPSA_SYD_PATH = capsaPaths.sydPath;
-                  };
-                })
-              ];
-            };
-
-            fittings = devenv.lib.mkShell {
-              inherit inputs pkgs;
-              modules = [
-                ./shared/nix/git-hooks.nix
-                {
-                  languages.rust.enable = true;
-                }
-              ];
-            };
-
-            lockin = devenv.lib.mkShell {
-              inherit inputs pkgs;
-              modules = [
-                ./shared/nix/git-hooks.nix
-                ({ lib, pkgs, ... }: {
-                  languages.rust.enable = true;
-
-                  env = {
-                    LOCKIN_LIBRARY_DIRS = lockinLibraryDirs;
-                  } // lib.optionalAttrs pkgs.stdenv.isLinux {
-                    LOCKIN_SYD_PATH = "${pkgs.sydbox}/bin/syd";
-                  };
-                })
-              ];
-            };
-
-            default = self.devShells.${hostSystem}.capsa;
+          devShells.default = devenv.lib.mkShell {
+            inherit inputs pkgs;
+            modules = [
+              ./shared/nix/devenv/base.nix
+              ./lockin/nix/devenv.nix
+              ./capsa/nix/devenv.nix
+            ];
           };
 
           formatter = pkgs.nixpkgs-fmt;

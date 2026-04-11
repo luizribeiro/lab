@@ -5,6 +5,7 @@ let
     else pkgs.libkrun;
 in
 rec {
+  inherit libkrunPkg;
   libkrunLibDir = "${lib.getLib libkrunPkg}/lib";
 
   libraryDirs = import ../../shared/nix/runtime-lib-dirs.nix {
