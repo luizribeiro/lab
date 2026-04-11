@@ -309,11 +309,18 @@ fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
 }
 
 fn escape_syd_path(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\\', "\\\\")
-        .replace(':', "\\:")
-        .replace(',', "\\,")
+    let raw = path.display().to_string();
+    let mut escaped = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '\\' | '+' | ':' | ',' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -324,6 +331,28 @@ mod tests {
     fn rules_for(spec: &SandboxSpec) -> Vec<String> {
         let tmp = tempfile::tempdir().expect("tempdir");
         syd_rules(Path::new("/bin/sh"), spec, tmp.path())
+    }
+
+    #[test]
+    fn escape_syd_path_escapes_all_metacharacters() {
+        let cases = [
+            ("/simple/path", "/simple/path"),
+            ("/has+plus", "/has\\+plus"),
+            ("/has:colon", "/has\\:colon"),
+            ("/has,comma", "/has\\,comma"),
+            (r"/has\backslash", r"/has\\backslash"),
+            (
+                r"/tmp/evil+allow/exec+/bin/sh",
+                r"/tmp/evil\+allow/exec\+/bin/sh",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                escape_syd_path(Path::new(input)),
+                expected,
+                "escaping {input:?}"
+            );
+        }
     }
 
     #[test]
