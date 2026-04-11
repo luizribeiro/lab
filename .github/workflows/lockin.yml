@@ -32,7 +32,7 @@ jobs:
 
       - name: Run tests
         run: |
-          nix develop --impure -L --command \
+          nix develop .#lockin --impure -L --command \
             cargo test --manifest-path lockin/Cargo.toml --workspace &&
-          nix develop --impure -L --command \
+          nix develop .#lockin --impure -L --command \
             cargo test --manifest-path lockin/Cargo.toml -p lockin --features tokio --test tokio

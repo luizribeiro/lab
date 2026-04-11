@@ -55,6 +55,14 @@
             ];
           };
 
+          devShells.lockin = devenv.lib.mkShell {
+            inherit inputs pkgs;
+            modules = [
+              ./shared/nix/devenv/base.nix
+              ./lockin/nix/devenv.nix
+            ];
+          };
+
           formatter = pkgs.nixpkgs-fmt;
         });
 }
