@@ -66,10 +66,8 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     if spec.allow_network {
         // Permit all TCP connect/bind via Landlock so network-enabled
         // daemons are not blocked by the Landlock network ruleset.
-        for family in ["inet", "inet6"] {
-            rules.push(format!("allow/lock/connect+{family}:0-65535"));
-            rules.push(format!("allow/lock/bind+{family}:0-65535"));
-        }
+        rules.push("allow/lock/connect+0-65535".to_string());
+        rules.push("allow/lock/bind+0-65535".to_string());
     }
 
     // Allow common filesystem types touched by capsa-vmm and host runtime.
@@ -479,15 +477,11 @@ mod tests {
             ..SandboxSpec::default()
         });
         assert!(
-            with_net
-                .iter()
-                .any(|r| r == "allow/lock/connect+inet:0-65535"),
+            with_net.iter().any(|r| r == "allow/lock/connect+0-65535"),
             "allow_network=true should emit Landlock connect allowlist"
         );
         assert!(
-            with_net
-                .iter()
-                .any(|r| r == "allow/lock/bind+inet6:0-65535"),
+            with_net.iter().any(|r| r == "allow/lock/bind+0-65535"),
             "allow_network=true should emit Landlock bind allowlist"
         );
 
