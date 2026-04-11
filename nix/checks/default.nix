@@ -1,17 +1,17 @@
-{ vmLib, pkgs }:
+{ vmLib, pkgs, capsaPaths }:
 let
   capsaPackage = import ../package.nix {
     inherit (pkgs) lib;
-    inherit pkgs;
+    inherit pkgs capsaPaths;
     src = ../..;
   };
   netIsolation = import ../tests/net-isolation.nix { inherit vmLib; };
   netDhcp = import ../tests/net-dhcp.nix { inherit vmLib pkgs; };
   daemonNoNetworkFastPath = import ../tests/daemon-no-network-fast-path.nix {
-    inherit vmLib pkgs capsaPackage;
+    inherit vmLib pkgs capsaPackage capsaPaths;
   };
   daemonNetdSpawnFailure = import ../tests/daemon-netd-spawn-failure.nix {
-    inherit vmLib pkgs capsaPackage;
+    inherit vmLib pkgs capsaPackage capsaPaths;
   };
 in
 {

@@ -38,7 +38,7 @@
           };
 
           vmLib = import ./nix/vm {
-            inherit lib pkgs nixpkgs hostSystem capsaPackage;
+            inherit lib pkgs nixpkgs hostSystem capsaPackage capsaPaths;
           };
 
           defaultVmAssets = vmLib.mkVMAssets { name = "capsa"; };
@@ -65,7 +65,7 @@
           };
 
           checks = import ./nix/checks {
-            inherit vmLib pkgs;
+            inherit vmLib pkgs capsaPaths;
           };
         in
         {

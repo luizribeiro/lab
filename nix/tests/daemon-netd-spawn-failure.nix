@@ -1,12 +1,7 @@
-{ vmLib, pkgs, capsaPackage }:
+{ vmLib, pkgs, capsaPackage, capsaPaths }:
 let
   assets = vmLib.mkVMAssets { name = "capsa-daemon-netd-spawn-failure"; };
   capsa = "${capsaPackage}/libexec/capsa/capsa";
-  libkrunLibDir =
-    if pkgs.stdenv.isDarwin then
-      "${pkgs.lib.getLib pkgs."libkrun-efi"}/lib"
-    else
-      "${pkgs.lib.getLib pkgs.libkrun}/lib";
 in
 pkgs.runCommand "capsa-daemon-netd-spawn-failure-vm-check"
 {
@@ -28,7 +23,7 @@ pkgs.runCommand "capsa-daemon-netd-spawn-failure-vm-check"
     set kernel "${assets.kernelImage}"
     set initramfs "${assets.initramfsImage}"
     set kernel_cmdline {${assets.vmConfig.kernelCmdline}}
-    set env(LIBKRUN_LIB_DIR) "${libkrunLibDir}"
+    set env(LIBKRUN_LIB_DIR) "${capsaPaths.libkrunLibDir}"
     set env(CAPSA_DISABLE_SANDBOX) 1
     set env(CAPSA_NETD_PATH) $env(NETD_STUB)
 

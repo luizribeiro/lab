@@ -3,6 +3,7 @@
 , nixpkgs
 , hostSystem
 , capsaPackage
+, capsaPaths
 }:
 let
   defaultGuestSystem =
@@ -76,18 +77,12 @@ let
     let
       assets = mkVMAssets args;
 
-      libkrunLibDir =
-        if pkgs.stdenv.isDarwin then
-          "${lib.getLib pkgs."libkrun-efi"}/lib"
-        else
-          "${lib.getLib pkgs.libkrun}/lib";
-
       capsaCmd = "${capsaPackage}/bin/capsa";
     in
     pkgs.writeShellApplication {
       name = "${assets.name}-run";
       text = ''
-        export LIBKRUN_LIB_DIR="${libkrunLibDir}"
+        export LIBKRUN_LIB_DIR="${capsaPaths.libkrunLibDir}"
 
         exec ${capsaCmd} \
           --kernel ${assets.kernelImage} \
