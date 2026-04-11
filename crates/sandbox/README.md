@@ -28,6 +28,34 @@ assert!(status.success());
 - **No privileged runtime**: works as a regular user.
 - **Fail closed**: unsupported OS/backend/configuration returns errors.
 
+## Library paths
+
+Sandboxed binaries need read (and on Linux, exec) access to their
+dynamic library directories. Set `CAPSA_LIBRARY_DIRS` to a
+colon-separated list of directories the dynamic linker needs:
+
+```sh
+export CAPSA_LIBRARY_DIRS="/usr/lib:/lib"
+
+# Nix example — the dev shell and production wrapper set this
+# automatically from the closure's library paths:
+export CAPSA_LIBRARY_DIRS="/nix/store/abc-glibc-2.38/lib:/nix/store/xyz-libkrun-4.0/lib"
+```
+
+`SandboxBuilder::new()` reads this variable automatically. You can
+also add paths programmatically with `.library_path()`:
+
+```rust,ignore
+use std::path::Path;
+use capsa_sandbox::Sandbox;
+
+let status = Sandbox::builder()
+    .library_path("/usr/lib")
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
+# Ok::<(), anyhow::Error>(())
+```
+
 ## Filesystem policy
 
 A private `$TMPDIR` is created for the child and removed when
