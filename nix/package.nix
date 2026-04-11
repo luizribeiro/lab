@@ -16,6 +16,7 @@ let
       lib.concatStringsSep ":" [
         "${lib.getLib pkgs.glibc}/lib"
         "${lib.getLib pkgs.stdenv.cc.cc}/lib"
+        "${pkgs.stdenv.cc.cc.libgcc}/lib"
         "${lib.getLib pkgs.libkrun}/lib"
       ];
 in
