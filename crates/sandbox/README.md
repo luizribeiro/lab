@@ -28,6 +28,26 @@ assert!(status.success());
 - **No privileged runtime**: works as a regular user.
 - **Fail closed**: unsupported OS/backend/configuration returns errors.
 
+## syd path (Linux)
+
+On Linux the sandbox delegates enforcement to `syd`. The caller must
+supply the absolute path to the `syd` binary via `.syd_path()`:
+
+```rust,ignore
+use std::path::Path;
+use capsa_sandbox::Sandbox;
+
+let status = Sandbox::builder()
+    .syd_path("/nix/store/.../bin/syd")
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
+# Ok::<(), anyhow::Error>(())
+```
+
+In production the Nix wrapper sets `CAPSA_SYD_PATH`; in `nix develop`
+it is exported in the shell hook. Callers read the env var and pass
+it through the builder.
+
 ## Library paths
 
 Dynamically linked binaries need their library directories

@@ -11,14 +11,19 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Returns a [`capsa_sandbox::SandboxBuilder`] with library paths from
-/// `CAPSA_LIBRARY_DIRS` applied. Use this in integration tests that
-/// spawn dynamically-linked binaries inside the sandbox.
+/// Returns a [`capsa_sandbox::SandboxBuilder`] with `CAPSA_SYD_PATH`
+/// and `CAPSA_LIBRARY_DIRS` applied. Use this in integration tests
+/// that spawn dynamically-linked binaries inside the sandbox.
 pub fn sandbox_builder() -> capsa_sandbox::SandboxBuilder {
     let mut builder = capsa_sandbox::Sandbox::builder();
-    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
-        for dir in val.split(':').filter(|s| !s.is_empty()) {
-            builder = builder.library_path(dir);
+    if let Some(val) = std::env::var_os("CAPSA_SYD_PATH") {
+        builder = builder.syd_path(std::path::PathBuf::from(val));
+    }
+    if let Some(val) = std::env::var_os("CAPSA_LIBRARY_DIRS") {
+        for dir in std::env::split_paths(&val) {
+            if !dir.as_os_str().is_empty() {
+                builder = builder.library_path(dir);
+            }
         }
     }
     builder

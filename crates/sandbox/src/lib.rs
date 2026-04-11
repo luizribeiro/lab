@@ -24,6 +24,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_network: bool,
     pub(crate) allow_kvm: bool,
     pub(crate) allow_interactive_tty: bool,
+    pub(crate) syd_path: Option<PathBuf>,
     pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_only_paths: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
@@ -60,9 +61,10 @@ impl Sandbox {
     /// [`Sandbox::builder`] from outside.
     #[cfg(target_os = "linux")]
     pub(crate) fn new(spec: SandboxSpec) -> Result<Self> {
-        let syd = linux::find_in_path("syd").ok_or_else(|| {
+        let syd = spec.syd_path.clone().ok_or_else(|| {
             anyhow::anyhow!(
-                "Linux sandbox requires `syd` on PATH. Install it (e.g. via `nix develop`)"
+                "Linux sandbox requires an explicit syd path via .syd_path(). \
+                 Set CAPSA_SYD_PATH or enter `nix develop`."
             )
         })?;
 
@@ -181,6 +183,19 @@ impl SandboxBuilder {
     /// and the terminal ioctl allowlist.
     pub fn allow_interactive_tty(mut self, allow: bool) -> Self {
         self.spec.allow_interactive_tty = allow;
+        self
+    }
+
+    /// Sets the absolute path to the `syd` sandbox enforcer binary
+    /// (Linux only). Required on Linux; ignored on other platforms.
+    pub fn syd_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "syd_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.syd_path = Some(path);
         self
     }
 
@@ -526,6 +541,21 @@ mod tests {
         let b_raw = builder.inherit_fd(b);
         assert_eq!(a_raw, a_raw_before);
         assert_eq!(b_raw, b_raw_before);
+    }
+
+    #[test]
+    fn syd_path_builder_stores_absolute() {
+        let builder = super::SandboxBuilder::new().syd_path("/usr/bin/syd");
+        assert_eq!(
+            builder.spec.syd_path,
+            Some(std::path::PathBuf::from("/usr/bin/syd"))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "syd_path must be absolute")]
+    fn syd_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().syd_path("bin/syd");
     }
 
     #[test]

@@ -78,7 +78,7 @@ pkgs.rustPlatform.buildRustPackage {
     export CAPSA_NETD_PATH="$out/libexec/capsa/capsa-netd"
     export CAPSA_LIBRARY_DIRS="${libraryDirs}"
     ${lib.optionalString pkgs.stdenv.isLinux ''
-    export PATH="${lib.makeBinPath [ pkgs.sydbox ]}:$PATH"
+    export CAPSA_SYD_PATH="${pkgs.sydbox}/bin/syd"
     ''}
     exec "$out/libexec/capsa/capsa" "\$@"
     EOF

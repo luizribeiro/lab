@@ -40,10 +40,19 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use capsa_sandbox::{Sandbox, SandboxBuilder};
 
+pub(super) fn apply_syd_path(builder: SandboxBuilder) -> SandboxBuilder {
+    match std::env::var_os("CAPSA_SYD_PATH") {
+        Some(val) => builder.syd_path(std::path::PathBuf::from(val)),
+        None => builder,
+    }
+}
+
 pub(super) fn apply_library_dirs(mut builder: SandboxBuilder) -> SandboxBuilder {
-    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
-        for dir in val.split(':').filter(|s| !s.is_empty()) {
-            builder = builder.library_path(dir);
+    if let Some(val) = std::env::var_os("CAPSA_LIBRARY_DIRS") {
+        for dir in std::env::split_paths(&val) {
+            if !dir.as_os_str().is_empty() {
+                builder = builder.library_path(dir);
+            }
         }
     }
     builder

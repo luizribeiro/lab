@@ -76,13 +76,13 @@ impl VmmPaths {
 }
 
 fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
-    let mut builder = child::apply_library_dirs(
-        capsa_sandbox::Sandbox::builder()
-            .allow_network(false)
-            .allow_kvm(true)
-            .allow_interactive_tty(true)
-            .read_only_path(plan::canonical_or_unchanged(vmm_exe)),
-    );
+    let mut builder = capsa_sandbox::Sandbox::builder()
+        .allow_network(false)
+        .allow_kvm(true)
+        .allow_interactive_tty(true)
+        .read_only_path(plan::canonical_or_unchanged(vmm_exe));
+    builder = child::apply_syd_path(builder);
+    builder = child::apply_library_dirs(builder);
 
     if let Some(root) = &paths.root {
         builder = builder.read_write_path(root.clone());
