@@ -1,0 +1,5 @@
+error: expected attribute arguments in parentheses: #[fittings::method(...)]
+ --> tests/ui/fail/method_attr_missing_name.rs:3:7
+  |
+3 |     #[fittings::method]
+  |       ^^^^^^^^^^^^^^^^

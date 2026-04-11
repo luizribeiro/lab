@@ -1,0 +1,12 @@
+[package]
+name = "hello-api"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fittings = { path = "../../crates/fittings" }
+schemars.workspace = true
+serde.workspace = true

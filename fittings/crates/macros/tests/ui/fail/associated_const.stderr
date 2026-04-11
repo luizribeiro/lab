@@ -1,0 +1,5 @@
+error: service traits cannot declare associated consts
+ --> tests/ui/fail/associated_const.rs:3:5
+  |
+3 |     const VERSION: &'static str;
+  |     ^^^^^

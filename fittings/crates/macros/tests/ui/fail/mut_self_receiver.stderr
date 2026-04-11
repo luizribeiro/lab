@@ -1,0 +1,5 @@
+error: service methods must take `&self` as the first parameter
+ --> tests/ui/fail/mut_self_receiver.rs:3:20
+  |
+3 |     async fn hello(&mut self, params: ()) -> Result<(), fittings::FittingsError>;
+  |                    ^

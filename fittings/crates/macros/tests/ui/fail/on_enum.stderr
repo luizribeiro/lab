@@ -1,0 +1,5 @@
+error: `#[fittings::service]` can only be applied to traits
+ --> tests/ui/fail/on_enum.rs:2:1
+  |
+2 | enum NotATrait {
+  | ^^^^
