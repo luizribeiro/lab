@@ -1,5 +1,5 @@
-//! Spawns capsa-netd inside a real `Sandbox::builder()` policy that
-//! mirrors what production does in capsa-core's `start::imp`.
+//! Spawns capsa-netd inside a real sandbox policy that mirrors what
+//! production does in capsa-core's `start::imp`.
 //! Catches the class of "policy is missing a path netd's startup
 //! needs" regressions: a missing binary path, the linux runtime
 //! probe paths (tokio reads `/proc/stat`, `/sys/...cpu/online` to
@@ -25,8 +25,18 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use capsa_sandbox::Sandbox;
+use capsa_sandbox::{Sandbox, SandboxBuilder};
 use capsa_test_support::ChildGuard;
+
+fn sandbox_builder() -> SandboxBuilder {
+    let mut builder = Sandbox::builder();
+    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
+        for dir in val.split(':').filter(|s| !s.is_empty()) {
+            builder = builder.library_path(dir);
+        }
+    }
+    builder
+}
 
 const PROBE_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
 const READINESS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,7 +55,7 @@ fn netd_signals_readiness_under_real_sandbox() {
     // is the same source of truth `capsa-core::start::imp` reads
     // from. If that list ever drops a path netd actually opens, this
     // test will fail before production silently falls back.
-    let mut builder = Sandbox::builder()
+    let mut builder = sandbox_builder()
         .allow_network(true)
         .read_only_path(netd_bin.clone());
     for runtime_path in capsa_net::runtime_read_paths() {

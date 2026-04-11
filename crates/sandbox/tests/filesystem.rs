@@ -6,8 +6,6 @@ mod common;
 
 use common::{run_probe, TestDir};
 
-use capsa_sandbox::Sandbox;
-
 // ── read scoping ─────────────────────────────────────────────
 
 #[test]
@@ -17,7 +15,7 @@ fn read_allowlist_grants_named_file() {
     std::fs::write(&allowed, b"ok").expect("write fixture");
 
     assert!(run_probe(
-        Sandbox::builder().read_only_path(allowed.clone()),
+        common::sandbox_builder().read_only_path(allowed.clone()),
         &["can-read", &allowed.display().to_string()]
     ));
 }
@@ -31,7 +29,7 @@ fn read_allowlist_does_not_grant_siblings() {
     std::fs::write(&sibling, b"sibling").expect("write sibling");
 
     assert!(!run_probe(
-        Sandbox::builder().read_only_path(allowed),
+        common::sandbox_builder().read_only_path(allowed),
         &["can-read", &sibling.display().to_string()]
     ));
 }
@@ -46,7 +44,7 @@ fn read_only_directory_grants_access_to_children() {
 
     let dir = temp.join("");
     assert!(run_probe(
-        Sandbox::builder().read_only_path(dir),
+        common::sandbox_builder().read_only_path(dir),
         &["can-read", &child_file.display().to_string()]
     ));
 }
@@ -61,14 +59,14 @@ fn read_only_path_blocks_writes() {
 
     assert!(
         run_probe(
-            Sandbox::builder().read_only_path(target.clone()),
+            common::sandbox_builder().read_only_path(target.clone()),
             &["can-read", &target.display().to_string()]
         ),
         "read should succeed on read_only_path"
     );
     assert!(
         !run_probe(
-            Sandbox::builder().read_only_path(target.clone()),
+            common::sandbox_builder().read_only_path(target.clone()),
             &["can-write", &target.display().to_string()]
         ),
         "write should fail on read_only_path"
@@ -86,11 +84,11 @@ fn stat_allowlist_does_not_grant_siblings() {
     std::fs::write(&sibling, b"sibling").expect("write sibling");
 
     assert!(run_probe(
-        Sandbox::builder().read_only_path(allowed.clone()),
+        common::sandbox_builder().read_only_path(allowed.clone()),
         &["can-stat", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        Sandbox::builder().read_only_path(allowed),
+        common::sandbox_builder().read_only_path(allowed),
         &["can-stat", &sibling.display().to_string()]
     ));
 }
@@ -106,11 +104,11 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
     std::fs::write(&denied, b"seed").expect("seed denied");
 
     assert!(run_probe(
-        Sandbox::builder().read_write_path(allowed.clone()),
+        common::sandbox_builder().read_write_path(allowed.clone()),
         &["can-write", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        Sandbox::builder().read_write_path(allowed),
+        common::sandbox_builder().read_write_path(allowed),
         &["can-write", &denied.display().to_string()]
     ));
 }
@@ -124,12 +122,12 @@ fn host_tmp_is_not_writable_without_explicit_allowlist() {
     std::fs::write(&host_file, b"seed").expect("seed host file");
 
     assert!(!run_probe(
-        Sandbox::builder(),
+        common::sandbox_builder(),
         &["can-write", &host_file.display().to_string()]
     ));
 }
 
 #[test]
 fn private_tmpdir_is_writable() {
-    assert!(run_probe(Sandbox::builder(), &["can-write-temp"]));
+    assert!(run_probe(common::sandbox_builder(), &["can-write-temp"]));
 }

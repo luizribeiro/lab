@@ -7,15 +7,13 @@ use std::net::TcpListener;
 
 use common::run_probe;
 
-use capsa_sandbox::Sandbox;
-
 #[test]
 fn connections_blocked_when_network_disabled() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind local listener");
     let port = listener.local_addr().expect("local addr").port();
 
     assert!(!run_probe(
-        Sandbox::builder().allow_network(false),
+        common::sandbox_builder().allow_network(false),
         &["can-connect", "127.0.0.1", &port.to_string()]
     ));
 }
@@ -30,7 +28,7 @@ fn connections_allowed_when_network_enabled() {
     });
 
     assert!(run_probe(
-        Sandbox::builder().allow_network(true),
+        common::sandbox_builder().allow_network(true),
         &["can-connect", "127.0.0.1", &port.to_string()]
     ));
 

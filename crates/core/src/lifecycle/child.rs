@@ -40,6 +40,15 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use capsa_sandbox::{Sandbox, SandboxBuilder};
 
+pub(super) fn apply_library_dirs(mut builder: SandboxBuilder) -> SandboxBuilder {
+    if let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") {
+        for dir in val.split(':').filter(|s| !s.is_empty()) {
+            builder = builder.library_path(dir);
+        }
+    }
+    builder
+}
+
 pub(super) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -455,6 +464,8 @@ mod tests {
         path
     }
 
+    // Shell scripts don't need library paths — /bin/sh is always
+    // accessible to the sandbox without explicit grants.
     fn bypass_builder() -> SandboxBuilder {
         capsa_sandbox::Sandbox::builder()
     }

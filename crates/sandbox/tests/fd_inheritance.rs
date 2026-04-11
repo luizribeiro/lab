@@ -16,8 +16,6 @@ use std::process::{ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use capsa_sandbox::Sandbox;
-
 use capsa_sandbox::SandboxChild;
 
 use common::probe_binary;
@@ -32,7 +30,7 @@ fn pipe_with_byte(byte: u8) -> OwnedFd {
 }
 
 fn run_probe_with_fd_pairs(pairs: Vec<(u8, OwnedFd)>) {
-    let mut builder = Sandbox::builder();
+    let mut builder = common::sandbox_builder();
     let mut pair_args: Vec<String> = Vec::with_capacity(pairs.len() * 2);
     for (expected_byte, owned) in pairs {
         let pre_raw = owned.as_raw_fd();
@@ -88,7 +86,7 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
 
     let probe = probe_binary();
 
-    let mut writer_builder = Sandbox::builder();
+    let mut writer_builder = common::sandbox_builder();
     let writer_raw = writer_builder.inherit_fd(writer_owned);
     let mut writer_cmd = writer_builder
         .command(&probe)
@@ -101,7 +99,7 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    let mut reader_builder = Sandbox::builder();
+    let mut reader_builder = common::sandbox_builder();
     let reader_raw = reader_builder.inherit_fd(reader_owned);
     let mut reader_cmd = reader_builder
         .command(&probe)
@@ -160,7 +158,7 @@ fn non_inherited_fd_is_sealed_in_child() {
     // inherit_fd. seal_fds (called by build) should close it in the
     // child, causing fd-read-byte to fail with EBADF.
     let probe = probe_binary();
-    let builder = Sandbox::builder();
+    let builder = common::sandbox_builder();
     let mut cmd = builder.command(&probe).expect("build sandbox");
     cmd.arg("fd-read-byte")
         .arg(leak_raw.to_string())
@@ -196,7 +194,7 @@ fn inherited_fd_survives_seal() {
     let read_raw = read_owned.as_raw_fd();
 
     let probe = probe_binary();
-    let mut builder = Sandbox::builder();
+    let mut builder = common::sandbox_builder();
     builder.inherit_fd(read_owned);
     let mut cmd = builder.command(&probe).expect("build sandbox");
     cmd.arg("fd-read-byte")

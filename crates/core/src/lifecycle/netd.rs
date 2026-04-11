@@ -88,9 +88,11 @@ pub(super) fn spawn_netd(
 }
 
 fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
-    let mut builder = capsa_sandbox::Sandbox::builder()
-        .allow_network(true)
-        .read_only_path(plan::canonical_or_unchanged(binary_path));
+    let mut builder = child::apply_library_dirs(
+        capsa_sandbox::Sandbox::builder()
+            .allow_network(true)
+            .read_only_path(plan::canonical_or_unchanged(binary_path)),
+    );
     for runtime_read_path in capsa_net::runtime_read_paths() {
         builder = builder.read_only_path(PathBuf::from(*runtime_read_path));
     }

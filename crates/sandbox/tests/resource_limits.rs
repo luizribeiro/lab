@@ -5,8 +5,6 @@ mod common;
 
 use std::process::Stdio;
 
-use capsa_sandbox::Sandbox;
-
 use common::{probe_binary, run_probe};
 
 #[test]
@@ -16,7 +14,7 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
     // Allow 16 fds total. The child starts with stdin/stdout/stderr (3)
     // plus a few internal fds, so asking for 20 opens should fail.
     // /dev/null is the target of open-many-fds; the sandbox must allow it.
-    let mut cmd = Sandbox::builder()
+    let mut cmd = common::sandbox_builder()
         .max_open_files(16)
         .read_only_path("/dev/null")
         .command(&probe)
@@ -44,7 +42,7 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
 fn max_open_files_allows_child_within_limit() {
     let probe = probe_binary();
 
-    let mut cmd = Sandbox::builder()
+    let mut cmd = common::sandbox_builder()
         .max_open_files(64)
         .read_only_path("/dev/null")
         .command(&probe)
@@ -64,7 +62,7 @@ fn max_open_files_allows_child_within_limit() {
 
 #[test]
 fn child_sees_rlimit_nofile_via_getrlimit() {
-    let builder = Sandbox::builder().max_open_files(64);
+    let builder = common::sandbox_builder().max_open_files(64);
     assert!(
         run_probe(builder, &["check-rlimit", "nofile", "64"]),
         "child should see RLIMIT_NOFILE=64 via getrlimit"
@@ -73,7 +71,7 @@ fn child_sees_rlimit_nofile_via_getrlimit() {
 
 #[test]
 fn disable_core_dumps_sets_zero_limit() {
-    let builder = Sandbox::builder().disable_core_dumps();
+    let builder = common::sandbox_builder().disable_core_dumps();
     assert!(
         run_probe(builder, &["check-rlimit", "core", "0"]),
         "child should see RLIMIT_CORE=0 via getrlimit"

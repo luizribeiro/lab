@@ -76,14 +76,13 @@ impl VmmPaths {
 }
 
 fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
-    // `paths` is already canonicalized; the macOS kernel resolves
-    // the symlink chain at open(2) time, so the policy must list
-    // the post-resolution path or the open hits EPERM.
-    let mut builder = capsa_sandbox::Sandbox::builder()
-        .allow_network(false)
-        .allow_kvm(true)
-        .allow_interactive_tty(true)
-        .read_only_path(plan::canonical_or_unchanged(vmm_exe));
+    let mut builder = child::apply_library_dirs(
+        capsa_sandbox::Sandbox::builder()
+            .allow_network(false)
+            .allow_kvm(true)
+            .allow_interactive_tty(true)
+            .read_only_path(plan::canonical_or_unchanged(vmm_exe)),
+    );
 
     if let Some(root) = &paths.root {
         builder = builder.read_write_path(root.clone());

@@ -9,7 +9,7 @@ use std::net::TcpListener;
 
 use common::{probe_binary, TestDir};
 
-use capsa_sandbox::{Sandbox, SandboxBuilder};
+use capsa_sandbox::SandboxBuilder;
 
 #[tokio::test]
 async fn read_allowlist_enforced() {
@@ -22,14 +22,14 @@ async fn read_allowlist_enforced() {
 
     assert!(
         run_probe(
-            Sandbox::builder().read_only_path(allowed.clone()),
+            common::sandbox_builder().read_only_path(allowed.clone()),
             &["can-read", &allowed.display().to_string()]
         )
         .await
     );
     assert!(
         !run_probe(
-            Sandbox::builder().read_only_path(allowed.clone()),
+            common::sandbox_builder().read_only_path(allowed.clone()),
             &["can-read", &sibling.display().to_string()]
         )
         .await
@@ -38,7 +38,7 @@ async fn read_allowlist_enforced() {
 
 #[tokio::test]
 async fn private_tmpdir_is_writable() {
-    assert!(run_probe(Sandbox::builder(), &["can-write-temp"]).await);
+    assert!(run_probe(common::sandbox_builder(), &["can-write-temp"]).await);
 }
 
 #[tokio::test]
@@ -51,14 +51,14 @@ async fn write_scoped_to_explicit_rw_paths() {
 
     assert!(
         run_probe(
-            Sandbox::builder().read_write_path(allowed.clone()),
+            common::sandbox_builder().read_write_path(allowed.clone()),
             &["can-write", &allowed.display().to_string()]
         )
         .await
     );
     assert!(
         !run_probe(
-            Sandbox::builder().read_write_path(allowed),
+            common::sandbox_builder().read_write_path(allowed),
             &["can-write", &denied.display().to_string()]
         )
         .await
@@ -72,7 +72,7 @@ async fn network_blocked_when_disabled() {
 
     assert!(
         !run_probe(
-            Sandbox::builder().allow_network(false),
+            common::sandbox_builder().allow_network(false),
             &["can-connect", "127.0.0.1", &port.to_string()]
         )
         .await
@@ -90,7 +90,7 @@ async fn network_allowed_when_enabled() {
 
     assert!(
         run_probe(
-            Sandbox::builder().allow_network(true),
+            common::sandbox_builder().allow_network(true),
             &["can-connect", "127.0.0.1", &port.to_string()]
         )
         .await

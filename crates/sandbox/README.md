@@ -30,20 +30,9 @@ assert!(status.success());
 
 ## Library paths
 
-Sandboxed binaries need read (and on Linux, exec) access to their
-dynamic library directories. Set `CAPSA_LIBRARY_DIRS` to a
-colon-separated list of directories the dynamic linker needs:
-
-```sh
-export CAPSA_LIBRARY_DIRS="/usr/lib:/lib"
-
-# Nix example — the dev shell and production wrapper set this
-# automatically from the closure's library paths:
-export CAPSA_LIBRARY_DIRS="/nix/store/abc-glibc-2.38/lib:/nix/store/xyz-libkrun-4.0/lib"
-```
-
-`SandboxBuilder::new()` reads this variable automatically. You can
-also add paths programmatically with `.library_path()`:
+Dynamically linked binaries need their library directories
+allowlisted. Use `.library_path()` to grant read (and on Linux,
+exec) access:
 
 ```rust,ignore
 use std::path::Path;

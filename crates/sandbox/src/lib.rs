@@ -153,34 +153,12 @@ pub struct SandboxBuilder {
     fds: Vec<(std::os::fd::OwnedFd, std::os::fd::RawFd)>,
 }
 
-fn parse_library_dirs_env() -> Vec<PathBuf> {
-    let Ok(val) = std::env::var("CAPSA_LIBRARY_DIRS") else {
-        return Vec::new();
-    };
-    parse_library_dirs(&val)
-}
-
-fn parse_library_dirs(val: &str) -> Vec<PathBuf> {
-    val.split(':')
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .collect()
-}
-
 impl SandboxBuilder {
     /// Creates a new builder with an empty sandbox policy and no
     /// inherited fds.
-    ///
-    /// If `CAPSA_LIBRARY_DIRS` is set (colon-separated list of
-    /// directories), those paths are added as library paths
-    /// automatically.
     pub fn new() -> Self {
         Self {
-            spec: SandboxSpec {
-                library_paths: parse_library_dirs_env(),
-                ..SandboxSpec::default()
-            },
+            spec: SandboxSpec::default(),
             fds: Vec::new(),
         }
     }
@@ -548,42 +526,6 @@ mod tests {
         let b_raw = builder.inherit_fd(b);
         assert_eq!(a_raw, a_raw_before);
         assert_eq!(b_raw, b_raw_before);
-    }
-
-    #[test]
-    fn parse_library_dirs_splits_on_colon() {
-        let dirs = super::parse_library_dirs("/usr/lib:/lib");
-        assert_eq!(
-            dirs,
-            vec![
-                std::path::PathBuf::from("/usr/lib"),
-                std::path::PathBuf::from("/lib"),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_library_dirs_skips_empty_segments() {
-        let dirs = super::parse_library_dirs("/usr/lib::/lib:");
-        assert_eq!(
-            dirs,
-            vec![
-                std::path::PathBuf::from("/usr/lib"),
-                std::path::PathBuf::from("/lib"),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_library_dirs_rejects_relative_paths() {
-        let dirs = super::parse_library_dirs("/usr/lib:relative/path:../sneaky");
-        assert_eq!(dirs, vec![std::path::PathBuf::from("/usr/lib")]);
-    }
-
-    #[test]
-    fn parse_library_dirs_empty_string() {
-        let dirs = super::parse_library_dirs("");
-        assert!(dirs.is_empty());
     }
 
     #[test]
