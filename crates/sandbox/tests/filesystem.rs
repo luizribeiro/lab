@@ -44,8 +44,23 @@ fn read_only_directory_grants_access_to_children() {
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_only_path(dir),
+        common::sandbox_builder().read_only_dir(dir),
         &["can-read", &child_file.display().to_string()]
+    ));
+}
+
+// ── directory write scoping ──────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_write_to_children() {
+    let temp = TestDir::new("write-dir");
+    let child_file = temp.join("writable.txt");
+    std::fs::write(&child_file, b"seed").expect("seed child file");
+
+    let dir = temp.join("");
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(dir),
+        &["can-write", &child_file.display().to_string()]
     ));
 }
 

@@ -36,33 +36,30 @@ pub(super) fn build_policy(
     }
 
     for path in &paths.read_only_paths {
-        if is_directory(path) {
-            policy.allow_subpath(&["file-read*"], path);
-            policy.allow_subpath(&["file-map-executable"], path);
-        } else {
-            policy.allow_literal(&["file-read*"], path);
-            policy.allow_literal(&["file-map-executable"], path);
-        }
+        policy.allow_literal(&["file-read*"], path);
+        policy.allow_literal(&["file-map-executable"], path);
+    }
+    for dir in &paths.read_only_dirs {
+        policy.allow_subpath(&["file-read*"], dir);
+        policy.allow_subpath(&["file-map-executable"], dir);
     }
 
     for path in &paths.read_write_paths {
-        if is_directory(path) {
-            policy.allow_subpath(&["file-read*"], path);
-            policy.allow_subpath(&["file-write*"], path);
-        } else {
-            policy.allow_literal(&["file-read*"], path);
-            policy.allow_literal(&["file-write*"], path);
-        }
+        policy.allow_literal(&["file-read*"], path);
+        policy.allow_literal(&["file-write*"], path);
+    }
+    for dir in &paths.read_write_dirs {
+        policy.allow_subpath(&["file-read*"], dir);
+        policy.allow_subpath(&["file-write*"], dir);
     }
 
     for path in &paths.ioctl_paths {
-        if is_directory(path) {
-            policy.allow_subpath(&["file-read*"], path);
-            policy.allow_subpath(&["file-ioctl"], path);
-        } else {
-            policy.allow_literal(&["file-read*"], path);
-            policy.allow_literal(&["file-ioctl"], path);
-        }
+        policy.allow_literal(&["file-read*"], path);
+        policy.allow_literal(&["file-ioctl"], path);
+    }
+    for dir in &paths.ioctl_dirs {
+        policy.allow_subpath(&["file-read*"], dir);
+        policy.allow_subpath(&["file-ioctl"], dir);
     }
 
     if spec.allow_network {
@@ -70,12 +67,6 @@ pub(super) fn build_policy(
     }
 
     policy
-}
-
-fn is_directory(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_dir())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -27,8 +27,11 @@ pub(crate) struct SandboxSpec {
     pub(crate) syd_path: Option<PathBuf>,
     pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_only_paths: Vec<PathBuf>,
+    pub(crate) read_only_dirs: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
+    pub(crate) read_write_dirs: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
+    pub(crate) ioctl_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
 }
 
@@ -211,22 +214,48 @@ impl SandboxBuilder {
         self
     }
 
-    /// Adds a path that the child should be allowed to read.
+    /// Adds a single file path that the child should be allowed to
+    /// read. Use [`read_only_dir`](Self::read_only_dir) for
+    /// directories that need recursive access.
     pub fn read_only_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.spec.read_only_paths.push(path.into());
         self
     }
 
-    /// Adds a path that the child should be allowed to read and write.
+    /// Adds a directory whose contents the child should be allowed to
+    /// read recursively.
+    pub fn read_only_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.spec.read_only_dirs.push(path.into());
+        self
+    }
+
+    /// Adds a single file path that the child should be allowed to
+    /// read and write. Use [`read_write_dir`](Self::read_write_dir)
+    /// for directories that need recursive access.
     pub fn read_write_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.spec.read_write_paths.push(path.into());
         self
     }
 
-    /// Adds a path that the child should be allowed to perform ioctl
-    /// operations on.
+    /// Adds a directory whose contents the child should be allowed to
+    /// read and write recursively.
+    pub fn read_write_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.spec.read_write_dirs.push(path.into());
+        self
+    }
+
+    /// Adds a single file path that the child should be allowed to
+    /// perform ioctl operations on. Use
+    /// [`ioctl_dir`](Self::ioctl_dir) for directories.
     pub fn ioctl_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.spec.ioctl_paths.push(path.into());
+        self
+    }
+
+    /// Adds a directory whose contents the child should be allowed to
+    /// perform ioctl operations on recursively.
+    pub fn ioctl_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.spec.ioctl_dirs.push(path.into());
         self
     }
 

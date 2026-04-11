@@ -7,8 +7,11 @@ use crate::SandboxSpec;
 pub(super) struct PathSets {
     pub(super) executable_paths: Vec<PathBuf>,
     pub(super) read_only_paths: Vec<PathBuf>,
+    pub(super) read_only_dirs: Vec<PathBuf>,
     pub(super) read_write_paths: Vec<PathBuf>,
+    pub(super) read_write_dirs: Vec<PathBuf>,
     pub(super) ioctl_paths: Vec<PathBuf>,
+    pub(super) ioctl_dirs: Vec<PathBuf>,
     pub(super) traversal_paths: Vec<PathBuf>,
 }
 
@@ -24,17 +27,26 @@ impl PathSets {
         for path in &spec.read_only_paths {
             paths.add_read_only(path);
         }
+        for dir in &spec.read_only_dirs {
+            paths.add_read_only_dir(dir);
+        }
 
         for path in &spec.read_write_paths {
             paths.add_read_write(path);
+        }
+        for dir in &spec.read_write_dirs {
+            paths.add_read_write_dir(dir);
         }
 
         for path in &spec.ioctl_paths {
             paths.add_ioctl(path);
         }
+        for dir in &spec.ioctl_dirs {
+            paths.add_ioctl_dir(dir);
+        }
 
         for dir in &spec.library_paths {
-            paths.add_read_only(dir);
+            paths.add_read_only_dir(dir);
         }
 
         if spec.allow_interactive_tty {
@@ -44,28 +56,34 @@ impl PathSets {
             paths.add_ioctl(Path::new("/dev/tty"));
         }
 
-        paths.add_read_write(private_tmp);
+        paths.add_read_write_dir(private_tmp);
 
         paths
     }
 
     fn add_read_only(&mut self, path: &Path) {
-        for candidate in path_candidates(path) {
-            push_unique(&mut self.read_only_paths, candidate.clone());
-            self.add_traversal_ancestors(&candidate);
-        }
+        self.collect_into(path, |s| &mut s.read_only_paths);
     }
-
+    fn add_read_only_dir(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.read_only_dirs);
+    }
     fn add_read_write(&mut self, path: &Path) {
-        for candidate in path_candidates(path) {
-            push_unique(&mut self.read_write_paths, candidate.clone());
-            self.add_traversal_ancestors(&candidate);
-        }
+        self.collect_into(path, |s| &mut s.read_write_paths);
+    }
+    fn add_read_write_dir(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.read_write_dirs);
+    }
+    fn add_ioctl(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.ioctl_paths);
+    }
+    fn add_ioctl_dir(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.ioctl_dirs);
     }
 
-    fn add_ioctl(&mut self, path: &Path) {
-        for candidate in path_candidates(path) {
-            push_unique(&mut self.ioctl_paths, candidate.clone());
+    fn collect_into(&mut self, path: &Path, target: fn(&mut Self) -> &mut Vec<PathBuf>) {
+        let candidates: Vec<_> = path_candidates(path);
+        for candidate in candidates {
+            push_unique(target(self), candidate.clone());
             self.add_traversal_ancestors(&candidate);
         }
     }

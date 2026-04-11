@@ -85,7 +85,15 @@ fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
     builder = child::apply_library_dirs(builder);
 
     if let Some(root) = &paths.root {
-        builder = builder.read_write_path(root.clone());
+        // root is a canonicalized, caller-controlled path that may be
+        // a directory (rootfs) or a file (disk image). The is_dir()
+        // check here is in trusted caller code, not in the sandbox
+        // internals where the original TOCTOU concern applied.
+        if root.is_dir() {
+            builder = builder.read_write_dir(root.clone());
+        } else {
+            builder = builder.read_write_path(root.clone());
+        }
     }
     if let Some(kernel) = &paths.kernel {
         builder = builder.read_only_path(kernel.clone());
