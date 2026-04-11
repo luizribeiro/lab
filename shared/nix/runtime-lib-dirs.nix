@@ -39,7 +39,8 @@ let
         {
           find ${lib.getLib seedPkg}/lib -name '*.so*' -exec ldd {} + 2>/dev/null \
             | grep -oE '/nix/store/[^ ]+\.so[.0-9]*' \
-            | sed 's|/[^/]*$||'
+            | sed 's|/[^/]*$||' \
+            || true
 
           echo "${lib.getLib pkgs.glibc}/lib"
           echo "${lib.getLib pkgs.stdenv.cc.cc}/lib"
