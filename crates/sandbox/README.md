@@ -76,6 +76,7 @@ use capsa_sandbox::Sandbox;
 let status = Sandbox::builder()
     .read_only_dir("/usr")
     .read_only_dir("/etc")
+    .read_only_path("/dev/null")
     .command(Path::new("/usr/bin/env"))?
     .status()?;
 assert!(status.success());
