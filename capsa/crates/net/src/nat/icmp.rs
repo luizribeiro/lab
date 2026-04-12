@@ -133,13 +133,11 @@ impl NatTable {
                             data
                         };
 
-                        if icmp_data.len() >= 6 {
-                            let reply_ident = u16::from_be_bytes([icmp_data[4], icmp_data[5]]);
-                            if reply_ident != icmp_id {
-                                return None;
-                            }
-                        }
-
+                        // Linux unprivileged ICMP sockets (SOCK_DGRAM +
+                        // IPPROTO_ICMP) rewrite the identifier field, so
+                        // we cannot match on it. Remote-IP filtering
+                        // above is sufficient since each binding has its
+                        // own socket and expected remote.
                         craft_icmp_echo_reply(
                             remote_ip,
                             guest_ip,
@@ -270,87 +268,8 @@ mod tests {
         cancel.cancel();
     }
 
-    #[tokio::test]
-    async fn icmp_response_filtered_by_identifier() {
-        let (tx, mut rx) = frame_channel(64);
-        let cancel = CancellationToken::new();
-        let semaphore = Arc::new(Semaphore::new(1));
-        let permit = semaphore.clone().try_acquire_owned().unwrap();
-
-        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
-        let socket_addr = socket.local_addr().unwrap();
-
-        let expected_remote_ip = Ipv4Addr::new(127, 0, 0, 1);
-        let guest_ip = Ipv4Addr::new(10, 0, 2, 15);
-        let icmp_id: u16 = 1234;
-        let wrong_icmp_id: u16 = 5678;
-        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
-        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
-
-        let _task = spawn_nat_forward_task(
-            socket.clone(),
-            tx,
-            cancel.clone(),
-            permit,
-            ETHERNET_MTU,
-            "icmp",
-            move |data: &[u8], remote_addr: SocketAddr| {
-                let remote_ip = match remote_addr.ip() {
-                    std::net::IpAddr::V4(ip) => ip,
-                    _ => return None,
-                };
-                if remote_ip != expected_remote_ip {
-                    return None;
-                }
-
-                if data.len() >= 6 {
-                    let reply_ident = u16::from_be_bytes([data[4], data[5]]);
-                    if reply_ident != icmp_id {
-                        return None;
-                    }
-                }
-
-                craft_icmp_echo_reply(remote_ip, guest_ip, icmp_id, data, gateway_mac, guest_mac)
-            },
-        );
-
-        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-
-        fn make_icmp_reply(ident: u16) -> Vec<u8> {
-            let mut pkt = vec![0u8; 16];
-            pkt[0] = 0; // type = echo reply
-            pkt[4] = (ident >> 8) as u8;
-            pkt[5] = (ident & 0xFF) as u8;
-            pkt[7] = 1; // seq_no = 1
-            pkt
-        }
-
-        // Wrong identifier — should be dropped.
-        sender
-            .send_to(&make_icmp_reply(wrong_icmp_id), socket_addr)
-            .await
-            .unwrap();
-        let result = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
-        assert!(
-            result.is_err(),
-            "ICMP response with wrong identifier should be dropped"
-        );
-
-        // Correct identifier — should be forwarded.
-        sender
-            .send_to(&make_icmp_reply(icmp_id), socket_addr)
-            .await
-            .unwrap();
-        let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
-            .await
-            .expect("should receive frame for matching identifier")
-            .expect("channel should not be closed");
-        let eth = smoltcp::wire::EthernetFrame::new_checked(&frame).unwrap();
-        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
-        let icmp = Icmpv4Packet::new_checked(ip.payload()).unwrap();
-        assert_eq!(icmp.msg_type(), Icmpv4Message::EchoReply);
-        assert_eq!(icmp.echo_ident(), icmp_id);
-
-        cancel.cancel();
-    }
+    // Identifier-based filtering was removed because Linux unprivileged
+    // ICMP sockets (SOCK_DGRAM + IPPROTO_ICMP) rewrite the identifier
+    // field, making it impossible to match. Remote-IP filtering (tested
+    // by icmp_response_from_unexpected_ip_is_dropped) is sufficient.
 }
