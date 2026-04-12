@@ -116,7 +116,7 @@ mod tests {
         let status = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "IFS= read -r line <&{target_fd}; [ \"$line\" = \"hello\" ]"
+                "IFS= read -r line < /dev/fd/{target_fd}; [ \"$line\" = \"hello\" ]"
             ))
             .map_fd(read_owned, target_fd)
             .status()
@@ -140,7 +140,7 @@ mod tests {
         let status = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "IFS= read -r line <&{raw}; [ \"$line\" = \"world\" ]"
+                "IFS= read -r line < /dev/fd/{raw}; [ \"$line\" = \"world\" ]"
             ))
             .keep_fd(read_owned)
             .status()
@@ -163,7 +163,7 @@ mod tests {
         let status = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "IFS= read -r line <&{leaked_raw} 2>/dev/null; [ $? -ne 0 ]"
+                "IFS= read -r line < /dev/fd/{leaked_raw} 2>/dev/null; [ $? -ne 0 ]"
             ))
             .seal_fds()
             .status()
@@ -191,7 +191,7 @@ mod tests {
         let status = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "IFS= read -r line <&{raw}; [ \"$line\" = \"kept\" ]"
+                "IFS= read -r line < /dev/fd/{raw}; [ \"$line\" = \"kept\" ]"
             ))
             .seal_fds()
             .keep_fd(read_owned)
@@ -213,7 +213,7 @@ mod tests {
         let status = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "IFS= read -r line <&{target_fd}; [ \"$line\" = \"remapped\" ]"
+                "IFS= read -r line < /dev/fd/{target_fd}; [ \"$line\" = \"remapped\" ]"
             ))
             .seal_fds()
             .map_fd(read_owned, target_fd)
