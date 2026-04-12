@@ -9,7 +9,7 @@ Build and run a child process inside an OS sandbox.
 
 ## Quick start
 
-```rust
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -37,7 +37,7 @@ resolves the `syd` binary automatically using this fallback chain:
 2. `LOCKIN_SYD_PATH` environment variable
 3. `syd` found in `PATH`
 
-```rust,ignore
+```rust,no_run,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -54,7 +54,7 @@ Dynamically linked binaries need their library directories
 allowlisted. Use `.library_path()` to grant read (and on Linux,
 exec) access:
 
-```rust,ignore
+```rust,no_run,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -70,7 +70,7 @@ let status = Sandbox::builder()
 A private `$TMPDIR` is created for the child and removed when
 the sandbox is dropped.
 
-```rust
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -86,7 +86,7 @@ assert!(status.success());
 
 ## Network policy
 
-```rust
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -103,7 +103,7 @@ assert!(status.success());
 Pass only the fds the child needs; all other fds `>= 3` are sealed
 at exec time (via [`lockin-process`](../lockin-process)).
 
-```rust
+```rust,no_run
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use lockin::Sandbox;
@@ -123,7 +123,7 @@ assert!(status.success());
 
 ## Resource limits
 
-```rust
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -142,7 +142,7 @@ assert!(status.success());
 
 Enable with `--features tokio`.
 
-```rust,ignore
+```rust,no_run,ignore
 use std::path::Path;
 use lockin::Sandbox;
 

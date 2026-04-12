@@ -41,7 +41,7 @@ pub(crate) struct SandboxSpec {
 /// Construct one via [`Sandbox::builder`] and
 /// [`SandboxBuilder::command`].
 ///
-/// ```
+/// ```no_run
 /// use std::path::Path;
 /// use lockin::Sandbox;
 ///
