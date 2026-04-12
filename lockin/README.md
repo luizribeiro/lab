@@ -9,7 +9,7 @@ Build and run a child process inside an OS sandbox.
 
 ## Quick start
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -30,8 +30,12 @@ assert!(status.success());
 
 ## syd path (Linux)
 
-On Linux the sandbox delegates enforcement to `syd`. The caller must
-supply the absolute path to the `syd` binary via `.syd_path()`:
+On Linux the sandbox delegates enforcement to `syd`. The library
+resolves the `syd` binary automatically using this fallback chain:
+
+1. Explicit `.syd_path()` on the builder
+2. `LOCKIN_SYD_PATH` environment variable
+3. `syd` found in `PATH`
 
 ```rust,ignore
 use std::path::Path;
@@ -43,9 +47,6 @@ let status = Sandbox::builder()
     .status()?;
 # Ok::<(), anyhow::Error>(())
 ```
-
-Callers typically read an environment variable (e.g. `CAPSA_SYD_PATH`)
-and pass it through the builder.
 
 ## Library paths
 
@@ -69,7 +70,7 @@ let status = Sandbox::builder()
 A private `$TMPDIR` is created for the child and removed when
 the sandbox is dropped.
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -85,7 +86,7 @@ assert!(status.success());
 
 ## Network policy
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -102,7 +103,7 @@ assert!(status.success());
 Pass only the fds the child needs; all other fds `>= 3` are sealed
 at exec time (via [`lockin-process`](../lockin-process)).
 
-```rust,no_run
+```rust
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use lockin::Sandbox;
@@ -122,7 +123,7 @@ assert!(status.success());
 
 ## Resource limits
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 

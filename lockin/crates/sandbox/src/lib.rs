@@ -41,7 +41,7 @@ pub(crate) struct SandboxSpec {
 /// Construct one via [`Sandbox::builder`] and
 /// [`SandboxBuilder::command`].
 ///
-/// ```no_run
+/// ```
 /// use std::path::Path;
 /// use lockin::Sandbox;
 ///
@@ -64,12 +64,7 @@ impl Sandbox {
     /// [`Sandbox::builder`] from outside.
     #[cfg(target_os = "linux")]
     pub(crate) fn new(spec: SandboxSpec) -> Result<Self> {
-        let syd = spec.syd_path.clone().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Linux sandbox requires an explicit syd path via .syd_path(). \
-                 Set CAPSA_SYD_PATH or enter `nix develop`."
-            )
-        })?;
+        let syd = resolve_syd_path(&spec)?;
 
         let private_tmp = create_private_tmp()?;
 
@@ -117,6 +112,51 @@ impl Sandbox {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn resolve_syd_path(spec: &SandboxSpec) -> Result<PathBuf> {
+    if let Some(path) = &spec.syd_path {
+        return Ok(path.clone());
+    }
+
+    if let Some(val) = std::env::var_os("LOCKIN_SYD_PATH") {
+        let path = PathBuf::from(val);
+        anyhow::ensure!(
+            path.is_absolute(),
+            "LOCKIN_SYD_PATH must be absolute, got: {}",
+            path.display()
+        );
+        return Ok(path);
+    }
+
+    if let Some(path) = find_in_path("syd") {
+        return Ok(path);
+    }
+
+    anyhow::bail!(
+        "Linux sandbox requires syd but could not find it. \
+         Set LOCKIN_SYD_PATH, add syd to PATH, or call .syd_path() explicitly."
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn find_in_path(binary: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        let candidate = dir.join(binary);
+        if let Ok(meta) = candidate.metadata() {
+            if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 fn create_private_tmp() -> Result<tempfile::TempDir> {
     let base = std::env::temp_dir().join("lockin");
     std::fs::create_dir_all(&base)
@@ -136,7 +176,7 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use std::os::fd::{AsRawFd, OwnedFd};
 /// use std::path::Path;
 /// use lockin::Sandbox;
@@ -190,7 +230,9 @@ impl SandboxBuilder {
     }
 
     /// Sets the absolute path to the `syd` sandbox enforcer binary
-    /// (Linux only). Required on Linux; ignored on other platforms.
+    /// (Linux only; ignored on other platforms).
+    ///
+    /// If not set, the library checks `LOCKIN_SYD_PATH` then `PATH`.
     pub fn syd_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
@@ -599,5 +641,95 @@ mod tests {
                 .filter(|p| p.is_absolute())
                 .count()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    mod resolve_syd {
+        use super::super::*;
+        use std::sync::Mutex;
+
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        struct EnvGuard {
+            _lock: std::sync::MutexGuard<'static, ()>,
+            saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        }
+
+        impl EnvGuard {
+            fn lock(vars: &[&'static str]) -> Self {
+                let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                let saved = vars.iter().map(|&k| (k, std::env::var_os(k))).collect();
+                Self { _lock, saved }
+            }
+        }
+
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for (key, val) in &self.saved {
+                    match val {
+                        Some(v) => std::env::set_var(key, v),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn explicit_path_takes_priority() {
+            let _g = EnvGuard::lock(&["LOCKIN_SYD_PATH"]);
+            std::env::set_var("LOCKIN_SYD_PATH", "/should/not/be/used");
+            let spec = SandboxSpec {
+                syd_path: Some(PathBuf::from("/explicit/syd")),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_syd_path(&spec).unwrap(),
+                PathBuf::from("/explicit/syd")
+            );
+        }
+
+        #[test]
+        fn env_var_used_when_no_explicit_path() {
+            let _g = EnvGuard::lock(&["LOCKIN_SYD_PATH"]);
+            std::env::set_var("LOCKIN_SYD_PATH", "/from/env/syd");
+            assert_eq!(
+                resolve_syd_path(&SandboxSpec::default()).unwrap(),
+                PathBuf::from("/from/env/syd")
+            );
+        }
+
+        #[test]
+        fn env_var_rejects_relative_path() {
+            let _g = EnvGuard::lock(&["LOCKIN_SYD_PATH"]);
+            std::env::set_var("LOCKIN_SYD_PATH", "relative/syd");
+            let err = resolve_syd_path(&SandboxSpec::default()).unwrap_err();
+            assert!(err.to_string().contains("must be absolute"));
+        }
+
+        #[test]
+        fn falls_back_to_path_lookup() {
+            let _g = EnvGuard::lock(&["LOCKIN_SYD_PATH", "PATH"]);
+            std::env::remove_var("LOCKIN_SYD_PATH");
+
+            let dir = tempfile::tempdir().unwrap();
+            let syd = dir.path().join("syd");
+            std::fs::write(&syd, "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&syd, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+
+            std::env::set_var("PATH", dir.path());
+            assert_eq!(resolve_syd_path(&SandboxSpec::default()).unwrap(), syd);
+        }
+
+        #[test]
+        fn error_when_syd_not_found() {
+            let _g = EnvGuard::lock(&["LOCKIN_SYD_PATH", "PATH"]);
+            std::env::remove_var("LOCKIN_SYD_PATH");
+            std::env::set_var("PATH", "/nonexistent");
+            assert!(resolve_syd_path(&SandboxSpec::default()).is_err());
+        }
     }
 }

@@ -3,13 +3,10 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Returns a [`lockin::SandboxBuilder`] with `LOCKIN_SYD_PATH`
-/// and `LOCKIN_LIBRARY_DIRS` applied from the environment.
+/// Returns a [`lockin::SandboxBuilder`] with `LOCKIN_LIBRARY_DIRS`
+/// applied from the environment.
 pub fn sandbox_builder() -> lockin::SandboxBuilder {
     let mut builder = lockin::Sandbox::builder();
-    if let Some(val) = std::env::var_os("LOCKIN_SYD_PATH") {
-        builder = builder.syd_path(std::path::PathBuf::from(val));
-    }
     if let Some(val) = std::env::var_os("LOCKIN_LIBRARY_DIRS") {
         for dir in std::env::split_paths(&val) {
             if !dir.as_os_str().is_empty() {
