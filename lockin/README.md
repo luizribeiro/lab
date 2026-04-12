@@ -9,7 +9,7 @@ Build and run a child process inside an OS sandbox.
 
 ## Quick start
 
-```rust,no_run,no_run
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -33,7 +33,7 @@ assert!(status.success());
 On Linux the sandbox delegates enforcement to `syd`. The caller must
 supply the absolute path to the `syd` binary via `.syd_path()`:
 
-```rust,no_run,ignore
+```rust,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -53,7 +53,7 @@ Dynamically linked binaries need their library directories
 allowlisted. Use `.library_path()` to grant read (and on Linux,
 exec) access:
 
-```rust,no_run,ignore
+```rust,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
@@ -141,7 +141,7 @@ assert!(status.success());
 
 Enable with `--features tokio`.
 
-```rust,no_run,ignore
+```rust,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
