@@ -49,5 +49,21 @@ let
         } | sort -u | tr '\n' ':' | sed 's/:$//' > $out
       ''
     );
+  nixDirs = builtins.readFile runtimeLibraryDirs;
+
+  # System library dirs so sandboxed system binaries (e.g.
+  # /usr/bin/env) can load their dynamic libraries under syd.
+  systemDirs = lib.optionalString pkgs.stdenv.isLinux
+    (lib.concatStringsSep ":" [
+      "/lib"
+      "/lib64"
+      "/usr/lib"
+      "/usr/lib64"
+      "/lib/x86_64-linux-gnu"
+      "/usr/lib/x86_64-linux-gnu"
+      "/lib/aarch64-linux-gnu"
+      "/usr/lib/aarch64-linux-gnu"
+    ]);
 in
-builtins.readFile runtimeLibraryDirs
+if systemDirs == "" then nixDirs
+else "${nixDirs}:${systemDirs}"
