@@ -9,11 +9,14 @@ Build and run a child process inside an OS sandbox.
 
 ## Quick start
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
+    // Reads LOCKIN_LIBRARY_DIRS (set by `nix develop` or your own
+    // tooling) so dynamically linked binaries can load under syd.
+    .library_paths_from_env()
     .command(Path::new("/usr/bin/env"))?
     .status()?;
 assert!(status.success());
@@ -70,11 +73,12 @@ let status = Sandbox::builder()
 A private `$TMPDIR` is created for the child and removed when
 the sandbox is dropped.
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
+    .library_paths_from_env()
     .read_only_dir("/usr")
     .read_only_dir("/etc")
     .read_only_path("/dev/null")
@@ -86,11 +90,12 @@ assert!(status.success());
 
 ## Network policy
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
+    .library_paths_from_env()
     .allow_network(true)
     .command(Path::new("/usr/bin/env"))?
     .status()?;
@@ -103,7 +108,7 @@ assert!(status.success());
 Pass only the fds the child needs; all other fds `>= 3` are sealed
 at exec time (via [`lockin-process`](../lockin-process)).
 
-```rust,no_run
+```rust
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use lockin::Sandbox;
@@ -111,7 +116,8 @@ use lockin::Sandbox;
 let (reader, _writer) = std::os::unix::net::UnixDatagram::pair()?;
 let fd = reader.as_raw_fd();
 
-let mut builder = Sandbox::builder();
+let mut builder = Sandbox::builder()
+    .library_paths_from_env();
 builder.inherit_fd(reader.into());
 
 let status = builder
@@ -123,11 +129,12 @@ assert!(status.success());
 
 ## Resource limits
 
-```rust,no_run
+```rust
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
+    .library_paths_from_env()
     .max_open_files(64)
     .max_cpu_time(30)
     .max_processes(32)
@@ -142,11 +149,12 @@ assert!(status.success());
 
 Enable with `--features tokio`.
 
-```rust,no_run,ignore
+```rust,ignore
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
+    .library_paths_from_env()
     .allow_network(true)
     .tokio_command(Path::new("/usr/bin/env"))?
     .status()

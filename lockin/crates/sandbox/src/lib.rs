@@ -41,11 +41,12 @@ pub(crate) struct SandboxSpec {
 /// Construct one via [`Sandbox::builder`] and
 /// [`SandboxBuilder::command`].
 ///
-/// ```no_run
+/// ```
 /// use std::path::Path;
 /// use lockin::Sandbox;
 ///
 /// let status = Sandbox::builder()
+///     .library_paths_from_env()
 ///     .command(Path::new("/usr/bin/env"))
 ///     .unwrap()
 ///     .status()
@@ -252,6 +253,25 @@ impl SandboxBuilder {
         debug_assert!(path.is_absolute(), "library_path must be absolute");
         if path.is_absolute() {
             self.spec.library_paths.push(path);
+        }
+        self
+    }
+
+    /// Reads `LOCKIN_LIBRARY_DIRS` from the environment and adds each
+    /// directory as a library path. The value is a `PATH`-style
+    /// colon-separated (or semicolon-separated on Windows) list of
+    /// absolute directory paths.
+    ///
+    /// This is the recommended way to configure library paths in
+    /// environments managed by Nix or similar tooling that sets
+    /// `LOCKIN_LIBRARY_DIRS` automatically.
+    pub fn library_paths_from_env(mut self) -> Self {
+        if let Some(val) = std::env::var_os("LOCKIN_LIBRARY_DIRS") {
+            for dir in std::env::split_paths(&val) {
+                if !dir.as_os_str().is_empty() && dir.is_absolute() {
+                    self = self.library_path(dir);
+                }
+            }
         }
         self
     }
@@ -592,6 +612,33 @@ pub(crate) fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>)
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsRawFd;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn lock(vars: &[&'static str]) -> Self {
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let saved = vars.iter().map(|&k| (k, std::env::var_os(k))).collect();
+            Self { _lock, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, val) in &self.saved {
+                match val {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 
     fn owned_tempfile() -> std::os::fd::OwnedFd {
         tempfile::tempfile()
@@ -643,36 +690,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn library_paths_from_env_noop_when_unset() {
+        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
+        std::env::remove_var("LOCKIN_LIBRARY_DIRS");
+        let builder = super::SandboxBuilder::new().library_paths_from_env();
+        assert!(builder.spec.library_paths.is_empty());
+    }
+
+    #[test]
+    fn library_paths_from_env_parses_multiple_dirs() {
+        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
+        std::env::set_var("LOCKIN_LIBRARY_DIRS", "/usr/lib:/lib/x86_64-linux-gnu");
+        let builder = super::SandboxBuilder::new().library_paths_from_env();
+        assert_eq!(
+            builder.spec.library_paths,
+            vec![
+                std::path::PathBuf::from("/usr/lib"),
+                std::path::PathBuf::from("/lib/x86_64-linux-gnu"),
+            ]
+        );
+    }
+
+    #[test]
+    fn library_paths_from_env_drops_empty_components() {
+        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
+        std::env::set_var("LOCKIN_LIBRARY_DIRS", "/usr/lib::/lib");
+        let builder = super::SandboxBuilder::new().library_paths_from_env();
+        assert_eq!(builder.spec.library_paths.len(), 2);
+    }
+
+    #[test]
+    fn library_paths_from_env_drops_relative_paths() {
+        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
+        std::env::set_var("LOCKIN_LIBRARY_DIRS", "relative/lib:/usr/lib");
+        let builder = super::SandboxBuilder::new().library_paths_from_env();
+        assert_eq!(
+            builder.spec.library_paths,
+            vec![std::path::PathBuf::from("/usr/lib")]
+        );
+    }
+
     #[cfg(target_os = "linux")]
     mod resolve_syd {
         use super::super::*;
-        use std::sync::Mutex;
-
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-        struct EnvGuard {
-            _lock: std::sync::MutexGuard<'static, ()>,
-            saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        }
-
-        impl EnvGuard {
-            fn lock(vars: &[&'static str]) -> Self {
-                let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-                let saved = vars.iter().map(|&k| (k, std::env::var_os(k))).collect();
-                Self { _lock, saved }
-            }
-        }
-
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                for (key, val) in &self.saved {
-                    match val {
-                        Some(v) => std::env::set_var(key, v),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
+        use super::EnvGuard;
 
         #[test]
         fn explicit_path_takes_priority() {
