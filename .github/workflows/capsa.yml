@@ -1,0 +1,42 @@
+name: capsa
+
+# TODO: add macOS CI (needs Virtualization.framework support in libkrun)
+
+on:
+  push:
+    paths:
+      - "capsa/**"
+      - "lockin/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/capsa.yml"
+  pull_request:
+    paths:
+      - "capsa/**"
+      - "lockin/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/capsa.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: sudo chmod 666 /dev/kvm
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/flakehub-cache-action@v2
+
+      - name: Run tests
+        run: |
+          nix develop .#capsa --impure -L --command \
+            cargo test --manifest-path capsa/Cargo.toml --workspace
+
+      - name: Run nix checks
+        run: nix flake check --impure -L
