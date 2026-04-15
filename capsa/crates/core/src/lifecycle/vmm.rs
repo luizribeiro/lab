@@ -80,7 +80,10 @@ fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
         .allow_network(false)
         .allow_kvm(true)
         .allow_interactive_tty(true)
-        .read_only_path(plan::canonical_or_unchanged(vmm_exe));
+        .read_only_path(plan::canonical_or_unchanged(vmm_exe))
+        // libkrun reads this to enumerate capabilities before dropping
+        // privileges for the guest.
+        .read_only_path(PathBuf::from("/proc/sys/kernel/cap_last_cap"));
     builder = child::apply_syd_path(builder);
     builder = child::apply_library_dirs(builder);
 
