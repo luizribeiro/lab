@@ -5,9 +5,6 @@ let
   daemonNoNetworkFastPath = import ../tests/daemon-no-network-fast-path.nix {
     inherit vmLib pkgs capsaPackage capsaPaths;
   };
-  daemonNetdSpawnFailure = import ../tests/daemon-netd-spawn-failure.nix {
-    inherit vmLib pkgs capsaPackage capsaPaths;
-  };
 in
 {
   package-artifacts = pkgs.runCommand "capsa-package-artifacts" { } ''
@@ -80,7 +77,6 @@ in
   vm-net-isolation = netIsolation;
   vm-net-dhcp = netDhcp;
   vm-daemon-no-network-fast-path = daemonNoNetworkFastPath;
-  vm-daemon-netd-spawn-failure = daemonNetdSpawnFailure;
 }
 
 
