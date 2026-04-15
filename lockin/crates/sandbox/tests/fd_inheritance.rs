@@ -10,7 +10,7 @@
 mod common;
 
 use std::io::Write;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 use std::process::{ExitStatus, Stdio};
 use std::thread;
@@ -151,7 +151,18 @@ fn non_inherited_fd_is_sealed_in_child() {
     write_end.write_all(b"Z").expect("write marker");
     drop(write_end);
 
-    let leak_fd: OwnedFd = read_end.into();
+    // Move the pipe to a high fd number so it doesn't collide with
+    // fds that sandbox-exec opens internally (it reuses low numbers
+    // like 3 for its own sockets).
+    let original: OwnedFd = read_end.into();
+    let high_raw = 100;
+    assert_ne!(
+        unsafe { libc::dup2(original.as_raw_fd(), high_raw) },
+        -1,
+        "dup2 to fd {high_raw} failed"
+    );
+    drop(original);
+    let leak_fd = unsafe { OwnedFd::from_raw_fd(high_raw) };
     let leak_raw = leak_fd.as_raw_fd();
 
     // Keep the fd alive in the parent but do NOT register it via
