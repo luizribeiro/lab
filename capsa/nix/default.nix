@@ -6,7 +6,6 @@ let
   capsaPackage = import ./package.nix {
     inherit lib pkgs capsaPaths;
     src = ../..;
-    cargoRoot = "capsa";
   };
 
   vmLib = import ./vm {
@@ -21,7 +20,7 @@ in
   };
 
   checks = import ./checks {
-    inherit vmLib pkgs capsaPaths;
+    inherit vmLib pkgs capsaPaths capsaPackage;
   };
 
   lib = {

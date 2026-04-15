@@ -2,19 +2,17 @@
 , pkgs
 , capsaPaths
 , src
-, cargoRoot ? null
 , version ? "0.1.0"
 }:
-let
-  prefix = if cargoRoot != null then cargoRoot + "/" else "";
-  entitlements = src + "/${prefix}entitlements/capsa.entitlements";
-in
-pkgs.rustPlatform.buildRustPackage ({
+pkgs.rustPlatform.buildRustPackage {
   pname = "capsa";
   inherit version src;
 
+  cargoRoot = "capsa";
+  buildAndTestSubdir = "capsa";
+
   cargoLock = {
-    lockFile = src + "/${prefix}Cargo.lock";
+    lockFile = src + "/capsa/Cargo.lock";
   };
 
   cargoBuildFlags = [
@@ -33,7 +31,7 @@ pkgs.rustPlatform.buildRustPackage ({
   nativeBuildInputs = [ pkgs.pkg-config ];
   buildInputs =
     lib.optionals pkgs.stdenv.isLinux [ pkgs.libkrun ]
-      ++ lib.optionals pkgs.stdenv.isDarwin [
+    ++ lib.optionals pkgs.stdenv.isDarwin [
       pkgs."libkrun-efi"
       pkgs.libepoxy
       pkgs.virglrenderer
@@ -76,9 +74,6 @@ pkgs.rustPlatform.buildRustPackage ({
   postFixup = lib.optionalString pkgs.stdenv.isDarwin ''
     /usr/bin/codesign --force --sign - $out/libexec/capsa/capsa
     /usr/bin/codesign --force --sign - $out/libexec/capsa/capsa-netd
-    /usr/bin/codesign --force --sign - --entitlements ${entitlements} $out/libexec/capsa/capsa-vmm
+    /usr/bin/codesign --force --sign - --entitlements ${src + "/capsa/entitlements/capsa.entitlements"} $out/libexec/capsa/capsa-vmm
   '';
-} // lib.optionalAttrs (cargoRoot != null) {
-  inherit cargoRoot;
-  preBuild = "cd ${cargoRoot}";
-})
+}
