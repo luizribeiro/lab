@@ -1,0 +1,36 @@
+name: fittings
+
+on:
+  push:
+    paths:
+      - "fittings/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/fittings.yml"
+  pull_request:
+    paths:
+      - "fittings/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/fittings.yml"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/flakehub-cache-action@v2
+
+      - name: Run tests
+        run: |
+          nix develop .#fittings --impure -L --command \
+            cargo test --manifest-path fittings/Cargo.toml --workspace

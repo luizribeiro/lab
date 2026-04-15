@@ -46,21 +46,30 @@
 
           inherit (capsa) checks;
 
-          devShells.default = devenv.lib.mkShell {
-            inherit inputs pkgs;
-            modules = [
-              ./shared/nix/devenv/base.nix
-              ./lockin/nix/devenv.nix
-              ./capsa/nix/devenv.nix
-            ];
-          };
+          devShells = {
+            default = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+                ./lockin/nix/devenv.nix
+                ./capsa/nix/devenv.nix
+              ];
+            };
 
-          devShells.lockin = devenv.lib.mkShell {
-            inherit inputs pkgs;
-            modules = [
-              ./shared/nix/devenv/base.nix
-              ./lockin/nix/devenv.nix
-            ];
+            lockin = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+                ./lockin/nix/devenv.nix
+              ];
+            };
+
+            fittings = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+              ];
+            };
           };
 
           formatter = pkgs.nixpkgs-fmt;
