@@ -10,6 +10,7 @@ pub struct Config {
     pub sandbox: SandboxConfig,
     pub filesystem: FilesystemConfig,
     pub limits: LimitsConfig,
+    pub env: EnvConfig,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -30,6 +31,22 @@ pub struct FilesystemConfig {
     pub ioctl_paths: Vec<PathBuf>,
     pub ioctl_dirs: Vec<PathBuf>,
     pub library_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct EnvConfig {
+    pub inherit: bool,
+    pub block: Vec<String>,
+}
+
+impl Default for EnvConfig {
+    fn default() -> Self {
+        Self {
+            inherit: true,
+            block: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -180,6 +197,10 @@ mod tests {
             max_cpu_time = 60
             max_processes = 100
             disable_core_dumps = true
+
+            [env]
+            inherit = false
+            block = ["AWS_*", "GITHUB_TOKEN"]
             "#,
         )
         .unwrap();
@@ -209,6 +230,10 @@ mod tests {
                     max_processes: Some(100),
                     disable_core_dumps: true,
                 },
+                env: EnvConfig {
+                    inherit: false,
+                    block: vec!["AWS_*".to_string(), "GITHUB_TOKEN".to_string()],
+                },
             }
         );
     }
@@ -216,6 +241,33 @@ mod tests {
     #[test]
     fn unknown_field_rejected() {
         let err = parse("[sandbox]\ntypo_field = true").unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn env_defaults_inherit_true_block_empty() {
+        let config = parse("").unwrap();
+        assert!(config.env.inherit);
+        assert!(config.env.block.is_empty());
+    }
+
+    #[test]
+    fn env_section_parses() {
+        let config = parse(
+            r#"
+            [env]
+            inherit = false
+            block = ["AWS_*"]
+            "#,
+        )
+        .unwrap();
+        assert!(!config.env.inherit);
+        assert_eq!(config.env.block, vec!["AWS_*".to_string()]);
+    }
+
+    #[test]
+    fn env_unknown_field_rejected() {
+        let err = parse("[env]\ngarbage = 1").unwrap_err();
         assert!(err.to_string().contains("unknown field"));
     }
 
