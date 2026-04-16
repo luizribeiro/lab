@@ -85,25 +85,53 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
 | `limits.max_processes` | `int` | `RLIMIT_NPROC` |
 | `limits.disable_core_dumps` | `bool` | Set `RLIMIT_CORE` to 0. |
+| `env.inherit` | `bool` | Pass parent env to the child (default `true`). Set `false` to start with an empty env. |
+| `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped from the child. |
 
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.
 
 ### Environment variables
 
-The CLI unconditionally strips these variables from the child
-environment to prevent dynamic-linker-based code injection:
+By default, lockin passes every parent environment variable through
+to the sandboxed child, with two exceptions:
 
-- Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
-- macOS: `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`
+- **Built-in blocklist** (always stripped): dynamic-linker vars that
+  bypass the filesystem sandbox by loading arbitrary code.
+  - Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
+  - macOS: `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`.
+    On macOS these matter for non-SIP-hardened binaries; SIP-protected
+    binaries have them removed by the OS regardless.
+- **User blocklist** (`env.block`): glob patterns you specify in the
+  config. Useful for stripping known credential vars before they
+  reach the sandbox:
 
-On macOS, `DYLD_*` stripping matters for non-SIP-hardened binaries;
-SIP-protected binaries have these variables removed by the OS before
-execution regardless.
+  ```toml
+  [env]
+  block = ["AWS_*", "*_TOKEN", "*_SECRET", "GITHUB_TOKEN"]
+  ```
 
-All other parent environment variables are passed through unchanged.
-A future release will add explicit allow/deny configuration for the
-rest of the environment.
+Setting `env.inherit = false` starts the child with an empty
+environment. The sandbox library still injects a private
+`TMPDIR`/`TMP`/`TEMP` pointing to a temp directory it creates for
+the child.
+
+#### What this does not protect against
+
+The default (`inherit = true` + `block`) is a tool for stripping
+*specific, known* variables. It is not a general-purpose credential
+hygiene default:
+
+- A credential not matched by any `block` pattern is passed through.
+  If you set `SNOWFLAKE_PASSWORD` in your shell and don't add
+  `SNOWFLAKE_*` to `block`, the child sees it.
+- Variables not in `block` still reveal their existence to the child.
+  `SSH_AUTH_SOCK` being set reveals an agent is running, even if the
+  socket itself is unreachable under the filesystem policy.
+
+For stronger hygiene, either use `inherit = false` and manage the env
+explicitly, or unset sensitive variables in the parent shell before
+invoking lockin.
 
 ## Rust API
 
