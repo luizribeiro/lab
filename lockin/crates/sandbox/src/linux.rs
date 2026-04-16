@@ -222,6 +222,8 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
 
     for path in read_recursive_paths {
         add_allow_recursive_rule(&mut rules, "allow/read,stat", &path);
+        add_allow_recursive_rule(&mut rules, "allow/readdir", &path);
+        add_lock_allow_rule(&mut rules, "allow/lock/readdir", &path);
     }
 
     for path in exec_paths {

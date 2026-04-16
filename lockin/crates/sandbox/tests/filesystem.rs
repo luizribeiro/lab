@@ -88,6 +88,58 @@ fn read_only_path_blocks_writes() {
     );
 }
 
+// ── readdir scoping ──────────────────────────────────────────
+
+#[test]
+fn read_only_directory_grants_readdir() {
+    let temp = TestDir::new("readdir-ro");
+    std::fs::write(temp.join("a.txt"), b"a").expect("seed a");
+    std::fs::write(temp.join("b.txt"), b"b").expect("seed b");
+
+    let dir = temp.join("");
+    assert!(run_probe(
+        common::sandbox_builder().read_only_dir(dir.clone()),
+        &["can-readdir", &dir.display().to_string()]
+    ));
+}
+
+#[test]
+fn read_write_directory_grants_readdir() {
+    let temp = TestDir::new("readdir-rw");
+    std::fs::write(temp.join("a.txt"), b"a").expect("seed a");
+
+    let dir = temp.join("");
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(dir.clone()),
+        &["can-readdir", &dir.display().to_string()]
+    ));
+}
+
+#[test]
+fn readdir_recurses_into_subdirectories() {
+    let temp = TestDir::new("readdir-subdir");
+    let subdir = temp.join("sub");
+    std::fs::create_dir(&subdir).expect("mkdir sub");
+    std::fs::write(subdir.join("nested.txt"), b"n").expect("seed nested");
+
+    let dir = temp.join("");
+    assert!(run_probe(
+        common::sandbox_builder().read_only_dir(dir),
+        &["can-readdir", &subdir.display().to_string()]
+    ));
+}
+
+#[test]
+fn readdir_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("readdir-deny");
+    std::fs::write(temp.join("a.txt"), b"a").expect("seed a");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-readdir", &temp.join("").display().to_string()]
+    ));
+}
+
 // ── stat scoping ─────────────────────────────────────────────
 
 #[test]
