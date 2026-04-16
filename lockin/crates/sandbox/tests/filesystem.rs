@@ -157,6 +157,46 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── unlink scoping ───────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_unlink() {
+    let temp = TestDir::new("unlink-rw");
+    let target = temp.join("victim.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-unlink", &target.display().to_string()]
+    ));
+    assert!(!target.exists(), "file should have been removed");
+}
+
+#[test]
+fn read_only_directory_does_not_grant_unlink() {
+    let temp = TestDir::new("unlink-ro");
+    let target = temp.join("victim.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-unlink", &target.display().to_string()]
+    ));
+    assert!(target.exists(), "file should NOT have been removed");
+}
+
+#[test]
+fn unlink_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("unlink-deny");
+    let target = temp.join("victim.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-unlink", &target.display().to_string()]
+    ));
+}
+
 // ── chmod scoping ────────────────────────────────────────────
 
 #[test]

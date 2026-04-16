@@ -43,6 +43,12 @@ fn main() {
             };
             can_mkdir(Path::new(&path))
         }
+        "can-unlink" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_unlink(Path::new(&path))
+        }
         "can-chmod" => {
             let Some(path) = args.next() else {
                 usage_and_exit();
@@ -161,6 +167,10 @@ fn can_readdir(path: &Path) -> Result<(), String> {
 
 fn can_mkdir(path: &Path) -> Result<(), String> {
     std::fs::create_dir(path).map_err(|e| e.to_string())
+}
+
+fn can_unlink(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
 fn can_chmod(path: &Path, mode: u32) -> Result<(), String> {
@@ -449,6 +459,7 @@ actions:\n\
   can-stat <path>\n\
   can-readdir <path>\n\
   can-mkdir <path>\n\
+  can-unlink <path>\n\
   can-chmod <path> <octal-mode>\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
