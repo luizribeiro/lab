@@ -24,11 +24,11 @@ pub struct SandboxConfig {
 #[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FilesystemConfig {
-    pub read_only: Vec<PathBuf>,
+    pub read_only_paths: Vec<PathBuf>,
     pub read_only_dirs: Vec<PathBuf>,
-    pub read_write: Vec<PathBuf>,
+    pub read_write_paths: Vec<PathBuf>,
     pub read_write_dirs: Vec<PathBuf>,
-    pub ioctl: Vec<PathBuf>,
+    pub ioctl_paths: Vec<PathBuf>,
     pub ioctl_dirs: Vec<PathBuf>,
     pub library_dirs: Vec<PathBuf>,
     pub library_dirs_from_env: bool,
@@ -72,19 +72,19 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
         builder = builder.library_path(resolve_path(dir)?);
     }
 
-    for p in &config.filesystem.read_only {
+    for p in &config.filesystem.read_only_paths {
         builder = builder.read_only_path(resolve_path(p)?);
     }
     for p in &config.filesystem.read_only_dirs {
         builder = builder.read_only_dir(resolve_path(p)?);
     }
-    for p in &config.filesystem.read_write {
+    for p in &config.filesystem.read_write_paths {
         builder = builder.read_write_path(resolve_path(p)?);
     }
     for p in &config.filesystem.read_write_dirs {
         builder = builder.read_write_dir(resolve_path(p)?);
     }
-    for p in &config.filesystem.ioctl {
+    for p in &config.filesystem.ioctl_paths {
         builder = builder.ioctl_path(resolve_path(p)?);
     }
     for p in &config.filesystem.ioctl_dirs {
@@ -175,11 +175,11 @@ mod tests {
             syd_path = "/usr/bin/syd"
 
             [filesystem]
-            read_only = ["/etc/hosts"]
+            read_only_paths = ["/etc/hosts"]
             read_only_dirs = ["/usr/share"]
-            read_write = ["/var/log/app.log"]
+            read_write_paths = ["/var/log/app.log"]
             read_write_dirs = ["./data"]
-            ioctl = ["/dev/net/tun"]
+            ioctl_paths = ["/dev/net/tun"]
             ioctl_dirs = []
             library_dirs = ["/usr/lib"]
             library_dirs_from_env = true
@@ -195,24 +195,34 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            config.command,
-            Some(vec!["/usr/bin/python3".into(), "-u".into()])
+            config,
+            Config {
+                command: Some(vec!["/usr/bin/python3".into(), "-u".into()]),
+                sandbox: SandboxConfig {
+                    allow_network: true,
+                    allow_kvm: false,
+                    allow_interactive_tty: true,
+                    syd_path: Some(PathBuf::from("/usr/bin/syd")),
+                },
+                filesystem: FilesystemConfig {
+                    read_only_paths: vec![PathBuf::from("/etc/hosts")],
+                    read_only_dirs: vec![PathBuf::from("/usr/share")],
+                    read_write_paths: vec![PathBuf::from("/var/log/app.log")],
+                    read_write_dirs: vec![PathBuf::from("./data")],
+                    ioctl_paths: vec![PathBuf::from("/dev/net/tun")],
+                    ioctl_dirs: vec![],
+                    library_dirs: vec![PathBuf::from("/usr/lib")],
+                    library_dirs_from_env: true,
+                },
+                limits: LimitsConfig {
+                    max_open_files: Some(1024),
+                    max_address_space: Some(4294967296),
+                    max_cpu_time: Some(60),
+                    max_processes: Some(100),
+                    disable_core_dumps: true,
+                },
+            }
         );
-        assert!(config.sandbox.allow_network);
-        assert!(config.sandbox.allow_interactive_tty);
-        assert_eq!(config.sandbox.syd_path, Some(PathBuf::from("/usr/bin/syd")));
-        assert_eq!(
-            config.filesystem.read_only,
-            vec![PathBuf::from("/etc/hosts")]
-        );
-        assert_eq!(
-            config.filesystem.library_dirs,
-            vec![PathBuf::from("/usr/lib")]
-        );
-        assert!(config.filesystem.library_dirs_from_env);
-        assert_eq!(config.limits.max_open_files, Some(1024));
-        assert_eq!(config.limits.max_address_space, Some(4294967296));
-        assert!(config.limits.disable_core_dumps);
     }
 
     #[test]

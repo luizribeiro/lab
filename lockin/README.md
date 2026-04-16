@@ -67,11 +67,11 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
 | `sandbox.syd_path` | `string` | Explicit path to `syd` (Linux). |
-| `filesystem.read_only` | `[path, ...]` | Individual read-only file paths. |
+| `filesystem.read_only_paths` | `[path, ...]` | Individual read-only file paths. |
 | `filesystem.read_only_dirs` | `[path, ...]` | Recursive read-only directories. |
-| `filesystem.read_write` | `[path, ...]` | Individual read-write file paths. |
+| `filesystem.read_write_paths` | `[path, ...]` | Individual read-write file paths. |
 | `filesystem.read_write_dirs` | `[path, ...]` | Recursive read-write directories. |
-| `filesystem.ioctl` | `[path, ...]` | ioctl-allowed file paths. |
+| `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
 | `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
 | `filesystem.library_dirs` | `[path, ...]` | Dynamic linker library directories. |
 | `filesystem.library_dirs_from_env` | `bool` | Read library dirs from `LOCKIN_LIBRARY_DIRS`. |
