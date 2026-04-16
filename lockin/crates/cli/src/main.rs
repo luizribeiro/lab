@@ -1,4 +1,5 @@
 mod config;
+mod glob;
 
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
