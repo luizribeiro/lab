@@ -265,6 +265,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         for candidate in path_candidates(&dir) {
             add_allow_recursive_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
             add_allow_recursive_rule(&mut rules, "allow/mkdir", &candidate);
+            add_allow_recursive_rule(&mut rules, "allow/chmod", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/write,create", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/mkdir", &candidate);
         }

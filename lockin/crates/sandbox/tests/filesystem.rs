@@ -157,6 +157,44 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── chmod scoping ────────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_chmod() {
+    let temp = TestDir::new("chmod-rw");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-chmod", &target.display().to_string(), "0o644"]
+    ));
+}
+
+#[test]
+fn read_only_directory_does_not_grant_chmod() {
+    let temp = TestDir::new("chmod-ro");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-chmod", &target.display().to_string(), "0o644"]
+    ));
+}
+
+#[test]
+fn chmod_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("chmod-deny");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-chmod", &target.display().to_string(), "0o644"]
+    ));
+}
+
 #[test]
 fn mkdir_is_denied_without_explicit_allowlist() {
     let temp = TestDir::new("mkdir-deny");
