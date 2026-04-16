@@ -43,6 +43,12 @@ fn main() {
             };
             can_mkdir(Path::new(&path))
         }
+        "can-rmdir" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_rmdir(Path::new(&path))
+        }
         "can-rename" => {
             let Some(from) = args.next() else {
                 usage_and_exit();
@@ -176,6 +182,10 @@ fn can_readdir(path: &Path) -> Result<(), String> {
 
 fn can_mkdir(path: &Path) -> Result<(), String> {
     std::fs::create_dir(path).map_err(|e| e.to_string())
+}
+
+fn can_rmdir(path: &Path) -> Result<(), String> {
+    std::fs::remove_dir(path).map_err(|e| e.to_string())
 }
 
 fn can_rename(from: &Path, to: &Path) -> Result<(), String> {
@@ -472,6 +482,7 @@ actions:\n\
   can-stat <path>\n\
   can-readdir <path>\n\
   can-mkdir <path>\n\
+  can-rmdir <path>\n\
   can-rename <from> <to>\n\
   can-unlink <path>\n\
   can-chmod <path> <octal-mode>\n\

@@ -157,6 +157,46 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── rmdir scoping ────────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_rmdir() {
+    let temp = TestDir::new("rmdir-rw");
+    let victim = temp.join("victim");
+    std::fs::create_dir(&victim).expect("seed dir");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-rmdir", &victim.display().to_string()]
+    ));
+    assert!(!victim.exists(), "dir should have been removed");
+}
+
+#[test]
+fn read_only_directory_does_not_grant_rmdir() {
+    let temp = TestDir::new("rmdir-ro");
+    let victim = temp.join("victim");
+    std::fs::create_dir(&victim).expect("seed dir");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-rmdir", &victim.display().to_string()]
+    ));
+    assert!(victim.exists(), "dir should NOT have been removed");
+}
+
+#[test]
+fn rmdir_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("rmdir-deny");
+    let victim = temp.join("victim");
+    std::fs::create_dir(&victim).expect("seed dir");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-rmdir", &victim.display().to_string()]
+    ));
+}
+
 // ── rename scoping ───────────────────────────────────────────
 
 #[test]
