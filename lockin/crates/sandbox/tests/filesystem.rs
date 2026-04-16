@@ -157,6 +157,44 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── utime scoping ────────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_utime() {
+    let temp = TestDir::new("utime-rw");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-utime", &target.display().to_string()]
+    ));
+}
+
+#[test]
+fn read_only_directory_does_not_grant_utime() {
+    let temp = TestDir::new("utime-ro");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-utime", &target.display().to_string()]
+    ));
+}
+
+#[test]
+fn utime_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("utime-deny");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-utime", &target.display().to_string()]
+    ));
+}
+
 // ── rmdir scoping ────────────────────────────────────────────
 
 #[test]
