@@ -33,7 +33,7 @@ fn run_probe_succeeds() {
     let config = write_config(
         r#"
         [filesystem]
-        library_dirs_from_env = true
+        library_paths_from_env = true
         "#,
     );
     let probe = probe_binary();
@@ -56,7 +56,7 @@ fn exit_code_passthrough() {
     let config = write_config(
         r#"
         [filesystem]
-        library_dirs_from_env = true
+        library_paths_from_env = true
         "#,
     );
     let probe = probe_binary();

@@ -30,8 +30,8 @@ pub struct FilesystemConfig {
     pub read_write_dirs: Vec<PathBuf>,
     pub ioctl_paths: Vec<PathBuf>,
     pub ioctl_dirs: Vec<PathBuf>,
-    pub library_dirs: Vec<PathBuf>,
-    pub library_dirs_from_env: bool,
+    pub library_paths: Vec<PathBuf>,
+    pub library_paths_from_env: bool,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -65,10 +65,10 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
         builder = builder.syd_path(resolve_path(p)?);
     }
 
-    if config.filesystem.library_dirs_from_env {
+    if config.filesystem.library_paths_from_env {
         builder = builder.library_paths_from_env();
     }
-    for dir in &config.filesystem.library_dirs {
+    for dir in &config.filesystem.library_paths {
         builder = builder.library_path(resolve_path(dir)?);
     }
 
@@ -181,8 +181,8 @@ mod tests {
             read_write_dirs = ["./data"]
             ioctl_paths = ["/dev/net/tun"]
             ioctl_dirs = []
-            library_dirs = ["/usr/lib"]
-            library_dirs_from_env = true
+            library_paths = ["/usr/lib"]
+            library_paths_from_env = true
 
             [limits]
             max_open_files = 1024
@@ -211,8 +211,8 @@ mod tests {
                     read_write_dirs: vec![PathBuf::from("./data")],
                     ioctl_paths: vec![PathBuf::from("/dev/net/tun")],
                     ioctl_dirs: vec![],
-                    library_dirs: vec![PathBuf::from("/usr/lib")],
-                    library_dirs_from_env: true,
+                    library_paths: vec![PathBuf::from("/usr/lib")],
+                    library_paths_from_env: true,
                 },
                 limits: LimitsConfig {
                     max_open_files: Some(1024),

@@ -29,7 +29,7 @@ allow_network = false
 
 [filesystem]
 read_only_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
-library_dirs_from_env = true
+library_paths_from_env = true
 
 [limits]
 max_open_files = 1024
@@ -73,8 +73,8 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `filesystem.read_write_dirs` | `[path, ...]` | Recursive read-write directories. |
 | `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
 | `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
-| `filesystem.library_dirs` | `[path, ...]` | Dynamic linker library directories. |
-| `filesystem.library_dirs_from_env` | `bool` | Read library dirs from `LOCKIN_LIBRARY_DIRS`. |
+| `filesystem.library_paths` | `[path, ...]` | Dynamic linker library directories (colon-separated absolute paths). |
+| `filesystem.library_paths_from_env` | `bool` | Read library dirs from `LOCKIN_LIBRARY_DIRS`. |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
 | `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
