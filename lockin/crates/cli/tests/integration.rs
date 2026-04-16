@@ -32,9 +32,7 @@ fn probe_binary() -> PathBuf {
 fn run_probe_succeeds() {
     let config = write_config(
         r#"
-        [filesystem]
-        library_paths_from_env = true
-        "#,
+"#,
     );
     let probe = probe_binary();
     let output = run_lockin(&[
@@ -55,9 +53,7 @@ fn run_probe_succeeds() {
 fn exit_code_passthrough() {
     let config = write_config(
         r#"
-        [filesystem]
-        library_paths_from_env = true
-        "#,
+"#,
     );
     let probe = probe_binary();
     let output = run_lockin(&[
