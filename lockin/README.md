@@ -89,6 +89,22 @@ All fields are optional. Everything defaults to deny/false/empty.
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.
 
+### Environment variables
+
+The CLI unconditionally strips these variables from the child
+environment to prevent dynamic-linker-based code injection:
+
+- Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
+- macOS: `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`
+
+On macOS, `DYLD_*` stripping matters for non-SIP-hardened binaries;
+SIP-protected binaries have these variables removed by the OS before
+execution regardless.
+
+All other parent environment variables are passed through unchanged.
+A future release will add explicit allow/deny configuration for the
+rest of the environment.
+
 ## Rust API
 
 `Sandbox::builder()` provides the same cross-platform API for use

@@ -11,6 +11,21 @@ use config::{apply_config, load_config, resolve_command};
 
 const EXIT_LOCKIN_ERROR: u8 = 125;
 
+const BUILTIN_ENV_BLOCKLIST: &[&str] = &[
+    #[cfg(target_os = "linux")]
+    "LD_PRELOAD",
+    #[cfg(target_os = "linux")]
+    "LD_LIBRARY_PATH",
+    #[cfg(target_os = "linux")]
+    "LD_AUDIT",
+    #[cfg(target_os = "macos")]
+    "DYLD_INSERT_LIBRARIES",
+    #[cfg(target_os = "macos")]
+    "DYLD_LIBRARY_PATH",
+    #[cfg(target_os = "macos")]
+    "DYLD_FRAMEWORK_PATH",
+];
+
 #[derive(Parser, Debug)]
 #[command(name = "lockin", about = "Run programs inside an OS sandbox")]
 #[command(trailing_var_arg = true)]
@@ -37,8 +52,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let (program, args) = resolve_command(&config, &cli.command)?;
     let mut cmd = apply_config(&config)?.command(&program)?;
     cmd.args(&args);
+    apply_env_blocklist(&mut cmd);
     let status = cmd.status()?;
     Ok(ExitCode::from(child_exit_code(status)))
+}
+
+fn apply_env_blocklist(cmd: &mut lockin::SandboxCommand) {
+    for var in BUILTIN_ENV_BLOCKLIST {
+        cmd.env_remove(var);
+    }
 }
 
 fn child_exit_code(status: ExitStatus) -> u8 {
@@ -147,6 +169,27 @@ mod tests {
             cli.command,
             vec!["script.py", "--verbose", "--user", "alice"]
         );
+    }
+
+    #[test]
+    fn apply_env_blocklist_removes_dynamic_linker_vars() {
+        let mut cmd = lockin::Sandbox::builder()
+            .command(Path::new("/bin/echo"))
+            .unwrap();
+        apply_env_blocklist(&mut cmd);
+        let removed: Vec<&std::ffi::OsStr> = cmd
+            .as_command()
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(removed.len(), BUILTIN_ENV_BLOCKLIST.len());
+        for var in BUILTIN_ENV_BLOCKLIST {
+            assert!(
+                removed.iter().any(|k| *k == std::ffi::OsStr::new(var)),
+                "expected {var} to be removed, got: {removed:?}"
+            );
+        }
     }
 
     #[test]
