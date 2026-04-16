@@ -2,14 +2,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn lockin_binary() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../target/debug/lockin");
-    assert!(
-        path.exists(),
-        "lockin binary not found at {} — run `cargo build -p lockin-cli` first",
-        path.display()
-    );
-    path
+    PathBuf::from(env!("CARGO_BIN_EXE_lockin"))
 }
 
 fn run_lockin(args: &[&str]) -> Output {
