@@ -24,6 +24,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_network: bool,
     pub(crate) allow_kvm: bool,
     pub(crate) allow_interactive_tty: bool,
+    pub(crate) allow_non_pie_exec: bool,
     pub(crate) syd_path: Option<PathBuf>,
     pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_only_paths: Vec<PathBuf>,
@@ -227,6 +228,16 @@ impl SandboxBuilder {
     /// and the terminal ioctl allowlist.
     pub fn allow_interactive_tty(mut self, allow: bool) -> Self {
         self.spec.allow_interactive_tty = allow;
+        self
+    }
+
+    /// Permits exec of non-PIE (not Position Independent Executable)
+    /// binaries. syd denies these by default as ROP-style exploit
+    /// hardening, which breaks toolchains whose compilers are built
+    /// without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only;
+    /// ignored on macOS.
+    pub fn allow_non_pie_exec(mut self, allow: bool) -> Self {
+        self.spec.allow_non_pie_exec = allow;
         self
     }
 

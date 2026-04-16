@@ -45,6 +45,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "trace/force_cloexec:on".to_string(),
     ];
 
+    if spec.allow_non_pie_exec {
+        rules.push("trace/allow_unsafe_exec_nopie:1".to_string());
+    }
+
     if spec.allow_network {
         // Network-enabled daemons (e.g. capsa-netd) disable syd's
         // seccomp-level network mediation so the daemon can own
@@ -388,6 +392,29 @@ mod tests {
                 "escaping {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn non_pie_exec_rule_is_gated_on_allow_non_pie_exec() {
+        let default_rules = rules_for(&SandboxSpec::default());
+        assert!(
+            !default_rules
+                .iter()
+                .any(|r| r == "trace/allow_unsafe_exec_nopie:1"),
+            "default spec must keep syd's PIE enforcement on"
+        );
+
+        let allowed = SandboxSpec {
+            allow_non_pie_exec: true,
+            ..SandboxSpec::default()
+        };
+        let allowed_rules = rules_for(&allowed);
+        assert!(
+            allowed_rules
+                .iter()
+                .any(|r| r == "trace/allow_unsafe_exec_nopie:1"),
+            "allow_non_pie_exec=true must disable syd's PIE enforcement"
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub struct SandboxConfig {
     pub allow_network: bool,
     pub allow_kvm: bool,
     pub allow_interactive_tty: bool,
+    pub allow_non_pie_exec: bool,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -68,7 +69,8 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
     let mut builder = lockin::Sandbox::builder()
         .allow_network(config.sandbox.allow_network)
         .allow_kvm(config.sandbox.allow_kvm)
-        .allow_interactive_tty(config.sandbox.allow_interactive_tty);
+        .allow_interactive_tty(config.sandbox.allow_interactive_tty)
+        .allow_non_pie_exec(config.sandbox.allow_non_pie_exec);
 
     builder = builder.library_paths_from_env();
     for dir in &config.filesystem.library_paths {
@@ -175,6 +177,7 @@ mod tests {
             allow_network = true
             allow_kvm = false
             allow_interactive_tty = true
+            allow_non_pie_exec = true
 
             [filesystem]
             read_only_paths = ["/etc/hosts"]
@@ -209,6 +212,7 @@ mod tests {
                     allow_network: true,
                     allow_kvm: false,
                     allow_interactive_tty: true,
+                    allow_non_pie_exec: true,
                 },
                 filesystem: FilesystemConfig {
                     read_only_paths: vec![PathBuf::from("/etc/hosts")],

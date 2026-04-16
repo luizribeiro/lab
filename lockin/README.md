@@ -73,6 +73,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `sandbox.allow_network` | `bool` | Allow outbound/inbound networking. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
+| `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |
 | `filesystem.read_only_paths` | `[path, ...]` | Individual read-only file paths. |
 | `filesystem.read_only_dirs` | `[path, ...]` | Recursive read-only directories. |
 | `filesystem.read_write_paths` | `[path, ...]` | Individual read-write file paths. |
