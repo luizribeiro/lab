@@ -62,7 +62,7 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
         .allow_interactive_tty(config.sandbox.allow_interactive_tty);
 
     if let Some(ref p) = config.sandbox.syd_path {
-        builder = builder.syd_path(p);
+        builder = builder.syd_path(resolve_path(p)?);
     }
 
     if config.filesystem.library_dirs_from_env {
@@ -333,6 +333,26 @@ mod tests {
             program.contains("syd"),
             "expected syd in program, got: {program}"
         );
+    }
+
+    #[test]
+    fn apply_config_resolves_relative_syd_path() {
+        let config = Config {
+            sandbox: SandboxConfig {
+                syd_path: Some(PathBuf::from("bin/syd")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let builder = apply_config(&config).unwrap();
+        let cmd = builder.command(Path::new("/bin/echo")).unwrap();
+        let program = PathBuf::from(cmd.as_command().get_program());
+        assert!(
+            program.is_absolute(),
+            "expected absolute syd path, got: {}",
+            program.display()
+        );
+        assert!(program.ends_with("bin/syd"));
     }
 
     #[test]
