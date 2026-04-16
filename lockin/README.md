@@ -56,6 +56,14 @@ print(json.load(sys.stdin)["name"])
 The config's `command` field specifies the interpreter. Trailing
 arguments from the command line are appended to it.
 
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0`–`255` | Child's own exit code. |
+| `128 + N` | Child was killed by signal `N` (e.g. `137` = SIGKILL, `143` = SIGTERM). |
+| `125` | lockin itself failed (config parse, path resolution, sandbox setup). |
+
 ### Config reference
 
 All fields are optional. Everything defaults to deny/false/empty.
