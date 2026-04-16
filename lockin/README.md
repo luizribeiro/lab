@@ -5,9 +5,88 @@ Build and run a child process inside an OS sandbox.
 - Linux backend: `syd`
 - macOS backend: `sandbox-exec`
 
-`Sandbox::builder()` provides one cross-platform API.
+## CLI
 
-## Quick start
+The `lockin` command runs any program inside a sandbox configured
+by a TOML file:
+
+```sh
+lockin [-c <config>] [--] <program> [args...]
+```
+
+Config resolution: if `-c` is given, that file is used (error if
+missing). Otherwise `./lockin.toml` is used if it exists. If
+neither is found, a deny-all default policy applies.
+
+### Example
+
+```toml
+# lockin.toml
+command = ["/usr/bin/python3"]
+
+[sandbox]
+allow_network = false
+
+[filesystem]
+read_only_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
+library_dirs_from_env = true
+
+[limits]
+max_open_files = 1024
+max_cpu_time = 60
+```
+
+```sh
+lockin -- script.py --verbose
+lockin -c sandbox.toml -- myapp --flag
+```
+
+### Shebang support
+
+The CLI supports Linux-portable shebangs via the `-c` short flag
+with an attached value:
+
+```python
+#!/usr/bin/lockin -c/etc/lockin/python3.toml
+
+import json, sys
+print(json.load(sys.stdin)["name"])
+```
+
+The config's `command` field specifies the interpreter. Trailing
+arguments from the command line are appended to it.
+
+### Config reference
+
+All fields are optional. Everything defaults to deny/false/empty.
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. |
+| `sandbox.allow_network` | `bool` | Allow outbound/inbound networking. |
+| `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. |
+| `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
+| `sandbox.syd_path` | `string` | Explicit path to `syd` (Linux). |
+| `filesystem.read_only` | `[path, ...]` | Individual read-only file paths. |
+| `filesystem.read_only_dirs` | `[path, ...]` | Recursive read-only directories. |
+| `filesystem.read_write` | `[path, ...]` | Individual read-write file paths. |
+| `filesystem.read_write_dirs` | `[path, ...]` | Recursive read-write directories. |
+| `filesystem.ioctl` | `[path, ...]` | ioctl-allowed file paths. |
+| `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
+| `filesystem.library_dirs` | `[path, ...]` | Dynamic linker library directories. |
+| `filesystem.library_dirs_from_env` | `bool` | Read library dirs from `LOCKIN_LIBRARY_DIRS`. |
+| `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
+| `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
+| `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
+| `limits.max_processes` | `int` | `RLIMIT_NPROC` |
+| `limits.disable_core_dumps` | `bool` | Set `RLIMIT_CORE` to 0. |
+
+## Rust API
+
+`Sandbox::builder()` provides the same cross-platform API for use
+as a library.
+
+### Quick start
 
 ```rust
 use std::path::Path;
