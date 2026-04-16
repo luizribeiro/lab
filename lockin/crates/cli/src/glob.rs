@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 /// Shell-style pattern match for env var names. Byte-level; correct
 /// for ASCII names only.
 pub fn matches(pattern: &str, input: &str) -> bool {

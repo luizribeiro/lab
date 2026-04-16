@@ -53,14 +53,29 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let (program, args) = resolve_command(&config, &cli.command)?;
     let mut cmd = apply_config(&config)?.command(&program)?;
     cmd.args(&args);
-    apply_env_blocklist(&mut cmd);
+    apply_env(&config.env, &mut cmd, std::env::vars_os());
     let status = cmd.status()?;
     Ok(ExitCode::from(child_exit_code(status)))
 }
 
-fn apply_env_blocklist(cmd: &mut lockin::SandboxCommand) {
-    for var in BUILTIN_ENV_BLOCKLIST {
-        cmd.env_remove(var);
+fn apply_env<I>(env: &config::EnvConfig, cmd: &mut lockin::SandboxCommand, parent_env: I)
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    if !env.inherit {
+        cmd.env_clear();
+        return;
+    }
+    for (key, _) in parent_env {
+        let Some(name) = key.to_str() else { continue };
+        let matches_any = BUILTIN_ENV_BLOCKLIST
+            .iter()
+            .copied()
+            .chain(env.block.iter().map(String::as_str))
+            .any(|p| glob::matches(p, name));
+        if matches_any {
+            cmd.env_remove(&key);
+        }
     }
 }
 
@@ -172,25 +187,83 @@ mod tests {
         );
     }
 
-    #[test]
-    fn apply_env_blocklist_removes_dynamic_linker_vars() {
-        let mut cmd = lockin::Sandbox::builder()
+    fn build_cmd() -> lockin::SandboxCommand {
+        lockin::Sandbox::builder()
             .command(Path::new("/bin/echo"))
-            .unwrap();
-        apply_env_blocklist(&mut cmd);
-        let removed: Vec<&std::ffi::OsStr> = cmd
-            .as_command()
+            .unwrap()
+    }
+
+    fn removed_keys(cmd: &lockin::SandboxCommand) -> Vec<OsString> {
+        cmd.as_command()
             .get_envs()
             .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k)
-            .collect();
-        assert_eq!(removed.len(), BUILTIN_ENV_BLOCKLIST.len());
+            .map(|(k, _)| k.to_owned())
+            .collect()
+    }
+
+    fn synthetic_env(keys: &[&str]) -> Vec<(OsString, OsString)> {
+        keys.iter()
+            .map(|k| (OsString::from(k), OsString::from("value")))
+            .collect()
+    }
+
+    #[test]
+    fn apply_env_strips_builtin_blocklist() {
+        let mut cmd = build_cmd();
+        let mut parent: Vec<&str> = BUILTIN_ENV_BLOCKLIST.to_vec();
+        parent.push("UNRELATED");
+        apply_env(
+            &config::EnvConfig::default(),
+            &mut cmd,
+            synthetic_env(&parent),
+        );
+        let removed = removed_keys(&cmd);
         for var in BUILTIN_ENV_BLOCKLIST {
             assert!(
-                removed.iter().any(|k| *k == std::ffi::OsStr::new(var)),
-                "expected {var} to be removed, got: {removed:?}"
+                removed.iter().any(|k| k == var),
+                "expected {var} removed, got: {removed:?}"
             );
         }
+        assert!(!removed.iter().any(|k| k == "UNRELATED"));
+    }
+
+    #[test]
+    fn apply_env_respects_user_block_patterns() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: true,
+            block: vec!["AWS_*".into(), "GITHUB_TOKEN".into()],
+        };
+        apply_env(
+            &env_config,
+            &mut cmd,
+            synthetic_env(&["AWS_SECRET", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "OTHER"]),
+        );
+        let removed = removed_keys(&cmd);
+        assert!(removed.iter().any(|k| k == "AWS_SECRET"));
+        assert!(removed.iter().any(|k| k == "AWS_SESSION_TOKEN"));
+        assert!(removed.iter().any(|k| k == "GITHUB_TOKEN"));
+        assert!(!removed.iter().any(|k| k == "OTHER"));
+    }
+
+    #[test]
+    fn apply_env_inherit_false_clears_prior_overrides() {
+        let mut cmd = build_cmd();
+        cmd.env("PRESET", "value");
+        assert!(cmd.as_command().get_envs().any(|(k, _)| k == "PRESET"));
+        apply_env(
+            &config::EnvConfig {
+                inherit: false,
+                block: vec![],
+            },
+            &mut cmd,
+            synthetic_env(&["LD_PRELOAD"]),
+        );
+        assert_eq!(
+            cmd.as_command().get_envs().count(),
+            0,
+            "env_clear should have dropped all overrides"
+        );
     }
 
     #[test]
