@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -37,6 +38,8 @@ pub struct FilesystemConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct EnvConfig {
     pub inherit: bool,
+    pub pass: Vec<String>,
+    pub set: BTreeMap<String, String>,
     pub block: Vec<String>,
 }
 
@@ -44,6 +47,8 @@ impl Default for EnvConfig {
     fn default() -> Self {
         Self {
             inherit: true,
+            pass: Vec::new(),
+            set: BTreeMap::new(),
             block: Vec::new(),
         }
     }
@@ -200,6 +205,8 @@ mod tests {
 
             [env]
             inherit = false
+            pass = ["PATH", "HOME"]
+            set = { LANG = "C.UTF-8" }
             block = ["AWS_*", "GITHUB_TOKEN"]
             "#,
         )
@@ -232,6 +239,8 @@ mod tests {
                 },
                 env: EnvConfig {
                     inherit: false,
+                    pass: vec!["PATH".to_string(), "HOME".to_string()],
+                    set: [("LANG".to_string(), "C.UTF-8".to_string())].into(),
                     block: vec!["AWS_*".to_string(), "GITHUB_TOKEN".to_string()],
                 },
             }
@@ -245,9 +254,11 @@ mod tests {
     }
 
     #[test]
-    fn env_defaults_inherit_true_block_empty() {
+    fn env_defaults() {
         let config = parse("").unwrap();
         assert!(config.env.inherit);
+        assert!(config.env.pass.is_empty());
+        assert!(config.env.set.is_empty());
         assert!(config.env.block.is_empty());
     }
 
@@ -257,12 +268,38 @@ mod tests {
             r#"
             [env]
             inherit = false
+            pass = ["PATH"]
+            set = { TERM = "xterm-256color" }
             block = ["AWS_*"]
             "#,
         )
         .unwrap();
         assert!(!config.env.inherit);
+        assert_eq!(config.env.pass, vec!["PATH".to_string()]);
+        assert_eq!(
+            config.env.set,
+            BTreeMap::from([("TERM".to_string(), "xterm-256color".to_string())]),
+        );
         assert_eq!(config.env.block, vec!["AWS_*".to_string()]);
+    }
+
+    #[test]
+    fn env_set_accepts_explicit_table_syntax() {
+        let config = parse(
+            r#"
+            [env.set]
+            LANG = "C.UTF-8"
+            TERM = "xterm-256color"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.env.set,
+            BTreeMap::from([
+                ("LANG".to_string(), "C.UTF-8".to_string()),
+                ("TERM".to_string(), "xterm-256color".to_string()),
+            ]),
+        );
     }
 
     #[test]

@@ -233,6 +233,7 @@ mod tests {
         let env_config = config::EnvConfig {
             inherit: true,
             block: vec!["AWS_*".into(), "GITHUB_TOKEN".into()],
+            ..Default::default()
         };
         apply_env(
             &env_config,
@@ -254,7 +255,7 @@ mod tests {
         apply_env(
             &config::EnvConfig {
                 inherit: false,
-                block: vec![],
+                ..Default::default()
             },
             &mut cmd,
             synthetic_env(&["LD_PRELOAD"]),
