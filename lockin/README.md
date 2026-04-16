@@ -85,53 +85,62 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
 | `limits.max_processes` | `int` | `RLIMIT_NPROC` |
 | `limits.disable_core_dumps` | `bool` | Set `RLIMIT_CORE` to 0. |
-| `env.inherit` | `bool` | Pass parent env to the child (default `true`). Set `false` to start with an empty env. |
-| `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped from the child. |
+| `env.inherit` | `bool` | Pass parent env to the child (default `false`). Set `true` to inherit everything and use `env.block` to strip. |
+| `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
+| `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
+| `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
 
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.
 
 ### Environment variables
 
-By default, lockin passes every parent environment variable through
-to the sandboxed child, with two exceptions:
+By default, lockin starts the child with an empty environment
+(`inherit = false`). You add what the child needs via `env.pass`
+(import from parent) and `env.set` (hardcoded values).
 
-- **Built-in blocklist** (always stripped): dynamic-linker vars that
-  bypass the filesystem sandbox by loading arbitrary code.
-  - Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
-  - macOS: `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`.
-    On macOS these matter for non-SIP-hardened binaries; SIP-protected
-    binaries have them removed by the OS regardless.
-- **User blocklist** (`env.block`): glob patterns you specify in the
-  config. Useful for stripping known credential vars before they
-  reach the sandbox:
+Unconditional built-in blocklist — dynamic-linker vars that would
+bypass the filesystem sandbox by loading arbitrary code — is always
+stripped, even from `env.set`:
 
-  ```toml
-  [env]
-  block = ["AWS_*", "*_TOKEN", "*_SECRET", "GITHUB_TOKEN"]
-  ```
+- Linux: `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
+- macOS: `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`.
+  On macOS these matter for non-SIP-hardened binaries; SIP-protected
+  binaries have them removed by the OS regardless.
 
-Setting `env.inherit = false` starts the child with an empty
-environment. The sandbox library still injects a private
-`TMPDIR`/`TMP`/`TEMP` pointing to a temp directory it creates for
-the child.
+Example (deny-by-default with explicit pass/set):
 
-#### What this does not protect against
+```toml
+[env]
+pass = ["PATH", "HOME", "USER", "TERM", "LANG", "LC_*", "NIX_*"]
+set = { RUST_LOG = "info" }
+```
 
-The default (`inherit = true` + `block`) is a tool for stripping
-*specific, known* variables. It is not a general-purpose credential
-hygiene default:
+The sandbox library also always injects `TMPDIR`/`TMP`/`TEMP`
+pointing to a private temp directory; these survive `inherit = false`.
 
-- A credential not matched by any `block` pattern is passed through.
-  If you set `SNOWFLAKE_PASSWORD` in your shell and don't add
-  `SNOWFLAKE_*` to `block`, the child sees it.
-- Variables not in `block` still reveal their existence to the child.
-  `SSH_AUTH_SOCK` being set reveals an agent is running, even if the
-  socket itself is unreachable under the filesystem policy.
+#### Inherit-mode escape hatch
 
-For stronger hygiene, either use `inherit = false` and manage the env
-explicitly, or unset sensitive variables in the parent shell before
-invoking lockin.
+For workflows where you trust the parent env and only want to strip
+a few specific vars, set `inherit = true`:
+
+```toml
+[env]
+inherit = true
+block = ["AWS_*", "*_TOKEN", "*_SECRET", "GITHUB_TOKEN"]
+```
+
+In this mode, `pass` is ignored (everything already inherits) and
+`block` acts as the sole filter. This is the enumerate-or-leak mode:
+any credential not listed in `block` leaks. Prefer deny-by-default
+for stronger isolation guarantees.
+
+#### `env.block` precedence
+
+`env.block` is a *filter*, not a stage. It strips matching keys no
+matter where they came from — `inherit`, `pass`, or `set`. That
+means `set.LD_PRELOAD = "/path"` does not override the built-in
+blocklist: the assignment is silently dropped.
 
 ## Rust API
 

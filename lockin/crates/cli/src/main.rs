@@ -27,6 +27,8 @@ const BUILTIN_ENV_BLOCKLIST: &[&str] = &[
     "DYLD_FRAMEWORK_PATH",
 ];
 
+const SANDBOX_OWNED_ENV: &[&str] = &["TMPDIR", "TMP", "TEMP"];
+
 #[derive(Parser, Debug)]
 #[command(name = "lockin", about = "Run programs inside an OS sandbox")]
 #[command(trailing_var_arg = true)]
@@ -79,7 +81,22 @@ where
             }
         }
     } else {
+        let preserved: Vec<(OsString, OsString)> = cmd
+            .as_command()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                let name = k.to_str()?;
+                if SANDBOX_OWNED_ENV.contains(&name) {
+                    v.map(|v| (k.to_owned(), v.to_owned()))
+                } else {
+                    None
+                }
+            })
+            .collect();
         cmd.env_clear();
+        for (k, v) in preserved {
+            cmd.env(k, v);
+        }
         for (key, value) in &parent {
             let Some(name) = key.to_str() else { continue };
             if env.pass.iter().any(|p| glob::matches(p, name)) && !is_blocked(name) {
@@ -235,11 +252,11 @@ mod tests {
         let mut cmd = build_cmd();
         let mut parent: Vec<&str> = BUILTIN_ENV_BLOCKLIST.to_vec();
         parent.push("UNRELATED");
-        apply_env(
-            &config::EnvConfig::default(),
-            &mut cmd,
-            synthetic_env(&parent),
-        );
+        let env_config = config::EnvConfig {
+            inherit: true,
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&parent));
         let removed = removed_keys(&cmd);
         for var in BUILTIN_ENV_BLOCKLIST {
             assert!(
@@ -282,18 +299,6 @@ mod tests {
         apply_env(&env_config, &mut cmd, synthetic_env(&["HOME", "OTHER"]));
         let after = set_pairs(&cmd);
         assert_eq!(before, after, "pass must be a no-op when inherit=true");
-    }
-
-    #[test]
-    fn apply_env_inherit_false_with_empty_pass_set_is_empty() {
-        let mut cmd = build_cmd();
-        let env_config = config::EnvConfig {
-            inherit: false,
-            ..Default::default()
-        };
-        apply_env(&env_config, &mut cmd, synthetic_env(&["FOO", "BAR"]));
-        assert!(set_pairs(&cmd).is_empty());
-        assert_eq!(removed_keys(&cmd).len(), 0);
     }
 
     #[test]
@@ -410,22 +415,25 @@ mod tests {
     }
 
     #[test]
-    fn apply_env_inherit_false_clears_prior_overrides() {
+    fn apply_env_inherit_false_preserves_sandbox_env_across_clear() {
         let mut cmd = build_cmd();
-        cmd.env("PRESET", "value");
-        assert!(cmd.as_command().get_envs().any(|(k, _)| k == "PRESET"));
+        let sandbox_env = set_pairs(&cmd);
+        assert!(
+            !sandbox_env.is_empty(),
+            "sandbox library should have set some env (TMPDIR etc.)"
+        );
         apply_env(
             &config::EnvConfig {
                 inherit: false,
                 ..Default::default()
             },
             &mut cmd,
-            synthetic_env(&["LD_PRELOAD"]),
+            synthetic_env(&["FOO", "BAR"]),
         );
         assert_eq!(
-            cmd.as_command().get_envs().count(),
-            0,
-            "env_clear should have dropped all overrides"
+            set_pairs(&cmd),
+            sandbox_env,
+            "inherit=false keeps only TMPDIR/TMP/TEMP from the sandbox library"
         );
     }
 

@@ -34,24 +34,13 @@ pub struct FilesystemConfig {
     pub library_paths: Vec<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvConfig {
     pub inherit: bool,
     pub pass: Vec<String>,
     pub set: BTreeMap<String, String>,
     pub block: Vec<String>,
-}
-
-impl Default for EnvConfig {
-    fn default() -> Self {
-        Self {
-            inherit: true,
-            pass: Vec::new(),
-            set: BTreeMap::new(),
-            block: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -256,7 +245,7 @@ mod tests {
     #[test]
     fn env_defaults() {
         let config = parse("").unwrap();
-        assert!(config.env.inherit);
+        assert!(!config.env.inherit);
         assert!(config.env.pass.is_empty());
         assert!(config.env.set.is_empty());
         assert!(config.env.block.is_empty());
