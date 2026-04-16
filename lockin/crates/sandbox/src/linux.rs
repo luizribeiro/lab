@@ -277,6 +277,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
             add_lock_allow_rule(&mut rules, "allow/lock/mkdir", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/rmdir", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/delete", &candidate);
+            add_lock_allow_rule(&mut rules, "allow/lock/truncate", &candidate);
         }
     }
 

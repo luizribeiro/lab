@@ -43,6 +43,12 @@ fn main() {
             };
             can_mkdir(Path::new(&path))
         }
+        "can-truncate" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_truncate(Path::new(&path))
+        }
         "can-utime" => {
             let Some(path) = args.next() else {
                 usage_and_exit();
@@ -188,6 +194,15 @@ fn can_readdir(path: &Path) -> Result<(), String> {
 
 fn can_mkdir(path: &Path) -> Result<(), String> {
     std::fs::create_dir(path).map_err(|e| e.to_string())
+}
+
+fn can_truncate(path: &Path) -> Result<(), String> {
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn can_utime(path: &Path) -> Result<(), String> {
@@ -505,6 +520,7 @@ actions:\n\
   can-mkdir <path>\n\
   can-rmdir <path>\n\
   can-utime <path>\n\
+  can-truncate <path>\n\
   can-rename <from> <to>\n\
   can-unlink <path>\n\
   can-chmod <path> <octal-mode>\n\

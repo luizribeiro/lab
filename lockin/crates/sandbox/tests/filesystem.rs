@@ -157,6 +157,44 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── truncate scoping ─────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_truncate() {
+    let temp = TestDir::new("truncate-rw");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed contents").expect("seed file");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-truncate", &target.display().to_string()]
+    ));
+}
+
+#[test]
+fn read_only_directory_does_not_grant_truncate() {
+    let temp = TestDir::new("truncate-ro");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-truncate", &target.display().to_string()]
+    ));
+}
+
+#[test]
+fn truncate_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("truncate-deny");
+    let target = temp.join("file.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-truncate", &target.display().to_string()]
+    ));
+}
+
 // ── utime scoping ────────────────────────────────────────────
 
 #[test]
