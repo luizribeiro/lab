@@ -157,6 +157,63 @@ fn read_only_directory_does_not_grant_mkdir() {
     ));
 }
 
+// ── rename scoping ───────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_rename() {
+    let temp = TestDir::new("rename-rw");
+    let from = temp.join("from.txt");
+    let to = temp.join("to.txt");
+    std::fs::write(&from, b"seed").expect("seed file");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &[
+            "can-rename",
+            &from.display().to_string(),
+            &to.display().to_string()
+        ]
+    ));
+    assert!(
+        to.exists() && !from.exists(),
+        "rename should have moved the file"
+    );
+}
+
+#[test]
+fn read_only_directory_does_not_grant_rename() {
+    let temp = TestDir::new("rename-ro");
+    let from = temp.join("from.txt");
+    let to = temp.join("to.txt");
+    std::fs::write(&from, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &[
+            "can-rename",
+            &from.display().to_string(),
+            &to.display().to_string()
+        ]
+    ));
+}
+
+#[test]
+fn rename_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("rename-deny");
+    let from = temp.join("from.txt");
+    let to = temp.join("to.txt");
+    std::fs::write(&from, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &[
+            "can-rename",
+            &from.display().to_string(),
+            &to.display().to_string()
+        ]
+    ));
+}
+
 // ── unlink scoping ───────────────────────────────────────────
 
 #[test]
