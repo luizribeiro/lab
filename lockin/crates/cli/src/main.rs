@@ -58,23 +58,39 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::from(child_exit_code(status)))
 }
 
+// Non-UTF-8 env keys are skipped in pass matching and block filtering;
+// glob matching is byte-level ASCII.
 fn apply_env<I>(env: &config::EnvConfig, cmd: &mut lockin::SandboxCommand, parent_env: I)
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
-    if !env.inherit {
+    let parent: Vec<(OsString, OsString)> = parent_env.into_iter().collect();
+    let blocklist: Vec<&str> = BUILTIN_ENV_BLOCKLIST
+        .iter()
+        .copied()
+        .chain(env.block.iter().map(String::as_str))
+        .collect();
+    let is_blocked = |name: &str| blocklist.iter().any(|p| glob::matches(p, name));
+
+    if env.inherit {
+        for (key, _) in &parent {
+            if key.to_str().is_some_and(is_blocked) {
+                cmd.env_remove(key);
+            }
+        }
+    } else {
         cmd.env_clear();
-        return;
+        for (key, value) in &parent {
+            let Some(name) = key.to_str() else { continue };
+            if env.pass.iter().any(|p| glob::matches(p, name)) && !is_blocked(name) {
+                cmd.env(key, value);
+            }
+        }
     }
-    for (key, _) in parent_env {
-        let Some(name) = key.to_str() else { continue };
-        let matches_any = BUILTIN_ENV_BLOCKLIST
-            .iter()
-            .copied()
-            .chain(env.block.iter().map(String::as_str))
-            .any(|p| glob::matches(p, name));
-        if matches_any {
-            cmd.env_remove(&key);
+
+    for (key, value) in &env.set {
+        if !is_blocked(key) {
+            cmd.env(key, value);
         }
     }
 }
@@ -207,6 +223,13 @@ mod tests {
             .collect()
     }
 
+    fn set_pairs(cmd: &lockin::SandboxCommand) -> Vec<(OsString, OsString)> {
+        cmd.as_command()
+            .get_envs()
+            .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned())))
+            .collect()
+    }
+
     #[test]
     fn apply_env_strips_builtin_blocklist() {
         let mut cmd = build_cmd();
@@ -245,6 +268,145 @@ mod tests {
         assert!(removed.iter().any(|k| k == "AWS_SESSION_TOKEN"));
         assert!(removed.iter().any(|k| k == "GITHUB_TOKEN"));
         assert!(!removed.iter().any(|k| k == "OTHER"));
+    }
+
+    #[test]
+    fn apply_env_pass_ignored_when_inherit_true() {
+        let mut cmd = build_cmd();
+        let before = set_pairs(&cmd);
+        let env_config = config::EnvConfig {
+            inherit: true,
+            pass: vec!["HOME".into()],
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&["HOME", "OTHER"]));
+        let after = set_pairs(&cmd);
+        assert_eq!(before, after, "pass must be a no-op when inherit=true");
+    }
+
+    #[test]
+    fn apply_env_inherit_false_with_empty_pass_set_is_empty() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&["FOO", "BAR"]));
+        assert!(set_pairs(&cmd).is_empty());
+        assert_eq!(removed_keys(&cmd).len(), 0);
+    }
+
+    #[test]
+    fn apply_env_pass_imports_matched_parent_vars() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            pass: vec!["PATH".into(), "HOME".into()],
+            ..Default::default()
+        };
+        let parent: Vec<(OsString, OsString)> = vec![
+            ("PATH".into(), "/bin:/usr/bin".into()),
+            ("HOME".into(), "/home/u".into()),
+            ("UNRELATED".into(), "x".into()),
+        ];
+        apply_env(&env_config, &mut cmd, parent);
+        let set = set_pairs(&cmd);
+        assert!(set.iter().any(|(k, v)| k == "PATH" && v == "/bin:/usr/bin"));
+        assert!(set.iter().any(|(k, v)| k == "HOME" && v == "/home/u"));
+        assert!(!set.iter().any(|(k, _)| k == "UNRELATED"));
+    }
+
+    #[test]
+    fn apply_env_pass_supports_globs() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            pass: vec!["NIX_*".into()],
+            ..Default::default()
+        };
+        apply_env(
+            &env_config,
+            &mut cmd,
+            synthetic_env(&["NIX_CC", "NIX_CFLAGS", "OTHER"]),
+        );
+        let set = set_pairs(&cmd);
+        assert!(set.iter().any(|(k, _)| k == "NIX_CC"));
+        assert!(set.iter().any(|(k, _)| k == "NIX_CFLAGS"));
+        assert!(!set.iter().any(|(k, _)| k == "OTHER"));
+    }
+
+    #[test]
+    fn apply_env_set_adds_hardcoded_values() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            set: [("LANG".into(), "C.UTF-8".into())].into(),
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        let set = set_pairs(&cmd);
+        assert!(set.iter().any(|(k, v)| k == "LANG" && v == "C.UTF-8"));
+    }
+
+    #[test]
+    fn apply_env_set_overrides_pass_on_collision() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            pass: vec!["TERM".into()],
+            set: [("TERM".into(), "dumb".into())].into(),
+            ..Default::default()
+        };
+        let parent: Vec<(OsString, OsString)> = vec![("TERM".into(), "xterm-256color".into())];
+        apply_env(&env_config, &mut cmd, parent);
+        let set = set_pairs(&cmd);
+        let term = set.iter().find(|(k, _)| k == "TERM");
+        assert_eq!(term.map(|(_, v)| v.to_str()), Some(Some("dumb")));
+    }
+
+    #[test]
+    fn apply_env_block_strips_set_entries() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: true,
+            set: [("AWS_KEY".into(), "leak".into())].into(),
+            block: vec!["AWS_*".into()],
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        let set = set_pairs(&cmd);
+        assert!(!set.iter().any(|(k, _)| k == "AWS_KEY"));
+    }
+
+    #[test]
+    fn apply_env_builtin_blocklist_strips_set_entries() {
+        let mut cmd = build_cmd();
+        let first_builtin = BUILTIN_ENV_BLOCKLIST[0];
+        let env_config = config::EnvConfig {
+            inherit: false,
+            set: [(first_builtin.into(), "/evil".into())].into(),
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        let set = set_pairs(&cmd);
+        assert!(
+            !set.iter().any(|(k, _)| k == first_builtin),
+            "built-in blocklist must override set"
+        );
+    }
+
+    #[test]
+    fn apply_env_block_strips_pass_imported() {
+        let mut cmd = build_cmd();
+        let env_config = config::EnvConfig {
+            inherit: false,
+            pass: vec!["SECRET".into()],
+            block: vec!["SECRET".into()],
+            ..Default::default()
+        };
+        apply_env(&env_config, &mut cmd, synthetic_env(&["SECRET"]));
+        let set = set_pairs(&cmd);
+        assert!(!set.iter().any(|(k, _)| k == "SECRET"));
     }
 
     #[test]
