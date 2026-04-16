@@ -66,7 +66,6 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `sandbox.allow_network` | `bool` | Allow outbound/inbound networking. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
-| `sandbox.syd_path` | `string` | Explicit path to `syd`. Linux only; ignored on macOS. |
 | `filesystem.read_only_paths` | `[path, ...]` | Individual read-only file paths. |
 | `filesystem.read_only_dirs` | `[path, ...]` | Recursive read-only directories. |
 | `filesystem.read_write_paths` | `[path, ...]` | Individual read-write file paths. |

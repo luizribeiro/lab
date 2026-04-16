@@ -18,7 +18,6 @@ pub struct SandboxConfig {
     pub allow_network: bool,
     pub allow_kvm: bool,
     pub allow_interactive_tty: bool,
-    pub syd_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -60,10 +59,6 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
         .allow_network(config.sandbox.allow_network)
         .allow_kvm(config.sandbox.allow_kvm)
         .allow_interactive_tty(config.sandbox.allow_interactive_tty);
-
-    if let Some(ref p) = config.sandbox.syd_path {
-        builder = builder.syd_path(resolve_path(p)?);
-    }
 
     if config.filesystem.library_paths_from_env {
         builder = builder.library_paths_from_env();
@@ -172,7 +167,6 @@ mod tests {
             allow_network = true
             allow_kvm = false
             allow_interactive_tty = true
-            syd_path = "/usr/bin/syd"
 
             [filesystem]
             read_only_paths = ["/etc/hosts"]
@@ -202,7 +196,6 @@ mod tests {
                     allow_network: true,
                     allow_kvm: false,
                     allow_interactive_tty: true,
-                    syd_path: Some(PathBuf::from("/usr/bin/syd")),
                 },
                 filesystem: FilesystemConfig {
                     read_only_paths: vec![PathBuf::from("/etc/hosts")],
@@ -333,26 +326,6 @@ mod tests {
             program.contains("syd"),
             "expected syd in program, got: {program}"
         );
-    }
-
-    #[test]
-    fn apply_config_resolves_relative_syd_path() {
-        let config = Config {
-            sandbox: SandboxConfig {
-                syd_path: Some(PathBuf::from("bin/syd")),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let builder = apply_config(&config).unwrap();
-        let cmd = builder.command(Path::new("/bin/echo")).unwrap();
-        let program = PathBuf::from(cmd.as_command().get_program());
-        assert!(
-            program.is_absolute(),
-            "expected absolute syd path, got: {}",
-            program.display()
-        );
-        assert!(program.ends_with("bin/syd"));
     }
 
     #[test]
