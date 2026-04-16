@@ -1,11 +1,14 @@
-#[allow(dead_code)]
 mod config;
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
+
+use config::{apply_config, load_config, resolve_command};
+
+const EXIT_LOCKIN_ERROR: u8 = 125;
 
 #[derive(Parser, Debug)]
 #[command(name = "lockin", about = "Run programs inside an OS sandbox")]
@@ -18,8 +21,38 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    let _cli = Cli::parse();
-    ExitCode::SUCCESS
+    let cli = Cli::parse();
+    match run(cli) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("lockin: {e:#}");
+            ExitCode::from(EXIT_LOCKIN_ERROR)
+        }
+    }
+}
+
+fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+    let config = resolve_config(&cli.config)?;
+    let (program, args) = resolve_command(&config, &cli.command)?;
+    let mut cmd = apply_config(&config)?.command(&program)?;
+    cmd.args(&args);
+    let status = cmd.status()?;
+    Ok(ExitCode::from(
+        status.code().unwrap_or(EXIT_LOCKIN_ERROR as i32) as u8,
+    ))
+}
+
+fn resolve_config(explicit: &Option<PathBuf>) -> anyhow::Result<config::Config> {
+    if let Some(path) = explicit {
+        return load_config(path);
+    }
+
+    let default_path = Path::new("lockin.toml");
+    if default_path.exists() {
+        return load_config(default_path);
+    }
+
+    Ok(config::Config::default())
 }
 
 #[cfg(test)]
