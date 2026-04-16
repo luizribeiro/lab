@@ -55,6 +55,38 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
+pub fn resolve_command(
+    config: &Config,
+    cli_args: &[std::ffi::OsString],
+) -> Result<(PathBuf, Vec<std::ffi::OsString>)> {
+    let mut argv: Vec<std::ffi::OsString> = config
+        .command
+        .as_ref()
+        .map(|cmd| cmd.iter().map(std::ffi::OsString::from).collect())
+        .unwrap_or_default();
+    argv.extend(cli_args.iter().cloned());
+
+    anyhow::ensure!(!argv.is_empty(), "no command specified");
+
+    let program_path = Path::new(&argv[0]);
+    let program = if program_path.parent() == Some(Path::new("")) {
+        program_path.to_path_buf()
+    } else {
+        resolve_path(program_path)?
+    };
+    let args = argv[1..].to_vec();
+    Ok((program, args))
+}
+
+pub fn resolve_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        std::path::absolute(path)
+            .with_context(|| format!("failed to resolve path: {}", path.display()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +187,75 @@ mod tests {
         std::fs::write(tmp.path(), "command = []").unwrap();
         let err = load_config(tmp.path()).unwrap_err();
         assert!(err.to_string().contains("must not be empty"));
+    }
+
+    fn os(s: &str) -> std::ffi::OsString {
+        s.into()
+    }
+
+    #[test]
+    fn resolve_config_command_plus_cli_args() {
+        let config = Config {
+            command: Some(vec!["/usr/bin/python3".into()]),
+            ..Default::default()
+        };
+        let (prog, args) = resolve_command(&config, &[os("script.py"), os("--flag")]).unwrap();
+        assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
+        assert_eq!(args, vec![os("script.py"), os("--flag")]);
+    }
+
+    #[test]
+    fn resolve_config_command_with_fixed_args() {
+        let config = Config {
+            command: Some(vec!["/usr/bin/python3".into(), "-u".into()]),
+            ..Default::default()
+        };
+        let (prog, args) = resolve_command(&config, &[os("script.py")]).unwrap();
+        assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
+        assert_eq!(args, vec![os("-u"), os("script.py")]);
+    }
+
+    #[test]
+    fn resolve_config_command_only() {
+        let config = Config {
+            command: Some(vec!["/usr/bin/python3".into(), "main.py".into()]),
+            ..Default::default()
+        };
+        let (prog, args) = resolve_command(&config, &[]).unwrap();
+        assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
+        assert_eq!(args, vec![os("main.py")]);
+    }
+
+    #[test]
+    fn resolve_cli_args_only() {
+        let config = Config::default();
+        let (prog, args) = resolve_command(&config, &[os("/usr/bin/myapp"), os("--flag")]).unwrap();
+        assert_eq!(prog, PathBuf::from("/usr/bin/myapp"));
+        assert_eq!(args, vec![os("--flag")]);
+    }
+
+    #[test]
+    fn resolve_no_command_errors() {
+        let config = Config::default();
+        let err = resolve_command(&config, &[]).unwrap_err();
+        assert!(err.to_string().contains("no command specified"));
+    }
+
+    #[test]
+    fn resolve_bare_command_passes_through() {
+        let config = Config {
+            command: Some(vec!["python3".into()]),
+            ..Default::default()
+        };
+        let (prog, _) = resolve_command(&config, &[os("script.py")]).unwrap();
+        assert_eq!(prog, PathBuf::from("python3"));
+    }
+
+    #[test]
+    fn resolve_relative_path() {
+        let config = Config::default();
+        let (prog, _) = resolve_command(&config, &[os("./myapp")]).unwrap();
+        assert!(prog.is_absolute());
     }
 
     #[test]
