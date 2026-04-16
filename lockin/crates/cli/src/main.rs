@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod config;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
