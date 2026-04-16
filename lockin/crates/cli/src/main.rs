@@ -1,8 +1,9 @@
 mod config;
 
 use std::ffi::OsString;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, ExitStatus};
 
 use clap::Parser;
 
@@ -37,9 +38,17 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let mut cmd = apply_config(&config)?.command(&program)?;
     cmd.args(&args);
     let status = cmd.status()?;
-    Ok(ExitCode::from(
-        status.code().unwrap_or(EXIT_LOCKIN_ERROR as i32) as u8,
-    ))
+    Ok(ExitCode::from(child_exit_code(status)))
+}
+
+fn child_exit_code(status: ExitStatus) -> u8 {
+    if let Some(code) = status.code() {
+        return code as u8;
+    }
+    if let Some(sig) = status.signal() {
+        return (128 + sig) as u8;
+    }
+    EXIT_LOCKIN_ERROR
 }
 
 fn resolve_config(explicit: &Option<PathBuf>) -> anyhow::Result<config::Config> {
@@ -138,6 +147,22 @@ mod tests {
             cli.command,
             vec!["script.py", "--verbose", "--user", "alice"]
         );
+    }
+
+    #[test]
+    fn child_exit_code_normal() {
+        let status = ExitStatus::from_raw(0 << 8);
+        assert_eq!(child_exit_code(status), 0);
+        let status = ExitStatus::from_raw(42 << 8);
+        assert_eq!(child_exit_code(status), 42);
+    }
+
+    #[test]
+    fn child_exit_code_signal() {
+        let status = ExitStatus::from_raw(9);
+        assert_eq!(child_exit_code(status), 128 + 9);
+        let status = ExitStatus::from_raw(15);
+        assert_eq!(child_exit_code(status), 128 + 15);
     }
 
     #[test]
