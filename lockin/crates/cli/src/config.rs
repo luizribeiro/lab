@@ -55,6 +55,61 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
+pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
+    let mut builder = lockin::Sandbox::builder()
+        .allow_network(config.sandbox.allow_network)
+        .allow_kvm(config.sandbox.allow_kvm)
+        .allow_interactive_tty(config.sandbox.allow_interactive_tty);
+
+    if let Some(ref p) = config.sandbox.syd_path {
+        builder = builder.syd_path(p);
+    }
+
+    if config.filesystem.library_dirs_from_env {
+        builder = builder.library_paths_from_env();
+    }
+    for dir in &config.filesystem.library_dirs {
+        builder = builder.library_path(resolve_path(dir)?);
+    }
+
+    for p in &config.filesystem.read_only {
+        builder = builder.read_only_path(resolve_path(p)?);
+    }
+    for p in &config.filesystem.read_only_dirs {
+        builder = builder.read_only_dir(resolve_path(p)?);
+    }
+    for p in &config.filesystem.read_write {
+        builder = builder.read_write_path(resolve_path(p)?);
+    }
+    for p in &config.filesystem.read_write_dirs {
+        builder = builder.read_write_dir(resolve_path(p)?);
+    }
+    for p in &config.filesystem.ioctl {
+        builder = builder.ioctl_path(resolve_path(p)?);
+    }
+    for p in &config.filesystem.ioctl_dirs {
+        builder = builder.ioctl_dir(resolve_path(p)?);
+    }
+
+    if let Some(n) = config.limits.max_open_files {
+        builder = builder.max_open_files(n);
+    }
+    if let Some(n) = config.limits.max_address_space {
+        builder = builder.max_address_space(n);
+    }
+    if let Some(n) = config.limits.max_cpu_time {
+        builder = builder.max_cpu_time(n);
+    }
+    if let Some(n) = config.limits.max_processes {
+        builder = builder.max_processes(n);
+    }
+    if config.limits.disable_core_dumps {
+        builder = builder.disable_core_dumps();
+    }
+
+    Ok(builder)
+}
+
 pub fn resolve_command(
     config: &Config,
     cli_args: &[std::ffi::OsString],
@@ -256,6 +311,31 @@ mod tests {
         let config = Config::default();
         let (prog, _) = resolve_command(&config, &[os("./myapp")]).unwrap();
         assert!(prog.is_absolute());
+    }
+
+    #[test]
+    fn apply_default_config_builds_sandbox() {
+        let config = Config::default();
+        let builder = apply_config(&config).unwrap();
+        let cmd = builder.command(Path::new("/bin/echo")).unwrap();
+        let program = cmd.as_command().get_program().to_string_lossy().to_string();
+        assert!(
+            program.contains("syd"),
+            "expected syd in program, got: {program}"
+        );
+    }
+
+    #[test]
+    fn apply_config_with_limits() {
+        let config = Config {
+            limits: LimitsConfig {
+                max_open_files: Some(64),
+                disable_core_dumps: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(apply_config(&config).is_ok());
     }
 
     #[test]
