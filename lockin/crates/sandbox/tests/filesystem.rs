@@ -129,6 +129,45 @@ fn readdir_recurses_into_subdirectories() {
     ));
 }
 
+// ── mkdir scoping ────────────────────────────────────────────
+
+#[test]
+fn read_write_directory_grants_mkdir() {
+    let temp = TestDir::new("mkdir-rw");
+    let new_dir = temp.join("created");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_write_dir(temp.join("")),
+        &["can-mkdir", &new_dir.display().to_string()]
+    ));
+    assert!(
+        new_dir.is_dir(),
+        "probe reported success but directory was not created on disk"
+    );
+}
+
+#[test]
+fn read_only_directory_does_not_grant_mkdir() {
+    let temp = TestDir::new("mkdir-ro");
+    let new_dir = temp.join("blocked");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_only_dir(temp.join("")),
+        &["can-mkdir", &new_dir.display().to_string()]
+    ));
+}
+
+#[test]
+fn mkdir_is_denied_without_explicit_allowlist() {
+    let temp = TestDir::new("mkdir-deny");
+    let new_dir = temp.join("blocked");
+
+    assert!(!run_probe(
+        common::sandbox_builder(),
+        &["can-mkdir", &new_dir.display().to_string()]
+    ));
+}
+
 #[test]
 fn readdir_is_denied_without_explicit_allowlist() {
     let temp = TestDir::new("readdir-deny");

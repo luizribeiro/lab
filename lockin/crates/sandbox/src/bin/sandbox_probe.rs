@@ -37,6 +37,12 @@ fn main() {
             };
             can_readdir(Path::new(&path))
         }
+        "can-mkdir" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_mkdir(Path::new(&path))
+        }
         "can-exec" => {
             let Some(path) = args.next() else {
                 usage_and_exit();
@@ -139,6 +145,10 @@ fn can_readdir(path: &Path) -> Result<(), String> {
         entry.map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn can_mkdir(path: &Path) -> Result<(), String> {
+    std::fs::create_dir(path).map_err(|e| e.to_string())
 }
 
 fn can_exec(path: &Path, args: &[String]) -> Result<(), String> {
@@ -421,6 +431,7 @@ actions:\n\
   can-write <path>\n\
   can-stat <path>\n\
   can-readdir <path>\n\
+  can-mkdir <path>\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
   can-write-temp\n\
