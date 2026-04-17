@@ -1,123 +1,11 @@
-# capsa (Rust crate API)
+# capsa
 
-This README documents the **public API surface of the `capsa` Rust crate**.
+Lightweight VMs with network sandboxing, powered by libkrun.
 
-> Scope note: this document intentionally focuses on Rust API exports only.
-> Runtime architecture, daemon internals, CLI behavior, Nix packaging, and sandbox implementation details are out of scope here.
+The `capsa` crate is the user-facing surface: typed configuration for
+VMs and per-interface network policies.
 
----
-
-## What `capsa` exposes
-
-`capsa` is currently a small façade crate. It re-exports selected public types from `capsa-core` (which itself re-exports policy types from `capsa-net`).
-
-At crate root, these items are public:
-
-```rust
-pub use capsa::{
-    DomainPattern,
-    DomainPatternParseError,
-    MatchCriteria,
-    NetworkPolicy,
-    PolicyAction,
-    PolicyRule,
-    VmConfig,
-    VmNetworkInterfaceConfig,
-};
-```
-
----
-
-## API reference (current)
-
-## VM configuration
-
-### `VmConfig`
-User-facing VM configuration struct.
-
-Fields:
-- `root: Option<PathBuf>`
-- `kernel: Option<PathBuf>`
-- `initramfs: Option<PathBuf>`
-- `kernel_cmdline: Option<String>`
-- `vcpus: u8`
-- `memory_mib: u32`
-- `verbosity: u8`
-- `interfaces: Vec<VmNetworkInterfaceConfig>`
-
-Methods:
-- `validate(&self) -> anyhow::Result<()>`
-
-### `VmNetworkInterfaceConfig`
-User-facing network interface configuration.
-
-Fields:
-- `mac: Option<[u8; 6]>` (auto-generated when omitted)
-- `policy: Option<NetworkPolicy>` (runtime defaults to deny-all when omitted)
-
----
-
-## Network policy DSL
-
-### `NetworkPolicy`
-Policy document with default action + ordered rules.
-
-Fields:
-- `default_action: PolicyAction`
-- `rules: Vec<PolicyRule>`
-
-Common constructors/helpers:
-- `NetworkPolicy::deny_all()`
-- `NetworkPolicy::allow_all()`
-- `policy.allow_domain(DomainPattern)`
-- `NetworkPolicy::from_allowed_hosts(iter)`
-
-### `PolicyRule`
-A single rule entry.
-
-Fields:
-- `action: PolicyAction`
-- `criteria: MatchCriteria`
-
-### `PolicyAction`
-Rule/default action enum:
-- `Allow`
-- `Deny`
-- `Log`
-
-### `MatchCriteria`
-Match expression enum:
-- `Any`
-- `Domain(DomainPattern)`
-- `All(Vec<MatchCriteria>)`
-
-### `DomainPattern`
-Domain matcher enum:
-- `Exact(String)`
-- `Wildcard(String)`
-
-Methods:
-- `DomainPattern::parse(&str) -> Result<DomainPattern, DomainPatternParseError>`
-- `matches(&self, domain: &str) -> bool`
-
-### `DomainPatternParseError`
-Error enum returned when parsing invalid domain patterns.
-
----
-
-## What is intentionally *not* in `capsa` public API
-
-The following are **not** exported by the `capsa` crate:
-- daemon supervisor/adapters
-- daemon launch spec internals (`VmmLaunchSpec`, `ResolvedNetworkInterface`, etc.)
-- internal launcher/orchestration modules
-- VMM/netd runtime entrypoints
-
-Those remain internal to lower-level crates.
-
----
-
-## Minimal usage example
+## Quick start
 
 ```rust
 use capsa::{DomainPattern, NetworkPolicy, VmConfig, VmNetworkInterfaceConfig};
@@ -127,8 +15,8 @@ let policy = NetworkPolicy::deny_all()
 
 let vm = VmConfig {
     root: None,
-    kernel: Some("/path/to/vmlinuz".into()),
-    initramfs: Some("/path/to/initramfs.cpio".into()),
+    kernel: Some("/boot/vmlinuz".into()),
+    initramfs: Some("/boot/initramfs.cpio".into()),
     kernel_cmdline: Some("console=hvc0".into()),
     vcpus: 1,
     memory_mib: 512,
@@ -143,9 +31,84 @@ vm.validate()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
----
+## Design principles
 
-## Compatibility expectations
+- **Typed config, not a DSL**: Rust types are the source of truth for VM and policy shape.
+- **Secure defaults**: omitting an interface policy is deny-all at runtime; `NetworkPolicy::deny_all()` is the canonical starting point.
+- **Explicit relaxation**: outbound access is granted only by adding allow rules.
+- **Validated upfront**: `VmConfig::validate()` rejects malformed configuration before boot.
 
-- Items listed above are the intended user-facing surface of `capsa`.
-- Everything else should be treated as internal implementation detail unless explicitly re-exported here.
+## Network policy
+
+Deny everything, then allow a single exact host:
+
+```rust
+use capsa::{DomainPattern, NetworkPolicy};
+
+let policy = NetworkPolicy::deny_all()
+    .allow_domain(DomainPattern::parse("api.example.com")?);
+# Ok::<(), capsa::DomainPatternParseError>(())
+```
+
+Wildcards — `*.example.com` matches subdomains, not the apex:
+
+```rust
+use capsa::{DomainPattern, NetworkPolicy};
+
+let policy = NetworkPolicy::deny_all()
+    .allow_domain(DomainPattern::parse("*.example.com")?);
+# Ok::<(), capsa::DomainPatternParseError>(())
+```
+
+Build a policy from a list of hosts (invalid patterns return an error):
+
+```rust
+use capsa::NetworkPolicy;
+
+let policy = NetworkPolicy::from_allowed_hosts([
+    "api.example.com",
+    "*.cdn.example.com",
+])?;
+# Ok::<(), capsa::DomainPatternParseError>(())
+```
+
+Allow everything (debugging only):
+
+```rust
+use capsa::NetworkPolicy;
+
+let policy = NetworkPolicy::allow_all();
+```
+
+## Multiple interfaces
+
+Each interface carries its own policy, so a VM can route some traffic
+unrestricted and funnel the rest through a deny-by-default filter:
+
+```rust
+use capsa::{DomainPattern, NetworkPolicy, VmConfig, VmNetworkInterfaceConfig};
+
+let vm = VmConfig {
+    root: Some("/var/lib/capsa/rootfs".into()),
+    kernel: None,
+    initramfs: None,
+    kernel_cmdline: None,
+    vcpus: 2,
+    memory_mib: 1024,
+    verbosity: 0,
+    interfaces: vec![
+        VmNetworkInterfaceConfig {
+            mac: None,
+            policy: Some(NetworkPolicy::allow_all()),
+        },
+        VmNetworkInterfaceConfig {
+            mac: None,
+            policy: Some(
+                NetworkPolicy::deny_all()
+                    .allow_domain(DomainPattern::parse("api.example.com")?),
+            ),
+        },
+    ],
+};
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
