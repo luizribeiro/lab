@@ -80,18 +80,23 @@ impl VmProcesses {
     }
 }
 
+impl VmProcesses {
+    /// SIGKILL both child processes and wait for their reapers to
+    /// publish exit status. Safe to call after the children have
+    /// already exited on their own (becomes a no-op). Also invoked
+    /// implicitly by `Drop`.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        if let Some(netd) = self.netd.as_mut() {
+            netd.kill()?;
+        }
+        self.vmm.kill()
+    }
+}
+
 impl Drop for VmProcesses {
     fn drop(&mut self) {
-        // Supervisor policy: SIGKILL on drop, no SIGTERM grace period.
-        // Callers that want graceful shutdown should kill the child
-        // gracefully themselves before dropping.
-        if let Some(netd) = self.netd.as_mut() {
-            if let Err(err) = netd.kill() {
-                tracing::warn!(daemon = "netd", error = %err, "drop-time SIGKILL failed");
-            }
-        }
-        if let Err(err) = self.vmm.kill() {
-            tracing::warn!(daemon = "vmm", error = %err, "drop-time SIGKILL failed");
+        if let Err(err) = self.kill() {
+            tracing::warn!(error = %err, "drop-time SIGKILL failed");
         }
     }
 }

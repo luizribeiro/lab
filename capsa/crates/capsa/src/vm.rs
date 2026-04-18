@@ -1,8 +1,8 @@
-use capsa_core::VmConfig;
+use capsa_core::{VmConfig, VmProcesses};
 
 use crate::attach::{AttachApply, AttachCtx, Attachable};
 use crate::boot::{Boot, BootKind};
-use crate::error::BuildError;
+use crate::error::{BuildError, RuntimeError, StartError};
 
 #[derive(Debug, Clone)]
 pub struct Vm {
@@ -13,6 +13,22 @@ impl Vm {
     #[doc(hidden)]
     pub fn __into_core_config(self) -> VmConfig {
         self.config
+    }
+
+    /// Spawn the VM's supervisor processes and return a
+    /// [`VmHandle`]. The handle blocks the VM's lifecycle until you
+    /// call [`VmHandle::wait`], or dropped it to SIGKILL both
+    /// children.
+    pub fn start(self) -> Result<VmHandle, StartError> {
+        let inner = self.config.spawn().map_err(StartError::new)?;
+        Ok(VmHandle { inner })
+    }
+
+    /// Blocking convenience: start the VM and wait for it to exit.
+    /// Equivalent to `self.start()?.wait()`.
+    pub fn run(self) -> Result<(), RuntimeError> {
+        let mut inner = self.config.spawn().map_err(RuntimeError::new)?;
+        inner.wait().map_err(RuntimeError::new)
     }
 
     pub fn builder(boot: impl Into<Boot>) -> VmBuilder {
@@ -95,6 +111,23 @@ impl VmBuilder {
             .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
 
         Ok(Vm { config })
+    }
+}
+
+pub struct VmHandle {
+    inner: VmProcesses,
+}
+
+impl VmHandle {
+    /// SIGKILL both child processes immediately. Safe to call after
+    /// the VM has exited on its own (becomes a no-op).
+    pub fn kill(&mut self) -> Result<(), RuntimeError> {
+        self.inner.kill().map_err(RuntimeError::new)
+    }
+
+    /// Block until the VM exits. Consumes the handle.
+    pub fn wait(mut self) -> Result<(), RuntimeError> {
+        self.inner.wait().map_err(RuntimeError::new)
     }
 }
 

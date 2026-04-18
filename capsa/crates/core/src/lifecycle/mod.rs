@@ -80,4 +80,8 @@ impl VmProcesses {
     pub fn wait(&mut self) -> Result<()> {
         anyhow::bail!("capsa VM launch is only supported on Linux and macOS")
     }
+
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
