@@ -2,26 +2,17 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use capsa::{Boot, Network, PortForward, Vm};
-use clap::{ArgAction, ArgGroup, Parser};
+use clap::{ArgAction, Parser};
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "capsa",
-    version,
-    about = "Start a microVM with libkrun",
-    group(ArgGroup::new("boot-source").required(true).args(["root", "kernel"]))
-)]
+#[command(name = "capsa", version, about = "Start a microVM with libkrun")]
 struct Cli {
-    /// Path to VM root filesystem directory.
-    #[arg(long, conflicts_with = "kernel")]
-    root: Option<PathBuf>,
-
     /// Kernel image path.
-    #[arg(long, conflicts_with = "root")]
-    kernel: Option<PathBuf>,
+    #[arg(long)]
+    kernel: PathBuf,
 
     /// Optional initramfs path.
-    #[arg(long, requires = "kernel")]
+    #[arg(long)]
     initramfs: Option<PathBuf>,
 
     /// Optional kernel command line.
@@ -73,10 +64,7 @@ fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
 
 impl Cli {
     fn to_boot(&self) -> Boot {
-        if let Some(root) = &self.root {
-            return Boot::root(root.clone());
-        }
-        let mut kb = Boot::kernel(self.kernel.clone().expect("clap group guarantees kernel"));
+        let mut kb = Boot::kernel(self.kernel.clone());
         if let Some(initramfs) = &self.initramfs {
             kb = kb.initramfs(initramfs.clone());
         }
@@ -164,7 +152,7 @@ mod tests {
 
     #[test]
     fn forward_requires_allow_host() {
-        let args = Cli::parse_from(["capsa", "--root", "/tmp/root", "--forward", "9100:9100"]);
+        let args = Cli::parse_from(["capsa", "--kernel", "/tmp/kernel", "--forward", "9100:9100"]);
 
         let err = args
             .to_vm()
@@ -178,8 +166,8 @@ mod tests {
     fn malformed_forward_returns_error() {
         let args = Cli::parse_from([
             "capsa",
-            "--root",
-            "/tmp/root",
+            "--kernel",
+            "/tmp/kernel",
             "--allow-host",
             "*",
             "--forward",
@@ -194,8 +182,8 @@ mod tests {
     fn forward_port_zero_returns_error() {
         let args = Cli::parse_from([
             "capsa",
-            "--root",
-            "/tmp/root",
+            "--kernel",
+            "/tmp/kernel",
             "--allow-host",
             "*",
             "--forward",
@@ -210,8 +198,8 @@ mod tests {
     fn duplicate_host_port_returns_error() {
         let args = Cli::parse_from([
             "capsa",
-            "--root",
-            "/tmp/root",
+            "--kernel",
+            "/tmp/kernel",
             "--allow-host",
             "*",
             "--forward",
@@ -230,8 +218,8 @@ mod tests {
     fn malformed_allow_host_pattern_returns_error() {
         let args = Cli::parse_from([
             "capsa",
-            "--root",
-            "/tmp/root",
+            "--kernel",
+            "/tmp/kernel",
             "--allow-host",
             "*example.com",
         ]);
@@ -244,7 +232,7 @@ mod tests {
 
     #[test]
     fn net_flag_is_rejected_during_cli_parsing() {
-        let err = Cli::try_parse_from(["capsa", "--root", "/tmp/root", "--net"])
+        let err = Cli::try_parse_from(["capsa", "--kernel", "/tmp/kernel", "--net"])
             .expect_err("legacy --net should be rejected");
 
         assert_eq!(err.kind(), ErrorKind::UnknownArgument);

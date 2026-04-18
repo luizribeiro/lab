@@ -187,18 +187,6 @@ impl KrunVm<Configured> {
 
         Ok(self.into_state())
     }
-
-    pub(crate) fn set_root(self, root: &Path) -> Result<KrunVm<BootConfigured>> {
-        let root = path_to_cstring(root).context("root path contains NUL")?;
-
-        // SAFETY: pointer valid for duration of call.
-        check_rc(
-            unsafe { ffi::krun_set_root(self.ctx.id, root.as_ptr()) },
-            "failed to configure VM root",
-        )?;
-
-        Ok(self.into_state())
-    }
 }
 
 impl KrunVm<BootConfigured> {

@@ -37,7 +37,6 @@ pub(super) fn spawn_vmm(
     }
 
     let spec = VmmLaunchSpec {
-        root: paths.root,
         kernel: paths.kernel,
         initramfs: paths.initramfs,
         kernel_cmdline: config.kernel_cmdline.clone(),
@@ -57,16 +56,14 @@ pub(super) fn spawn_vmm(
 /// the launch spec; built once per `spawn_vmm` call. Private to
 /// this file because no other site needs the post-symlink form.
 struct VmmPaths {
-    root: Option<PathBuf>,
-    kernel: Option<PathBuf>,
+    kernel: PathBuf,
     initramfs: Option<PathBuf>,
 }
 
 impl VmmPaths {
     fn from_config(config: &VmConfig) -> Self {
         Self {
-            root: config.root.as_deref().map(plan::canonical_or_unchanged),
-            kernel: config.kernel.as_deref().map(plan::canonical_or_unchanged),
+            kernel: plan::canonical_or_unchanged(&config.kernel),
             initramfs: config
                 .initramfs
                 .as_deref()
@@ -83,24 +80,11 @@ fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
         .read_only_path(plan::canonical_or_unchanged(vmm_exe))
         // libkrun reads this to enumerate capabilities before dropping
         // privileges for the guest.
-        .read_only_path(PathBuf::from("/proc/sys/kernel/cap_last_cap"));
+        .read_only_path(PathBuf::from("/proc/sys/kernel/cap_last_cap"))
+        .read_only_path(paths.kernel.clone());
     builder = child::apply_syd_path(builder);
     builder = child::apply_library_dirs(builder);
 
-    if let Some(root) = &paths.root {
-        // root is a canonicalized, caller-controlled path that may be
-        // a directory (rootfs) or a file (disk image). The is_dir()
-        // check here is in trusted caller code, not in the sandbox
-        // internals where the original TOCTOU concern applied.
-        if root.is_dir() {
-            builder = builder.read_write_dir(root.clone());
-        } else {
-            builder = builder.read_write_path(root.clone());
-        }
-    }
-    if let Some(kernel) = &paths.kernel {
-        builder = builder.read_only_path(kernel.clone());
-    }
     if let Some(initramfs) = &paths.initramfs {
         builder = builder.read_only_path(initramfs.clone());
     }

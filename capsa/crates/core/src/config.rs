@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmConfig {
-    pub root: Option<PathBuf>,
-    pub kernel: Option<PathBuf>,
+    pub kernel: PathBuf,
     pub initramfs: Option<PathBuf>,
     pub kernel_cmdline: Option<String>,
     pub vcpus: u8,

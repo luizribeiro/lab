@@ -102,8 +102,7 @@ impl NetLaunchSpec {
 /// never crosses this boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmmLaunchSpec {
-    pub root: Option<PathBuf>,
-    pub kernel: Option<PathBuf>,
+    pub kernel: PathBuf,
     pub initramfs: Option<PathBuf>,
     pub kernel_cmdline: Option<String>,
     pub vcpus: u8,
@@ -336,8 +335,7 @@ mod vmm_tests {
 
     fn base_spec() -> VmmLaunchSpec {
         VmmLaunchSpec {
-            root: Some("/tmp/root".into()),
-            kernel: None,
+            kernel: "/tmp/kernel".into(),
             initramfs: None,
             kernel_cmdline: None,
             vcpus: 1,

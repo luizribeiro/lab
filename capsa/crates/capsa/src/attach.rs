@@ -102,7 +102,7 @@ impl NetworkAttach {
     /// ```no_run
     /// # use capsa::{Boot, Network, PortForward, Vm};
     /// # let net = Network::builder().build()?.start()?;
-    /// Vm::builder(Boot::root("/rootfs"))
+    /// Vm::builder(Boot::kernel("/boot/vmlinuz"))
     ///     .attach_with(&net, |a| {
     ///         a.forward(PortForward { host: 8080, guest: 80 })
     ///             .forward(PortForward { host: 8443, guest: 443 })

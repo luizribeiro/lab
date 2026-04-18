@@ -17,7 +17,7 @@
 //! use capsa::{Boot, Network, PortForward, Vm};
 //!
 //! let api = Network::builder().allow_host("api.example.com").build()?.start()?;
-//! let exit = Vm::builder(Boot::root("/rootfs"))
+//! let exit = Vm::builder(Boot::kernel("/boot/vmlinuz"))
 //!     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
 //!     .build()?
 //!     .run()?;

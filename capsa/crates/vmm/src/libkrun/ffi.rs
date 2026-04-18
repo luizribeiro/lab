@@ -40,7 +40,6 @@ unsafe extern "C" {
     pub(super) fn krun_init_log(target_fd: i32, level: u32, style: u32, options: u32) -> i32;
     pub(super) fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
     pub(super) fn krun_set_gpu_options2(ctx_id: u32, virgl_flags: u32, shm_size: u64) -> i32;
-    pub(super) fn krun_set_root(ctx_id: u32, root_path: *const c_char) -> i32;
     pub(super) fn krun_set_kernel(
         ctx_id: u32,
         kernel_path: *const c_char,

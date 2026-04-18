@@ -106,8 +106,7 @@ mod tests {
 
     fn sample_config() -> VmConfig {
         VmConfig {
-            root: Some("/tmp/root".into()),
-            kernel: Some("/tmp/kernel".into()),
+            kernel: "/tmp/kernel".into(),
             initramfs: Some("/tmp/initramfs".into()),
             kernel_cmdline: Some("console=ttyS0".to_string()),
             vcpus: 1,

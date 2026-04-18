@@ -51,15 +51,6 @@ let vm = Vm::builder(
 # Ok::<(), capsa::BuildError>(())
 ```
 
-Or a disk-image root:
-
-```rust
-use capsa::{Boot, Vm};
-
-let vm = Vm::builder(Boot::root("/var/lib/capsa/rootfs")).build()?;
-# Ok::<(), capsa::BuildError>(())
-```
-
 ## Network policy
 
 `Network::builder()` starts deny-all; the DSL is allowlist-first:
@@ -117,8 +108,8 @@ use capsa::{Boot, Network, Vm};
 
 let api = Network::builder().allow_host("api.example.com").build()?.start()?;
 
-let vm1 = Vm::builder(Boot::root("/rootfs-a")).attach(&api).build()?;
-let vm2 = Vm::builder(Boot::root("/rootfs-b")).attach(&api).build()?;
+let vm1 = Vm::builder(Boot::kernel("/boot/vmlinuz")).attach(&api).build()?;
+let vm2 = Vm::builder(Boot::kernel("/boot/vmlinuz")).attach(&api).build()?;
 // vm1 and vm2 share the same netd; they're on the same virtual subnet.
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -134,7 +125,7 @@ use capsa::{Boot, Network, PortForward, Vm};
 
 let net = Network::builder().allow_all_hosts().build()?.start()?;
 
-let vm = Vm::builder(Boot::root("/rootfs"))
+let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
     .attach_with(&net, |a| {
         a.mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee])
             .forward(PortForward { host: 8080, guest: 80 })
@@ -152,7 +143,7 @@ extension point.
 
 ```rust,ignore
 // Future in-tree API
-let vm = Vm::builder(Boot::root("/rootfs"))
+let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
     .attach(&api_net)
     .attach_with(&scratch_disk, |d| d.mount("/var/lib/data"))
     .build()?;
@@ -168,7 +159,7 @@ Blocking (simplest — mirrors `Command::status()`):
 ```rust,no_run
 use capsa::{Boot, Vm};
 
-Vm::builder(Boot::root("/rootfs")).build()?.run()?;
+Vm::builder(Boot::kernel("/boot/vmlinuz")).build()?.run()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -177,7 +168,7 @@ Holding a handle for programmatic control:
 ```rust,no_run
 use capsa::{Boot, Vm};
 
-let handle = Vm::builder(Boot::root("/rootfs")).build()?.start()?;
+let handle = Vm::builder(Boot::kernel("/boot/vmlinuz")).build()?.start()?;
 // ... do other work while the VM is running ...
 handle.wait()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -188,7 +179,9 @@ Explicit kill:
 ```rust,no_run
 use capsa::{Boot, Vm};
 
-let mut handle = Vm::builder(Boot::root("/rootfs")).build()?.start()?;
+let mut handle = Vm::builder(Boot::kernel("/boot/vmlinuz"))
+    .build()?
+    .start()?;
 handle.kill()?;
 handle.wait()?;
 # Ok::<(), Box<dyn std::error::Error>>(())

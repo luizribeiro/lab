@@ -28,8 +28,7 @@ impl std::fmt::Debug for Vm {
 impl Vm {
     /// Start a fresh VM builder. `boot` is required up front so a
     /// VM can never be constructed without one; pass a [`Boot`]
-    /// directly (`Boot::root(path)`) or a [`KernelBoot`] which
-    /// implicitly converts.
+    /// directly or a [`KernelBoot`] which implicitly converts.
     pub fn builder(boot: impl Into<Boot>) -> VmBuilder {
         VmBuilder {
             boot: boot.into(),
@@ -143,7 +142,7 @@ impl VmBuilder {
     /// ```no_run
     /// # use capsa::{Boot, Network, PortForward, Vm};
     /// # let api = Network::builder().build()?.start()?;
-    /// Vm::builder(Boot::root("/rootfs"))
+    /// Vm::builder(Boot::kernel("/boot/vmlinuz"))
     ///     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
     ///     .build()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -164,20 +163,16 @@ impl VmBuilder {
     /// deferred input is invalid (today: none — validation happens
     /// at `Network::build` time).
     pub fn build(self) -> Result<Vm, BuildError> {
-        let (root, kernel, initramfs, kernel_cmdline) = match self.boot.kind {
-            BootKind::Root(path) => (Some(path), None, None, None),
-            BootKind::Kernel {
-                kernel,
-                initramfs,
-                cmdline,
-            } => (None, Some(kernel), initramfs, cmdline),
-        };
-
-        let config = VmConfig {
-            root,
+        let BootKind::Kernel {
             kernel,
             initramfs,
-            kernel_cmdline,
+            cmdline,
+        } = self.boot.kind;
+
+        let config = VmConfig {
+            kernel,
+            initramfs,
+            kernel_cmdline: cmdline,
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
             verbosity: self.verbosity,
@@ -304,7 +299,7 @@ mod tests {
 
     #[test]
     fn builder_applies_defaults() {
-        let vm = Vm::builder(Boot::root("/var/lib/capsa/rootfs"))
+        let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
             .build()
             .expect("build should succeed");
 
@@ -312,16 +307,6 @@ mod tests {
         assert_eq!(vm.config.memory_mib, 512);
         assert_eq!(vm.config.verbosity, 0);
         assert!(vm.attachments.is_empty());
-    }
-
-    #[test]
-    fn root_boot_lowers_to_root_path() {
-        let vm = Vm::builder(Boot::root("/var/lib/capsa/rootfs"))
-            .build()
-            .expect("build should succeed");
-
-        assert_eq!(vm.config.root, Some(PathBuf::from("/var/lib/capsa/rootfs")));
-        assert_eq!(vm.config.kernel, None);
     }
 
     #[test]
@@ -334,7 +319,7 @@ mod tests {
         .build()
         .expect("build should succeed");
 
-        assert_eq!(vm.config.kernel, Some(PathBuf::from("/boot/vmlinuz")));
+        assert_eq!(vm.config.kernel, PathBuf::from("/boot/vmlinuz"));
         assert_eq!(
             vm.config.initramfs,
             Some(PathBuf::from("/boot/initramfs.cpio"))
@@ -344,7 +329,7 @@ mod tests {
 
     #[test]
     fn resource_setters_lower_to_config() {
-        let vm = Vm::builder(Boot::root("/rootfs"))
+        let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
             .vcpus(4)
             .memory_mib(2048)
             .verbosity(2)
@@ -362,7 +347,7 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        assert_eq!(vm.config.kernel, Some(PathBuf::from("/boot/vmlinuz")));
+        assert_eq!(vm.config.kernel, PathBuf::from("/boot/vmlinuz"));
         assert_eq!(vm.config.initramfs, None);
         assert_eq!(vm.config.kernel_cmdline, None);
     }

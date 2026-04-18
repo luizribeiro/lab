@@ -2,12 +2,11 @@ use std::path::PathBuf;
 
 /// How the VM boots.
 ///
-/// Two mutually exclusive modes:
-/// - [`Boot::root`] — boot from an existing rootfs or disk image (the
-///   vmm picks which based on whether the path is a directory or a
-///   file). Use this for VM-shaped workloads.
-/// - [`Boot::kernel`] — supply a kernel image directly and optionally
-///   an initramfs and cmdline. Use this for minimal / custom boots.
+/// Today there is one mode: direct-kernel boot via [`Boot::kernel`],
+/// which supplies a kernel image plus an optional initramfs and
+/// kernel command line. The type is shaped as an enum wrapper so
+/// future boot modes (disk image, EFI) can land as new variants
+/// without breaking existing callers.
 ///
 /// Required up front by [`Vm::builder`](crate::Vm::builder) so a VM
 /// cannot be constructed without a boot source.
@@ -18,7 +17,6 @@ pub struct Boot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BootKind {
-    Root(PathBuf),
     Kernel {
         kernel: PathBuf,
         initramfs: Option<PathBuf>,
@@ -27,16 +25,6 @@ pub(crate) enum BootKind {
 }
 
 impl Boot {
-    /// Boot from an existing root. `path` may be either a directory
-    /// (treated as a rootfs, mounted read-write) or a regular file
-    /// (treated as a disk image). The vmm picks the mode at start
-    /// time.
-    pub fn root(path: impl Into<PathBuf>) -> Self {
-        Self {
-            kind: BootKind::Root(path.into()),
-        }
-    }
-
     /// Start a [`KernelBoot`] builder for direct-kernel boot. Chain
     /// `.initramfs(...)` and `.cmdline(...)` as needed; the result
     /// implicitly converts to `Boot` via `Into` so
@@ -102,15 +90,6 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn root_boot_captures_path() {
-        let boot = Boot::root("/var/lib/capsa/rootfs");
-        assert_eq!(
-            boot.kind,
-            BootKind::Root(PathBuf::from("/var/lib/capsa/rootfs"))
-        );
-    }
-
-    #[test]
     fn kernel_boot_without_initramfs_or_cmdline() {
         let boot: Boot = Boot::kernel("/boot/vmlinuz").into();
         assert_eq!(
@@ -152,9 +131,7 @@ mod tests {
             .cmdline("first")
             .cmdline("second")
             .into();
-        let BootKind::Kernel { cmdline, .. } = boot.kind else {
-            panic!("expected kernel boot");
-        };
+        let BootKind::Kernel { cmdline, .. } = boot.kind;
         assert_eq!(cmdline.as_deref(), Some("second"));
     }
 }

@@ -16,17 +16,13 @@ pub fn start_vm(spec: &VmmLaunchSpec) -> Result<()> {
 
     let vm = configure_network(vm, &spec.resolved_interfaces)?;
 
-    if let Some(kernel) = &spec.kernel {
-        let kernel_cmdline = effective_kernel_cmdline(spec);
-        let vm = vm.set_kernel(kernel, spec.initramfs.as_deref(), kernel_cmdline.as_deref())?;
-        return vm.start_enter();
-    }
-
-    if let Some(root) = &spec.root {
-        return vm.set_root(root)?.start_enter();
-    }
-
-    anyhow::bail!("missing boot source: pass either --root <dir> or --kernel <path>")
+    let kernel_cmdline = effective_kernel_cmdline(spec);
+    let vm = vm.set_kernel(
+        &spec.kernel,
+        spec.initramfs.as_deref(),
+        kernel_cmdline.as_deref(),
+    )?;
+    vm.start_enter()
 }
 
 fn configure_network(
@@ -95,8 +91,7 @@ mod tests {
 
     fn base_spec() -> VmmLaunchSpec {
         VmmLaunchSpec {
-            root: Some("/tmp/root".into()),
-            kernel: None,
+            kernel: "/boot/vmlinuz".into(),
             initramfs: None,
             kernel_cmdline: None,
             vcpus: 1,
