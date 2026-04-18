@@ -8,9 +8,8 @@ use anyhow::{bail, Context, Result};
 
 use crate::config::VmConfig;
 
-use super::child::{self, ChildHandle, Exited};
-use super::netd::{self, NetdSpawn};
-use super::plan::{self, VmmInterfaceBinding};
+use super::child::ChildHandle;
+use super::plan::VmmInterfaceBinding;
 use super::vmm;
 
 /// A resolved VM-side attachment produced by the caller (e.g. the
@@ -23,7 +22,6 @@ pub struct VmAttachment {
 
 pub struct VmProcesses {
     vmm: ChildHandle,
-    netd: Option<ChildHandle>,
 }
 
 impl VmProcesses {
@@ -31,8 +29,6 @@ impl VmProcesses {
     /// external network daemon. The caller has already sent
     /// `AddInterface` over the daemon's control socket for each
     /// attachment and now hands the guest-side fds to this function.
-    /// No internal netd is started; the returned `VmProcesses`
-    /// supervises only the vmm child.
     pub fn spawn_with_attachments(
         config: &VmConfig,
         attachments: Vec<VmAttachment>,
@@ -47,89 +43,25 @@ impl VmProcesses {
             .collect();
         let vmm =
             vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
-        Ok(Self { vmm, netd: None })
-    }
-
-    pub(super) fn spawn(config: &VmConfig) -> Result<Self> {
-        config.validate().context("invalid VM configuration")?;
-
-        if config.interfaces.is_empty() {
-            let vmm = vmm::spawn_vmm(config, vec![])?;
-            return Ok(Self { vmm, netd: None });
-        }
-
-        let plans = plan::plan_interfaces(config)?;
-        let sockets = plan::open_interface_sockets(plans)?;
-
-        let (
-            NetdSpawn {
-                child: netd_child,
-                ready_reader,
-            },
-            attachment,
-            bindings,
-        ) = netd::spawn_netd(
-            sockets,
-            config.interfaces.first().and_then(|i| i.policy.clone()),
-        )?;
-
-        netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
-            .context("netd readiness check failed")?;
-
-        attachment
-            .attach_all()
-            .context("failed to attach VM interfaces via netd control socket")?;
-
-        // If spawn_vmm errors below, `netd_child` is dropped here and
-        // its `ChildHandle::Drop` tears down the netd child. No
-        // explicit cleanup needed — this is the whole point of RAII.
-        let vmm =
-            vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
-
-        Ok(Self {
-            vmm,
-            netd: Some(netd_child),
-        })
+        Ok(Self { vmm })
     }
 
     pub fn wait(&mut self) -> Result<()> {
-        let Some(netd) = self.netd.as_mut() else {
-            let status = self
-                .vmm
-                .wait_by_ref()
-                .context("failed to wait on sandboxed VMM child")?;
-            return if status.success() {
-                Ok(())
-            } else {
-                bail!("sandboxed VMM process exited with status {status}")
-            };
-        };
-
-        match child::wait_either(&mut self.vmm, netd) {
-            Exited::First(Ok(status)) if status.success() => Ok(()),
-            Exited::First(Ok(status)) => {
-                bail!("sandboxed VMM process exited with status {status}")
-            }
-            Exited::First(Err(err)) => Err(err).context("failed to reap VMM process"),
-            Exited::Second(Ok(status)) => {
-                bail!(
-                    "network daemon exited unexpectedly while VMM was running with status {status}"
-                )
-            }
-            Exited::Second(Err(err)) => Err(err).context("failed to reap network daemon"),
+        let status = self
+            .vmm
+            .wait_by_ref()
+            .context("failed to wait on sandboxed VMM child")?;
+        if status.success() {
+            Ok(())
+        } else {
+            bail!("sandboxed VMM process exited with status {status}")
         }
     }
-}
 
-impl VmProcesses {
-    /// SIGKILL both child processes and wait for their reapers to
-    /// publish exit status. Safe to call after the children have
-    /// already exited on their own (becomes a no-op). Also invoked
-    /// implicitly by `Drop`.
+    /// SIGKILL the vmm child and wait for its reaper to publish exit
+    /// status. Safe to call after the child has already exited on its
+    /// own (becomes a no-op). Also invoked implicitly by `Drop`.
     pub fn kill(&mut self) -> std::io::Result<()> {
-        if let Some(netd) = self.netd.as_mut() {
-            netd.kill()?;
-        }
         self.vmm.kill()
     }
 }

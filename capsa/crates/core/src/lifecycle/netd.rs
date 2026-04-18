@@ -1,6 +1,6 @@
-//! capsa-netd spawn path: builds the netd sandbox policy, hands the
-//! caller-provided host_fd into the sandboxed daemon, and waits for
-//! the daemon's one-byte readiness signal before returning.
+//! Shared helpers for bringing up a `capsa-netd` child: the sandbox
+//! policy builder, the readiness-timeout constant, and the blocking
+//! `wait_ready` that consumes the daemon's one-byte handshake.
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -8,114 +8,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_spec::{encode_launch_spec_args, NetLaunchSpec};
 use lockin::SandboxBuilder;
-use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
 
-use super::child::{self, ChildHandle};
-use super::control_client::ControlClient;
-use super::plan::{self, InterfacePlan, InterfaceSockets, VmmInterfaceBinding};
+use super::child;
+use super::plan;
 
 pub(super) const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_SIGNAL: u8 = b'R';
 
-pub(super) struct NetdSpawn {
-    pub(super) child: ChildHandle,
-    pub(super) ready_reader: OwnedFd,
-}
-
-pub(super) struct PendingAttach {
-    pub(super) mac: [u8; 6],
-    pub(super) port_forwards: Vec<(u16, u16)>,
-    pub(super) host_fd: OwnedFd,
-}
-
-pub(super) struct NetdAttachment {
-    control: ControlClient,
-    pending: Vec<PendingAttach>,
-}
-
-impl NetdAttachment {
-    /// Send an `AddInterface` request for every pending attachment.
-    /// Must be called after the daemon signals readiness.
-    pub(super) fn attach_all(mut self) -> Result<()> {
-        for attach in self.pending {
-            self.control
-                .send_add_interface(attach.mac, attach.port_forwards, &attach.host_fd)
-                .with_context(|| {
-                    format!("failed to attach interface with MAC {:02x?}", attach.mac)
-                })?;
-        }
-        Ok(())
-    }
-}
-
-pub(super) fn spawn_netd(
-    sockets: Vec<InterfaceSockets>,
-    network_policy: Option<capsa_net::NetworkPolicy>,
-) -> Result<(NetdSpawn, NetdAttachment, Vec<VmmInterfaceBinding>)> {
-    let binary = child::resolve_binary("CAPSA_NETD_PATH", "capsa-netd")
-        .context("failed to resolve net daemon binary")?;
-    let (ready_reader, ready_writer) =
-        std::io::pipe().context("failed to create netd readiness pipe")?;
-
-    let (client_sock, netd_sock) = socketpair(
-        AddressFamily::Unix,
-        SockType::SeqPacket,
-        None,
-        SockFlag::SOCK_CLOEXEC,
-    )
-    .context("failed to create netd control socketpair")?;
-
-    let builder = netd_sandbox_builder(&binary);
-
-    let mut bindings = Vec::with_capacity(sockets.len());
-    let mut pending = Vec::with_capacity(sockets.len());
-
-    for socket in sockets {
-        let InterfaceSockets {
-            plan: InterfacePlan { mac, port_forwards },
-            host_fd,
-            guest_fd,
-        } = socket;
-        bindings.push(VmmInterfaceBinding { mac, guest_fd });
-        pending.push(PendingAttach {
-            mac,
-            port_forwards,
-            host_fd,
-        });
-    }
-
-    let ready_writer_owned = OwnedFd::from(ready_writer);
-    let ready_fd_num = ready_writer_owned.as_raw_fd();
-    let control_fd_num = netd_sock.as_raw_fd();
-    let fds: Vec<OwnedFd> = vec![ready_writer_owned, netd_sock];
-
-    let spec = NetLaunchSpec {
-        ready_fd: ready_fd_num,
-        control_fd: Some(control_fd_num),
-        policy: network_policy,
-    };
-    spec.validate().context("invalid netd launch spec")?;
-
-    let args = encode_launch_spec_args(&spec)?;
-    let process = child::spawn_sandboxed("netd", &binary, builder, fds, &args, true)
-        .context("failed to spawn network daemon")?;
-
-    Ok((
-        NetdSpawn {
-            child: process,
-            ready_reader: OwnedFd::from(ready_reader),
-        },
-        NetdAttachment {
-            control: ControlClient::new(client_sock),
-            pending,
-        },
-        bindings,
-    ))
-}
-
-fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
+pub(super) fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
     let mut builder = lockin::Sandbox::builder()
         .allow_network(true)
         .read_only_path(plan::canonical_or_unchanged(binary_path));

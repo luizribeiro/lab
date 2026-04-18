@@ -23,16 +23,12 @@
 //!   the kernel for an unrelated process. A narrow race between the
 //!   "load flag" and "send signal" is possible but vanishingly
 //!   unlikely in practice; see the comment on `Drop` for details.
-//! - `wait_either` polls both handles' receivers with `try_recv` and a
-//!   short sleep. No bridge threads, no signal handlers, no
-//!   platform-specific syscalls.
-
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -122,12 +118,6 @@ fn ensure_executable(path: &Path) -> Result<()> {
         bail!("{} is not executable (no x bit set)", path.display());
     }
     Ok(())
-}
-
-/// Which of the two children `wait_either` saw exit first.
-pub(super) enum Exited {
-    First(Result<ExitStatus>),
-    Second(Result<ExitStatus>),
 }
 
 /// Handle to a spawned daemon child.
@@ -372,38 +362,6 @@ fn sandbox_bypassed_by_env() -> bool {
     )
 }
 
-/// Blocks until either `a` or `b` is reaped, returning the exit status
-/// of whichever one finished first. The other handle stays alive and
-/// its child is torn down implicitly when the caller drops the handle
-/// (or explicitly via `shutdown()`).
-pub(super) fn wait_either(a: &mut ChildHandle, b: &mut ChildHandle) -> Exited {
-    loop {
-        match a.status_rx.try_recv() {
-            Ok(status) => return Exited::First(status),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                return Exited::First(Err(anyhow::anyhow!(
-                    "{} reaper thread disconnected before reporting status",
-                    a.name
-                )));
-            }
-        }
-
-        match b.status_rx.try_recv() {
-            Ok(status) => return Exited::Second(status),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                return Exited::Second(Err(anyhow::anyhow!(
-                    "{} reaper thread disconnected before reporting status",
-                    b.name
-                )));
-            }
-        }
-
-        thread::sleep(DEFAULT_POLL_INTERVAL);
-    }
-}
-
 /// Send SIGTERM, wait up to `shutdown_timeout` for the reaper to flip
 /// `exited`, then escalate to SIGKILL if the child is still running.
 fn kill_with_timeout(
@@ -633,82 +591,6 @@ mod tests {
         );
     }
 
-    // ── wait_either ──────────────────────────────────────────────────
-
-    #[test]
-    fn wait_either_returns_first_when_it_exits_first() {
-        let _lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-        let fast = find_binary_on_path("true");
-        let slow = write_executable_script("capsa-slow", "sleep 5");
-
-        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
-        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
-
-        match wait_either(&mut a, &mut b) {
-            Exited::First(Ok(status)) => assert!(status.success()),
-            other => panic!("expected First success, got {other:?}"),
-        }
-
-        // Cleanup: drop both handles, slow child gets SIGTERM.
-        drop(a);
-        drop(b);
-        let _ = std::fs::remove_file(&slow);
-    }
-
-    #[test]
-    fn wait_either_returns_second_when_it_exits_first() {
-        let _lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-        let fast = find_binary_on_path("true");
-        let slow = write_executable_script("capsa-slow", "sleep 5");
-
-        let mut a = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
-        let mut b = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
-
-        match wait_either(&mut a, &mut b) {
-            Exited::Second(Ok(status)) => assert!(status.success()),
-            other => panic!("expected Second success, got {other:?}"),
-        }
-
-        drop(a);
-        drop(b);
-        let _ = std::fs::remove_file(&slow);
-    }
-
-    #[test]
-    fn wait_either_handles_already_exited_child() {
-        let _lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-        let fast = find_binary_on_path("true");
-        let slow = write_executable_script("capsa-slow2", "sleep 5");
-
-        let mut a = spawn_sandboxed("fast", &fast, bypass_builder(), vec![], &[], false).unwrap();
-        let mut b = spawn_sandboxed("slow", &slow, bypass_builder(), vec![], &[], false).unwrap();
-
-        // Give the fast child time to exit and the reaper to flip the
-        // flag before calling wait_either. wait_either must still
-        // report First rather than blocking forever on the slow one.
-        while !a.has_exited() {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-
-        match wait_either(&mut a, &mut b) {
-            Exited::First(Ok(_)) => {}
-            other => panic!("expected First after pre-exit, got {other:?}"),
-        }
-
-        drop(a);
-        drop(b);
-        let _ = std::fs::remove_file(&slow);
-    }
-
     // ── Drop path ────────────────────────────────────────────────────
 
     #[test]
@@ -730,14 +612,5 @@ mod tests {
         // Drop should not send any signals and should not block on
         // kill_with_timeout. Most importantly, it must not panic.
         drop(handle);
-    }
-
-    impl std::fmt::Debug for Exited {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Exited::First(r) => write!(f, "First({r:?})"),
-                Exited::Second(r) => write!(f, "Second({r:?})"),
-            }
-        }
     }
 }

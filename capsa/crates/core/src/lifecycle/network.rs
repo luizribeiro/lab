@@ -3,19 +3,16 @@
 //! public `capsa` crate to back a user-facing `NetworkHandle`.
 
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use capsa_net::NetworkPolicy;
 use capsa_spec::{encode_launch_spec_args, NetLaunchSpec};
-use lockin::SandboxBuilder;
 use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
 
 use super::child::{self, ChildHandle};
 use super::control_client::ControlClient;
-use super::netd::{wait_ready, READINESS_TIMEOUT};
-use super::plan;
+use super::netd::{netd_sandbox_builder, wait_ready, READINESS_TIMEOUT};
 
 pub struct NetworkProcesses {
     netd: Mutex<Option<ChildHandle>>,
@@ -93,22 +90,11 @@ impl Drop for NetworkProcesses {
     }
 }
 
-fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
-    let mut builder = lockin::Sandbox::builder()
-        .allow_network(true)
-        .read_only_path(plan::canonical_or_unchanged(binary_path));
-    builder = child::apply_syd_path(builder);
-    builder = child::apply_library_dirs(builder);
-    for runtime_read_path in capsa_net::runtime_read_paths() {
-        builder = builder.read_only_path(PathBuf::from(*runtime_read_path));
-    }
-    builder
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lifecycle::test_helpers::{env_lock, fake_netd_path, unique_temp_path, EnvVarGuard};
+    use std::path::Path;
     use std::time::{Duration, Instant};
 
     fn read_pid_file_with_timeout(path: &Path, timeout: Duration) -> u32 {
