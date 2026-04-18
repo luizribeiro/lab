@@ -89,6 +89,11 @@ impl GatewayStack {
                     }
                 }
 
+                Some(request) = self.preallocate_rx.recv() => {
+                    let ip = self.dhcp_server.get_or_allocate_ip(request.mac);
+                    let _ = request.response.send(ip);
+                }
+
                 Some(request) = self.port_forward_rx.recv() => {
                     let mut socket = new_smoltcp_tcp_socket();
                     let Some(local_port) = self.tcp_manager.allocate_local_port(&self.sockets) else {

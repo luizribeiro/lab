@@ -7,7 +7,10 @@ pub mod policy;
 pub mod switch;
 mod util;
 
-pub use gateway::{GatewayStack, GatewayStackConfig, PortForwardRequest};
+pub use gateway::{
+    GatewayStack, GatewayStackConfig, LeasePreallocationError, LeasePreallocator,
+    PortForwardRequest,
+};
 pub use policy::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PacketInfo, PolicyAction,
     PolicyChecker, PolicyResult, PolicyRule, TransportProtocol,

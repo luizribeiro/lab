@@ -201,7 +201,10 @@ impl DhcpServer {
         expired
     }
 
-    fn get_or_allocate_ip(&mut self, client_mac: EthernetAddress) -> Option<Ipv4Address> {
+    pub(super) fn get_or_allocate_ip(
+        &mut self,
+        client_mac: EthernetAddress,
+    ) -> Option<Ipv4Address> {
         if let Some(&(ip, _)) = self.leases.get(&client_mac) {
             return Some(ip);
         }

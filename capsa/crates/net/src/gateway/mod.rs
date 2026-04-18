@@ -4,6 +4,7 @@ mod device;
 mod dhcp;
 pub(super) mod dns;
 mod ingress;
+mod lease;
 pub(super) mod outbound_buffer;
 mod run;
 pub(super) mod tcp;
@@ -20,6 +21,8 @@ pub use self::config::GatewayStackConfig;
 use self::device::SmoltcpDevice;
 use self::dhcp::{DhcpEvent, DhcpServer};
 use self::dns::{DnsDispatcher, DnsResponse, MAX_DNS_QUERIES};
+use self::lease::LeaseRequest;
+pub use self::lease::{LeasePreallocationError, LeasePreallocator};
 pub use self::tcp::PortForwardRequest;
 use self::tcp::{TcpHostEvent, TcpManager};
 
@@ -58,6 +61,8 @@ pub struct GatewayStack {
     pub(super) tcp_host_rx: tokio::sync::mpsc::Receiver<TcpHostEvent>,
     pub(super) tcp_host_tx: tokio::sync::mpsc::Sender<TcpHostEvent>,
     pub(super) port_forward_rx: tokio::sync::mpsc::Receiver<PortForwardRequest>,
+    preallocate_tx: tokio::sync::mpsc::Sender<LeaseRequest>,
+    preallocate_rx: tokio::sync::mpsc::Receiver<LeaseRequest>,
     pub(super) policy_checker: Option<PolicyChecker>,
     pub(super) start_time: std::time::Instant,
     /// Channel for receiving frames from the I/O task (bounded for backpressure).
@@ -148,6 +153,9 @@ impl GatewayStack {
         let (port_forward_tx, port_forward_rx) = tokio::sync::mpsc::channel(1);
         drop(port_forward_tx);
 
+        let (preallocate_tx, preallocate_rx) =
+            tokio::sync::mpsc::channel(crate::config::channel::DEFAULT);
+
         Self {
             device,
             iface,
@@ -163,6 +171,8 @@ impl GatewayStack {
             tcp_host_rx,
             tcp_host_tx,
             port_forward_rx,
+            preallocate_tx,
+            preallocate_rx,
             policy_checker,
             start_time,
             rx_from_guest,
@@ -176,6 +186,12 @@ impl GatewayStack {
     ) -> Self {
         self.port_forward_rx = port_forward_rx;
         self
+    }
+
+    /// Returns a handle that can preallocate DHCP leases on this
+    /// running gateway. Cheaply cloneable.
+    pub fn lease_preallocator(&self) -> LeasePreallocator {
+        LeasePreallocator::new(self.preallocate_tx.clone())
     }
 
     pub(super) fn process_dhcp(&mut self) {
@@ -204,5 +220,77 @@ impl GatewayStack {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use crate::frame::{EthernetFrameIO, FrameReader, FrameWriter};
+    use std::io;
+    use std::net::Ipv4Addr;
+
+    struct NullFrameIo;
+    struct NullReader;
+    struct NullWriter;
+
+    impl EthernetFrameIO for NullFrameIo {
+        type ReadHalf = NullReader;
+        type WriteHalf = NullWriter;
+
+        fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
+            (NullReader, NullWriter)
+        }
+    }
+
+    impl FrameReader for NullReader {
+        async fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
+            std::future::pending().await
+        }
+    }
+
+    impl FrameWriter for NullWriter {
+        async fn send_frame(&mut self, _frame: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preallocate_returns_same_ip_for_same_mac() {
+        let stack = GatewayStack::new(NullFrameIo, GatewayStackConfig::default()).await;
+        let preallocator = stack.lease_preallocator();
+        tokio::spawn(async move { stack.run().await });
+
+        let mac = [0x52, 0x54, 0x00, 0x00, 0x00, 0x42];
+        let first = preallocator.preallocate(mac).await.expect("first alloc");
+        let second = preallocator.preallocate(mac).await.expect("second alloc");
+        assert_eq!(first, second);
+        assert_eq!(first, Ipv4Addr::new(10, 0, 2, 15));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preallocate_returns_distinct_ips_for_distinct_macs() {
+        let stack = GatewayStack::new(NullFrameIo, GatewayStackConfig::default()).await;
+        let preallocator = stack.lease_preallocator();
+        tokio::spawn(async move { stack.run().await });
+
+        let mac_a = [0x52, 0x54, 0x00, 0x00, 0x00, 0x01];
+        let mac_b = [0x52, 0x54, 0x00, 0x00, 0x00, 0x02];
+        let a = preallocator.preallocate(mac_a).await.expect("mac a");
+        let b = preallocator.preallocate(mac_b).await.expect("mac b");
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preallocate_fails_when_gateway_is_gone() {
+        let stack = GatewayStack::new(NullFrameIo, GatewayStackConfig::default()).await;
+        let preallocator = stack.lease_preallocator();
+        drop(stack);
+
+        let err = preallocator
+            .preallocate([0x52, 0x54, 0x00, 0x00, 0x00, 0x99])
+            .await
+            .expect_err("preallocation should fail after gateway drop");
+        assert!(matches!(err, LeasePreallocationError::GatewayGone));
     }
 }
