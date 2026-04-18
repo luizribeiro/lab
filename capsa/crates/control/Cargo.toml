@@ -1,0 +1,16 @@
+[package]
+name = "capsa-control"
+version = "0.1.0"
+edition = "2021"
+
+# Shared sync helpers for the capsa-netd control protocol: recv/send
+# of ControlRequest/ControlResponse over a SOCK_SEQPACKET socket,
+# including SCM_RIGHTS fd passing. Used by capsa-core (client side),
+# capsa-netd (server side), and the capsa-fake-netd test binary.
+
+[dependencies]
+anyhow = "1.0"
+capsa-spec = { path = "../spec" }
+libc = "0.2"
+nix = { version = "0.29", features = ["socket", "uio"] }
+serde_json = "1.0"

@@ -1,17 +1,12 @@
-//! Client side of the netd control protocol. Sends `AddInterface`
-//! requests over a `SOCK_SEQPACKET` control socket, transferring the
-//! host-side fd via `SCM_RIGHTS` ancillary data, and reads the
-//! daemon's response.
+//! Client side of the netd control protocol. Thin wrapper around
+//! `capsa-control` that pairs an `AddInterface` send with reading
+//! the daemon's response.
 
-use std::io::{IoSlice, IoSliceMut};
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 
 use anyhow::{bail, Context, Result};
+use capsa_control::{recv_response, send_request};
 use capsa_spec::{ControlRequest, ControlResponse};
-use nix::cmsg_space;
-use nix::sys::socket::{recvmsg, sendmsg, ControlMessage, MsgFlags};
-
-const MAX_RESPONSE_LEN: usize = 64 * 1024;
 
 pub(super) struct ControlClient {
     fd: OwnedFd,
@@ -29,53 +24,23 @@ impl ControlClient {
         host_fd: &impl AsRawFd,
     ) -> Result<()> {
         let request = ControlRequest::AddInterface { mac, port_forwards };
-        let body = serde_json::to_vec(&request).context("serialize AddInterface request")?;
-        let fds = [host_fd.as_raw_fd()];
-        let iov = [IoSlice::new(&body)];
-        let cmsgs = [ControlMessage::ScmRights(&fds)];
-
-        sendmsg::<()>(self.fd.as_raw_fd(), &iov, &cmsgs, MsgFlags::empty(), None)
-            .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+        send_request(self.fd.as_raw_fd(), &request, Some(host_fd.as_raw_fd()))
             .context("sendmsg AddInterface")?;
 
-        let response = self.recv_response().context("read AddInterface response")?;
-        match response {
+        match recv_response(self.fd.as_raw_fd()).context("read AddInterface response")? {
             ControlResponse::Ok => Ok(()),
             ControlResponse::Error { message } => {
                 bail!("netd rejected AddInterface: {message}")
             }
         }
     }
-
-    fn recv_response(&mut self) -> Result<ControlResponse> {
-        let mut buf = vec![0u8; MAX_RESPONSE_LEN];
-        let mut cmsg = cmsg_space!([RawFd; 1]);
-        let bytes = {
-            let mut iov = [IoSliceMut::new(&mut buf)];
-            let msg = recvmsg::<()>(
-                self.fd.as_raw_fd(),
-                &mut iov,
-                Some(&mut cmsg),
-                MsgFlags::empty(),
-            )
-            .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
-            .context("recvmsg response")?;
-            if msg.bytes == 0 {
-                bail!("netd control socket closed before sending response");
-            }
-            msg.bytes
-        };
-        serde_json::from_slice(&buf[..bytes]).context("deserialize ControlResponse")
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::socket::{
-        recvmsg, socketpair, AddressFamily, ControlMessageOwned, SockFlag, SockType,
-    };
-    use std::os::fd::FromRawFd;
+    use capsa_control::{recv_request, send_response, IncomingRequest};
+    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
 
     fn seqpacket_pair() -> (OwnedFd, OwnedFd) {
         socketpair(
@@ -98,36 +63,6 @@ mod tests {
         a
     }
 
-    fn recv_request_and_fd(fd: RawFd) -> (ControlRequest, Option<OwnedFd>) {
-        let mut buf = vec![0u8; 4096];
-        let mut cmsg = cmsg_space!([RawFd; 1]);
-        let (bytes, received_fd) = {
-            let mut iov = [IoSliceMut::new(&mut buf)];
-            let msg =
-                recvmsg::<()>(fd, &mut iov, Some(&mut cmsg), MsgFlags::empty()).expect("recvmsg");
-            let bytes = msg.bytes;
-            let mut received_fd: Option<OwnedFd> = None;
-            for cmsg in msg.cmsgs().expect("cmsgs") {
-                if let ControlMessageOwned::ScmRights(fds) = cmsg {
-                    if let Some(&raw) = fds.first() {
-                        // SAFETY: kernel transferred this fd to us.
-                        received_fd = Some(unsafe { OwnedFd::from_raw_fd(raw) });
-                    }
-                }
-            }
-            (bytes, received_fd)
-        };
-        let request: ControlRequest =
-            serde_json::from_slice(&buf[..bytes]).expect("deserialize request");
-        (request, received_fd)
-    }
-
-    fn send_response_sync(fd: RawFd, response: &ControlResponse) {
-        let body = serde_json::to_vec(response).unwrap();
-        let iov = [IoSlice::new(&body)];
-        sendmsg::<()>(fd, &iov, &[], MsgFlags::empty(), None).expect("sendmsg response");
-    }
-
     #[test]
     fn send_add_interface_round_trips_mac_forwards_and_fd() {
         let (client_fd, server_fd) = seqpacket_pair();
@@ -135,9 +70,14 @@ mod tests {
 
         let server_raw = server_fd.as_raw_fd();
         let server_handle = std::thread::spawn(move || {
-            let (request, host_fd) = recv_request_and_fd(server_raw);
-            send_response_sync(server_raw, &ControlResponse::Ok);
-            (request, host_fd)
+            let incoming = recv_request(server_raw)
+                .expect("recv_request")
+                .expect("peer closed");
+            send_response(server_raw, &ControlResponse::Ok).expect("send_response");
+            match incoming {
+                IncomingRequest::Parsed { request, fd } => (request, fd),
+                IncomingRequest::Malformed(err) => panic!("unexpected malformed: {err}"),
+            }
         });
 
         let mut client = ControlClient::new(client_fd);
@@ -168,13 +108,14 @@ mod tests {
 
         let server_raw = server_fd.as_raw_fd();
         let server_handle = std::thread::spawn(move || {
-            let (_request, _host_fd) = recv_request_and_fd(server_raw);
-            send_response_sync(
+            let _ = recv_request(server_raw).expect("recv_request");
+            send_response(
                 server_raw,
                 &ControlResponse::Error {
                     message: "pool exhausted".into(),
                 },
-            );
+            )
+            .expect("send_response");
         });
 
         let mut client = ControlClient::new(client_fd);
@@ -193,7 +134,7 @@ mod tests {
         let dummy = dummy_fd();
 
         let server_handle = std::thread::spawn(move || {
-            let _ = recv_request_and_fd(server_fd.as_raw_fd());
+            let _ = recv_request(server_fd.as_raw_fd()).expect("recv_request");
             drop(server_fd);
         });
 

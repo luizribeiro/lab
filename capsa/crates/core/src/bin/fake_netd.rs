@@ -4,14 +4,13 @@
 //! killed. Behaviour is driven by environment variables so the
 //! orchestrate test harness can script specific scenarios.
 
-use std::io::{IoSlice, IoSliceMut, Write};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::io::Write;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::thread;
 use std::time::Duration;
 
-use capsa_spec::{parse_launch_spec_args, ControlRequest, ControlResponse, NetLaunchSpec};
-use nix::cmsg_space;
-use nix::sys::socket::{recvmsg, sendmsg, ControlMessageOwned, MsgFlags};
+use capsa_control::{recv_request, send_response, IncomingRequest};
+use capsa_spec::{parse_launch_spec_args, ControlResponse, NetLaunchSpec};
 
 const READY_SIGNAL: u8 = b'R';
 
@@ -68,68 +67,18 @@ fn control_loop(raw_fd: i32) {
     // SAFETY: `raw_fd` is inherited from the launcher.
     let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
     loop {
-        match recv_once(fd.as_fd_raw()) {
+        match recv_request(fd.as_raw_fd()) {
             Ok(None) => return,
-            Ok(Some(_request)) => {
-                send_ok(fd.as_fd_raw());
+            Ok(Some(IncomingRequest::Parsed { .. } | IncomingRequest::Malformed(_))) => {
+                if let Err(err) = send_response(fd.as_raw_fd(), &ControlResponse::Ok) {
+                    eprintln!("fake-netd: send_response error: {err}");
+                    return;
+                }
             }
             Err(err) => {
-                eprintln!("fake-netd: control recv error: {err}");
+                eprintln!("fake-netd: recv_request error: {err}");
                 return;
             }
         }
-    }
-}
-
-trait AsFdRaw {
-    fn as_fd_raw(&self) -> RawFd;
-}
-
-impl AsFdRaw for OwnedFd {
-    fn as_fd_raw(&self) -> RawFd {
-        std::os::fd::AsRawFd::as_raw_fd(self)
-    }
-}
-
-fn recv_once(fd: RawFd) -> std::io::Result<Option<ControlRequest>> {
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut cmsg = cmsg_space!([RawFd; 1]);
-    let (bytes, received) = {
-        let mut iov = [IoSliceMut::new(&mut buf)];
-        let msg = recvmsg::<()>(fd, &mut iov, Some(&mut cmsg), MsgFlags::empty())
-            .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))?;
-        let bytes = msg.bytes;
-        let mut received: Option<RawFd> = None;
-        for cmsg in msg.cmsgs().map_err(std::io::Error::other)? {
-            if let ControlMessageOwned::ScmRights(fds) = cmsg {
-                if let Some(&raw) = fds.first() {
-                    received = Some(raw);
-                }
-            }
-        }
-        (bytes, received)
-    };
-
-    if let Some(raw) = received {
-        // SAFETY: kernel handed this fd to us; drop by closing.
-        unsafe {
-            libc::close(raw);
-        }
-    }
-
-    if bytes == 0 {
-        return Ok(None);
-    }
-
-    let request: ControlRequest = serde_json::from_slice(&buf[..bytes])
-        .map_err(|e| std::io::Error::other(format!("parse request: {e}")))?;
-    Ok(Some(request))
-}
-
-fn send_ok(fd: RawFd) {
-    let body = serde_json::to_vec(&ControlResponse::Ok).expect("serialize Ok");
-    let iov = [IoSlice::new(&body)];
-    if let Err(err) = sendmsg::<()>(fd, &iov, &[], MsgFlags::empty(), None) {
-        eprintln!("fake-netd: sendmsg response error: {err}");
     }
 }

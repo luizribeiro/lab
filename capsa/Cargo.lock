@@ -115,10 +115,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsa-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capsa-spec",
+ "libc",
+ "nix",
+ "serde_json",
+]
+
+[[package]]
 name = "capsa-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "capsa-control",
  "capsa-net",
  "capsa-spec",
  "libc",
@@ -153,6 +165,7 @@ name = "capsa-netd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "capsa-control",
  "capsa-net",
  "capsa-spec",
  "capsa-testkit",

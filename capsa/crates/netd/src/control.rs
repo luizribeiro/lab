@@ -1,22 +1,15 @@
-//! Runtime control socket for dynamically attaching guest interfaces
-//! to a running netd. Reads `ControlRequest` messages over a
-//! `SOCK_SEQPACKET` control socket, extracts the accompanying
-//! host-side fd via `SCM_RIGHTS`, and dispatches to a handler.
-
-#![allow(dead_code)]
+//! Async wrapper around the netd control socket. Delegates the
+//! wire-format send/recv to `capsa-control`; adds the tokio
+//! `AsyncFd` try_io loop and a dispatch handler.
 
 use std::future::Future;
-use std::io::{IoSlice, IoSliceMut};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
 use anyhow::{Context, Result};
+use capsa_control::{recv_request, send_response, IncomingRequest};
 use capsa_spec::{ControlRequest, ControlResponse};
-use nix::cmsg_space;
-use nix::sys::socket::{recvmsg, sendmsg, ControlMessageOwned, MsgFlags};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
-
-const MAX_REQUEST_LEN: usize = 64 * 1024;
 
 /// An `AddInterface` request after the host-side fd has been
 /// extracted from the `SCM_RIGHTS` ancillary data.
@@ -42,14 +35,16 @@ where
     loop {
         match recv_next(&async_fd).await? {
             None => return Ok(()),
-            Some(Incoming::AddInterface { request, host_fd }) => {
-                let ControlRequest::AddInterface { mac, port_forwards } = request;
-                let response = match host_fd {
-                    Some(fd) => {
+            Some(IncomingRequest::Parsed {
+                request: ControlRequest::AddInterface { mac, port_forwards },
+                fd,
+            }) => {
+                let response = match fd {
+                    Some(host_fd) => {
                         handler(AttachInterface {
                             mac,
                             port_forwards,
-                            host_fd: fd,
+                            host_fd,
                         })
                         .await
                     }
@@ -57,10 +52,10 @@ where
                         message: "AddInterface requires an SCM_RIGHTS fd".into(),
                     },
                 };
-                send_response(&async_fd, &response).await?;
+                send_response_async(&async_fd, &response).await?;
             }
-            Some(Incoming::Malformed(err)) => {
-                send_response(
+            Some(IncomingRequest::Malformed(err)) => {
+                send_response_async(
                     &async_fd,
                     &ControlResponse::Error {
                         message: format!("malformed request: {err}"),
@@ -72,100 +67,32 @@ where
     }
 }
 
-enum Incoming {
-    AddInterface {
-        request: ControlRequest,
-        host_fd: Option<OwnedFd>,
-    },
-    Malformed(String),
-}
-
-async fn recv_next(async_fd: &AsyncFd<OwnedFd>) -> Result<Option<Incoming>> {
+async fn recv_next(async_fd: &AsyncFd<OwnedFd>) -> Result<Option<IncomingRequest>> {
     loop {
         let mut guard = async_fd
             .readable()
             .await
             .context("wait readable on control fd")?;
-        match guard.try_io(|inner| recv_sync(inner.get_ref().as_raw_fd())) {
-            Ok(Ok(Some(incoming))) => return Ok(Some(incoming)),
-            Ok(Ok(None)) => return Ok(None),
-            Ok(Err(err)) => return Err(err.into()),
+        match guard.try_io(|inner| recv_request(inner.get_ref().as_raw_fd())) {
+            Ok(result) => return result.map_err(Into::into),
             Err(_would_block) => continue,
         }
     }
 }
 
-async fn send_response(async_fd: &AsyncFd<OwnedFd>, response: &ControlResponse) -> Result<()> {
-    let body = serde_json::to_vec(response).context("serialize response")?;
+async fn send_response_async(
+    async_fd: &AsyncFd<OwnedFd>,
+    response: &ControlResponse,
+) -> Result<()> {
     loop {
         let mut guard = async_fd
             .writable()
             .await
             .context("wait writable on control fd")?;
-        match guard.try_io(|inner| send_sync(inner.get_ref().as_raw_fd(), &body)) {
+        match guard.try_io(|inner| send_response(inner.get_ref().as_raw_fd(), response)) {
             Ok(res) => return res.map_err(Into::into),
             Err(_would_block) => continue,
         }
-    }
-}
-
-fn recv_sync(fd: RawFd) -> std::io::Result<Option<Incoming>> {
-    let mut buf = vec![0u8; MAX_REQUEST_LEN];
-    let mut cmsg = cmsg_space!([RawFd; 1]);
-
-    let (bytes, received_fd) = {
-        let mut iov = [IoSliceMut::new(&mut buf)];
-        let msg = match recvmsg::<()>(fd, &mut iov, Some(&mut cmsg), MsgFlags::empty()) {
-            Ok(m) => m,
-            Err(nix::errno::Errno::EAGAIN) => {
-                return Err(std::io::ErrorKind::WouldBlock.into());
-            }
-            Err(err) => return Err(std::io::Error::from_raw_os_error(err as i32)),
-        };
-
-        let bytes = msg.bytes;
-        let mut received_fd: Option<OwnedFd> = None;
-        for cmsg in msg.cmsgs().map_err(std::io::Error::other)? {
-            if let ControlMessageOwned::ScmRights(fds) = cmsg {
-                for &raw in &fds {
-                    if received_fd.is_some() {
-                        // SAFETY: kernel handed this fd to us; close extras.
-                        unsafe {
-                            libc::close(raw);
-                        }
-                        continue;
-                    }
-                    // SAFETY: fd was just transferred to us by the kernel.
-                    received_fd = Some(unsafe { OwnedFd::from_raw_fd(raw) });
-                }
-            }
-        }
-        (bytes, received_fd)
-    };
-
-    if bytes == 0 {
-        return Ok(None);
-    }
-
-    let payload = &buf[..bytes];
-    match serde_json::from_slice::<ControlRequest>(payload) {
-        Ok(request) => Ok(Some(Incoming::AddInterface {
-            request,
-            host_fd: received_fd,
-        })),
-        Err(err) => {
-            drop(received_fd);
-            Ok(Some(Incoming::Malformed(err.to_string())))
-        }
-    }
-}
-
-fn send_sync(fd: RawFd, body: &[u8]) -> std::io::Result<()> {
-    let iov = [IoSlice::new(body)];
-    match sendmsg::<()>(fd, &iov, &[], MsgFlags::empty(), None) {
-        Ok(_) => Ok(()),
-        Err(nix::errno::Errno::EAGAIN) => Err(std::io::ErrorKind::WouldBlock.into()),
-        Err(err) => Err(std::io::Error::from_raw_os_error(err as i32)),
     }
 }
 
@@ -189,7 +116,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use nix::sys::socket::{socketpair, AddressFamily, ControlMessage, SockFlag, SockType};
+    use capsa_control::{recv_response, send_request};
+    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
     use tokio::sync::Mutex;
 
     fn seqpacket_pair() -> (OwnedFd, OwnedFd) {
@@ -213,32 +141,11 @@ mod tests {
         a
     }
 
-    fn send_request_sync(fd: RawFd, request: &ControlRequest, fds: &[RawFd]) {
-        let body = serde_json::to_vec(request).expect("serialize");
-        let iov = [IoSlice::new(&body)];
-        let cmsgs = if fds.is_empty() {
-            vec![]
-        } else {
-            vec![ControlMessage::ScmRights(fds)]
-        };
-        sendmsg::<()>(fd, &iov, &cmsgs, MsgFlags::empty(), None).expect("sendmsg");
-    }
-
     fn send_raw_sync(fd: RawFd, body: &[u8]) {
+        use std::io::IoSlice;
         let iov = [IoSlice::new(body)];
-        sendmsg::<()>(fd, &iov, &[], MsgFlags::empty(), None).expect("sendmsg");
-    }
-
-    fn recv_response_sync(fd: RawFd) -> ControlResponse {
-        let mut buf = vec![0u8; 4096];
-        let mut cmsg = cmsg_space!([RawFd; 1]);
-        let bytes = {
-            let mut iov = [IoSliceMut::new(&mut buf)];
-            let msg =
-                recvmsg::<()>(fd, &mut iov, Some(&mut cmsg), MsgFlags::empty()).expect("recvmsg");
-            msg.bytes
-        };
-        serde_json::from_slice(&buf[..bytes]).expect("response should deserialize")
+        nix::sys::socket::sendmsg::<()>(fd, &iov, &[], nix::sys::socket::MsgFlags::empty(), None)
+            .expect("sendmsg");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -260,16 +167,17 @@ mod tests {
             .await
         });
 
-        send_request_sync(
+        send_request(
             client.as_raw_fd(),
             &ControlRequest::AddInterface {
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 port_forwards: vec![(8080, 80)],
             },
-            &[dummy.as_raw_fd()],
-        );
+            Some(dummy.as_raw_fd()),
+        )
+        .expect("send_request");
 
-        let resp = recv_response_sync(client.as_raw_fd());
+        let resp = recv_response(client.as_raw_fd()).expect("recv_response");
         assert_eq!(resp, ControlResponse::Ok);
 
         drop(client);
@@ -295,16 +203,17 @@ mod tests {
             .await
         });
 
-        send_request_sync(
+        send_request(
             client.as_raw_fd(),
             &ControlRequest::AddInterface {
                 mac: [0x02, 0, 0, 0, 0, 1],
                 port_forwards: vec![],
             },
-            &[],
-        );
+            None,
+        )
+        .expect("send_request");
 
-        let resp = recv_response_sync(client.as_raw_fd());
+        let resp = recv_response(client.as_raw_fd()).expect("recv_response");
         match resp {
             ControlResponse::Error { message } => {
                 assert!(message.contains("SCM_RIGHTS"), "unexpected: {message}");
@@ -329,7 +238,7 @@ mod tests {
 
         send_raw_sync(client.as_raw_fd(), b"{not json");
 
-        let resp = recv_response_sync(client.as_raw_fd());
+        let resp = recv_response(client.as_raw_fd()).expect("recv_response");
         match resp {
             ControlResponse::Error { message } => {
                 assert!(message.contains("malformed"), "unexpected: {message}");

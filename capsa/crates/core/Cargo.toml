@@ -9,6 +9,7 @@ path = "src/bin/fake_netd.rs"
 
 [dependencies]
 anyhow = "1.0"
+capsa-control = { path = "../control" }
 capsa-net = { path = "../net" }
 lockin = { path = "../../../lockin/crates/sandbox" }
 lockin-process = { path = "../../../lockin/crates/process" }

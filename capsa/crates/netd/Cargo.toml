@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+capsa-control = { path = "../control" }
 capsa-net = { path = "../net" }
 capsa-spec = { path = "../spec" }
 libc = "0.2"

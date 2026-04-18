@@ -2,6 +2,7 @@
 members = [
   "crates/capsa",
   "crates/cli",
+  "crates/control",
   "crates/core",
   "crates/net",
   "crates/netd",
