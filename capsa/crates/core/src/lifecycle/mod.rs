@@ -37,21 +37,47 @@ mod test_helpers;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vmm;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use orchestrate::VmProcesses;
+
 impl VmConfig {
-    /// Start the VM. On Linux and macOS this spawns the daemon
-    /// children and blocks until one of them exits. On other
-    /// platforms it returns an error immediately because the VM
-    /// launch path relies on libkrun, which only supports KVM
-    /// (Linux) and HVF (macOS) backends.
-    pub fn start(&self) -> Result<()> {
+    /// Spawn the VM's supervisor processes (netd if networking is
+    /// configured, then vmm) and return a handle to them. The caller
+    /// is responsible for calling [`VmProcesses::wait`] to block
+    /// until the VM exits, or dropping the handle to SIGKILL both
+    /// children.
+    ///
+    /// On platforms other than Linux or macOS this returns an error
+    /// immediately because the VM launch path relies on libkrun,
+    /// which only supports KVM (Linux) and HVF (macOS) backends.
+    pub fn spawn(&self) -> Result<VmProcesses> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            orchestrate::run(self)
+            VmProcesses::spawn(self)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = self;
             anyhow::bail!("capsa VM launch is only supported on Linux and macOS")
         }
+    }
+
+    /// Blocking convenience: spawn the VM and wait for it to exit.
+    /// Equivalent to `self.spawn()?.wait()`.
+    pub fn start(&self) -> Result<()> {
+        let mut processes = self.spawn()?;
+        processes.wait()
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub struct VmProcesses {
+    _private: (),
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+impl VmProcesses {
+    pub fn wait(&mut self) -> Result<()> {
+        anyhow::bail!("capsa VM launch is only supported on Linux and macOS")
     }
 }

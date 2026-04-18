@@ -11,7 +11,7 @@ use super::netd::{self, NetdSpawn};
 use super::plan;
 use super::vmm;
 
-pub(super) struct VmProcesses {
+pub struct VmProcesses {
     vmm: ChildHandle,
     netd: Option<ChildHandle>,
 }
@@ -51,7 +51,7 @@ impl VmProcesses {
         })
     }
 
-    pub(super) fn wait(&mut self) -> Result<()> {
+    pub fn wait(&mut self) -> Result<()> {
         let Some(netd) = self.netd.as_mut() else {
             let status = self
                 .vmm
@@ -94,11 +94,6 @@ impl Drop for VmProcesses {
             tracing::warn!(daemon = "vmm", error = %err, "drop-time SIGKILL failed");
         }
     }
-}
-
-pub(super) fn run(config: &VmConfig) -> Result<()> {
-    let mut processes = VmProcesses::spawn(config)?;
-    processes.wait()
 }
 
 #[cfg(test)]
