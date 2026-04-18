@@ -1,5 +1,16 @@
 use std::path::PathBuf;
 
+/// How the VM boots.
+///
+/// Two mutually exclusive modes:
+/// - [`Boot::root`] — boot from an existing rootfs or disk image (the
+///   vmm picks which based on whether the path is a directory or a
+///   file). Use this for VM-shaped workloads.
+/// - [`Boot::kernel`] — supply a kernel image directly and optionally
+///   an initramfs and cmdline. Use this for minimal / custom boots.
+///
+/// Required up front by [`Vm::builder`](crate::Vm::builder) so a VM
+/// cannot be constructed without a boot source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Boot {
     pub(crate) kind: BootKind,
@@ -16,12 +27,20 @@ pub(crate) enum BootKind {
 }
 
 impl Boot {
+    /// Boot from an existing root. `path` may be either a directory
+    /// (treated as a rootfs, mounted read-write) or a regular file
+    /// (treated as a disk image). The vmm picks the mode at start
+    /// time.
     pub fn root(path: impl Into<PathBuf>) -> Self {
         Self {
             kind: BootKind::Root(path.into()),
         }
     }
 
+    /// Start a [`KernelBoot`] builder for direct-kernel boot. Chain
+    /// `.initramfs(...)` and `.cmdline(...)` as needed; the result
+    /// implicitly converts to `Boot` via `Into` so
+    /// [`Vm::builder`](crate::Vm::builder) accepts it directly.
     pub fn kernel(path: impl Into<PathBuf>) -> KernelBoot {
         KernelBoot {
             kernel: path.into(),
@@ -31,6 +50,17 @@ impl Boot {
     }
 }
 
+/// Builder for direct-kernel boot. Created by [`Boot::kernel`].
+///
+/// Converts to [`Boot`] implicitly, so it can be passed straight to
+/// [`Vm::builder`](crate::Vm::builder):
+///
+/// ```no_run
+/// use capsa::{Boot, Vm};
+/// Vm::builder(Boot::kernel("/boot/vmlinuz").cmdline("console=hvc0"))
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelBoot {
     kernel: PathBuf,
@@ -39,11 +69,15 @@ pub struct KernelBoot {
 }
 
 impl KernelBoot {
+    /// Optional initramfs/initrd image loaded before kernel hand-off.
     pub fn initramfs(mut self, path: impl Into<PathBuf>) -> Self {
         self.initramfs = Some(path.into());
         self
     }
 
+    /// Kernel command line passed to the guest. Later calls replace
+    /// earlier ones (not appended), so compose the full string in
+    /// one go.
     pub fn cmdline(mut self, cmdline: impl Into<String>) -> Self {
         self.cmdline = Some(cmdline.into());
         self
