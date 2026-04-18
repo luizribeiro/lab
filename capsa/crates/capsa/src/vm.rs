@@ -157,6 +157,14 @@ pub struct VmHandle {
     _network_handles: Vec<NetworkHandle>,
 }
 
+impl std::fmt::Debug for VmHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VmHandle")
+            .field("networks", &self._network_handles.len())
+            .finish()
+    }
+}
+
 impl VmHandle {
     /// SIGKILL the vmm child immediately. Safe to call after the VM
     /// has exited on its own (becomes a no-op). Does not tear down

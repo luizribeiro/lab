@@ -264,6 +264,31 @@ mod tests {
     }
 
     #[test]
+    fn spawn_with_two_external_networks_attaches_both() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &fake_netd_path());
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &find_binary_on_path("true"));
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let net_a = NetworkProcesses::spawn(None).expect("spawn netd a");
+        let net_b = NetworkProcesses::spawn(None).expect("spawn netd b");
+
+        let mac_a = [0x02, 0xaa, 0xaa, 0xaa, 0xaa, 0x01];
+        let mac_b = [0x02, 0xbb, 0xbb, 0xbb, 0xbb, 0x02];
+        let (att_a, host_a) = make_attachment(mac_a);
+        let (att_b, host_b) = make_attachment(mac_b);
+        net_a.attach(mac_a, vec![], &host_a).expect("attach a");
+        net_b.attach(mac_b, vec![], &host_b).expect("attach b");
+
+        let mut processes =
+            VmProcesses::spawn_with_attachments(&sample_config(), vec![att_a, att_b])
+                .expect("spawn with two attachments");
+        processes.wait().expect("wait should succeed for exit 0");
+    }
+
+    #[test]
     fn dropping_vm_processes_sigkills_vmm_without_sigterm_grace() {
         let _env_lock = env_lock()
             .lock()
