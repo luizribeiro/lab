@@ -40,9 +40,7 @@ pub struct NetworkHandle {
 
 impl std::fmt::Debug for NetworkHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NetworkHandle")
-            .field("refcount", &Arc::strong_count(&self.inner))
-            .finish()
+        f.debug_struct("NetworkHandle").finish_non_exhaustive()
     }
 }
 
