@@ -71,12 +71,13 @@ impl NetworkProcesses {
         &self,
         mac: [u8; 6],
         port_forwards: Vec<(u16, u16)>,
+        udp_forwards: Vec<(u16, u16)>,
         host_fd: &OwnedFd,
     ) -> Result<()> {
         self.control
             .lock()
             .expect("control mutex poisoned")
-            .send_add_interface(mac, port_forwards, host_fd)
+            .send_add_interface(mac, port_forwards, udp_forwards, host_fd)
     }
 }
 

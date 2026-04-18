@@ -329,7 +329,7 @@ mod tests {
         let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
         let (attachment, host_fd) = make_attachment(mac);
         network
-            .attach(mac, vec![], &host_fd)
+            .attach(mac, vec![], vec![], &host_fd)
             .expect("attach interface via control socket");
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![attachment])
@@ -353,8 +353,12 @@ mod tests {
         let mac_b = [0x02, 0xbb, 0xbb, 0xbb, 0xbb, 0x02];
         let (att_a, host_a) = make_attachment(mac_a);
         let (att_b, host_b) = make_attachment(mac_b);
-        net_a.attach(mac_a, vec![], &host_a).expect("attach a");
-        net_b.attach(mac_b, vec![], &host_b).expect("attach b");
+        net_a
+            .attach(mac_a, vec![], vec![], &host_a)
+            .expect("attach a");
+        net_b
+            .attach(mac_b, vec![], vec![], &host_b)
+            .expect("attach b");
 
         let mut processes =
             VmProcesses::spawn_with_attachments(&sample_config(), vec![att_a, att_b])

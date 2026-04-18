@@ -21,9 +21,14 @@ impl ControlClient {
         &mut self,
         mac: [u8; 6],
         port_forwards: Vec<(u16, u16)>,
+        udp_forwards: Vec<(u16, u16)>,
         host_fd: &impl AsRawFd,
     ) -> Result<()> {
-        let request = ControlRequest::AddInterface { mac, port_forwards };
+        let request = ControlRequest::AddInterface {
+            mac,
+            port_forwards,
+            udp_forwards,
+        };
         send_request(self.fd.as_raw_fd(), &request, Some(host_fd.as_raw_fd()))
             .context("sendmsg AddInterface")?;
 
@@ -85,6 +90,7 @@ mod tests {
             .send_add_interface(
                 [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 vec![(8080, 80), (8443, 443)],
+                vec![(5353, 53)],
                 &dummy,
             )
             .expect("send_add_interface should succeed");
@@ -93,9 +99,14 @@ mod tests {
         drop(server_fd);
 
         match request {
-            ControlRequest::AddInterface { mac, port_forwards } => {
+            ControlRequest::AddInterface {
+                mac,
+                port_forwards,
+                udp_forwards,
+            } => {
                 assert_eq!(mac, [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
                 assert_eq!(port_forwards, vec![(8080, 80), (8443, 443)]);
+                assert_eq!(udp_forwards, vec![(5353, 53)]);
             }
         }
         assert!(host_fd.is_some(), "server should have received the host fd");
@@ -120,7 +131,7 @@ mod tests {
 
         let mut client = ControlClient::new(client_fd);
         let err = client
-            .send_add_interface([0x02, 0, 0, 0, 0, 1], vec![], &dummy)
+            .send_add_interface([0x02, 0, 0, 0, 0, 1], vec![], vec![], &dummy)
             .expect_err("error response should fail");
         assert!(err.to_string().contains("pool exhausted"));
 
@@ -140,7 +151,7 @@ mod tests {
 
         let mut client = ControlClient::new(client_fd);
         let err = client
-            .send_add_interface([0x02, 0, 0, 0, 0, 1], vec![], &dummy)
+            .send_add_interface([0x02, 0, 0, 0, 0, 1], vec![], vec![], &dummy)
             .expect_err("peer close should fail");
         assert!(
             err.to_string().contains("closed") || err.to_string().contains("read"),

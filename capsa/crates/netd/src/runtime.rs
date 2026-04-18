@@ -7,10 +7,10 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use capsa_net::{
     bridge_to_switch, GatewayStack, GatewayStackConfig, LeasePreallocator, NetworkPolicy,
-    PortForwardRequest, VirtualSwitch,
+    PortForwardRequest, UdpPortForwardRequest, VirtualSwitch,
 };
 use capsa_spec::{ControlResponse, NetLaunchSpec};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -79,9 +79,12 @@ impl NetworkRuntime {
         };
         let (port_forward_tx, port_forward_rx) =
             mpsc::channel::<PortForwardRequest>(PORT_FORWARD_CHANNEL_CAPACITY);
+        let (udp_port_forward_tx, udp_port_forward_rx) =
+            mpsc::channel::<UdpPortForwardRequest>(UDP_PORT_FORWARD_CHANNEL_CAPACITY);
         let gateway = GatewayStack::new(gateway_port, gateway_config)
             .await
-            .with_port_forward_rx(port_forward_rx);
+            .with_port_forward_rx(port_forward_rx)
+            .with_udp_port_forward_rx(udp_port_forward_rx);
         let preallocator = gateway.lease_preallocator();
         let gateway_task: JoinHandle<io::Result<()>> =
             tokio::spawn(async move { gateway.run().await });
@@ -98,6 +101,7 @@ impl NetworkRuntime {
                 let switch = switch_for_handler.clone();
                 let preallocator = preallocator.clone();
                 let port_forward_tx = port_forward_tx.clone();
+                let udp_port_forward_tx = udp_port_forward_tx.clone();
                 async move {
                     match attach_interface_port(
                         iface,
@@ -105,6 +109,7 @@ impl NetworkRuntime {
                         &tasks,
                         &preallocator,
                         &port_forward_tx,
+                        &udp_port_forward_tx,
                     )
                     .await
                     {
@@ -173,6 +178,8 @@ impl NetworkRuntime {
 }
 
 const PORT_FORWARD_CHANNEL_CAPACITY: usize = 64;
+const UDP_PORT_FORWARD_CHANNEL_CAPACITY: usize = 64;
+const UDP_RECV_BUF: usize = 4096;
 
 async fn attach_interface_port(
     iface: AttachInterface,
@@ -180,31 +187,49 @@ async fn attach_interface_port(
     tasks: &TaskHandles,
     preallocator: &LeasePreallocator,
     port_forward_tx: &mpsc::Sender<PortForwardRequest>,
+    udp_port_forward_tx: &mpsc::Sender<UdpPortForwardRequest>,
 ) -> Result<()> {
     let AttachInterface {
         mac,
         port_forwards,
+        udp_forwards,
         host_fd,
     } = iface;
 
-    // Bind TCP listeners first: if a host port is unavailable we want
-    // the AddInterface to fail before we stand up the bridge so the
-    // caller sees a clean error instead of a half-wired interface.
-    let mut listeners = Vec::with_capacity(port_forwards.len());
-    if !port_forwards.is_empty() {
-        let guest_ip = preallocator
-            .preallocate(mac)
-            .await
-            .with_context(|| format!("failed to preallocate DHCP lease for MAC {mac:02x?}"))?;
-
-        for (host_port, guest_port) in port_forwards {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host_port))
+    // Bind TCP and UDP listeners first: if any host port is
+    // unavailable we want the AddInterface to fail before standing
+    // up the bridge so the caller sees a clean error instead of a
+    // half-wired interface.
+    let needs_guest_ip = !port_forwards.is_empty() || !udp_forwards.is_empty();
+    let guest_ip = if needs_guest_ip {
+        Some(
+            preallocator
+                .preallocate(mac)
                 .await
-                .with_context(|| {
-                    format!("failed to bind TCP port forward listener on host port {host_port}")
-                })?;
-            listeners.push((listener, guest_ip, guest_port));
-        }
+                .with_context(|| format!("failed to preallocate DHCP lease for MAC {mac:02x?}"))?,
+        )
+    } else {
+        None
+    };
+
+    let mut tcp_listeners = Vec::with_capacity(port_forwards.len());
+    for (host_port, guest_port) in port_forwards {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host_port))
+            .await
+            .with_context(|| {
+                format!("failed to bind TCP port forward listener on host port {host_port}")
+            })?;
+        tcp_listeners.push((listener, guest_ip.unwrap(), guest_port));
+    }
+
+    let mut udp_sockets = Vec::with_capacity(udp_forwards.len());
+    for (host_port, guest_port) in udp_forwards {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, host_port))
+            .await
+            .with_context(|| {
+                format!("failed to bind UDP port forward listener on host port {host_port}")
+            })?;
+        udp_sockets.push((Arc::new(socket), guest_ip.unwrap(), guest_port));
     }
 
     let vm_port = switch.create_port().await;
@@ -213,12 +238,19 @@ async fn attach_interface_port(
 
     let mut task_vec = tasks.lock().await;
     task_vec.push(bridge_task);
-    for (listener, guest_ip, guest_port) in listeners {
+    for (listener, guest_ip, guest_port) in tcp_listeners {
         let tx = port_forward_tx.clone();
         let listener_task: JoinHandle<io::Result<()>> = tokio::spawn(async move {
             run_port_forward_listener(listener, tx, guest_ip, guest_port).await
         });
         task_vec.push(listener_task);
+    }
+    for (socket, guest_ip, guest_port) in udp_sockets {
+        let tx = udp_port_forward_tx.clone();
+        let socket_task: JoinHandle<io::Result<()>> = tokio::spawn(async move {
+            run_udp_port_forward_listener(socket, tx, guest_ip, guest_port).await
+        });
+        task_vec.push(socket_task);
     }
     Ok(())
 }
@@ -233,6 +265,39 @@ async fn run_port_forward_listener(
         let (stream, _peer_addr) = listener.accept().await?;
         let request = PortForwardRequest {
             stream,
+            guest_ip,
+            guest_port,
+        };
+
+        if tx.send(request).await.is_err() {
+            return Ok(());
+        }
+    }
+}
+
+async fn run_udp_port_forward_listener(
+    socket: Arc<UdpSocket>,
+    tx: mpsc::Sender<UdpPortForwardRequest>,
+    guest_ip: Ipv4Addr,
+    guest_port: u16,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; UDP_RECV_BUF];
+    loop {
+        let (len, peer) = socket.recv_from(&mut buf).await?;
+        let host_src = match peer {
+            std::net::SocketAddr::V4(v4) => v4,
+            std::net::SocketAddr::V6(_) => {
+                tracing::debug!(
+                    host_port = socket.local_addr().ok().map(|a| a.port()),
+                    "UDP forward: ignoring IPv6 datagram"
+                );
+                continue;
+            }
+        };
+        let request = UdpPortForwardRequest {
+            data: buf[..len].to_vec(),
+            host_src,
+            host_socket: socket.clone(),
             guest_ip,
             guest_port,
         };
@@ -336,19 +401,22 @@ mod tests {
         let _ = daemon.await;
     }
 
-    async fn setup_preallocator_and_channel() -> (
+    async fn setup_preallocator_and_channels() -> (
         capsa_net::LeasePreallocator,
         tokio::sync::mpsc::Sender<capsa_net::PortForwardRequest>,
+        tokio::sync::mpsc::Sender<capsa_net::UdpPortForwardRequest>,
     ) {
         let switch = VirtualSwitch::new();
         let gateway_port = switch.create_port().await;
         let (pf_tx, pf_rx) = tokio::sync::mpsc::channel(16);
+        let (udp_tx, udp_rx) = tokio::sync::mpsc::channel(16);
         let gateway = GatewayStack::new(gateway_port, GatewayStackConfig::default())
             .await
-            .with_port_forward_rx(pf_rx);
+            .with_port_forward_rx(pf_rx)
+            .with_udp_port_forward_rx(udp_rx);
         let preallocator = gateway.lease_preallocator();
         tokio::spawn(async move { gateway.run().await });
-        (preallocator, pf_tx)
+        (preallocator, pf_tx, udp_tx)
     }
 
     fn dummy_host_fd() -> std::os::fd::OwnedFd {
@@ -369,7 +437,7 @@ mod tests {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        let (preallocator, pf_tx) = setup_preallocator_and_channel().await;
+        let (preallocator, pf_tx, udp_tx) = setup_preallocator_and_channels().await;
         let switch = Arc::new(VirtualSwitch::new());
         let tasks = Arc::new(Mutex::new(Vec::new()));
 
@@ -382,12 +450,20 @@ mod tests {
         let iface = AttachInterface {
             mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x10],
             port_forwards: vec![(host_port, 80)],
+            udp_forwards: vec![],
             host_fd: dummy_host_fd(),
         };
 
-        attach_interface_port(iface, switch.as_ref(), &tasks, &preallocator, &pf_tx)
-            .await
-            .expect("attach should succeed");
+        attach_interface_port(
+            iface,
+            switch.as_ref(),
+            &tasks,
+            &preallocator,
+            &pf_tx,
+            &udp_tx,
+        )
+        .await
+        .expect("attach should succeed");
 
         // Listener + bridge tasks should have been spawned.
         assert_eq!(tasks.lock().await.len(), 2);
@@ -405,7 +481,7 @@ mod tests {
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        let (preallocator, pf_tx) = setup_preallocator_and_channel().await;
+        let (preallocator, pf_tx, udp_tx) = setup_preallocator_and_channels().await;
         let switch = Arc::new(VirtualSwitch::new());
         let tasks = Arc::new(Mutex::new(Vec::new()));
 
@@ -417,12 +493,20 @@ mod tests {
         let iface = AttachInterface {
             mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x11],
             port_forwards: vec![(host_port, 80)],
+            udp_forwards: vec![],
             host_fd: dummy_host_fd(),
         };
 
-        let err = attach_interface_port(iface, switch.as_ref(), &tasks, &preallocator, &pf_tx)
-            .await
-            .expect_err("bind on busy port should fail");
+        let err = attach_interface_port(
+            iface,
+            switch.as_ref(),
+            &tasks,
+            &preallocator,
+            &pf_tx,
+            &udp_tx,
+        )
+        .await
+        .expect_err("bind on busy port should fail");
         assert!(
             err.to_string().contains("failed to bind"),
             "unexpected: {err}"
@@ -433,5 +517,49 @@ mod tests {
         );
 
         drop(blocker);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_interface_port_binds_udp_host_listener() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (preallocator, pf_tx, udp_tx) = setup_preallocator_and_channels().await;
+        let switch = Arc::new(VirtualSwitch::new());
+        let tasks = Arc::new(Mutex::new(Vec::new()));
+
+        let probe = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("probe bind");
+        let host_port = probe.local_addr().expect("local_addr").port();
+        drop(probe);
+
+        let iface = AttachInterface {
+            mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x20],
+            port_forwards: vec![],
+            udp_forwards: vec![(host_port, 53)],
+            host_fd: dummy_host_fd(),
+        };
+
+        attach_interface_port(
+            iface,
+            switch.as_ref(),
+            &tasks,
+            &preallocator,
+            &pf_tx,
+            &udp_tx,
+        )
+        .await
+        .expect("attach should succeed");
+
+        // Listener + bridge tasks should have been spawned.
+        assert_eq!(tasks.lock().await.len(), 2);
+
+        // Host port should now be bound by the UDP listener.
+        let rebind = tokio::net::UdpSocket::bind(("127.0.0.1", host_port)).await;
+        assert!(
+            rebind.is_err(),
+            "host_port {host_port} should already be bound"
+        );
     }
 }

@@ -16,6 +16,7 @@ use tokio::io::Interest;
 pub struct AttachInterface {
     pub mac: [u8; 6],
     pub port_forwards: Vec<(u16, u16)>,
+    pub udp_forwards: Vec<(u16, u16)>,
     pub host_fd: OwnedFd,
 }
 
@@ -36,7 +37,12 @@ where
         match recv_next(&async_fd).await? {
             None => return Ok(()),
             Some(IncomingRequest::Parsed {
-                request: ControlRequest::AddInterface { mac, port_forwards },
+                request:
+                    ControlRequest::AddInterface {
+                        mac,
+                        port_forwards,
+                        udp_forwards,
+                    },
                 fd,
             }) => {
                 let response = match fd {
@@ -44,6 +50,7 @@ where
                         handler(AttachInterface {
                             mac,
                             port_forwards,
+                            udp_forwards,
                             host_fd,
                         })
                         .await
@@ -172,6 +179,7 @@ mod tests {
             &ControlRequest::AddInterface {
                 mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
                 port_forwards: vec![(8080, 80)],
+                udp_forwards: vec![(5353, 53)],
             },
             Some(dummy.as_raw_fd()),
         )
@@ -190,6 +198,7 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].mac, [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
         assert_eq!(received[0].port_forwards, vec![(8080, 80)]);
+        assert_eq!(received[0].udp_forwards, vec![(5353, 53)]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -208,6 +217,7 @@ mod tests {
             &ControlRequest::AddInterface {
                 mac: [0x02, 0, 0, 0, 0, 1],
                 port_forwards: vec![],
+                udp_forwards: vec![],
             },
             None,
         )

@@ -76,6 +76,7 @@ pub struct PortForward {
 pub struct NetworkAttach {
     pub(crate) mac: Option<[u8; 6]>,
     pub(crate) port_forwards: Vec<(u16, u16)>,
+    pub(crate) udp_port_forwards: Vec<(u16, u16)>,
 }
 
 impl NetworkAttach {
@@ -83,6 +84,7 @@ impl NetworkAttach {
         Self {
             mac: None,
             port_forwards: Vec::new(),
+            udp_port_forwards: Vec::new(),
         }
     }
 }
@@ -112,6 +114,16 @@ impl NetworkAttach {
     /// ```
     pub fn forward(mut self, forward: PortForward) -> Self {
         self.port_forwards.push((forward.host, forward.guest));
+        self
+    }
+
+    /// Forward a host UDP port to a guest UDP port. Order is
+    /// preserved across multiple calls. Per-source-address NAT on
+    /// the gateway side tracks reply routing, so multiple UDP
+    /// clients can share the same host port (bounded by the
+    /// gateway's per-flow limit).
+    pub fn forward_udp(mut self, forward: PortForward) -> Self {
+        self.udp_port_forwards.push((forward.host, forward.guest));
         self
     }
 }

@@ -134,8 +134,14 @@ pub enum ControlRequest {
     /// `SCM_RIGHTS` on the same message.
     AddInterface {
         mac: [u8; 6],
+        /// TCP (host_port, guest_port) forwards. Historical name
+        /// kept for wire compatibility; the companion `udp_forwards`
+        /// field carries the UDP variants.
         #[serde(default)]
         port_forwards: Vec<(u16, u16)>,
+        /// UDP (host_port, guest_port) forwards.
+        #[serde(default)]
+        udp_forwards: Vec<(u16, u16)>,
     },
 }
 
@@ -271,6 +277,7 @@ mod control_tests {
         let req = ControlRequest::AddInterface {
             mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
             port_forwards: vec![(8080, 80), (8443, 443)],
+            udp_forwards: vec![(5353, 53)],
         };
 
         let encoded = serde_json::to_string(&req).expect("request should serialize");
@@ -285,6 +292,7 @@ mod control_tests {
         let req = ControlRequest::AddInterface {
             mac: [0x02, 0, 0, 0, 0, 1],
             port_forwards: vec![],
+            udp_forwards: vec![],
         };
 
         let encoded = serde_json::to_string(&req).unwrap();
@@ -295,14 +303,19 @@ mod control_tests {
     }
 
     #[test]
-    fn add_interface_defaults_port_forwards_when_missing() {
+    fn add_interface_defaults_forwards_when_missing() {
         let encoded = r#"{"op":"add_interface","mac":[2,0,0,0,0,1]}"#;
         let decoded: ControlRequest =
             serde_json::from_str(encoded).expect("missing forwards should default");
 
         match decoded {
-            ControlRequest::AddInterface { port_forwards, .. } => {
+            ControlRequest::AddInterface {
+                port_forwards,
+                udp_forwards,
+                ..
+            } => {
                 assert!(port_forwards.is_empty());
+                assert!(udp_forwards.is_empty());
             }
         }
     }

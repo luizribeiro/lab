@@ -60,7 +60,12 @@ impl Vm {
             attachment
                 .handle
                 .inner
-                .attach(mac, attachment.attach.port_forwards.clone(), &host_fd)
+                .attach(
+                    mac,
+                    attachment.attach.port_forwards.clone(),
+                    attachment.attach.udp_port_forwards.clone(),
+                    &host_fd,
+                )
                 .map_err(|e| StartError::Attach(e.into()))?;
             vm_attachments.push(VmAttachment { mac, guest_fd });
         }
