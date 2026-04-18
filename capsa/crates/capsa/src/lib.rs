@@ -1,5 +1,7 @@
+mod boot;
 mod error;
 
+pub use self::boot::{Boot, KernelBoot};
 pub use self::error::BuildError;
 
 pub use capsa_core::{
