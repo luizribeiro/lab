@@ -3,7 +3,6 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildError {
     InvalidHostPattern { pattern: String, reason: String },
-    InvalidConfig(String),
 }
 
 impl fmt::Display for BuildError {
@@ -12,7 +11,6 @@ impl fmt::Display for BuildError {
             Self::InvalidHostPattern { pattern, reason } => {
                 write!(f, "invalid host pattern '{pattern}': {reason}")
             }
-            Self::InvalidConfig(msg) => write!(f, "invalid VM configuration: {msg}"),
         }
     }
 }

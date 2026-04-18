@@ -4,7 +4,7 @@ mod lifecycle;
 pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
 };
-pub use config::{VmConfig, VmNetworkInterfaceConfig};
+pub use config::VmConfig;
 pub use lifecycle::{NetworkProcesses, VmAttachment, VmProcesses};
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

@@ -174,9 +174,7 @@ mod tests {
             .build()
             .expect_err("malformed wildcard should fail build");
 
-        let BuildError::InvalidHostPattern { pattern, reason } = err else {
-            panic!("expected InvalidHostPattern, got {err:?}");
-        };
+        let BuildError::InvalidHostPattern { pattern, reason } = err;
         assert_eq!(pattern, "*example.com");
         assert!(
             reason.contains("wildcard"),

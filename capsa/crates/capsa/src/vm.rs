@@ -141,12 +141,7 @@ impl VmBuilder {
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
             verbosity: self.verbosity,
-            interfaces: vec![],
         };
-
-        config
-            .validate()
-            .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
 
         Ok(Vm {
             config,

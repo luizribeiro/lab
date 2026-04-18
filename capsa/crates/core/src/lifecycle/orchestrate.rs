@@ -33,7 +33,6 @@ impl VmProcesses {
         config: &VmConfig,
         attachments: Vec<VmAttachment>,
     ) -> Result<Self> {
-        config.validate().context("invalid VM configuration")?;
         let bindings: Vec<VmmInterfaceBinding> = attachments
             .into_iter()
             .map(|a| VmmInterfaceBinding {
@@ -116,7 +115,6 @@ mod tests {
             vcpus: 1,
             memory_mib: 512,
             verbosity: 0,
-            interfaces: vec![],
         }
     }
 
