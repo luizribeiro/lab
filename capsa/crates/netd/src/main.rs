@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 
 use capsa_spec::{parse_launch_spec_args, NetLaunchSpec};
 
+mod control;
 mod runtime;
 
 fn run<I, S>(args: I) -> Result<()>
