@@ -35,7 +35,10 @@ impl VmProcesses {
             },
             attachment,
             bindings,
-        ) = netd::spawn_netd(sockets)?;
+        ) = netd::spawn_netd(
+            sockets,
+            config.interfaces.first().and_then(|i| i.policy.clone()),
+        )?;
 
         netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
             .context("netd readiness check failed")?;

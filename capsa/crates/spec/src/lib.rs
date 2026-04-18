@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, ensure, Context, Result};
+use capsa_net::NetworkPolicy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,10 @@ pub struct NetLaunchSpec {
     /// Validated to be >= 3 and disjoint from `ready_fd`.
     #[serde(default)]
     pub control_fd: Option<i32>,
+    /// Outbound network policy applied by the daemon's single
+    /// gateway stack. Every attached interface shares this policy.
+    #[serde(default)]
+    pub policy: Option<NetworkPolicy>,
 }
 
 impl NetLaunchSpec {
@@ -216,6 +221,7 @@ mod net_tests {
         NetLaunchSpec {
             ready_fd,
             control_fd: None,
+            policy: None,
         }
     }
 

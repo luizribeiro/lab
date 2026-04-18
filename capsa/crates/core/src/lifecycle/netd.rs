@@ -52,6 +52,7 @@ impl NetdAttachment {
 
 pub(super) fn spawn_netd(
     sockets: Vec<InterfaceSockets>,
+    network_policy: Option<capsa_net::NetworkPolicy>,
 ) -> Result<(NetdSpawn, NetdAttachment, Vec<VmmInterfaceBinding>)> {
     let binary = child::resolve_binary("CAPSA_NETD_PATH", "capsa-netd")
         .context("failed to resolve net daemon binary")?;
@@ -93,6 +94,7 @@ pub(super) fn spawn_netd(
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
         control_fd: Some(control_fd_num),
+        policy: network_policy,
     };
     spec.validate().context("invalid netd launch spec")?;
 

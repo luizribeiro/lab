@@ -4,13 +4,9 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use capsa_net::{
-    bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, PortForwardRequest,
-    VirtualSwitch,
-};
+use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, VirtualSwitch};
 use capsa_spec::{ControlResponse, NetLaunchSpec};
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::control::{run_control_loop, AttachInterface};
@@ -49,26 +45,6 @@ fn signal_readiness(ready_fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-async fn run_port_forward_listener(
-    listener: TcpListener,
-    tx: mpsc::Sender<PortForwardRequest>,
-    guest_ip: std::net::Ipv4Addr,
-    guest_port: u16,
-) -> io::Result<()> {
-    loop {
-        let (stream, _peer_addr) = listener.accept().await?;
-        let request = PortForwardRequest {
-            stream,
-            guest_ip,
-            guest_port,
-        };
-
-        if tx.send(request).await.is_err() {
-            return Ok(());
-        }
-    }
-}
-
 struct NetworkRuntime {
     tasks: TaskHandles,
 }
@@ -78,41 +54,52 @@ impl NetworkRuntime {
         let NetLaunchSpec {
             ready_fd: _,
             control_fd,
+            policy,
         } = launch_spec;
 
         let tasks: TaskHandles = Arc::new(Mutex::new(Vec::new()));
 
-        if let Some(control_fd) = control_fd {
-            // SAFETY: control_fd is validated by `NetLaunchSpec::validate` and inherited
-            // from the launcher; ownership is transferred to the control loop.
-            let control_fd = unsafe { OwnedFd::from_raw_fd(control_fd) };
-            let tasks_for_handler = tasks.clone();
-            let control_task: JoinHandle<io::Result<()>> = tokio::spawn(async move {
-                let result = run_control_loop(control_fd, move |iface: AttachInterface| {
-                    let tasks = tasks_for_handler.clone();
-                    async move {
-                        match setup_interface(
-                            iface.host_fd,
-                            iface.mac,
-                            None,
-                            iface.port_forwards,
-                            &tasks,
-                        )
-                        .await
-                        {
-                            Ok(()) => ControlResponse::Ok,
-                            Err(err) => ControlResponse::Error {
-                                message: err.to_string(),
-                            },
-                        }
+        let Some(control_fd) = control_fd else {
+            return Ok(Self { tasks });
+        };
+
+        // Build the single shared switch + gateway for this daemon.
+        // Every attached interface becomes another port on this
+        // switch; every outbound flow hits this one gateway stack.
+        let switch = Arc::new(VirtualSwitch::new());
+        let gateway_port = switch.create_port().await;
+        let gateway_config = GatewayStackConfig {
+            policy: Some(policy.unwrap_or_else(NetworkPolicy::deny_all)),
+            ..GatewayStackConfig::default()
+        };
+        let gateway = GatewayStack::new(gateway_port, gateway_config).await;
+        let gateway_task: JoinHandle<io::Result<()>> =
+            tokio::spawn(async move { gateway.run().await });
+        tasks.lock().await.push(gateway_task);
+
+        // SAFETY: control_fd is validated by `NetLaunchSpec::validate`
+        // and inherited from the launcher; ownership transferred in.
+        let control_fd = unsafe { OwnedFd::from_raw_fd(control_fd) };
+        let tasks_for_handler = tasks.clone();
+        let switch_for_handler = switch.clone();
+        let control_task: JoinHandle<io::Result<()>> = tokio::spawn(async move {
+            let result = run_control_loop(control_fd, move |iface: AttachInterface| {
+                let tasks = tasks_for_handler.clone();
+                let switch = switch_for_handler.clone();
+                async move {
+                    match attach_interface_port(iface, switch.as_ref(), &tasks).await {
+                        Ok(()) => ControlResponse::Ok,
+                        Err(err) => ControlResponse::Error {
+                            message: err.to_string(),
+                        },
                     }
-                })
-                .await;
-                result.map_err(io::Error::other)
-            });
-            tasks.lock().await.push(control_task);
-            tracing::debug!("netd control loop initialized");
-        }
+                }
+            })
+            .await;
+            result.map_err(io::Error::other)
+        });
+        tasks.lock().await.push(control_task);
+        tracing::debug!("netd runtime initialized with shared gateway");
 
         Ok(Self { tasks })
     }
@@ -165,52 +152,31 @@ impl NetworkRuntime {
     }
 }
 
-async fn setup_interface(
-    host_fd: OwnedFd,
-    mac: [u8; 6],
-    policy: Option<NetworkPolicy>,
-    port_forwards: Vec<(u16, u16)>,
+async fn attach_interface_port(
+    iface: AttachInterface,
+    switch: &VirtualSwitch,
     tasks: &TaskHandles,
 ) -> Result<()> {
-    let switch = VirtualSwitch::new();
+    let AttachInterface {
+        mac: _,
+        port_forwards,
+        host_fd,
+    } = iface;
+
+    // TODO(shared-subnet): per-interface port forwards require
+    // knowing the guest's DHCP IP. Plumbing that through the shared
+    // gateway is a follow-up; for now log and drop them.
+    if !port_forwards.is_empty() {
+        tracing::warn!(
+            count = port_forwards.len(),
+            "AddInterface port_forwards are not yet supported under the shared gateway; ignoring"
+        );
+    }
+
     let vm_port = switch.create_port().await;
-    let gateway_port = switch.create_port().await;
-
-    let gateway_config = GatewayStackConfig {
-        policy: Some(policy.unwrap_or_else(NetworkPolicy::deny_all)),
-        port_forwards: port_forwards.clone(),
-        ..GatewayStackConfig::default()
-    };
-    let guest_ip = gateway_config.dhcp_range_start;
-    let _ = mac; // reserved for future MAC-aware routing in shared-subnet mode
-
-    let (port_forward_tx, port_forward_rx) = mpsc::channel(64);
-
-    let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
-    let gateway = GatewayStack::new(gateway_port, gateway_config)
-        .await
-        .with_port_forward_rx(port_forward_rx);
-    let gateway_task = tokio::spawn(async move { gateway.run().await });
-
-    {
-        let mut guard = tasks.lock().await;
-        guard.push(bridge_task);
-        guard.push(gateway_task);
-    }
-
-    for (host_port, guest_port) in port_forwards {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, host_port))
-            .await
-            .with_context(|| {
-                format!("failed to bind TCP port forward listener on host port {host_port}")
-            })?;
-        let tx = port_forward_tx.clone();
-        let listener_task = tokio::spawn(async move {
-            run_port_forward_listener(listener, tx, guest_ip, guest_port).await
-        });
-        tasks.lock().await.push(listener_task);
-    }
-
+    let bridge_task: JoinHandle<io::Result<()>> =
+        tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
+    tasks.lock().await.push(bridge_task);
     Ok(())
 }
 
@@ -250,6 +216,7 @@ mod tests {
         let launch_spec = NetLaunchSpec {
             ready_fd: writer_fd,
             control_fd: Some(server_fd),
+            policy: None,
         };
 
         // Close the peer so the control task exits cleanly once
@@ -272,6 +239,7 @@ mod tests {
         let launch_spec = NetLaunchSpec {
             ready_fd: writer_fd,
             control_fd: None,
+            policy: None,
         };
 
         let daemon = tokio::spawn(async move { run(launch_spec, writer_fd).await });

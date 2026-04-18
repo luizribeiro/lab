@@ -64,6 +64,7 @@ mod tests {
         let invalid_spec_json = serde_json::json!({
             "ready_fd": 30,
             "control_fd": 30,
+            "policy": null,
         })
         .to_string();
 
