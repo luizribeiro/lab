@@ -1,5 +1,6 @@
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixDatagram;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use capsa_core::{VmAttachment, VmConfig, VmProcesses};
 
@@ -47,11 +48,11 @@ impl Vm {
         let mut vm_attachments = Vec::with_capacity(attachments.len());
         let mut network_handles = Vec::with_capacity(attachments.len());
 
-        for (index, attachment) in attachments.iter().enumerate() {
+        for attachment in attachments.iter() {
             let (host_sock, guest_sock) = UnixDatagram::pair().map_err(StartError::Socketpair)?;
             let host_fd: OwnedFd = host_sock.into();
             let guest_fd: OwnedFd = guest_sock.into();
-            let mac = attachment.attach.mac.unwrap_or_else(|| generate_mac(index));
+            let mac = attachment.attach.mac.unwrap_or_else(generate_mac);
             attachment
                 .handle
                 .inner
@@ -233,26 +234,27 @@ impl From<std::process::ExitStatus> for VmExit {
     }
 }
 
-fn generate_mac(index: usize) -> [u8; 6] {
-    let mut seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    seed ^= (std::process::id() as u128) << 32;
-    seed ^= (index as u128) << 8;
+/// Monotonic counter for process-local MAC uniqueness. Combined with
+/// the pid below it guarantees distinct MACs for every call from this
+/// process; cross-process distinctness is best-effort via pid.
+static MAC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    let mut mac = [0u8; 6];
-    mac[0] = 0x02;
-    mac[1] = ((seed >> 8) & 0xff) as u8;
-    mac[2] = ((seed >> 16) & 0xff) as u8;
-    mac[3] = ((seed >> 24) & 0xff) as u8;
-    mac[4] = ((seed >> 32) & 0xff) as u8;
-    mac[5] = ((seed >> 40) & 0xff) as u8;
+fn generate_mac() -> [u8; 6] {
+    let counter = MAC_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id() as u64;
 
-    if mac == [0u8; 6] {
-        mac[5] = 1;
-    }
-    mac
+    // Layout: locally-administered unicast prefix 0x02, then three
+    // pid-derived bytes, then two counter-derived bytes. Two VMs in
+    // the same process get different counter bytes; VMs across
+    // processes get different pid bytes.
+    [
+        0x02,
+        ((pid >> 16) & 0xff) as u8,
+        ((pid >> 8) & 0xff) as u8,
+        (pid & 0xff) as u8,
+        ((counter >> 8) & 0xff) as u8,
+        (counter & 0xff) as u8,
+    ]
 }
 
 #[cfg(test)]
@@ -327,14 +329,24 @@ mod tests {
 
     #[test]
     fn generated_macs_are_nonzero_and_locally_administered() {
-        let mac = generate_mac(0);
+        let mac = generate_mac();
         assert_ne!(mac, [0u8; 6]);
         assert_eq!(mac[0] & 0x02, 0x02, "locally administered bit set");
         assert_eq!(mac[0] & 0x01, 0x00, "multicast bit clear");
     }
 
     #[test]
-    fn generated_macs_differ_across_indexes() {
-        assert_ne!(generate_mac(0), generate_mac(1));
+    fn generated_macs_are_unique_across_back_to_back_calls() {
+        let a = generate_mac();
+        let b = generate_mac();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn generated_macs_are_unique_across_many_calls() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1024 {
+            assert!(seen.insert(generate_mac()), "MAC collision within same run");
+        }
     }
 }
