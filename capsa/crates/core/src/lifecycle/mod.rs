@@ -44,7 +44,7 @@ mod vmm;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use network::NetworkProcesses;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use orchestrate::VmProcesses;
+pub use orchestrate::{VmAttachment, VmProcesses};
 
 impl VmConfig {
     /// Spawn the VM's supervisor processes (netd if networking is

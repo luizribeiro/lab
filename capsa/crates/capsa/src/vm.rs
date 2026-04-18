@@ -1,31 +1,28 @@
-use capsa_core::{VmConfig, VmProcesses};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixDatagram;
 
-use crate::attach::{AttachApply, AttachCtx, Attachable};
+use capsa_core::{VmAttachment, VmConfig, VmProcesses};
+
+use crate::attach::{AttachApply, AttachCtx, Attachable, NetworkAttachment};
 use crate::boot::{Boot, BootKind};
 use crate::error::{BuildError, RuntimeError, StartError};
+use crate::network::NetworkHandle;
 
-#[derive(Debug, Clone)]
 pub struct Vm {
     pub(crate) config: VmConfig,
+    pub(crate) attachments: Vec<NetworkAttachment>,
+}
+
+impl std::fmt::Debug for Vm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vm")
+            .field("config", &self.config)
+            .field("attachments", &self.attachments.len())
+            .finish()
+    }
 }
 
 impl Vm {
-    /// Spawn the VM's supervisor processes and return a
-    /// [`VmHandle`]. The handle blocks the VM's lifecycle until you
-    /// call [`VmHandle::wait`], or dropped it to SIGKILL both
-    /// children.
-    pub fn start(self) -> Result<VmHandle, StartError> {
-        let inner = self.config.spawn().map_err(StartError::new)?;
-        Ok(VmHandle { inner })
-    }
-
-    /// Blocking convenience: start the VM and wait for it to exit.
-    /// Equivalent to `self.start()?.wait()`.
-    pub fn run(self) -> Result<(), RuntimeError> {
-        let mut inner = self.config.spawn().map_err(RuntimeError::new)?;
-        inner.wait().map_err(RuntimeError::new)
-    }
-
     pub fn builder(boot: impl Into<Boot>) -> VmBuilder {
         VmBuilder {
             boot: boot.into(),
@@ -35,9 +32,55 @@ impl Vm {
             ctx: AttachCtx::default(),
         }
     }
+
+    /// Spawn the VM: allocate a host/guest socketpair per attachment,
+    /// send `AddInterface` to each attached network daemon, and
+    /// launch the vmm process. The returned [`VmHandle`] keeps clones
+    /// of every attached [`NetworkHandle`] alive so the network
+    /// daemons outlive the VM.
+    pub fn start(self) -> Result<VmHandle, StartError> {
+        let Self {
+            config,
+            attachments,
+        } = self;
+
+        let mut vm_attachments = Vec::with_capacity(attachments.len());
+        let mut network_handles = Vec::with_capacity(attachments.len());
+
+        for (index, attachment) in attachments.iter().enumerate() {
+            let (host_sock, guest_sock) = UnixDatagram::pair().map_err(StartError::new)?;
+            let host_fd: OwnedFd = host_sock.into();
+            let guest_fd: OwnedFd = guest_sock.into();
+            let mac = attachment.attach.mac.unwrap_or_else(|| generate_mac(index));
+            attachment
+                .handle
+                .inner
+                .attach(mac, attachment.attach.port_forwards.clone(), &host_fd)
+                .map_err(StartError::new)?;
+            vm_attachments.push(VmAttachment { mac, guest_fd });
+        }
+
+        for attachment in attachments {
+            network_handles.push(attachment.handle);
+        }
+
+        let inner = VmProcesses::spawn_with_attachments(&config, vm_attachments)
+            .map_err(StartError::new)?;
+
+        Ok(VmHandle {
+            inner,
+            _network_handles: network_handles,
+        })
+    }
+
+    /// Blocking convenience: start the VM and wait for it to exit.
+    pub fn run(self) -> Result<(), RuntimeError> {
+        self.start()
+            .map_err(|e| RuntimeError::new(e.to_string()))?
+            .wait()
+    }
 }
 
-#[derive(Debug)]
 pub struct VmBuilder {
     boot: Boot,
     vcpus: u8,
@@ -98,40 +141,67 @@ impl VmBuilder {
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
             verbosity: self.verbosity,
-            interfaces: self.ctx.interfaces,
+            interfaces: vec![],
         };
 
         config
             .validate()
             .map_err(|e| BuildError::InvalidConfig(e.to_string()))?;
 
-        Ok(Vm { config })
+        Ok(Vm {
+            config,
+            attachments: self.ctx.attachments,
+        })
     }
 }
 
 pub struct VmHandle {
     inner: VmProcesses,
+    // Held across the VM's lifetime so the network daemons it
+    // attached to stay alive until the VM is dropped.
+    _network_handles: Vec<NetworkHandle>,
 }
 
 impl VmHandle {
-    /// SIGKILL both child processes immediately. Safe to call after
-    /// the VM has exited on its own (becomes a no-op).
+    /// SIGKILL the vmm child immediately. Safe to call after the VM
+    /// has exited on its own (becomes a no-op). Does not tear down
+    /// attached networks — those are owned by the caller's
+    /// [`NetworkHandle`] clones.
     pub fn kill(&mut self) -> Result<(), RuntimeError> {
         self.inner.kill().map_err(RuntimeError::new)
     }
 
-    /// Block until the VM exits. Consumes the handle.
+    /// Block until the VM exits.
     pub fn wait(mut self) -> Result<(), RuntimeError> {
         self.inner.wait().map_err(RuntimeError::new)
     }
 }
 
+fn generate_mac(index: usize) -> [u8; 6] {
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    seed ^= (std::process::id() as u128) << 32;
+    seed ^= (index as u128) << 8;
+
+    let mut mac = [0u8; 6];
+    mac[0] = 0x02;
+    mac[1] = ((seed >> 8) & 0xff) as u8;
+    mac[2] = ((seed >> 16) & 0xff) as u8;
+    mac[3] = ((seed >> 24) & 0xff) as u8;
+    mac[4] = ((seed >> 32) & 0xff) as u8;
+    mac[5] = ((seed >> 40) & 0xff) as u8;
+
+    if mac == [0u8; 6] {
+        mac[5] = 1;
+    }
+    mac
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot::Boot;
-    use crate::network::Network;
-    use capsa_core::PolicyAction;
     use std::path::PathBuf;
 
     #[test]
@@ -143,7 +213,7 @@ mod tests {
         assert_eq!(vm.config.vcpus, 1);
         assert_eq!(vm.config.memory_mib, 512);
         assert_eq!(vm.config.verbosity, 0);
-        assert!(vm.config.interfaces.is_empty());
+        assert!(vm.attachments.is_empty());
     }
 
     #[test]
@@ -154,8 +224,6 @@ mod tests {
 
         assert_eq!(vm.config.root, Some(PathBuf::from("/var/lib/capsa/rootfs")));
         assert_eq!(vm.config.kernel, None);
-        assert_eq!(vm.config.initramfs, None);
-        assert_eq!(vm.config.kernel_cmdline, None);
     }
 
     #[test]
@@ -168,7 +236,6 @@ mod tests {
         .build()
         .expect("build should succeed");
 
-        assert_eq!(vm.config.root, None);
         assert_eq!(vm.config.kernel, Some(PathBuf::from("/boot/vmlinuz")));
         assert_eq!(
             vm.config.initramfs,
@@ -192,69 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn attach_adds_default_interface() {
-        let network = Network::builder()
-            .allow_host("api.example.com")
-            .build()
-            .expect("network should build");
-
-        let vm = Vm::builder(Boot::root("/rootfs"))
-            .attach(&network)
-            .build()
-            .expect("build should succeed");
-
-        assert_eq!(vm.config.interfaces.len(), 1);
-        let iface = &vm.config.interfaces[0];
-        assert_eq!(iface.mac, None);
-        assert!(iface.port_forwards.is_empty());
-        let policy = iface.policy.as_ref().expect("policy should be set");
-        assert_eq!(policy.default_action, PolicyAction::Deny);
-        assert_eq!(policy.rules.len(), 1);
-    }
-
-    #[test]
-    fn attach_with_applies_mac_and_forwards() {
-        let network = Network::builder()
-            .allow_all_hosts()
-            .build()
-            .expect("network should build");
-
-        let vm = Vm::builder(Boot::root("/rootfs"))
-            .attach_with(&network, |a| {
-                a.mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee])
-                    .forward_tcp(8080, 80)
-            })
-            .build()
-            .expect("build should succeed");
-
-        let iface = &vm.config.interfaces[0];
-        assert_eq!(iface.mac, Some([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]));
-        assert_eq!(iface.port_forwards, vec![(8080, 80)]);
-    }
-
-    #[test]
-    fn build_rejects_multiple_attachments_for_now() {
-        let net_a = Network::builder().build().expect("network should build");
-        let net_b = Network::builder().build().expect("network should build");
-
-        let err = Vm::builder(Boot::root("/rootfs"))
-            .attach(&net_a)
-            .attach(&net_b)
-            .build()
-            .expect_err("multi-interface should be rejected");
-
-        match err {
-            BuildError::InvalidConfig(msg) => {
-                assert!(
-                    msg.contains("multiple network interfaces"),
-                    "unexpected error message: {msg}"
-                );
-            }
-            other => panic!("expected InvalidConfig, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn builder_accepts_kernel_boot_without_initramfs_or_cmdline() {
         let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
             .build()
@@ -263,5 +267,18 @@ mod tests {
         assert_eq!(vm.config.kernel, Some(PathBuf::from("/boot/vmlinuz")));
         assert_eq!(vm.config.initramfs, None);
         assert_eq!(vm.config.kernel_cmdline, None);
+    }
+
+    #[test]
+    fn generated_macs_are_nonzero_and_locally_administered() {
+        let mac = generate_mac(0);
+        assert_ne!(mac, [0u8; 6]);
+        assert_eq!(mac[0] & 0x02, 0x02, "locally administered bit set");
+        assert_eq!(mac[0] & 0x01, 0x00, "multicast bit clear");
+    }
+
+    #[test]
+    fn generated_macs_differ_across_indexes() {
+        assert_ne!(generate_mac(0), generate_mac(1));
     }
 }

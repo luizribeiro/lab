@@ -127,7 +127,11 @@ impl Cli {
                 )
             })?;
 
-            builder = builder.attach_with(&network, |attach| {
+            let handle = network
+                .start()
+                .map_err(|err| anyhow!("failed to start network daemon: {err}"))?;
+
+            builder = builder.attach_with(&handle, |attach| {
                 port_forwards
                     .iter()
                     .fold(attach, |acc, &(host, guest)| acc.forward_tcp(host, guest))

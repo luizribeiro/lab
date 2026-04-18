@@ -1,6 +1,4 @@
-use capsa_core::VmNetworkInterfaceConfig;
-
-use crate::network::Network;
+use crate::network::NetworkHandle;
 
 mod sealed {
     pub trait Sealed {}
@@ -13,19 +11,24 @@ pub trait Attachable: sealed::Sealed {
 #[doc(hidden)]
 pub mod __private {
     use super::Attachable;
-    use capsa_core::VmNetworkInterfaceConfig;
+    use crate::network::NetworkHandle;
 
     pub trait AttachApply: Attachable {
         fn apply(&self, attachment: Self::Attachment, ctx: &mut AttachCtx);
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Default)]
     pub struct AttachCtx {
-        pub interfaces: Vec<VmNetworkInterfaceConfig>,
+        pub attachments: Vec<NetworkAttachment>,
+    }
+
+    pub struct NetworkAttachment {
+        pub handle: NetworkHandle,
+        pub attach: super::NetworkAttach,
     }
 }
 
-pub(crate) use __private::{AttachApply, AttachCtx};
+pub(crate) use __private::{AttachApply, AttachCtx, NetworkAttachment};
 
 #[derive(Debug, Clone, Default)]
 pub struct NetworkAttach {
@@ -45,18 +48,17 @@ impl NetworkAttach {
     }
 }
 
-impl sealed::Sealed for Network {}
+impl sealed::Sealed for NetworkHandle {}
 
-impl Attachable for Network {
+impl Attachable for NetworkHandle {
     type Attachment = NetworkAttach;
 }
 
-impl __private::AttachApply for Network {
+impl __private::AttachApply for NetworkHandle {
     fn apply(&self, attachment: NetworkAttach, ctx: &mut __private::AttachCtx) {
-        ctx.interfaces.push(VmNetworkInterfaceConfig {
-            mac: attachment.mac,
-            policy: Some(self.policy.clone()),
-            port_forwards: attachment.port_forwards,
+        ctx.attachments.push(NetworkAttachment {
+            handle: self.clone(),
+            attach: attachment,
         });
     }
 }
@@ -64,7 +66,6 @@ impl __private::AttachApply for Network {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capsa_core::PolicyAction;
 
     #[test]
     fn network_attach_defaults_are_empty() {
@@ -85,47 +86,5 @@ mod tests {
             .forward_tcp(8080, 80)
             .forward_tcp(8443, 443);
         assert_eq!(attach.port_forwards, vec![(8080, 80), (8443, 443)]);
-    }
-
-    #[test]
-    fn network_apply_pushes_interface_with_policy() {
-        let network = Network::builder()
-            .allow_host("api.example.com")
-            .build()
-            .expect("network should build");
-
-        let mut ctx = AttachCtx::default();
-        let attachment = NetworkAttach::default()
-            .mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee])
-            .forward_tcp(8080, 80);
-
-        network.apply(attachment, &mut ctx);
-
-        assert_eq!(ctx.interfaces.len(), 1);
-        let iface = &ctx.interfaces[0];
-        assert_eq!(iface.mac, Some([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]));
-        assert_eq!(iface.port_forwards, vec![(8080, 80)]);
-        let policy = iface.policy.as_ref().expect("policy should be set");
-        assert_eq!(policy.default_action, PolicyAction::Deny);
-        assert_eq!(policy.rules.len(), 1);
-    }
-
-    #[test]
-    fn network_apply_with_default_attachment_leaves_mac_and_forwards_unset() {
-        let network = Network::builder()
-            .allow_all_hosts()
-            .build()
-            .expect("network should build");
-
-        let mut ctx = AttachCtx::default();
-        network.apply(NetworkAttach::default(), &mut ctx);
-
-        let iface = &ctx.interfaces[0];
-        assert_eq!(iface.mac, None);
-        assert!(iface.port_forwards.is_empty());
-        assert_eq!(
-            iface.policy.as_ref().unwrap().default_action,
-            PolicyAction::Allow
-        );
     }
 }

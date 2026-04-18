@@ -2,14 +2,24 @@
 //! spawn phase and a wait phase so callers can hold a handle to a
 //! running VM.
 
+use std::os::fd::OwnedFd;
+
 use anyhow::{bail, Context, Result};
 
 use crate::config::VmConfig;
 
 use super::child::{self, ChildHandle, Exited};
 use super::netd::{self, NetdSpawn};
-use super::plan;
+use super::plan::{self, VmmInterfaceBinding};
 use super::vmm;
+
+/// A resolved VM-side attachment produced by the caller (e.g. the
+/// public `capsa` crate after sending `AddInterface` to an external
+/// netd). The `guest_fd` will be inherited into the sandboxed vmm.
+pub struct VmAttachment {
+    pub mac: [u8; 6],
+    pub guest_fd: OwnedFd,
+}
 
 pub struct VmProcesses {
     vmm: ChildHandle,
@@ -17,6 +27,29 @@ pub struct VmProcesses {
 }
 
 impl VmProcesses {
+    /// Spawn a vmm whose interfaces are already attached to an
+    /// external network daemon. The caller has already sent
+    /// `AddInterface` over the daemon's control socket for each
+    /// attachment and now hands the guest-side fds to this function.
+    /// No internal netd is started; the returned `VmProcesses`
+    /// supervises only the vmm child.
+    pub fn spawn_with_attachments(
+        config: &VmConfig,
+        attachments: Vec<VmAttachment>,
+    ) -> Result<Self> {
+        config.validate().context("invalid VM configuration")?;
+        let bindings: Vec<VmmInterfaceBinding> = attachments
+            .into_iter()
+            .map(|a| VmmInterfaceBinding {
+                mac: a.mac,
+                guest_fd: a.guest_fd,
+            })
+            .collect();
+        let vmm =
+            vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
+        Ok(Self { vmm, netd: None })
+    }
+
     pub(super) fn spawn(config: &VmConfig) -> Result<Self> {
         config.validate().context("invalid VM configuration")?;
 
