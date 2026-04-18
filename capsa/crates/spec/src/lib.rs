@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_net::NetworkPolicy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -48,30 +47,21 @@ where
     .context("failed to parse launch spec JSON")
 }
 
-/// Launcher -> netd JSON contract.
+/// Launcher -> netd JSON contract. Interfaces are attached at
+/// runtime via the control socket (see [`ControlRequest`]), so the
+/// launch spec only carries daemon-wide parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetLaunchSpec {
-    /// Inherited fd the daemon should use to signal readiness. Must be an
-    /// open writable fd (typically a pipe write end) inherited from the
-    /// launcher. Validated to be >= 3 and disjoint from interface fds so
-    /// it cannot collide with stdio or any tap fd.
+    /// Inherited fd the daemon should use to signal readiness. Must
+    /// be an open writable fd (typically a pipe write end) inherited
+    /// from the launcher. Validated to be >= 3 so it cannot collide
+    /// with stdio.
     pub ready_fd: i32,
-    /// Inherited `SOCK_SEQPACKET` fd the daemon should use for runtime
-    /// control messages (adding interfaces dynamically). Validated to
-    /// be >= 3 and disjoint from `ready_fd` and all interface fds.
+    /// Inherited `SOCK_SEQPACKET` fd the daemon should use for
+    /// runtime control messages (adding interfaces dynamically).
+    /// Validated to be >= 3 and disjoint from `ready_fd`.
     #[serde(default)]
     pub control_fd: Option<i32>,
-    #[serde(default)]
-    pub interfaces: Vec<NetInterfaceSpec>,
-    #[serde(default)]
-    pub port_forwards: Vec<(u16, u16)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NetInterfaceSpec {
-    pub host_fd: i32,
-    pub mac: [u8; 6],
-    pub policy: Option<NetworkPolicy>,
 }
 
 impl NetLaunchSpec {
@@ -93,23 +83,6 @@ impl NetLaunchSpec {
             ensure!(
                 seen_fds.insert(control_fd),
                 "control_fd {control_fd} collides with ready_fd"
-            );
-        }
-
-        for (index, interface) in self.interfaces.iter().enumerate() {
-            ensure!(
-                interface.host_fd >= 3,
-                "interface {index}: invalid host_fd {} (must be >= 3)",
-                interface.host_fd
-            );
-            ensure!(
-                seen_fds.insert(interface.host_fd),
-                "interface {index}: host_fd {} collides with another fd",
-                interface.host_fd
-            );
-            ensure!(
-                interface.mac != [0u8; 6],
-                "interface {index}: MAC address is all zeros"
             );
         }
 
@@ -239,83 +212,29 @@ mod args_tests {
 mod net_tests {
     use super::*;
 
-    fn sample_interface(host_fd: i32, mac: [u8; 6]) -> NetInterfaceSpec {
-        NetInterfaceSpec {
-            host_fd,
-            mac,
-            policy: None,
-        }
-    }
-
-    fn spec_with(ready_fd: i32, interfaces: Vec<NetInterfaceSpec>) -> NetLaunchSpec {
+    fn spec_with(ready_fd: i32) -> NetLaunchSpec {
         NetLaunchSpec {
             ready_fd,
             control_fd: None,
-            interfaces,
-            port_forwards: vec![],
         }
-    }
-
-    #[test]
-    fn validate_rejects_low_host_fd() {
-        let spec = spec_with(30, vec![sample_interface(2, [0x02, 0, 0, 0, 0, 1])]);
-        let err = spec.validate().expect_err("host_fd < 3 should fail");
-        assert!(err.to_string().contains("interface 0: invalid host_fd 2"));
-    }
-
-    #[test]
-    fn validate_rejects_duplicate_host_fd() {
-        let spec = spec_with(
-            30,
-            vec![
-                sample_interface(10, [0x02, 0, 0, 0, 0, 1]),
-                sample_interface(10, [0x02, 0, 0, 0, 0, 2]),
-            ],
-        );
-        let err = spec.validate().expect_err("duplicate host fd should fail");
-        assert!(err.to_string().contains("interface 1: host_fd 10 collides"));
-    }
-
-    #[test]
-    fn validate_rejects_host_fd_colliding_with_ready_fd() {
-        let spec = spec_with(30, vec![sample_interface(30, [0x02, 0, 0, 0, 0, 1])]);
-        let err = spec
-            .validate()
-            .expect_err("host_fd equal to ready_fd should fail");
-        assert!(err.to_string().contains("interface 0: host_fd 30 collides"));
     }
 
     #[test]
     fn validate_rejects_low_ready_fd() {
-        let spec = spec_with(2, vec![sample_interface(10, [0x02, 0, 0, 0, 0, 1])]);
-        let err = spec.validate().expect_err("ready_fd < 3 should fail");
+        let err = spec_with(2)
+            .validate()
+            .expect_err("ready_fd < 3 should fail");
         assert!(err.to_string().contains("invalid ready_fd 2"));
     }
 
     #[test]
-    fn validate_rejects_zero_mac() {
-        let spec = spec_with(30, vec![sample_interface(10, [0; 6])]);
-        let err = spec.validate().expect_err("zero mac should fail");
-        assert!(err
-            .to_string()
-            .contains("interface 0: MAC address is all zeros"));
-    }
-
-    #[test]
-    fn validate_accepts_unique_nonzero_interfaces() {
-        let spec = spec_with(
-            30,
-            vec![
-                sample_interface(10, [0x02, 0, 0, 0, 0, 1]),
-                sample_interface(11, [0x02, 0, 0, 0, 0, 2]),
-            ],
-        );
-        spec.validate().expect("spec should validate");
+    fn validate_accepts_valid_ready_fd() {
+        spec_with(30).validate().expect("spec should validate");
     }
 
     #[test]
     fn validate_rejects_control_fd_below_three() {
-        let mut spec = spec_with(30, vec![]);
+        let mut spec = spec_with(30);
         spec.control_fd = Some(2);
         let err = spec.validate().expect_err("control_fd < 3 should fail");
         assert!(err.to_string().contains("invalid control_fd 2"));
@@ -323,7 +242,7 @@ mod net_tests {
 
     #[test]
     fn validate_rejects_control_fd_colliding_with_ready_fd() {
-        let mut spec = spec_with(30, vec![]);
+        let mut spec = spec_with(30);
         spec.control_fd = Some(30);
         let err = spec
             .validate()
@@ -332,18 +251,8 @@ mod net_tests {
     }
 
     #[test]
-    fn validate_rejects_control_fd_colliding_with_interface_fd() {
-        let mut spec = spec_with(30, vec![sample_interface(40, [0x02, 0, 0, 0, 0, 1])]);
-        spec.control_fd = Some(40);
-        let err = spec
-            .validate()
-            .expect_err("control_fd colliding with interface fd should fail");
-        assert!(err.to_string().contains("host_fd 40 collides"));
-    }
-
-    #[test]
     fn validate_accepts_unique_control_fd() {
-        let mut spec = spec_with(30, vec![sample_interface(40, [0x02, 0, 0, 0, 0, 1])]);
+        let mut spec = spec_with(30);
         spec.control_fd = Some(50);
         spec.validate().expect("unique control_fd should validate");
     }

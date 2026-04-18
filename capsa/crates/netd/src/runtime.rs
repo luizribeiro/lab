@@ -78,34 +78,9 @@ impl NetworkRuntime {
         let NetLaunchSpec {
             ready_fd: _,
             control_fd,
-            interfaces,
-            port_forwards,
         } = launch_spec;
 
-        let tasks: TaskHandles = Arc::new(Mutex::new(Vec::with_capacity(
-            interfaces.len() * 2 + port_forwards.len() + 1,
-        )));
-
-        for (index, interface) in interfaces.into_iter().enumerate() {
-            // SAFETY: interface host fd values are validated by `NetLaunchSpec::validate` and
-            // provided by the launcher after fd remapping. Ownership is transferred into netd.
-            let host_fd = unsafe { OwnedFd::from_raw_fd(interface.host_fd) };
-            let iface_forwards = if index == 0 {
-                port_forwards.clone()
-            } else {
-                vec![]
-            };
-            setup_interface(
-                host_fd,
-                interface.mac,
-                interface.policy,
-                iface_forwards,
-                &tasks,
-            )
-            .await
-            .with_context(|| format!("failed to set up interface {index}"))?;
-            tracing::debug!(interface = index, "netd interface runtime initialized");
-        }
+        let tasks: TaskHandles = Arc::new(Mutex::new(Vec::new()));
 
         if let Some(control_fd) = control_fd {
             // SAFETY: control_fd is validated by `NetLaunchSpec::validate` and inherited
@@ -242,19 +217,9 @@ async fn setup_interface(
 #[cfg(test)]
 mod tests {
     use super::run;
-    use capsa_net::NetworkPolicy;
-    use capsa_spec::{NetInterfaceSpec, NetLaunchSpec};
+    use capsa_spec::NetLaunchSpec;
     use std::io::Read;
-    use std::os::fd::{FromRawFd, IntoRawFd};
-    use std::os::unix::net::UnixDatagram;
-
-    fn sample_interface(host_fd: i32, policy: Option<NetworkPolicy>) -> NetInterfaceSpec {
-        NetInterfaceSpec {
-            host_fd,
-            mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
-            policy,
-        }
-    }
+    use std::os::fd::FromRawFd;
 
     fn pipe() -> (std::fs::File, i32) {
         let mut fds = [0; 2];
@@ -265,42 +230,6 @@ mod tests {
         // SAFETY: `pipe` filled `fds[0]` with a valid read descriptor.
         let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
         (reader, fds[1])
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn task_failure_causes_non_zero_daemon_outcome() {
-        let mut host_pipe_fds = [0; 2];
-        // SAFETY: `host_pipe_fds` points to valid memory for two integers.
-        let rc = unsafe { libc::pipe(host_pipe_fds.as_mut_ptr()) };
-        assert_eq!(
-            rc, 0,
-            "pipe creation for invalid host endpoint should succeed"
-        );
-        let host_fd = host_pipe_fds[0];
-        // SAFETY: close the write end; runtime takes ownership of `host_fd` only.
-        let close_rc = unsafe { libc::close(host_pipe_fds[1]) };
-        assert_eq!(close_rc, 0, "closing write end should succeed");
-
-        let (mut reader, writer_fd) = pipe();
-
-        let launch_spec = NetLaunchSpec {
-            ready_fd: writer_fd,
-            control_fd: None,
-            interfaces: vec![sample_interface(host_fd, None)],
-            port_forwards: vec![],
-        };
-
-        let err = run(launch_spec, writer_fd)
-            .await
-            .expect_err("bridge task completion should fail-fast netd");
-
-        let mut ready = [0u8; 1];
-        reader
-            .read_exact(&mut ready)
-            .expect("readiness byte should be emitted before task failure");
-        assert_eq!(ready, [super::READY_SIGNAL]);
-
-        assert!(err.to_string().contains("critical network task"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -321,8 +250,6 @@ mod tests {
         let launch_spec = NetLaunchSpec {
             ready_fd: writer_fd,
             control_fd: Some(server_fd),
-            interfaces: vec![],
-            port_forwards: vec![],
         };
 
         // Close the peer so the control task exits cleanly once
@@ -340,15 +267,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn readiness_emitted_once_after_startup_path() {
-        let (host, _guest) = UnixDatagram::pair().expect("socketpair should be created");
-        let host_fd = host.into_raw_fd();
+    async fn readiness_emitted_exactly_once() {
         let (mut reader, writer_fd) = pipe();
         let launch_spec = NetLaunchSpec {
             ready_fd: writer_fd,
             control_fd: None,
-            interfaces: vec![sample_interface(host_fd, None)],
-            port_forwards: vec![],
         };
 
         let daemon = tokio::spawn(async move { run(launch_spec, writer_fd).await });

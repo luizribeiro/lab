@@ -93,8 +93,6 @@ pub(super) fn spawn_netd(
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
         control_fd: Some(control_fd_num),
-        interfaces: vec![],
-        port_forwards: vec![],
     };
     spec.validate().context("invalid netd launch spec")?;
 

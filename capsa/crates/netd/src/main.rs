@@ -37,7 +37,6 @@ mod tests {
         serde_json::json!({
             "ready_fd": ready_fd,
             "control_fd": null,
-            "interfaces": []
         })
         .to_string()
     }
@@ -64,18 +63,7 @@ mod tests {
     fn invalid_launch_spec_returns_validation_error_before_runtime() {
         let invalid_spec_json = serde_json::json!({
             "ready_fd": 30,
-            "interfaces": [
-                {
-                    "host_fd": 200,
-                    "mac": [2, 170, 187, 204, 221, 238],
-                    "policy": null
-                },
-                {
-                    "host_fd": 200,
-                    "mac": [2, 170, 187, 204, 221, 239],
-                    "policy": null
-                }
-            ]
+            "control_fd": 30,
         })
         .to_string();
 
