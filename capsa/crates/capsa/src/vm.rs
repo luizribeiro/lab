@@ -48,7 +48,7 @@ impl Vm {
         let mut network_handles = Vec::with_capacity(attachments.len());
 
         for (index, attachment) in attachments.iter().enumerate() {
-            let (host_sock, guest_sock) = UnixDatagram::pair().map_err(StartError::new)?;
+            let (host_sock, guest_sock) = UnixDatagram::pair().map_err(StartError::Socketpair)?;
             let host_fd: OwnedFd = host_sock.into();
             let guest_fd: OwnedFd = guest_sock.into();
             let mac = attachment.attach.mac.unwrap_or_else(|| generate_mac(index));
@@ -56,7 +56,7 @@ impl Vm {
                 .handle
                 .inner
                 .attach(mac, attachment.attach.port_forwards.clone(), &host_fd)
-                .map_err(StartError::new)?;
+                .map_err(|e| StartError::Attach(e.into()))?;
             vm_attachments.push(VmAttachment { mac, guest_fd });
         }
 
@@ -65,7 +65,7 @@ impl Vm {
         }
 
         let inner = VmProcesses::spawn_with_attachments(&config, vm_attachments)
-            .map_err(StartError::new)?;
+            .map_err(|e| StartError::VmSpawn(e.into()))?;
 
         Ok(VmHandle {
             inner,

@@ -18,28 +18,38 @@ impl fmt::Display for BuildError {
 
 impl std::error::Error for BuildError {}
 
-#[derive(Debug)]
-pub struct StartError {
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
-impl StartError {
-    pub(crate) fn new(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self {
-            source: source.into(),
-        }
-    }
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum StartError {
+    /// Failed to spawn the network daemon.
+    NetworkSpawn(BoxedError),
+    /// Failed to spawn the virtual machine monitor.
+    VmSpawn(BoxedError),
+    /// Failed to attach an interface to a running network daemon.
+    Attach(BoxedError),
+    /// Failed to allocate a host/guest socketpair for an attachment.
+    Socketpair(std::io::Error),
 }
 
 impl fmt::Display for StartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to start VM: {}", self.source)
+        match self {
+            Self::NetworkSpawn(e) => write!(f, "failed to spawn network daemon: {e}"),
+            Self::VmSpawn(e) => write!(f, "failed to spawn VM: {e}"),
+            Self::Attach(e) => write!(f, "failed to attach interface: {e}"),
+            Self::Socketpair(e) => write!(f, "failed to allocate host/guest socketpair: {e}"),
+        }
     }
 }
 
 impl std::error::Error for StartError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
+        match self {
+            Self::NetworkSpawn(e) | Self::VmSpawn(e) | Self::Attach(e) => Some(e.as_ref()),
+            Self::Socketpair(e) => Some(e),
+        }
     }
 }
 
@@ -99,15 +109,34 @@ mod tests {
     }
 
     #[test]
-    fn start_error_preserves_source() {
+    fn start_error_network_spawn_display_names_the_daemon() {
         use std::error::Error;
 
         let cause = std::io::Error::new(std::io::ErrorKind::NotFound, "binary missing");
-        let err = StartError::new(cause);
+        let err = StartError::NetworkSpawn(Box::new(cause));
 
         let msg = err.to_string();
+        assert!(msg.contains("network daemon"), "unexpected: {msg}");
         assert!(msg.contains("binary missing"), "unexpected: {msg}");
         assert!(err.source().is_some(), "source should be set");
+    }
+
+    #[test]
+    fn start_error_vm_spawn_display_names_the_vm() {
+        let err = StartError::VmSpawn(Box::new(std::io::Error::other("vmm missing")));
+        let msg = err.to_string();
+        assert!(msg.contains("failed to spawn VM"), "unexpected: {msg}");
+        assert!(msg.contains("vmm missing"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn start_error_socketpair_preserves_io_error_source() {
+        use std::error::Error;
+
+        let io_err = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        let err = StartError::Socketpair(io_err);
+        assert!(err.to_string().contains("socketpair"), "{}", err);
+        assert!(err.source().is_some());
     }
 
     #[test]

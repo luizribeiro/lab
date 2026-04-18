@@ -21,8 +21,8 @@ impl Network {
     /// one clone of the returned handle exists; the last drop
     /// SIGKILLs it.
     pub fn start(&self) -> Result<NetworkHandle, StartError> {
-        let processes =
-            NetworkProcesses::spawn(Some(self.policy.clone())).map_err(StartError::new)?;
+        let processes = NetworkProcesses::spawn(Some(self.policy.clone()))
+            .map_err(|e| StartError::NetworkSpawn(e.into()))?;
         Ok(NetworkHandle {
             inner: Arc::new(processes),
         })
