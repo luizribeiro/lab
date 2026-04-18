@@ -9,8 +9,3 @@ pub use self::boot::{Boot, KernelBoot};
 pub use self::error::BuildError;
 pub use self::network::{Network, NetworkBuilder};
 pub use self::vm::{Vm, VmBuilder};
-
-pub use capsa_core::{
-    DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
-    VmConfig, VmNetworkInterfaceConfig,
-};

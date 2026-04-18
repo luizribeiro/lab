@@ -71,7 +71,7 @@ fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
 }
 
 impl Cli {
-    fn to_vm_config(&self) -> Result<capsa::VmConfig> {
+    fn to_vm_config(&self) -> Result<capsa_core::VmConfig> {
         let port_forwards = self
             .forward
             .iter()
@@ -96,7 +96,7 @@ impl Cli {
         let interfaces = if self.allow_host.is_empty() {
             vec![]
         } else {
-            let policy = capsa::NetworkPolicy::from_allowed_hosts(
+            let policy = capsa_core::NetworkPolicy::from_allowed_hosts(
                 self.allow_host.iter().map(String::as_str),
             )
             .map_err(|err| {
@@ -106,14 +106,14 @@ impl Cli {
                 )
             })?;
 
-            vec![capsa::VmNetworkInterfaceConfig {
+            vec![capsa_core::VmNetworkInterfaceConfig {
                 mac: None,
                 policy: Some(policy),
                 port_forwards,
             }]
         };
 
-        Ok(capsa::VmConfig {
+        Ok(capsa_core::VmConfig {
             root: self.root.clone(),
             kernel: self.kernel.clone(),
             initramfs: self.initramfs.clone(),
@@ -137,7 +137,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::Cli;
-    use capsa::{DomainPattern, MatchCriteria, PolicyAction};
+    use capsa_core::{DomainPattern, MatchCriteria, PolicyAction};
     use clap::{error::ErrorKind, Parser};
 
     #[test]
