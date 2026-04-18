@@ -14,7 +14,8 @@ use capsa::{Boot, Network, Vm};
 let api_net = Network::builder()
     .allow_host("api.example.com")
     .allow_host("*.cdn.example.com")
-    .build()?;
+    .build()?
+    .start()?;
 
 Vm::builder(Boot::kernel("/boot/vmlinuz").cmdline("console=hvc0"))
     .vcpus(2)
@@ -30,8 +31,9 @@ Vm::builder(Boot::kernel("/boot/vmlinuz").cmdline("console=hvc0"))
 - **Typed builder, one blessed path**: `Vm::builder(boot)` is the only way to construct a VM.
 - **Boot is required**: the builder takes a `Boot` spec up front; you can't forget it.
 - **Secure defaults**: a fresh `Network::builder()` is deny-all — only `allow_host` / `allow_hosts` / `allow_all_hosts` relaxes it.
+- **Networks are first-class**: a `Network` is built once, `start()`ed to spawn its daemon, and attached to any number of VMs.
 - **Validated at build**: `.build()` parses host patterns and runs config validation, surfacing errors via `BuildError`.
-- **Kill-on-drop runtime**: `VmHandle` SIGKILLs its supervisor children when dropped — no leaked processes on panic or abandon.
+- **Kill-on-drop runtime**: `VmHandle` SIGKILLs the vmm when dropped; the last `NetworkHandle` clone SIGKILLs the network daemon. No leaked processes on panic or abandon.
 
 ## Boot modes
 
@@ -60,10 +62,10 @@ let vm = Vm::builder(Boot::root("/var/lib/capsa/rootfs")).build()?;
 
 ## Network policy
 
-Deny-all with an explicit allowlist:
+`Network::builder()` starts deny-all; the DSL is allowlist-first:
 
 ```rust
-use capsa::{Network};
+use capsa::Network;
 
 let net = Network::builder()
     .allow_host("api.example.com")
@@ -89,18 +91,48 @@ Allow everything (debugging only):
 use capsa::Network;
 
 let net = Network::builder().allow_all_hosts().build()?;
+# Ok::<(), capsa::BuildError>(())
 ```
 
-## Attaching to a VM
+## Starting a network
 
-`.attach(&net)` attaches with defaults (auto MAC, no port forwards).
-`.attach_with(&net, |a| ...)` lets you set a MAC or forward TCP ports
-on this attachment:
+`Network::start()` spawns the network daemon and returns a
+[`NetworkHandle`]. The handle is cheaply cloneable — every clone
+shares the same daemon — and dropping the last clone SIGKILLs it.
 
-```rust
+```rust,no_run
+use capsa::Network;
+
+let handle = Network::builder()
+    .allow_host("api.example.com")
+    .build()?
+    .start()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Multiple VMs can share a single running network:
+
+```rust,no_run
 use capsa::{Boot, Network, Vm};
 
-let net = Network::builder().allow_all_hosts().build()?;
+let api = Network::builder().allow_host("api.example.com").build()?.start()?;
+
+let vm1 = Vm::builder(Boot::root("/rootfs-a")).attach(&api).build()?;
+let vm2 = Vm::builder(Boot::root("/rootfs-b")).attach(&api).build()?;
+// vm1 and vm2 share the same netd; they're on the same virtual subnet.
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+## Attaching a VM
+
+`.attach(&handle)` attaches with defaults (auto MAC, no port
+forwards). `.attach_with(&handle, |a| ...)` lets you set a MAC or
+forward TCP ports on this attachment:
+
+```rust,no_run
+use capsa::{Boot, Network, Vm};
+
+let net = Network::builder().allow_all_hosts().build()?.start()?;
 
 let vm = Vm::builder(Boot::root("/rootfs"))
     .attach_with(&net, |a| {
@@ -108,7 +140,7 @@ let vm = Vm::builder(Boot::root("/rootfs"))
             .forward_tcp(8080, 80)
     })
     .build()?;
-# Ok::<(), capsa::BuildError>(())
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 `.attach` / `.attach_with` are generic over `Attachable`, so future
@@ -158,6 +190,6 @@ handle.wait()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Dropping a running `VmHandle` SIGKILLs both supervisor children. This
-is the default teardown path — no explicit `kill` required for panic
-safety.
+Dropping a running `VmHandle` SIGKILLs the vmm. The
+[`NetworkHandle`]s it attached to stay alive as long as you (or
+another VM) still hold clones.
