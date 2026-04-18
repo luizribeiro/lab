@@ -1,70 +1,89 @@
-//! High-level VM launch flow. Decides whether to run with or
-//! without networking, threads each interface through the typed
-//! phases in `plan`, and supervises the pair until one exits.
+//! High-level VM launch flow. Splits the single-VM lifecycle into a
+//! spawn phase and a wait phase so callers can hold a handle to a
+//! running VM.
 
 use anyhow::{bail, Context, Result};
 
 use crate::config::VmConfig;
 
-use super::child::{self, Exited};
+use super::child::{self, ChildHandle, Exited};
 use super::netd::{self, NetdSpawn};
 use super::plan;
 use super::vmm;
 
+pub(super) struct VmProcesses {
+    vmm: ChildHandle,
+    netd: Option<ChildHandle>,
+}
+
+impl VmProcesses {
+    pub(super) fn spawn(config: &VmConfig) -> Result<Self> {
+        config.validate().context("invalid VM configuration")?;
+
+        if config.interfaces.is_empty() {
+            let vmm = vmm::spawn_vmm(config, vec![])?;
+            return Ok(Self { vmm, netd: None });
+        }
+
+        let plans = plan::plan_interfaces(config)?;
+        let sockets = plan::open_interface_sockets(plans)?;
+
+        let (
+            NetdSpawn {
+                child: netd_child,
+                ready_reader,
+            },
+            bindings,
+        ) = netd::spawn_netd(sockets)?;
+
+        netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
+            .context("netd readiness check failed")?;
+
+        // If spawn_vmm errors below, `netd_child` is dropped here and
+        // its `ChildHandle::Drop` tears down the netd child. No
+        // explicit cleanup needed — this is the whole point of RAII.
+        let vmm =
+            vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
+
+        Ok(Self {
+            vmm,
+            netd: Some(netd_child),
+        })
+    }
+
+    pub(super) fn wait(self) -> Result<()> {
+        let Self { vmm, netd } = self;
+
+        let Some(mut netd) = netd else {
+            let status = vmm
+                .wait()
+                .context("failed to wait on sandboxed VMM child")?;
+            return if status.success() {
+                Ok(())
+            } else {
+                bail!("sandboxed VMM process exited with status {status}")
+            };
+        };
+
+        let mut vmm = vmm;
+        match child::wait_either(&mut vmm, &mut netd) {
+            Exited::First(Ok(status)) if status.success() => Ok(()),
+            Exited::First(Ok(status)) => {
+                bail!("sandboxed VMM process exited with status {status}")
+            }
+            Exited::First(Err(err)) => Err(err).context("failed to reap VMM process"),
+            Exited::Second(Ok(status)) => {
+                bail!(
+                    "network daemon exited unexpectedly while VMM was running with status {status}"
+                )
+            }
+            Exited::Second(Err(err)) => Err(err).context("failed to reap network daemon"),
+        }
+    }
+}
+
 pub(super) fn run(config: &VmConfig) -> Result<()> {
-    config.validate().context("invalid VM configuration")?;
-
-    if config.interfaces.is_empty() {
-        return run_vmm_only(config);
-    }
-
-    run_with_network(config)
-}
-
-fn run_vmm_only(config: &VmConfig) -> Result<()> {
-    let vmm_child = vmm::spawn_vmm(config, vec![])?;
-    let status = vmm_child
-        .wait()
-        .context("failed to wait on sandboxed VMM child")?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("sandboxed VMM process exited with status {status}")
-    }
-}
-
-fn run_with_network(config: &VmConfig) -> Result<()> {
-    let plans = plan::plan_interfaces(config)?;
-    let sockets = plan::open_interface_sockets(plans)?;
-
-    let (
-        NetdSpawn {
-            child: mut netd_child,
-            ready_reader,
-        },
-        bindings,
-    ) = netd::spawn_netd(sockets)?;
-
-    netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
-        .context("netd readiness check failed")?;
-
-    // If spawn_vmm errors below, `netd_child` is dropped here and
-    // its `ChildHandle::Drop` tears down the netd child. No
-    // explicit cleanup needed — this is the whole point of RAII.
-    let mut vmm_child =
-        vmm::spawn_vmm(config, bindings).context("failed to spawn sandboxed VMM process")?;
-
-    match child::wait_either(&mut vmm_child, &mut netd_child) {
-        Exited::First(Ok(status)) if status.success() => Ok(()),
-        Exited::First(Ok(status)) => {
-            bail!("sandboxed VMM process exited with status {status}")
-        }
-        Exited::First(Err(err)) => Err(err).context("failed to reap VMM process"),
-        Exited::Second(Ok(status)) => {
-            bail!("network daemon exited unexpectedly while VMM was running with status {status}")
-        }
-        Exited::Second(Err(err)) => Err(err).context("failed to reap network daemon"),
-    }
+    VmProcesses::spawn(config)?.wait()
 }
 
 #[cfg(test)]
