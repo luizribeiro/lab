@@ -3,6 +3,10 @@ name = "capsa-core"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "capsa-fake-netd"
+path = "src/bin/fake_netd.rs"
+
 [dependencies]
 anyhow = "1.0"
 capsa-net = { path = "../net" }
