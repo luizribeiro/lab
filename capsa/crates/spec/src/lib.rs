@@ -129,6 +129,32 @@ pub struct ResolvedNetworkInterface {
     pub guest_fd: i32,
 }
 
+/// Runtime control request sent from `capsa-core` to a running
+/// `capsa-netd` over its control `SOCK_SEQPACKET`. The JSON body
+/// travels as the payload; any host-side fd the request references
+/// is transferred out of band via a single `SCM_RIGHTS` ancillary
+/// message on the same sendmsg call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum ControlRequest {
+    /// Attach a new guest interface to the running network. The
+    /// host-side socketpair fd is transferred out of band via
+    /// `SCM_RIGHTS` on the same message.
+    AddInterface {
+        mac: [u8; 6],
+        #[serde(default)]
+        port_forwards: Vec<(u16, u16)>,
+    },
+}
+
+/// Response to a [`ControlRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ControlResponse {
+    Ok,
+    Error { message: String },
+}
+
 impl VmmLaunchSpec {
     pub fn validate(&self) -> Result<()> {
         let mut seen_fds = HashSet::new();
@@ -268,6 +294,72 @@ mod net_tests {
             ],
         );
         spec.validate().expect("spec should validate");
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn add_interface_round_trip_preserves_fields() {
+        let req = ControlRequest::AddInterface {
+            mac: [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee],
+            port_forwards: vec![(8080, 80), (8443, 443)],
+        };
+
+        let encoded = serde_json::to_string(&req).expect("request should serialize");
+        let decoded: ControlRequest =
+            serde_json::from_str(&encoded).expect("request should deserialize");
+
+        assert_eq!(decoded, req);
+    }
+
+    #[test]
+    fn add_interface_wire_format_is_tagged_lowercase() {
+        let req = ControlRequest::AddInterface {
+            mac: [0x02, 0, 0, 0, 0, 1],
+            port_forwards: vec![],
+        };
+
+        let encoded = serde_json::to_string(&req).unwrap();
+        assert!(
+            encoded.starts_with(r#"{"op":"add_interface""#),
+            "unexpected wire format: {encoded}"
+        );
+    }
+
+    #[test]
+    fn add_interface_defaults_port_forwards_when_missing() {
+        let encoded = r#"{"op":"add_interface","mac":[2,0,0,0,0,1]}"#;
+        let decoded: ControlRequest =
+            serde_json::from_str(encoded).expect("missing forwards should default");
+
+        match decoded {
+            ControlRequest::AddInterface { port_forwards, .. } => {
+                assert!(port_forwards.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn ok_response_round_trip() {
+        let encoded = serde_json::to_string(&ControlResponse::Ok).unwrap();
+        assert_eq!(encoded, r#"{"status":"ok"}"#);
+        let decoded: ControlResponse = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, ControlResponse::Ok);
+    }
+
+    #[test]
+    fn error_response_round_trip_preserves_message() {
+        let resp = ControlResponse::Error {
+            message: "pool exhausted".into(),
+        };
+        let encoded = serde_json::to_string(&resp).unwrap();
+        let decoded: ControlResponse = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, resp);
+        assert!(encoded.contains(r#""status":"error""#));
+        assert!(encoded.contains("pool exhausted"));
     }
 }
 
