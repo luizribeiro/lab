@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
+use capsa::{Boot, Network, Vm};
 use clap::{ArgAction, ArgGroup, Parser};
 
 #[derive(Debug, Parser)]
@@ -71,6 +72,20 @@ fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
 }
 
 impl Cli {
+    fn to_boot(&self) -> Boot {
+        if let Some(root) = &self.root {
+            return Boot::root(root.clone());
+        }
+        let mut kb = Boot::kernel(self.kernel.clone().expect("clap group guarantees kernel"));
+        if let Some(initramfs) = &self.initramfs {
+            kb = kb.initramfs(initramfs.clone());
+        }
+        if let Some(cmdline) = &self.kernel_cmdline {
+            kb = kb.cmdline(cmdline.clone());
+        }
+        kb.into()
+    }
+
     fn to_vm_config(&self) -> Result<capsa_core::VmConfig> {
         let port_forwards = self
             .forward
@@ -93,36 +108,36 @@ impl Cli {
             ));
         }
 
-        let interfaces = if self.allow_host.is_empty() {
-            vec![]
-        } else {
-            let policy = capsa_core::NetworkPolicy::from_allowed_hosts(
-                self.allow_host.iter().map(String::as_str),
-            )
-            .map_err(|err| {
+        let mut builder = Vm::builder(self.to_boot())
+            .vcpus(self.vcpus)
+            .memory_mib(self.memory_mib)
+            .verbosity(self.verbose);
+
+        if !self.allow_host.is_empty() {
+            let has_global_wildcard = self.allow_host.iter().any(|h| h.trim() == "*");
+            let net_builder = if has_global_wildcard {
+                Network::builder().allow_all_hosts()
+            } else {
+                Network::builder().allow_hosts(self.allow_host.iter())
+            };
+            let network = net_builder.build().map_err(|err| {
                 anyhow!(
                     "invalid --allow-host value '{}': {err}",
                     self.allow_host.join("', '")
                 )
             })?;
 
-            vec![capsa_core::VmNetworkInterfaceConfig {
-                mac: None,
-                policy: Some(policy),
-                port_forwards,
-            }]
-        };
+            builder = builder.attach_with(&network, |attach| {
+                port_forwards
+                    .iter()
+                    .fold(attach, |acc, &(host, guest)| acc.forward_tcp(host, guest))
+            });
+        }
 
-        Ok(capsa_core::VmConfig {
-            root: self.root.clone(),
-            kernel: self.kernel.clone(),
-            initramfs: self.initramfs.clone(),
-            kernel_cmdline: self.kernel_cmdline.clone(),
-            vcpus: self.vcpus,
-            memory_mib: self.memory_mib,
-            verbosity: self.verbose,
-            interfaces,
-        })
+        let vm = builder
+            .build()
+            .map_err(|err| anyhow!("invalid VM configuration: {err}"))?;
+        Ok(vm.__into_core_config())
     }
 }
 

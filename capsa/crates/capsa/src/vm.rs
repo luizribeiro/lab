@@ -6,11 +6,15 @@ use crate::error::BuildError;
 
 #[derive(Debug, Clone)]
 pub struct Vm {
-    #[allow(dead_code)]
     pub(crate) config: VmConfig,
 }
 
 impl Vm {
+    #[doc(hidden)]
+    pub fn __into_core_config(self) -> VmConfig {
+        self.config
+    }
+
     pub fn builder(boot: impl Into<Boot>) -> VmBuilder {
         VmBuilder {
             boot: boot.into(),
