@@ -6,12 +6,18 @@ use capsa_core::{
 
 use crate::error::{BuildError, StartError};
 
+/// A validated network policy, not yet started. Cheap to clone;
+/// launch it with [`Network::start`] to get a [`NetworkHandle`].
 #[derive(Debug, Clone)]
 pub struct Network {
     pub(crate) policy: NetworkPolicy,
 }
 
 impl Network {
+    /// Start a fresh network builder. A freshly-built network is
+    /// **deny-all**: outbound connections are rejected unless a
+    /// specific `allow_host` / `allow_hosts` rule matches, or
+    /// `allow_all_hosts` has been called to flip the default.
     pub fn builder() -> NetworkBuilder {
         NetworkBuilder::default()
     }
@@ -47,6 +53,10 @@ impl std::fmt::Debug for NetworkHandle {
     }
 }
 
+/// Fluent builder for a [`Network`]. Created by [`Network::builder`].
+///
+/// The default is deny-all: nothing is reachable from the guest
+/// until you add `allow_host` rules or call `allow_all_hosts`.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkBuilder {
     allow_all: bool,
@@ -54,16 +64,27 @@ pub struct NetworkBuilder {
 }
 
 impl NetworkBuilder {
+    /// Flip the default action to Allow: everything is reachable
+    /// except what later rules deny. Use this for VMs that need
+    /// open internet access; prefer per-host allowlists otherwise.
     pub fn allow_all_hosts(mut self) -> Self {
         self.allow_all = true;
         self
     }
 
+    /// Allow outbound connections to the given host pattern. The
+    /// pattern is parsed by [`DomainPattern::parse`] at
+    /// [`build`](Self::build) time — invalid patterns surface as
+    /// [`BuildError::InvalidHostPattern`]. Supports exact
+    /// (`api.example.com`) and leading-wildcard (`*.example.com`)
+    /// forms.
     pub fn allow_host(mut self, pattern: impl AsRef<str>) -> Self {
         self.host_patterns.push(pattern.as_ref().to_string());
         self
     }
 
+    /// Batch equivalent of [`allow_host`](Self::allow_host).
+    /// Preserves rule order.
     pub fn allow_hosts<I, S>(mut self, patterns: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -74,6 +95,9 @@ impl NetworkBuilder {
         self
     }
 
+    /// Finalize into a [`Network`]. Parses every accumulated host
+    /// pattern; returns [`BuildError::InvalidHostPattern`] on the
+    /// first malformed one (with the offending input attached).
     pub fn build(self) -> Result<Network, BuildError> {
         let default_action = if self.allow_all {
             PolicyAction::Allow
