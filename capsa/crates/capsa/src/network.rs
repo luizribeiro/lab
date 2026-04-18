@@ -4,7 +4,6 @@ use crate::error::BuildError;
 
 #[derive(Debug, Clone)]
 pub struct Network {
-    #[allow(dead_code)]
     pub(crate) policy: NetworkPolicy,
 }
 
@@ -150,14 +149,13 @@ mod tests {
             .build()
             .expect_err("malformed wildcard should fail build");
 
-        match err {
-            BuildError::InvalidHostPattern { pattern, reason } => {
-                assert_eq!(pattern, "*example.com");
-                assert!(
-                    reason.contains("wildcard"),
-                    "reason missing detail: {reason}"
-                );
-            }
-        }
+        let BuildError::InvalidHostPattern { pattern, reason } = err else {
+            panic!("expected InvalidHostPattern, got {err:?}");
+        };
+        assert_eq!(pattern, "*example.com");
+        assert!(
+            reason.contains("wildcard"),
+            "reason missing detail: {reason}"
+        );
     }
 }

@@ -10,16 +10,22 @@ pub trait Attachable: sealed::Sealed {
     type Attachment: Default;
 }
 
-#[allow(dead_code)]
-pub(crate) trait AttachApply: Attachable {
-    fn apply(&self, attachment: Self::Attachment, ctx: &mut AttachCtx);
+#[doc(hidden)]
+pub mod __private {
+    use super::Attachable;
+    use capsa_core::VmNetworkInterfaceConfig;
+
+    pub trait AttachApply: Attachable {
+        fn apply(&self, attachment: Self::Attachment, ctx: &mut AttachCtx);
+    }
+
+    #[derive(Debug, Default)]
+    pub struct AttachCtx {
+        pub interfaces: Vec<VmNetworkInterfaceConfig>,
+    }
 }
 
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-pub(crate) struct AttachCtx {
-    pub(crate) interfaces: Vec<VmNetworkInterfaceConfig>,
-}
+pub(crate) use __private::{AttachApply, AttachCtx};
 
 #[derive(Debug, Clone, Default)]
 pub struct NetworkAttach {
@@ -45,8 +51,8 @@ impl Attachable for Network {
     type Attachment = NetworkAttach;
 }
 
-impl AttachApply for Network {
-    fn apply(&self, attachment: NetworkAttach, ctx: &mut AttachCtx) {
+impl __private::AttachApply for Network {
+    fn apply(&self, attachment: NetworkAttach, ctx: &mut __private::AttachCtx) {
         ctx.interfaces.push(VmNetworkInterfaceConfig {
             mac: attachment.mac,
             policy: Some(self.policy.clone()),
