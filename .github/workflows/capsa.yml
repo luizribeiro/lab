@@ -35,8 +35,10 @@ jobs:
 
       - name: Run tests
         run: |
-          nix develop .#capsa --impure -L --command \
+          nix develop .#capsa --impure -L --command bash -c '
+            cargo build --manifest-path capsa/Cargo.toml -p capsa-core --bin capsa-fake-netd &&
             cargo test --manifest-path capsa/Cargo.toml --workspace
+          '
 
       - name: Run nix checks
         run: nix flake check --impure -L
