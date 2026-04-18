@@ -32,7 +32,9 @@ struct Cli {
     #[arg(long = "allow-host")]
     allow_host: Vec<String>,
 
-    /// Forward host TCP port to guest TCP port (repeatable, format: host_port:guest_port).
+    /// Forward host port to guest port (repeatable). Format:
+    /// `[tcp:|udp:]host_port:guest_port`. The protocol prefix is
+    /// optional and defaults to `tcp`.
     #[arg(long = "forward")]
     forward: Vec<String>,
 
@@ -59,9 +61,21 @@ fn assemble_kernel_cmdline(verbose: u8, user_cmdline: Option<&str>) -> String {
     parts.join(" ")
 }
 
-fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
-    let (host, guest) = value.split_once(':').ok_or_else(|| {
-        anyhow!("invalid --forward value '{value}': expected host_port:guest_port")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForwardProtocol {
+    Tcp,
+    Udp,
+}
+
+fn parse_port_forward(value: &str) -> Result<(ForwardProtocol, u16, u16)> {
+    let (protocol, remainder) = match value.split_once(':') {
+        Some(("tcp", rest)) => (ForwardProtocol::Tcp, rest),
+        Some(("udp", rest)) => (ForwardProtocol::Udp, rest),
+        _ => (ForwardProtocol::Tcp, value),
+    };
+
+    let (host, guest) = remainder.split_once(':').ok_or_else(|| {
+        anyhow!("invalid --forward value '{value}': expected [tcp:|udp:]host_port:guest_port")
     })?;
 
     let host_port = host.parse::<u16>().map_err(|err| {
@@ -77,7 +91,7 @@ fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
         ));
     }
 
-    Ok((host_port, guest_port))
+    Ok((protocol, host_port, guest_port))
 }
 
 impl Cli {
@@ -94,26 +108,51 @@ impl Cli {
     }
 
     fn to_vm(&self) -> Result<Vm> {
-        let port_forwards = self
+        let parsed_forwards = self
             .forward
             .iter()
             .map(|value| parse_port_forward(value))
             .collect::<Result<Vec<_>>>()?;
 
+        // Duplicate host ports are only a problem within a single
+        // protocol — the host kernel will happily bind the same
+        // number on TCP and UDP.
         {
-            let mut seen_host_ports = std::collections::HashSet::new();
-            for &(host_port, _) in &port_forwards {
-                if !seen_host_ports.insert(host_port) {
-                    return Err(anyhow!("duplicate --forward host port {host_port}"));
+            let mut seen_tcp = std::collections::HashSet::new();
+            let mut seen_udp = std::collections::HashSet::new();
+            for &(protocol, host_port, _) in &parsed_forwards {
+                let seen = match protocol {
+                    ForwardProtocol::Tcp => &mut seen_tcp,
+                    ForwardProtocol::Udp => &mut seen_udp,
+                };
+                if !seen.insert(host_port) {
+                    let label = match protocol {
+                        ForwardProtocol::Tcp => "tcp",
+                        ForwardProtocol::Udp => "udp",
+                    };
+                    return Err(anyhow!(
+                        "duplicate --forward host port {host_port} ({label})"
+                    ));
                 }
             }
         }
 
-        if !port_forwards.is_empty() && self.allow_host.is_empty() {
+        if !parsed_forwards.is_empty() && self.allow_host.is_empty() {
             return Err(anyhow!(
                 "--forward requires networking to be enabled via at least one --allow-host"
             ));
         }
+
+        let tcp_forwards: Vec<(u16, u16)> = parsed_forwards
+            .iter()
+            .filter(|&&(p, _, _)| p == ForwardProtocol::Tcp)
+            .map(|&(_, h, g)| (h, g))
+            .collect();
+        let udp_forwards: Vec<(u16, u16)> = parsed_forwards
+            .iter()
+            .filter(|&&(p, _, _)| p == ForwardProtocol::Udp)
+            .map(|&(_, h, g)| (h, g))
+            .collect();
 
         let mut builder = Vm::builder(self.to_boot())
             .vcpus(self.vcpus)
@@ -137,10 +176,14 @@ impl Cli {
                 .start()
                 .map_err(|err| anyhow!("failed to start network daemon: {err}"))?;
 
-            builder = builder.attach_with(&handle, |attach| {
-                port_forwards.iter().fold(attach, |acc, &(host, guest)| {
-                    acc.forward(PortForward { host, guest })
-                })
+            builder = builder.attach_with(&handle, |mut attach| {
+                for &(host, guest) in &tcp_forwards {
+                    attach = attach.forward(PortForward { host, guest });
+                }
+                for &(host, guest) in &udp_forwards {
+                    attach = attach.forward_udp(PortForward { host, guest });
+                }
+                attach
             });
         }
 
@@ -183,7 +226,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assemble_kernel_cmdline, Cli};
+    use super::{assemble_kernel_cmdline, parse_port_forward, Cli, ForwardProtocol};
     use clap::{error::ErrorKind, Parser};
 
     #[test]
@@ -238,7 +281,9 @@ mod tests {
         ]);
 
         let err = args.to_vm().expect_err("config should fail to build");
-        assert!(err.to_string().contains("expected host_port:guest_port"));
+        assert!(err
+            .to_string()
+            .contains("expected [tcp:|udp:]host_port:guest_port"));
     }
 
     #[test]
@@ -300,5 +345,72 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("--net"));
+    }
+
+    #[test]
+    fn parse_port_forward_defaults_to_tcp() {
+        let (protocol, host, guest) = parse_port_forward("8080:80").unwrap();
+        assert_eq!(protocol, ForwardProtocol::Tcp);
+        assert_eq!(host, 8080);
+        assert_eq!(guest, 80);
+    }
+
+    #[test]
+    fn parse_port_forward_accepts_tcp_prefix() {
+        let (protocol, _, _) = parse_port_forward("tcp:8080:80").unwrap();
+        assert_eq!(protocol, ForwardProtocol::Tcp);
+    }
+
+    #[test]
+    fn parse_port_forward_accepts_udp_prefix() {
+        let (protocol, host, guest) = parse_port_forward("udp:5353:53").unwrap();
+        assert_eq!(protocol, ForwardProtocol::Udp);
+        assert_eq!(host, 5353);
+        assert_eq!(guest, 53);
+    }
+
+    #[test]
+    fn duplicate_host_port_across_protocols_is_allowed() {
+        // Host kernel binds TCP and UDP independently on the same
+        // port number, so the CLI must not treat them as duplicates.
+        let args = Cli::parse_from([
+            "capsa",
+            "--kernel",
+            "/tmp/kernel",
+            "--allow-host",
+            "*",
+            "--forward",
+            "tcp:53:53",
+            "--forward",
+            "udp:53:53",
+        ]);
+
+        // to_vm() goes on to spawn netd which will fail in this
+        // sandboxed test env — but crucially, not with a "duplicate"
+        // validation error before that.
+        let err = args.to_vm().expect_err("netd spawn will fail in this env");
+        assert!(
+            !err.to_string().contains("duplicate"),
+            "tcp+udp on same host port should not be flagged as duplicate: {err}"
+        );
+    }
+
+    #[test]
+    fn duplicate_udp_host_port_is_rejected() {
+        let args = Cli::parse_from([
+            "capsa",
+            "--kernel",
+            "/tmp/kernel",
+            "--allow-host",
+            "*",
+            "--forward",
+            "udp:9100:53",
+            "--forward",
+            "udp:9100:54",
+        ]);
+
+        let err = args.to_vm().expect_err("duplicate udp host port fails");
+        assert!(err.to_string().contains("duplicate --forward host port"));
+        assert!(err.to_string().contains("udp"));
     }
 }

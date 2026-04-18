@@ -118,7 +118,7 @@ let vm2 = Vm::builder(Boot::kernel("/boot/vmlinuz")).attach(&api).build()?;
 
 `.attach(&handle)` attaches with defaults (auto MAC, no port
 forwards). `.attach_with(&handle, |a| ...)` lets you set a MAC or
-forward TCP ports on this attachment:
+forward TCP/UDP ports on this attachment:
 
 ```rust,no_run
 use capsa::{Boot, Network, PortForward, Vm};
@@ -129,9 +129,17 @@ let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
     .attach_with(&net, |a| {
         a.mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee])
             .forward(PortForward { host: 8080, guest: 80 })
+            .forward_udp(PortForward { host: 5353, guest: 53 })
     })
     .build()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+From `capsa-cli`, the `--forward` flag accepts the same split via
+an optional `tcp:` / `udp:` prefix (defaulting to TCP):
+
+```text
+capsa … --forward 8080:80 --forward udp:5353:53
 ```
 
 `.attach` / `.attach_with` are generic over `Attachable`, so future
