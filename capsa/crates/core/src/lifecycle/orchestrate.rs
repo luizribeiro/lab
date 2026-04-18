@@ -3,8 +3,9 @@
 //! running VM.
 
 use std::os::fd::OwnedFd;
+use std::process::ExitStatus;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use crate::config::VmConfig;
 
@@ -45,16 +46,13 @@ impl VmProcesses {
         Ok(Self { vmm })
     }
 
-    pub fn wait(&mut self) -> Result<()> {
-        let status = self
-            .vmm
+    /// Block until the vmm child exits and return its `ExitStatus`.
+    /// Non-zero exit is a normal return value — the caller decides
+    /// how to interpret it.
+    pub fn wait(&mut self) -> Result<ExitStatus> {
+        self.vmm
             .wait_by_ref()
-            .context("failed to wait on sandboxed VMM child")?;
-        if status.success() {
-            Ok(())
-        } else {
-            bail!("sandboxed VMM process exited with status {status}")
-        }
+            .context("failed to wait on sandboxed VMM child")
     }
 
     /// SIGKILL the vmm child and wait for its reaper to publish exit
@@ -226,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_with_empty_attachments_propagates_vmm_non_zero_exit_status() {
+    fn spawn_with_empty_attachments_returns_non_zero_exit_status() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -236,8 +234,9 @@ mod tests {
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
             .expect("spawn should succeed");
-        let err = processes.wait().expect_err("non-zero exit should fail");
-        assert!(format!("{err:#}").contains("sandboxed VMM process exited with status"));
+        let status = processes.wait().expect("wait should return a status");
+        assert!(!status.success(), "false should exit non-zero");
+        assert_eq!(status.code(), Some(1));
     }
 
     // ── networked path (external NetworkProcesses) ──────────

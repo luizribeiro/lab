@@ -74,7 +74,8 @@ impl Vm {
     }
 
     /// Blocking convenience: start the VM and wait for it to exit.
-    pub fn run(self) -> Result<(), RuntimeError> {
+    /// See [`VmHandle::wait`] for the return semantics.
+    pub fn run(self) -> Result<VmExit, RuntimeError> {
         self.start().map_err(RuntimeError::Start)?.wait()
     }
 }
@@ -172,9 +173,55 @@ impl VmHandle {
         self.inner.kill().map_err(RuntimeError::Kill)
     }
 
-    /// Block until the VM exits.
-    pub fn wait(mut self) -> Result<(), RuntimeError> {
-        self.inner.wait().map_err(|e| RuntimeError::Wait(e.into()))
+    /// Block until the VM exits. Returns the guest's exit status;
+    /// a non-zero exit is not an error — the caller decides how to
+    /// interpret it via [`VmExit::success`] / [`VmExit::code`].
+    pub fn wait(mut self) -> Result<VmExit, RuntimeError> {
+        self.inner
+            .wait()
+            .map(VmExit::from)
+            .map_err(|e| RuntimeError::Wait(e.into()))
+    }
+}
+
+/// The exit status of a VM. Thin wrapper around
+/// [`std::process::ExitStatus`] with convenience accessors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmExit(std::process::ExitStatus);
+
+impl VmExit {
+    /// Whether the VM exited with status code 0.
+    pub fn success(&self) -> bool {
+        self.0.success()
+    }
+
+    /// The exit code if the VM exited normally. Returns `None` if
+    /// the VM was terminated by a signal.
+    pub fn code(&self) -> Option<i32> {
+        self.0.code()
+    }
+
+    /// The signal number that terminated the VM, if any.
+    pub fn signal(&self) -> Option<i32> {
+        use std::os::unix::process::ExitStatusExt;
+        self.0.signal()
+    }
+
+    /// The underlying [`std::process::ExitStatus`].
+    pub fn as_exit_status(&self) -> std::process::ExitStatus {
+        self.0
+    }
+}
+
+impl std::fmt::Display for VmExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl From<std::process::ExitStatus> for VmExit {
+    fn from(status: std::process::ExitStatus) -> Self {
+        Self(status)
     }
 }
 

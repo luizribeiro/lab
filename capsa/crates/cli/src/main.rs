@@ -145,7 +145,12 @@ impl Cli {
 }
 
 fn run(args: Cli) -> Result<()> {
-    args.to_vm()?.run().map_err(|err| anyhow!(err))
+    let exit = args.to_vm()?.run().map_err(|err| anyhow!(err))?;
+    if exit.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("VM exited with {exit}"))
+    }
 }
 
 fn main() -> Result<()> {
