@@ -28,7 +28,6 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
-use capsa_net::NetworkPolicy;
 
 use crate::config::{VmConfig, VmNetworkInterfaceConfig};
 
@@ -36,7 +35,6 @@ use crate::config::{VmConfig, VmNetworkInterfaceConfig};
 /// typed phase a `VmConfig` interface enters. No fds yet.
 pub(super) struct InterfacePlan {
     pub(super) mac: [u8; 6],
-    pub(super) policy: Option<NetworkPolicy>,
     pub(super) port_forwards: Vec<(u16, u16)>,
 }
 
@@ -65,7 +63,6 @@ pub(super) fn plan_interfaces(config: &VmConfig) -> Result<Vec<InterfacePlan>> {
         .map(|(index, iface)| {
             Ok(InterfacePlan {
                 mac: resolve_mac(iface, index).with_context(|| format!("interface {index}"))?,
-                policy: iface.policy.clone(),
                 port_forwards: iface.port_forwards.clone(),
             })
         })

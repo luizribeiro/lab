@@ -33,11 +33,16 @@ impl VmProcesses {
                 child: netd_child,
                 ready_reader,
             },
+            attachment,
             bindings,
         ) = netd::spawn_netd(sockets)?;
 
         netd::wait_ready(ready_reader, netd::READINESS_TIMEOUT)
             .context("netd readiness check failed")?;
+
+        attachment
+            .attach_all()
+            .context("failed to attach VM interfaces via netd control socket")?;
 
         // If spawn_vmm errors below, `netd_child` is dropped here and
         // its `ChildHandle::Drop` tears down the netd child. No
@@ -104,7 +109,7 @@ impl Drop for VmProcesses {
 #[cfg(test)]
 mod tests {
     use crate::lifecycle::test_helpers::{
-        env_lock, find_binary_on_path, unique_temp_path, EnvVarGuard,
+        env_lock, fake_netd_path, find_binary_on_path, unique_temp_path, EnvVarGuard,
     };
     use crate::{VmConfig, VmNetworkInterfaceConfig};
     use std::path::{Path, PathBuf};
@@ -305,18 +310,16 @@ esac
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let netd =
-            make_temp_executable_script("capsa-netd-timeout", "while true; do sleep 1; done");
+        let netd = fake_netd_path();
         let vmm = find_binary_on_path("true");
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _skip_ready = EnvVarGuard::set("FAKE_NETD_SKIP_READY", "1");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
         let err = sample_networked_config()
             .start()
             .expect_err("startup should fail if netd does not signal readiness");
-
-        let _ = std::fs::remove_file(netd);
 
         assert!(format!("{err:#}").contains("timed out waiting for net daemon readiness signal"));
     }
@@ -327,16 +330,11 @@ esac
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let netd_pid_file = unique_temp_path("capsa-netd-pid");
-        let netd = make_temp_executable_script(
-            "capsa-netd-ready-loop",
-            &format!(
-                "echo $$ > '{}'\neval \"printf 'R' >&${{READY_FD}}\"\nwhile true; do sleep 1; done",
-                netd_pid_file.display()
-            ),
-        );
+        let netd = fake_netd_path();
         let non_executable_vmm = make_temp_file("capsa-vmm-non-executable", b"not executable");
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _pid_file_guard = EnvVarGuard::set_path("FAKE_NETD_PID_FILE", &netd_pid_file);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable_vmm);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
@@ -348,7 +346,6 @@ esac
         wait_for_process_exit(netd_pid, Duration::from_secs(4));
 
         let _ = std::fs::remove_file(netd_pid_file);
-        let _ = std::fs::remove_file(netd);
         let _ = std::fs::remove_file(non_executable_vmm);
 
         let rendered = format!("{err:#}");
@@ -372,12 +369,10 @@ esac
                 vmm_pid_file.display()
             ),
         );
-        let netd = make_temp_executable_script(
-            "capsa-netd-ready-then-exit",
-            "eval \"printf 'R' >&${READY_FD}\"\nsleep 0.2\nexit 42",
-        );
+        let netd = fake_netd_path();
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _netd_exit = EnvVarGuard::set("FAKE_NETD_EXIT_AFTER_READY_MS", "500");
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
@@ -390,7 +385,6 @@ esac
 
         let _ = std::fs::remove_file(vmm_pid_file);
         let _ = std::fs::remove_file(vmm);
-        let _ = std::fs::remove_file(netd);
 
         assert!(format!("{err:#}").contains("network daemon exited unexpectedly"));
     }
@@ -436,16 +430,11 @@ esac
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let netd_pid_file = unique_temp_path("capsa-netd-pid");
-        let netd = make_temp_executable_script(
-            "capsa-netd-ready-loop",
-            &format!(
-                "echo $$ > '{}'\neval \"printf 'R' >&${{READY_FD}}\"\nwhile true; do sleep 1; done",
-                netd_pid_file.display()
-            ),
-        );
+        let netd = fake_netd_path();
         let vmm = find_binary_on_path("true");
 
         let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
+        let _pid_file_guard = EnvVarGuard::set_path("FAKE_NETD_PID_FILE", &netd_pid_file);
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
@@ -457,6 +446,5 @@ esac
         wait_for_process_exit(netd_pid, Duration::from_secs(4));
 
         let _ = std::fs::remove_file(netd_pid_file);
-        let _ = std::fs::remove_file(netd);
     }
 }

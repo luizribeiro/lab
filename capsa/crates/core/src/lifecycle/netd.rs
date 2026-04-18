@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_spec::{encode_launch_spec_args, NetInterfaceSpec, NetLaunchSpec};
+use capsa_spec::{encode_launch_spec_args, NetLaunchSpec};
 use lockin::SandboxBuilder;
+use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
 
 use super::child::{self, ChildHandle};
+use super::control_client::ControlClient;
 use super::plan::{self, InterfacePlan, InterfaceSockets, VmmInterfaceBinding};
 
 pub(super) const READINESS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -22,56 +24,77 @@ pub(super) struct NetdSpawn {
     pub(super) ready_reader: OwnedFd,
 }
 
-/// Each interface's `port_forwards` are merged into a single
-/// daemon-wide list because `NetLaunchSpec.port_forwards` is at the
-/// top level of the spec, not per-interface.
+pub(super) struct PendingAttach {
+    pub(super) mac: [u8; 6],
+    pub(super) port_forwards: Vec<(u16, u16)>,
+    pub(super) host_fd: OwnedFd,
+}
+
+pub(super) struct NetdAttachment {
+    control: ControlClient,
+    pending: Vec<PendingAttach>,
+}
+
+impl NetdAttachment {
+    /// Send an `AddInterface` request for every pending attachment.
+    /// Must be called after the daemon signals readiness.
+    pub(super) fn attach_all(mut self) -> Result<()> {
+        for attach in self.pending {
+            self.control
+                .send_add_interface(attach.mac, attach.port_forwards, &attach.host_fd)
+                .with_context(|| {
+                    format!("failed to attach interface with MAC {:02x?}", attach.mac)
+                })?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn spawn_netd(
     sockets: Vec<InterfaceSockets>,
-) -> Result<(NetdSpawn, Vec<VmmInterfaceBinding>)> {
+) -> Result<(NetdSpawn, NetdAttachment, Vec<VmmInterfaceBinding>)> {
     let binary = child::resolve_binary("CAPSA_NETD_PATH", "capsa-netd")
         .context("failed to resolve net daemon binary")?;
     let (ready_reader, ready_writer) =
         std::io::pipe().context("failed to create netd readiness pipe")?;
 
+    let (client_sock, netd_sock) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .context("failed to create netd control socketpair")?;
+
     let builder = netd_sandbox_builder(&binary);
 
-    let mut net_specs = Vec::with_capacity(sockets.len());
     let mut bindings = Vec::with_capacity(sockets.len());
-    let mut port_forwards = Vec::new();
-    let mut fds = Vec::new();
+    let mut pending = Vec::with_capacity(sockets.len());
 
     for socket in sockets {
         let InterfaceSockets {
-            plan:
-                InterfacePlan {
-                    mac,
-                    policy,
-                    port_forwards: iface_forwards,
-                },
+            plan: InterfacePlan { mac, port_forwards },
             host_fd,
             guest_fd,
         } = socket;
-
-        let host_fd_num = host_fd.as_raw_fd();
-        fds.push(host_fd);
-        net_specs.push(NetInterfaceSpec {
-            host_fd: host_fd_num,
-            mac,
-            policy,
-        });
-        port_forwards.extend(iface_forwards);
         bindings.push(VmmInterfaceBinding { mac, guest_fd });
+        pending.push(PendingAttach {
+            mac,
+            port_forwards,
+            host_fd,
+        });
     }
 
     let ready_writer_owned = OwnedFd::from(ready_writer);
     let ready_fd_num = ready_writer_owned.as_raw_fd();
-    fds.push(ready_writer_owned);
+    let control_fd_num = netd_sock.as_raw_fd();
+    let fds: Vec<OwnedFd> = vec![ready_writer_owned, netd_sock];
 
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
-        control_fd: None,
-        interfaces: net_specs,
-        port_forwards,
+        control_fd: Some(control_fd_num),
+        interfaces: vec![],
+        port_forwards: vec![],
     };
     spec.validate().context("invalid netd launch spec")?;
 
@@ -83,6 +106,10 @@ pub(super) fn spawn_netd(
         NetdSpawn {
             child: process,
             ready_reader: OwnedFd::from(ready_reader),
+        },
+        NetdAttachment {
+            control: ControlClient::new(client_sock),
+            pending,
         },
         bindings,
     ))

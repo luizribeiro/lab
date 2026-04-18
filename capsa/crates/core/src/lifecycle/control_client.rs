@@ -3,8 +3,6 @@
 //! host-side fd via `SCM_RIGHTS` ancillary data, and reads the
 //! daemon's response.
 
-#![allow(dead_code)]
-
 use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 

@@ -71,3 +71,16 @@ pub(crate) fn find_binary_on_path(name: &str) -> PathBuf {
     }
     panic!("binary `{name}` should be on PATH for tests");
 }
+
+/// Absolute path to the `capsa-fake-netd` helper binary built as part
+/// of this crate. Cargo builds the `[[bin]]` target into
+/// `target/<profile>/capsa-fake-netd`; `env::current_exe()` lets us
+/// reach it from any test binary.
+pub(crate) fn fake_netd_path() -> PathBuf {
+    let test_exe = std::env::current_exe().expect("current_exe should succeed");
+    test_exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("test binary should live under target/<profile>/deps")
+        .join("capsa-fake-netd")
+}
