@@ -107,7 +107,6 @@ pub struct VmmLaunchSpec {
     pub kernel_cmdline: Option<String>,
     pub vcpus: u8,
     pub memory_mib: u32,
-    pub verbosity: u8,
     #[serde(default)]
     pub resolved_interfaces: Vec<ResolvedNetworkInterface>,
 }
@@ -340,7 +339,6 @@ mod vmm_tests {
             kernel_cmdline: None,
             vcpus: 1,
             memory_mib: 512,
-            verbosity: 0,
             resolved_interfaces: vec![],
         }
     }

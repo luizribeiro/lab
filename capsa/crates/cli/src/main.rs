@@ -117,8 +117,7 @@ impl Cli {
 
         let mut builder = Vm::builder(self.to_boot())
             .vcpus(self.vcpus)
-            .memory_mib(self.memory_mib)
-            .verbosity(self.verbose);
+            .memory_mib(self.memory_mib);
 
         if !self.allow_host.is_empty() {
             let has_global_wildcard = self.allow_host.iter().any(|h| h.trim() == "*");
@@ -152,11 +151,29 @@ impl Cli {
 }
 
 fn run(args: Cli) -> Result<()> {
+    apply_vmm_log_env(args.verbose);
     let exit = args.to_vm()?.run().map_err(|err| anyhow!(err))?;
     if exit.success() {
         Ok(())
     } else {
         Err(anyhow!("VM exited with {exit}"))
+    }
+}
+
+/// Set `CAPSA_VMM_LOG` in the current process's env based on -v count
+/// so the spawned vmm child inherits it. Only sets the var when the
+/// CLI actually wants to raise the level, so a user-provided
+/// `CAPSA_VMM_LOG=...` still survives the no-flag case.
+fn apply_vmm_log_env(verbose: u8) {
+    let level = match verbose {
+        0 => return,
+        1 => "info",
+        _ => "debug",
+    };
+    // SAFETY: single-threaded context at CLI startup, before any
+    // child process is spawned.
+    unsafe {
+        std::env::set_var("CAPSA_VMM_LOG", level);
     }
 }
 

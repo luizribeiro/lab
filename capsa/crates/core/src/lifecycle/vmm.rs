@@ -42,7 +42,6 @@ pub(super) fn spawn_vmm(
         kernel_cmdline: config.kernel_cmdline.clone(),
         vcpus: config.vcpus,
         memory_mib: config.memory_mib,
-        verbosity: config.verbosity,
         resolved_interfaces: resolved,
     };
     spec.validate().context("invalid vmm launch spec")?;

@@ -111,7 +111,6 @@ mod tests {
             kernel_cmdline: Some("console=ttyS0".to_string()),
             vcpus: 1,
             memory_mib: 512,
-            verbosity: 0,
         }
     }
 

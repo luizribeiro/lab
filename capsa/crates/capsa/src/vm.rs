@@ -34,7 +34,6 @@ impl Vm {
             boot: boot.into(),
             vcpus: 1,
             memory_mib: 512,
-            verbosity: 0,
             ctx: AttachCtx::default(),
         }
     }
@@ -88,15 +87,19 @@ impl Vm {
 
 /// Fluent builder for a [`Vm`]. Created by [`Vm::builder`].
 ///
-/// Defaults: 1 vCPU, 512 MiB of memory, quiet logging, no attached
-/// networks. Chain setters to override; finish with [`build`].
+/// Defaults: 1 vCPU, 512 MiB of memory, no attached networks. Chain
+/// setters to override; finish with [`build`].
+///
+/// libkrun's own log verbosity is controlled out-of-band via the
+/// `CAPSA_VMM_LOG` environment variable (`info` / `debug`, default
+/// `error`) rather than a builder method, so it doesn't need to
+/// round-trip through the launch spec.
 ///
 /// [`build`]: VmBuilder::build
 pub struct VmBuilder {
     boot: Boot,
     vcpus: u8,
     memory_mib: u32,
-    verbosity: u8,
     ctx: AttachCtx,
 }
 
@@ -111,14 +114,6 @@ impl VmBuilder {
     /// Default: `512`.
     pub fn memory_mib(mut self, mib: u32) -> Self {
         self.memory_mib = mib;
-        self
-    }
-
-    /// Guest-side logging verbosity, forwarded to the vmm. The scale
-    /// is libkrun's: `0` quiet, higher values enable increasingly
-    /// verbose diagnostics. Default: `0`.
-    pub fn verbosity(mut self, level: u8) -> Self {
-        self.verbosity = level;
         self
     }
 
@@ -175,7 +170,6 @@ impl VmBuilder {
             kernel_cmdline: cmdline,
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
-            verbosity: self.verbosity,
         };
 
         Ok(Vm {
@@ -305,7 +299,6 @@ mod tests {
 
         assert_eq!(vm.config.vcpus, 1);
         assert_eq!(vm.config.memory_mib, 512);
-        assert_eq!(vm.config.verbosity, 0);
         assert!(vm.attachments.is_empty());
     }
 
@@ -332,13 +325,11 @@ mod tests {
         let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
             .vcpus(4)
             .memory_mib(2048)
-            .verbosity(2)
             .build()
             .expect("build should succeed");
 
         assert_eq!(vm.config.vcpus, 4);
         assert_eq!(vm.config.memory_mib, 2048);
-        assert_eq!(vm.config.verbosity, 2);
     }
 
     #[test]

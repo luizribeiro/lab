@@ -9,5 +9,4 @@ pub struct VmConfig {
     pub kernel_cmdline: Option<String>,
     pub vcpus: u8,
     pub memory_mib: u32,
-    pub verbosity: u8,
 }
