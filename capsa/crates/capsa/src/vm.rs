@@ -220,6 +220,34 @@ impl VmHandle {
             .map(VmExit::from)
             .map_err(|e| RuntimeError::Wait(e.into()))
     }
+
+    /// Non-blocking variant of [`wait`](Self::wait). Returns `Ok(None)`
+    /// while the VM is still running, `Ok(Some(exit))` once it has
+    /// reaped. Borrows the handle so the caller can poll and then
+    /// still `wait`, `kill`, or drop.
+    pub fn try_wait(&mut self) -> Result<Option<VmExit>, RuntimeError> {
+        self.inner
+            .try_wait()
+            .map(|opt| opt.map(VmExit::from))
+            .map_err(|e| RuntimeError::Wait(e.into()))
+    }
+
+    /// The vmm child's OS process id. Useful for attaching external
+    /// tooling (monitoring, `/proc` inspection, signalling). Pair
+    /// with [`is_running`](Self::is_running) before signalling: once
+    /// the VM exits, the kernel may reuse the PID for another
+    /// process.
+    pub fn pid(&self) -> u32 {
+        self.inner.pid()
+    }
+
+    /// Whether the VM has not yet been reaped. Cheap atomic read;
+    /// safe to poll. Implemented by [`VmHandle::drop`] as well, so
+    /// `is_running` flipping to `false` means the reaper has
+    /// published the exit status to the channel.
+    pub fn is_running(&self) -> bool {
+        self.inner.is_running()
+    }
 }
 
 /// The exit status of a VM. Thin wrapper around

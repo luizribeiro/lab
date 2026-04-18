@@ -55,6 +55,31 @@ impl VmProcesses {
             .context("failed to wait on sandboxed VMM child")
     }
 
+    /// Non-blocking wait. `Ok(None)` means the vmm is still running;
+    /// `Ok(Some(status))` means it has exited and the reaper has
+    /// published its status.
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+        self.vmm
+            .try_wait_by_ref()
+            .context("failed to poll sandboxed VMM child")
+    }
+
+    /// The vmm child's OS process id. Stable for the lifetime of the
+    /// handle; once the child exits the PID may be reused by the
+    /// kernel, so callers should pair it with [`is_running`] when
+    /// using it for signalling or inspection.
+    ///
+    /// [`is_running`]: Self::is_running
+    pub fn pid(&self) -> u32 {
+        self.vmm.pid()
+    }
+
+    /// Whether the vmm child has not yet been reaped. Cheap atomic
+    /// load; safe to poll.
+    pub fn is_running(&self) -> bool {
+        !self.vmm.has_exited()
+    }
+
     /// SIGKILL the vmm child and wait for its reaper to publish exit
     /// status. Safe to call after the child has already exited on its
     /// own (becomes a no-op). Also invoked implicitly by `Drop`.
@@ -235,6 +260,58 @@ mod tests {
         let status = processes.wait().expect("wait should return a status");
         assert!(!status.success(), "false should exit non-zero");
         assert_eq!(status.code(), Some(1));
+    }
+
+    #[test]
+    fn pid_and_is_running_track_vmm_lifecycle() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_true = find_binary_on_path("true");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
+            .expect("spawn should succeed");
+
+        let pid = processes.pid();
+        assert!(pid > 1, "pid {pid} should be a plausible child pid");
+
+        processes.wait().expect("wait");
+        assert!(!processes.is_running(), "vmm should be reaped after wait");
+    }
+
+    #[test]
+    fn try_wait_returns_none_while_running_and_some_after_exit() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let sleeper = make_temp_executable_script("capsa-try-wait-sleeper", "sleep 0.25\nexit 0");
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &sleeper);
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
+            .expect("spawn should succeed");
+
+        assert!(processes.is_running());
+        assert!(matches!(processes.try_wait(), Ok(None)));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let status = loop {
+            match processes.try_wait().expect("try_wait") {
+                Some(status) => break status,
+                None => {
+                    if Instant::now() >= deadline {
+                        panic!("sleeper never exited");
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        };
+        assert!(status.success());
+        assert!(!processes.is_running());
+
+        let _ = std::fs::remove_file(&sleeper);
     }
 
     // ── networked path (external NetworkProcesses) ──────────

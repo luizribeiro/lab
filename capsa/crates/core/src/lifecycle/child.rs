@@ -28,7 +28,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -146,9 +146,15 @@ impl ChildHandle {
         self.name
     }
 
-    #[cfg(test)]
+    /// The reaped-or-not flag, flipped by the reaper thread when it
+    /// finishes `waitpid`. Cheap to call; safe to spin on.
     pub(super) fn has_exited(&self) -> bool {
         self.exited.load(Ordering::Acquire)
+    }
+
+    /// The child's OS process id.
+    pub(super) fn pid(&self) -> u32 {
+        self.pid as u32
     }
 
     /// Block until the child exits on its own and return its status.
@@ -158,6 +164,21 @@ impl ChildHandle {
         self.status_rx
             .recv()
             .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?
+    }
+
+    /// Non-blocking variant of [`wait_by_ref`]. Returns `Ok(None)` if
+    /// the child is still running, `Ok(Some(status))` if it has
+    /// exited and the reaper published its status. An inner `Err` is
+    /// the same reaping error `wait_by_ref` would have surfaced.
+    pub(super) fn try_wait_by_ref(&mut self) -> Result<Option<ExitStatus>> {
+        match self.status_rx.try_recv() {
+            Ok(status) => status.map(Some),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!(
+                "{} reaper thread dropped its result channel",
+                self.name
+            )),
+        }
     }
 
     /// SIGKILL the child if it has not already exited and wait for
