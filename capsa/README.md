@@ -9,7 +9,7 @@ device attachments, plus a small runtime API to launch them.
 ## Quick start
 
 ```rust,no_run
-use capsa::{Boot, Network, Vm};
+use capsa::{Boot, Network, PortForward, Vm};
 
 let api_net = Network::builder()
     .allow_host("api.example.com")
@@ -20,7 +20,7 @@ let api_net = Network::builder()
 Vm::builder(Boot::kernel("/boot/vmlinuz").cmdline("console=hvc0"))
     .vcpus(2)
     .memory_mib(1024)
-    .attach_with(&api_net, |a| a.forward_tcp(8080, 80))
+    .attach_with(&api_net, |a| a.forward(PortForward { host: 8080, guest: 80 }))
     .build()?
     .run()?;
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -130,14 +130,14 @@ forwards). `.attach_with(&handle, |a| ...)` lets you set a MAC or
 forward TCP ports on this attachment:
 
 ```rust,no_run
-use capsa::{Boot, Network, Vm};
+use capsa::{Boot, Network, PortForward, Vm};
 
 let net = Network::builder().allow_all_hosts().build()?.start()?;
 
 let vm = Vm::builder(Boot::root("/rootfs"))
     .attach_with(&net, |a| {
         a.mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee])
-            .forward_tcp(8080, 80)
+            .forward(PortForward { host: 8080, guest: 80 })
     })
     .build()?;
 # Ok::<(), Box<dyn std::error::Error>>(())

@@ -48,14 +48,27 @@ pub mod __private {
 
 pub(crate) use __private::{AttachApply, AttachCtx, NetworkAttachment};
 
+/// A single TCP host→guest port mapping. Named fields because two
+/// bare `u16`s in the same position are trivially swappable.
+///
+/// TCP-only for now; UDP forwards (and other protocols) will land
+/// as additional methods on [`NetworkAttach`] rather than a
+/// `protocol` field here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortForward {
+    /// TCP port bound on the host's loopback interface.
+    pub host: u16,
+    /// TCP port on the guest that inbound connections are routed to.
+    pub guest: u16,
+}
+
 /// Per-VM attachment configuration for a [`NetworkHandle`].
 ///
 /// Received by the closure passed to
 /// [`VmBuilder::attach_with`](crate::VmBuilder::attach_with); the
 /// default has no MAC override (one is generated) and no port
 /// forwards. Builder-style setters consume and return `self` so the
-/// closure body can be written as a single `.forward_tcp(…).…`
-/// chain.
+/// closure body can be written as a single `.forward(…).…` chain.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkAttach {
     pub(crate) mac: Option<[u8; 6]>,
@@ -73,8 +86,16 @@ impl NetworkAttach {
 
     /// Forward a host TCP port to a guest TCP port. Call multiple
     /// times to forward multiple ports; order is preserved.
-    pub fn forward_tcp(mut self, host_port: u16, guest_port: u16) -> Self {
-        self.port_forwards.push((host_port, guest_port));
+    ///
+    /// ```
+    /// use capsa::{NetworkAttach, PortForward};
+    /// let attach = NetworkAttach::default()
+    ///     .forward(PortForward { host: 8080, guest: 80 })
+    ///     .forward(PortForward { host: 8443, guest: 443 });
+    /// # drop(attach);
+    /// ```
+    pub fn forward(mut self, forward: PortForward) -> Self {
+        self.port_forwards.push((forward.host, forward.guest));
         self
     }
 }
@@ -114,8 +135,14 @@ mod tests {
     #[test]
     fn network_attach_accumulates_forwards_in_order() {
         let attach = NetworkAttach::default()
-            .forward_tcp(8080, 80)
-            .forward_tcp(8443, 443);
+            .forward(PortForward {
+                host: 8080,
+                guest: 80,
+            })
+            .forward(PortForward {
+                host: 8443,
+                guest: 443,
+            });
         assert_eq!(attach.port_forwards, vec![(8080, 80), (8443, 443)]);
     }
 }

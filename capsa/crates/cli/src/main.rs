@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use capsa::{Boot, Network, Vm};
+use capsa::{Boot, Network, PortForward, Vm};
 use clap::{ArgAction, ArgGroup, Parser};
 
 #[derive(Debug, Parser)]
@@ -132,9 +132,9 @@ impl Cli {
                 .map_err(|err| anyhow!("failed to start network daemon: {err}"))?;
 
             builder = builder.attach_with(&handle, |attach| {
-                port_forwards
-                    .iter()
-                    .fold(attach, |acc, &(host, guest)| acc.forward_tcp(host, guest))
+                port_forwards.iter().fold(attach, |acc, &(host, guest)| {
+                    acc.forward(PortForward { host, guest })
+                })
             });
         }
 

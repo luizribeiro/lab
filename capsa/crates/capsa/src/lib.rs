@@ -14,11 +14,11 @@
 //! VM can attach to many networks.
 //!
 //! ```no_run
-//! use capsa::{Boot, Network, Vm};
+//! use capsa::{Boot, Network, PortForward, Vm};
 //!
 //! let api = Network::builder().allow_host("api.example.com").build()?.start()?;
 //! let exit = Vm::builder(Boot::root("/rootfs"))
-//!     .attach_with(&api, |a| a.forward_tcp(8080, 80))
+//!     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
 //!     .build()?
 //!     .run()?;
 //! assert!(exit.success());
@@ -35,7 +35,7 @@ mod error;
 mod network;
 mod vm;
 
-pub use self::attach::{Attachable, NetworkAttach};
+pub use self::attach::{Attachable, NetworkAttach, PortForward};
 pub use self::boot::{Boot, KernelBoot};
 pub use self::error::{BuildError, RuntimeError, StartError};
 pub use self::network::{Network, NetworkBuilder, NetworkHandle};

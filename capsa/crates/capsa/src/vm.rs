@@ -141,10 +141,10 @@ impl VmBuilder {
     /// returns the modified version.
     ///
     /// ```no_run
-    /// # use capsa::{Boot, Network, Vm};
+    /// # use capsa::{Boot, Network, PortForward, Vm};
     /// # let api = Network::builder().build()?.start()?;
     /// Vm::builder(Boot::root("/rootfs"))
-    ///     .attach_with(&api, |a| a.forward_tcp(8080, 80))
+    ///     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
     ///     .build()?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
