@@ -56,6 +56,11 @@ pub struct NetLaunchSpec {
     /// launcher. Validated to be >= 3 and disjoint from interface fds so
     /// it cannot collide with stdio or any tap fd.
     pub ready_fd: i32,
+    /// Inherited `SOCK_SEQPACKET` fd the daemon should use for runtime
+    /// control messages (adding interfaces dynamically). Validated to
+    /// be >= 3 and disjoint from `ready_fd` and all interface fds.
+    #[serde(default)]
+    pub control_fd: Option<i32>,
     #[serde(default)]
     pub interfaces: Vec<NetInterfaceSpec>,
     #[serde(default)]
@@ -80,6 +85,17 @@ impl NetLaunchSpec {
         let mut seen_fds = HashSet::new();
         seen_fds.insert(self.ready_fd);
 
+        if let Some(control_fd) = self.control_fd {
+            ensure!(
+                control_fd >= 3,
+                "invalid control_fd {control_fd}: must be >= 3 (fds 0/1/2 are reserved for stdio)"
+            );
+            ensure!(
+                seen_fds.insert(control_fd),
+                "control_fd {control_fd} collides with ready_fd"
+            );
+        }
+
         for (index, interface) in self.interfaces.iter().enumerate() {
             ensure!(
                 interface.host_fd >= 3,
@@ -88,7 +104,7 @@ impl NetLaunchSpec {
             );
             ensure!(
                 seen_fds.insert(interface.host_fd),
-                "interface {index}: host_fd {} collides with ready_fd or another interface",
+                "interface {index}: host_fd {} collides with another fd",
                 interface.host_fd
             );
             ensure!(
@@ -234,6 +250,7 @@ mod net_tests {
     fn spec_with(ready_fd: i32, interfaces: Vec<NetInterfaceSpec>) -> NetLaunchSpec {
         NetLaunchSpec {
             ready_fd,
+            control_fd: None,
             interfaces,
             port_forwards: vec![],
         }
@@ -294,6 +311,41 @@ mod net_tests {
             ],
         );
         spec.validate().expect("spec should validate");
+    }
+
+    #[test]
+    fn validate_rejects_control_fd_below_three() {
+        let mut spec = spec_with(30, vec![]);
+        spec.control_fd = Some(2);
+        let err = spec.validate().expect_err("control_fd < 3 should fail");
+        assert!(err.to_string().contains("invalid control_fd 2"));
+    }
+
+    #[test]
+    fn validate_rejects_control_fd_colliding_with_ready_fd() {
+        let mut spec = spec_with(30, vec![]);
+        spec.control_fd = Some(30);
+        let err = spec
+            .validate()
+            .expect_err("control_fd equal to ready_fd should fail");
+        assert!(err.to_string().contains("control_fd 30 collides"));
+    }
+
+    #[test]
+    fn validate_rejects_control_fd_colliding_with_interface_fd() {
+        let mut spec = spec_with(30, vec![sample_interface(40, [0x02, 0, 0, 0, 0, 1])]);
+        spec.control_fd = Some(40);
+        let err = spec
+            .validate()
+            .expect_err("control_fd colliding with interface fd should fail");
+        assert!(err.to_string().contains("host_fd 40 collides"));
+    }
+
+    #[test]
+    fn validate_accepts_unique_control_fd() {
+        let mut spec = spec_with(30, vec![sample_interface(40, [0x02, 0, 0, 0, 0, 1])]);
+        spec.control_fd = Some(50);
+        spec.validate().expect("unique control_fd should validate");
     }
 }
 

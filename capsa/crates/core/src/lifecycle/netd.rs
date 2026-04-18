@@ -69,6 +69,7 @@ pub(super) fn spawn_netd(
 
     let spec = NetLaunchSpec {
         ready_fd: ready_fd_num,
+        control_fd: None,
         interfaces: net_specs,
         port_forwards,
     };

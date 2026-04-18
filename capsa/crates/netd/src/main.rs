@@ -36,6 +36,7 @@ mod tests {
     fn sample_launch_spec_json(ready_fd: i32) -> String {
         serde_json::json!({
             "ready_fd": ready_fd,
+            "control_fd": null,
             "interfaces": []
         })
         .to_string()
