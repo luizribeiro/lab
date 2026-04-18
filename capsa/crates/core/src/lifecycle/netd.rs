@@ -1,14 +1,15 @@
 //! Shared helpers for bringing up a `capsa-netd` child: the sandbox
-//! policy builder, the readiness-timeout constant, and the blocking
+//! policy builder, the readiness-timeout constant, and the async
 //! `wait_ready` that consumes the daemon's one-byte handshake.
 
-use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use lockin::SandboxBuilder;
+use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
 
 use super::child;
 use super::plan;
@@ -28,59 +29,70 @@ pub(super) fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
     builder
 }
 
-/// Block until netd sends the one-byte readiness signal.
-/// Deadline-based so `EINTR` retries do not extend the total wait
-/// beyond `timeout`.
-pub(super) fn wait_ready(reader: OwnedFd, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut poll_fd = libc::pollfd {
-        fd: reader.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
+/// Await netd's one-byte readiness signal, or time out. The pipe
+/// read end is wrapped in [`AsyncFd`] so the wait does not block a
+/// thread; a [`tokio::time::timeout`] enforces the overall deadline.
+pub(super) async fn wait_ready(reader: OwnedFd, timeout: Duration) -> Result<()> {
+    set_nonblocking(reader.as_raw_fd()).context("set readiness fd nonblocking")?;
+    let async_fd =
+        AsyncFd::with_interest(reader, Interest::READABLE).context("wrap readiness fd")?;
+
+    let read_fut = read_ready_byte(&async_fd);
+    match tokio::time::timeout(timeout, read_fut).await {
+        Ok(result) => result,
+        Err(_) => bail!("timed out waiting for net daemon readiness signal"),
+    }
+}
+
+async fn read_ready_byte(async_fd: &AsyncFd<OwnedFd>) -> Result<()> {
+    let signal = loop {
+        let mut guard = async_fd
+            .readable()
+            .await
+            .context("wait readable on readiness fd")?;
+        match guard.try_io(|inner| {
+            let mut buf = [0u8; 1];
+            // SAFETY: read(2) on a valid fd with a valid buffer is
+            // well-defined. We read exactly one byte to satisfy the
+            // readiness protocol.
+            let rc = unsafe { libc::read(inner.get_ref().as_raw_fd(), buf.as_mut_ptr().cast(), 1) };
+            if rc < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if rc == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "failed reading net daemon readiness byte: pipe closed",
+                ));
+            }
+            Ok(buf[0])
+        }) {
+            Ok(Ok(byte)) => break byte,
+            Ok(Err(err)) => return Err(err).context("failed reading net daemon readiness byte"),
+            Err(_would_block) => continue,
+        }
     };
 
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            bail!("timed out waiting for net daemon readiness signal");
-        }
-        let ms = remaining.as_millis().min(i32::MAX as u128) as i32;
-
-        // SAFETY: `poll_fd` points to a valid `pollfd` on the stack.
-        let rc = unsafe { libc::poll(&mut poll_fd as *mut libc::pollfd, 1, ms) };
-        if rc == 0 {
-            bail!("timed out waiting for net daemon readiness signal");
-        }
-        if rc < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            return Err(err).context("poll on net daemon readiness pipe failed");
-        }
-        break;
-    }
-
-    if (poll_fd.revents & libc::POLLIN) == 0 {
-        bail!(
-            "net daemon readiness pipe became readable without readiness byte (revents={})",
-            poll_fd.revents
-        );
-    }
-
-    let mut ready_file = std::fs::File::from(reader);
-    let mut signal = [0u8; 1];
-    ready_file
-        .read_exact(&mut signal)
-        .context("failed reading net daemon readiness byte")?;
-
     ensure!(
-        signal[0] == READY_SIGNAL,
+        signal == READY_SIGNAL,
         "invalid net daemon readiness byte: expected {:?}, got {:?}",
         READY_SIGNAL,
-        signal[0]
+        signal
     );
 
+    Ok(())
+}
+
+fn set_nonblocking(fd: std::os::fd::RawFd) -> std::io::Result<()> {
+    // SAFETY: F_GETFL/F_SETFL on a valid fd is well-defined.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(())
 }
 
@@ -95,16 +107,20 @@ mod tests {
         read_end.into()
     }
 
-    #[test]
-    fn wait_ready_accepts_correct_signal() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_ready_accepts_correct_signal() {
         let reader = pipe_with_byte(READY_SIGNAL);
-        wait_ready(reader, Duration::from_secs(1)).expect("correct byte should succeed");
+        wait_ready(reader, Duration::from_secs(1))
+            .await
+            .expect("correct byte should succeed");
     }
 
-    #[test]
-    fn wait_ready_rejects_wrong_byte() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_ready_rejects_wrong_byte() {
         let reader = pipe_with_byte(b'X');
-        let err = wait_ready(reader, Duration::from_secs(1)).expect_err("wrong byte should fail");
+        let err = wait_ready(reader, Duration::from_secs(1))
+            .await
+            .expect_err("wrong byte should fail");
         assert!(
             err.to_string()
                 .contains("invalid net daemon readiness byte"),
@@ -112,18 +128,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wait_ready_fails_on_closed_pipe() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_ready_fails_on_closed_pipe() {
         let (read_end, write_end) = std::io::pipe().expect("create pipe");
         drop(write_end);
         let err = wait_ready(read_end.into(), Duration::from_secs(1))
+            .await
             .expect_err("closed pipe should fail");
         let msg = err.to_string();
-        // Linux returns POLLHUP (no POLLIN) → hits the revents guard;
-        // macOS returns POLLIN|POLLHUP → read_exact sees EOF. Both
-        // are correct platform behavior for a closed write end.
         assert!(
-            msg.contains("failed reading") || msg.contains("readiness"),
+            msg.contains("failed reading") || msg.contains("pipe closed"),
             "unexpected error: {err}"
         );
     }

@@ -46,18 +46,18 @@ impl VmProcesses {
         Ok(Self { vmm })
     }
 
-    /// Block until the vmm child exits and return its `ExitStatus`.
+    /// Await the vmm child's exit and return its `ExitStatus`.
     /// Non-zero exit is a normal return value — the caller decides
     /// how to interpret it.
-    pub fn wait(&mut self) -> Result<ExitStatus> {
+    pub async fn wait(&mut self) -> Result<ExitStatus> {
         self.vmm
             .wait_by_ref()
+            .await
             .context("failed to wait on sandboxed VMM child")
     }
 
     /// Non-blocking wait. `Ok(None)` means the vmm is still running;
-    /// `Ok(Some(status))` means it has exited and the reaper has
-    /// published its status.
+    /// `Ok(Some(status))` means it has exited.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.vmm
             .try_wait_by_ref()
@@ -74,25 +74,17 @@ impl VmProcesses {
         self.vmm.pid()
     }
 
-    /// Whether the vmm child has not yet been reaped. Cheap atomic
-    /// load; safe to poll.
+    /// Whether the vmm child has not yet been reaped.
     pub fn is_running(&self) -> bool {
         !self.vmm.has_exited()
     }
 
-    /// SIGKILL the vmm child and wait for its reaper to publish exit
-    /// status. Safe to call after the child has already exited on its
-    /// own (becomes a no-op). Also invoked implicitly by `Drop`.
-    pub fn kill(&mut self) -> std::io::Result<()> {
-        self.vmm.kill()
-    }
-}
-
-impl Drop for VmProcesses {
-    fn drop(&mut self) {
-        if let Err(err) = self.kill() {
-            tracing::warn!(error = %err, "drop-time SIGKILL failed");
-        }
+    /// SIGKILL the vmm child and await its reap. Safe to call after
+    /// the child has already exited on its own (becomes a no-op). Not
+    /// needed for cleanup — dropping `VmProcesses` kills the child
+    /// automatically via tokio's `kill_on_drop`.
+    pub async fn kill(&mut self) -> std::io::Result<()> {
+        self.vmm.kill().await
     }
 }
 
@@ -180,21 +172,21 @@ mod tests {
         matches!(err.raw_os_error(), Some(libc::EPERM))
     }
 
-    fn wait_for_process_exit(pid: u32, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
+    async fn wait_for_process_exit(pid: u32, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
             if !process_exists(pid) {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(25));
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
         panic!("process {pid} should have exited within {timeout:?}");
     }
 
     // ── no-network path (spawn_with_attachments, empty) ──────
 
-    #[test]
-    fn spawn_with_empty_attachments_succeeds_when_vmm_exits_zero() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_empty_attachments_succeeds_when_vmm_exits_zero() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -204,11 +196,14 @@ mod tests {
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
             .expect("spawn_with_attachments should succeed");
-        processes.wait().expect("wait should succeed for exit 0");
+        processes
+            .wait()
+            .await
+            .expect("wait should succeed for exit 0");
     }
 
-    #[test]
-    fn spawn_with_empty_attachments_does_not_require_netd_binary() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_empty_attachments_does_not_require_netd_binary() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -220,7 +215,7 @@ mod tests {
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
             .expect("no-network path should not try to spawn netd");
-        processes.wait().expect("wait should succeed");
+        processes.wait().await.expect("wait should succeed");
     }
 
     #[test]
@@ -246,8 +241,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn spawn_with_empty_attachments_returns_non_zero_exit_status() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_empty_attachments_returns_non_zero_exit_status() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -257,13 +252,13 @@ mod tests {
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
             .expect("spawn should succeed");
-        let status = processes.wait().expect("wait should return a status");
+        let status = processes.wait().await.expect("wait should return a status");
         assert!(!status.success(), "false should exit non-zero");
         assert_eq!(status.code(), Some(1));
     }
 
-    #[test]
-    fn pid_and_is_running_track_vmm_lifecycle() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pid_and_is_running_track_vmm_lifecycle() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -277,12 +272,12 @@ mod tests {
         let pid = processes.pid();
         assert!(pid > 1, "pid {pid} should be a plausible child pid");
 
-        processes.wait().expect("wait");
+        processes.wait().await.expect("wait");
         assert!(!processes.is_running(), "vmm should be reaped after wait");
     }
 
-    #[test]
-    fn try_wait_returns_none_while_running_and_some_after_exit() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn try_wait_returns_none_while_running_and_some_after_exit() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -296,15 +291,15 @@ mod tests {
         assert!(processes.is_running());
         assert!(matches!(processes.try_wait(), Ok(None)));
 
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         let status = loop {
             match processes.try_wait().expect("try_wait") {
                 Some(status) => break status,
                 None => {
-                    if Instant::now() >= deadline {
+                    if tokio::time::Instant::now() >= deadline {
                         panic!("sleeper never exited");
                     }
-                    std::thread::sleep(Duration::from_millis(25));
+                    tokio::time::sleep(Duration::from_millis(25)).await;
                 }
             }
         };
@@ -316,8 +311,8 @@ mod tests {
 
     // ── networked path (external NetworkProcesses) ──────────
 
-    #[test]
-    fn spawn_with_external_network_succeeds_end_to_end() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_external_network_succeeds_end_to_end() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -325,7 +320,9 @@ mod tests {
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &find_binary_on_path("true"));
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let network = NetworkProcesses::spawn(None).expect("spawn fake netd");
+        let network = NetworkProcesses::spawn(None)
+            .await
+            .expect("spawn fake netd");
         let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
         let (attachment, host_fd) = make_attachment(mac);
         network
@@ -334,11 +331,14 @@ mod tests {
 
         let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![attachment])
             .expect("spawn with attachment");
-        processes.wait().expect("wait should succeed for exit 0");
+        processes
+            .wait()
+            .await
+            .expect("wait should succeed for exit 0");
     }
 
-    #[test]
-    fn spawn_with_two_external_networks_attaches_both() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_with_two_external_networks_attaches_both() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -346,8 +346,8 @@ mod tests {
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &find_binary_on_path("true"));
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let net_a = NetworkProcesses::spawn(None).expect("spawn netd a");
-        let net_b = NetworkProcesses::spawn(None).expect("spawn netd b");
+        let net_a = NetworkProcesses::spawn(None).await.expect("spawn netd a");
+        let net_b = NetworkProcesses::spawn(None).await.expect("spawn netd b");
 
         let mac_a = [0x02, 0xaa, 0xaa, 0xaa, 0xaa, 0x01];
         let mac_b = [0x02, 0xbb, 0xbb, 0xbb, 0xbb, 0x02];
@@ -363,11 +363,14 @@ mod tests {
         let mut processes =
             VmProcesses::spawn_with_attachments(&sample_config(), vec![att_a, att_b])
                 .expect("spawn with two attachments");
-        processes.wait().expect("wait should succeed for exit 0");
+        processes
+            .wait()
+            .await
+            .expect("wait should succeed for exit 0");
     }
 
-    #[test]
-    fn dropping_vm_processes_sigkills_vmm_without_sigterm_grace() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_vm_processes_sigkills_vmm_without_sigterm_grace() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -391,7 +394,7 @@ mod tests {
         drop(processes);
         let elapsed = started.elapsed();
 
-        wait_for_process_exit(pid, Duration::from_secs(2));
+        wait_for_process_exit(pid, Duration::from_secs(2)).await;
 
         let _ = std::fs::remove_file(&vmm_pid_file);
         let _ = std::fs::remove_file(&vmm);

@@ -14,15 +14,18 @@
 //! VM can attach to many networks.
 //!
 //! ```no_run
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use capsa::{Boot, Network, PortForward, Vm};
 //!
-//! let api = Network::builder().allow_host("api.example.com").build()?.start()?;
+//! let api = Network::builder().allow_host("api.example.com").build()?.start().await?;
 //! let exit = Vm::builder(Boot::kernel("/boot/vmlinuz"))
 //!     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
 //!     .build()?
-//!     .run()?;
+//!     .run()
+//!     .await?;
 //! assert!(exit.success());
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Errors: [`BuildError`] at `.build()`, [`StartError`] at `.start()`,

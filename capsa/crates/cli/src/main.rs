@@ -107,7 +107,7 @@ impl Cli {
         kb.into()
     }
 
-    fn to_vm(&self) -> Result<Vm> {
+    async fn to_vm(&self) -> Result<Vm> {
         let parsed_forwards = self
             .forward
             .iter()
@@ -174,6 +174,7 @@ impl Cli {
 
             let handle = network
                 .start()
+                .await
                 .map_err(|err| anyhow!("failed to start network daemon: {err}"))?;
 
             builder = builder.attach_with(&handle, |mut attach| {
@@ -193,9 +194,14 @@ impl Cli {
     }
 }
 
-fn run(args: Cli) -> Result<()> {
+async fn run(args: Cli) -> Result<()> {
     apply_vmm_log_env(args.verbose);
-    let exit = args.to_vm()?.run().map_err(|err| anyhow!(err))?;
+    let exit = args
+        .to_vm()
+        .await?
+        .run()
+        .await
+        .map_err(|err| anyhow!(err))?;
     if exit.success() {
         Ok(())
     } else {
@@ -220,8 +226,9 @@ fn apply_vmm_log_env(verbose: u8) {
     }
 }
 
-fn main() -> Result<()> {
-    run(Cli::parse())
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    run(Cli::parse()).await
 }
 
 #[cfg(test)]
@@ -256,20 +263,21 @@ mod tests {
         assert_eq!(assemble_kernel_cmdline(0, Some("   ")), "quiet loglevel=0");
     }
 
-    #[test]
-    fn forward_requires_allow_host() {
+    #[tokio::test]
+    async fn forward_requires_allow_host() {
         let args = Cli::parse_from(["capsa", "--kernel", "/tmp/kernel", "--forward", "9100:9100"]);
 
         let err = args
             .to_vm()
+            .await
             .expect_err("forward without allow-host should fail");
         assert!(err
             .to_string()
             .contains("--forward requires networking to be enabled"));
     }
 
-    #[test]
-    fn malformed_forward_returns_error() {
+    #[tokio::test]
+    async fn malformed_forward_returns_error() {
         let args = Cli::parse_from([
             "capsa",
             "--kernel",
@@ -280,14 +288,14 @@ mod tests {
             "not-a-forward",
         ]);
 
-        let err = args.to_vm().expect_err("config should fail to build");
+        let err = args.to_vm().await.expect_err("config should fail to build");
         assert!(err
             .to_string()
             .contains("expected [tcp:|udp:]host_port:guest_port"));
     }
 
-    #[test]
-    fn forward_port_zero_returns_error() {
+    #[tokio::test]
+    async fn forward_port_zero_returns_error() {
         let args = Cli::parse_from([
             "capsa",
             "--kernel",
@@ -298,12 +306,12 @@ mod tests {
             "0:80",
         ]);
 
-        let err = args.to_vm().expect_err("config should fail to build");
+        let err = args.to_vm().await.expect_err("config should fail to build");
         assert!(err.to_string().contains("ports must be in 1..=65535"));
     }
 
-    #[test]
-    fn duplicate_host_port_returns_error() {
+    #[tokio::test]
+    async fn duplicate_host_port_returns_error() {
         let args = Cli::parse_from([
             "capsa",
             "--kernel",
@@ -316,14 +324,17 @@ mod tests {
             "9100:80",
         ]);
 
-        let err = args.to_vm().expect_err("duplicate host port should fail");
+        let err = args
+            .to_vm()
+            .await
+            .expect_err("duplicate host port should fail");
         assert!(err
             .to_string()
             .contains("duplicate --forward host port 9100"));
     }
 
-    #[test]
-    fn malformed_allow_host_pattern_returns_error() {
+    #[tokio::test]
+    async fn malformed_allow_host_pattern_returns_error() {
         let args = Cli::parse_from([
             "capsa",
             "--kernel",
@@ -332,7 +343,7 @@ mod tests {
             "*example.com",
         ]);
 
-        let err = args.to_vm().expect_err("config should fail to build");
+        let err = args.to_vm().await.expect_err("config should fail to build");
         assert!(err
             .to_string()
             .contains("wildcard host pattern must use only a leading '*.' prefix"));
@@ -369,8 +380,8 @@ mod tests {
         assert_eq!(guest, 53);
     }
 
-    #[test]
-    fn duplicate_host_port_across_protocols_is_allowed() {
+    #[tokio::test]
+    async fn duplicate_host_port_across_protocols_is_allowed() {
         // Host kernel binds TCP and UDP independently on the same
         // port number, so the CLI must not treat them as duplicates.
         let args = Cli::parse_from([
@@ -388,15 +399,18 @@ mod tests {
         // to_vm() goes on to spawn netd which will fail in this
         // sandboxed test env — but crucially, not with a "duplicate"
         // validation error before that.
-        let err = args.to_vm().expect_err("netd spawn will fail in this env");
+        let err = args
+            .to_vm()
+            .await
+            .expect_err("netd spawn will fail in this env");
         assert!(
             !err.to_string().contains("duplicate"),
             "tcp+udp on same host port should not be flagged as duplicate: {err}"
         );
     }
 
-    #[test]
-    fn duplicate_udp_host_port_is_rejected() {
+    #[tokio::test]
+    async fn duplicate_udp_host_port_is_rejected() {
         let args = Cli::parse_from([
             "capsa",
             "--kernel",
@@ -409,7 +423,10 @@ mod tests {
             "udp:9100:54",
         ]);
 
-        let err = args.to_vm().expect_err("duplicate udp host port fails");
+        let err = args
+            .to_vm()
+            .await
+            .expect_err("duplicate udp host port fails");
         assert!(err.to_string().contains("duplicate --forward host port"));
         assert!(err.to_string().contains("udp"));
     }

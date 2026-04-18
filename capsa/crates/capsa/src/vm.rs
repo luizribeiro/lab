@@ -83,10 +83,10 @@ impl Vm {
         })
     }
 
-    /// Blocking convenience: start the VM and wait for it to exit.
+    /// Convenience: start the VM and await its exit.
     /// See [`VmHandle::wait`] for the return semantics.
-    pub fn run(self) -> Result<VmExit, RuntimeError> {
-        self.start().map_err(RuntimeError::Start)?.wait()
+    pub async fn run(self) -> Result<VmExit, RuntimeError> {
+        self.start().map_err(RuntimeError::Start)?.wait().await
     }
 }
 
@@ -140,12 +140,14 @@ impl VmBuilder {
     /// returns the modified version.
     ///
     /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use capsa::{Boot, Network, PortForward, Vm};
-    /// # let api = Network::builder().build()?.start()?;
+    /// # let api = Network::builder().build()?.start().await?;
     /// Vm::builder(Boot::kernel("/boot/vmlinuz"))
     ///     .attach_with(&api, |a| a.forward(PortForward { host: 8080, guest: 80 }))
     ///     .build()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// [`Attachment`]: Attachable::Attachment
@@ -212,16 +214,17 @@ impl VmHandle {
     /// has exited on its own (becomes a no-op). Does not tear down
     /// attached networks — those are owned by the caller's
     /// [`NetworkHandle`] clones.
-    pub fn kill(&mut self) -> Result<(), RuntimeError> {
-        self.inner.kill().map_err(RuntimeError::Kill)
+    pub async fn kill(&mut self) -> Result<(), RuntimeError> {
+        self.inner.kill().await.map_err(RuntimeError::Kill)
     }
 
-    /// Block until the VM exits. Returns the guest's exit status;
+    /// Await the VM's exit. Returns the guest's exit status;
     /// a non-zero exit is not an error — the caller decides how to
     /// interpret it via [`VmExit::success`] / [`VmExit::code`].
-    pub fn wait(mut self) -> Result<VmExit, RuntimeError> {
+    pub async fn wait(mut self) -> Result<VmExit, RuntimeError> {
         self.inner
             .wait()
+            .await
             .map(VmExit::from)
             .map_err(|e| RuntimeError::Wait(e.into()))
     }

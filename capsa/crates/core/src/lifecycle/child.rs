@@ -1,37 +1,29 @@
 //! Generic child-process primitives used by `super::netd` and
-//! `super::vmm`. The only file in `lifecycle/` that knows nothing
-//! about VMs: it speaks `Child`, `pid`, signals, and reaper threads.
+//! `super::vmm`. Async-first: backed by `tokio::process::Child` via
+//! lockin's `tokio_command` spawn path, so `wait` and `kill` are
+//! awaitable without burning a dedicated reaper thread per child.
 //!
 //! Intentionally small and concrete: two daemon binaries do not
-//! justify a trait hierarchy. Don't reach for crossbeam, async, or
-//! pidfd here unless a real requirement forces the change.
+//! justify a trait hierarchy.
 //!
 //! The ownership story:
 //!
-//! - `spawn_sandboxed` forks a child, captures its pid, and immediately
-//!   moves the `std::process::Child` into a single *reaper* thread that
-//!   blocks in `Child::wait`. This thread is the one and only piece of
-//!   code that ever calls `waitpid` for this child. It publishes the
-//!   exit status on a `sync_channel(1)` and flips an `AtomicBool` so
-//!   the rest of the program can observe that the child has been
-//!   reaped.
-//! - `ChildHandle` holds the pid, the atomic flag, the receiver, the
-//!   reaper's `JoinHandle`, and (optionally) the `Sandbox` value whose
-//!   private tmpdir must outlive the child.
-//! - `Drop` sends `SIGTERM`/`SIGKILL` only while the atomic flag is
-//!   `false`, so we never signal a PID that may have been reused by
-//!   the kernel for an unrelated process. A narrow race between the
-//!   "load flag" and "send signal" is possible but vanishingly
-//!   unlikely in practice; see the comment on `Drop` for details.
+//! - `spawn_sandboxed` builds a sandboxed `tokio::process::Command`
+//!   (via lockin's `tokio_command` path) and spawns the child. The
+//!   returned `ChildHandle` owns the resulting `SandboxChild`, which
+//!   in turn owns both the tokio `Child` and the `Sandbox` tmpdir.
+//! - `kill_on_drop(true)` is set on every spawn so dropping the
+//!   handle without an explicit teardown still SIGKILLs the child;
+//!   tokio's orphan reaper keeps the zombie from lingering.
+//! - `wait_by_ref` / `try_wait_by_ref` / `kill` delegate to
+//!   `SandboxChild`. Exit status is cached on the first successful
+//!   wait so subsequent calls remain cheap.
+
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
-use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use lockin::{Sandbox, SandboxBuilder};
@@ -122,21 +114,26 @@ fn ensure_executable(path: &Path) -> Result<()> {
 
 /// Handle to a spawned daemon child.
 ///
-/// Created by [`spawn_sandboxed`]. The caller should either call
-/// [`ChildHandle::shutdown`] (explicit teardown) or let the handle
-/// drop (implicit teardown that logs any errors via `tracing::warn`).
+/// Created by [`spawn_sandboxed`]. The caller should either drive
+/// it to completion via [`ChildHandle::wait_by_ref`], or explicitly
+/// tear it down via [`ChildHandle::kill`] / [`ChildHandle::shutdown`].
+/// Dropping the handle without waiting is also safe — `kill_on_drop`
+/// is set on every spawned command so the child is SIGKILLed and
+/// tokio's orphan reaper cleans up the zombie.
 pub(super) struct ChildHandle {
     name: &'static str,
-    pid: i32,
-    exited: Arc<AtomicBool>,
-    status_rx: Receiver<Result<ExitStatus>>,
-    reaper: Option<JoinHandle<()>>,
-    // Keeps the sandbox's private tmpdir alive for the lifetime of the
-    // child. Must drop AFTER the reaper joins, so field order matters
-    // if we ever change this to use field-order drop semantics. Right
-    // now `Drop::drop` explicitly joins the reaper first.
+    pid: u32,
+    child: tokio::process::Child,
+    // Keeps the sandbox's private tmpdir alive for the lifetime of
+    // the child. `None` in the `CAPSA_DISABLE_SANDBOX` bypass path.
     _sandbox: Option<Sandbox>,
+    cached_status: Option<ExitStatus>,
+    // Consulted only by the cfg(test) shutdown flow; set on every
+    // spawn so production paths also see sane defaults if they ever
+    // call into it.
+    #[allow(dead_code)]
     shutdown_timeout: Duration,
+    #[allow(dead_code)]
     poll_interval: Duration,
 }
 
@@ -146,132 +143,98 @@ impl ChildHandle {
         self.name
     }
 
-    /// The reaped-or-not flag, flipped by the reaper thread when it
-    /// finishes `waitpid`. Cheap to call; safe to spin on.
+    /// Whether this handle has observed an exit status. Flips once
+    /// [`wait_by_ref`](Self::wait_by_ref) returns or
+    /// [`try_wait_by_ref`](Self::try_wait_by_ref) first yields `Some`.
     pub(super) fn has_exited(&self) -> bool {
-        self.exited.load(Ordering::Acquire)
+        self.cached_status.is_some()
     }
 
     /// The child's OS process id.
     pub(super) fn pid(&self) -> u32 {
-        self.pid as u32
+        self.pid
     }
 
-    /// Block until the child exits on its own and return its status.
-    /// Does **not** send any signals. Borrows the handle so
-    /// supervisors that need to Drop it later can still block on exit.
-    pub(super) fn wait_by_ref(&mut self) -> Result<ExitStatus> {
-        self.status_rx
-            .recv()
-            .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?
+    /// Await the child's exit on its own and return its status.
+    /// Does **not** send any signals. Caches the first non-error
+    /// result so subsequent calls are cheap.
+    pub(super) async fn wait_by_ref(&mut self) -> Result<ExitStatus> {
+        if let Some(status) = self.cached_status {
+            return Ok(status);
+        }
+        let status = self
+            .child
+            .wait()
+            .await
+            .with_context(|| format!("failed waiting for {} process", self.name))?;
+        self.cached_status = Some(status);
+        Ok(status)
     }
 
     /// Non-blocking variant of [`wait_by_ref`]. Returns `Ok(None)` if
-    /// the child is still running, `Ok(Some(status))` if it has
-    /// exited and the reaper published its status. An inner `Err` is
-    /// the same reaping error `wait_by_ref` would have surfaced.
+    /// the child is still running.
     pub(super) fn try_wait_by_ref(&mut self) -> Result<Option<ExitStatus>> {
-        match self.status_rx.try_recv() {
-            Ok(status) => status.map(Some),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(anyhow::anyhow!(
-                "{} reaper thread dropped its result channel",
-                self.name
-            )),
+        if let Some(status) = self.cached_status {
+            return Ok(Some(status));
         }
+        let status = self
+            .child
+            .try_wait()
+            .with_context(|| format!("failed polling {} process", self.name))?;
+        if let Some(s) = status {
+            self.cached_status = Some(s);
+        }
+        Ok(status)
     }
 
-    /// SIGKILL the child if it has not already exited and wait for
-    /// the reaper to publish its status. Drains the status channel so
-    /// subsequent `Drop` sees `exited == true` and is a no-op. Used by
-    /// supervisors (like `VmProcesses::Drop`) that want immediate
-    /// termination instead of SIGTERM+escalate.
-    pub(super) fn kill(&mut self) -> io::Result<()> {
-        if self.exited.load(Ordering::Acquire) {
+    /// SIGKILL the child and await its reap. Safe to call after the
+    /// child has already exited (becomes a no-op that just confirms
+    /// the cached status).
+    pub(super) async fn kill(&mut self) -> io::Result<()> {
+        if self.cached_status.is_some() {
             return Ok(());
         }
-        send_signal(self.pid, libc::SIGKILL)?;
-        wait_for_flag(&self.exited, self.shutdown_timeout, self.poll_interval);
-        let _ = self.status_rx.try_recv();
-        Ok(())
+        // start_kill is sync (just sends SIGKILL); wait is async and
+        // performs the reap. Avoid the async tokio::process::Child::kill
+        // helper because it takes &mut self twice in quick succession,
+        // which composes awkwardly with our cached-status bookkeeping.
+        match self.child.start_kill() {
+            Ok(()) => {}
+            Err(err) if err.raw_os_error() == Some(libc::ESRCH) => {}
+            Err(err) => return Err(err),
+        }
+        match self.child.wait().await {
+            Ok(status) => {
+                self.cached_status = Some(status);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
-    /// Explicit teardown: request shutdown if the child is still
-    /// running, wait for the reaper, and return its exit status.
-    /// Production teardown happens via `Drop`, which uses the same
-    /// `kill_with_timeout` helper.
+    /// Explicit teardown: SIGTERM, wait up to `shutdown_timeout`, then
+    /// escalate to SIGKILL, and return the final exit status.
     #[cfg(test)]
-    pub(super) fn shutdown(mut self) -> Result<ExitStatus> {
-        if !self.exited.load(Ordering::Acquire) {
-            kill_with_timeout(
-                self.pid,
-                &self.exited,
+    pub(super) async fn shutdown(mut self) -> Result<ExitStatus> {
+        if self.cached_status.is_none() {
+            shutdown_with_timeout(
+                &mut self.child,
+                &mut self.cached_status,
                 self.shutdown_timeout,
                 self.poll_interval,
             )
+            .await
             .with_context(|| format!("failed to shut down {} daemon", self.name))?;
         }
-
-        let status_result = self
-            .status_rx
-            .recv()
-            .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?;
-
-        if let Some(reaper) = self.reaper.take() {
-            if reaper.join().is_err() {
-                tracing::warn!(daemon = self.name, "reaper thread panicked");
-            }
-        }
-
-        status_result
-    }
-}
-
-impl Drop for ChildHandle {
-    fn drop(&mut self) {
-        // PID-reuse race: we only send signals while `exited == false`.
-        // At that point the reaper is still blocked in `Child::wait`,
-        // so the kernel has not yet reaped this pid and cannot have
-        // reused it. Between the atomic load and the `kill` syscall
-        // the reaper *could* return and the kernel *could* reuse the
-        // pid, but the window is a few instructions wide and the
-        // kernel does not aggressively recycle pids. Fully closing
-        // this race would require pidfd_send_signal on Linux, which
-        // we skip to keep the implementation portable.
-        if !self.exited.load(Ordering::Acquire) {
-            if let Err(err) = kill_with_timeout(
-                self.pid,
-                &self.exited,
-                self.shutdown_timeout,
-                self.poll_interval,
-            ) {
-                tracing::warn!(
-                    daemon = self.name,
-                    pid = self.pid,
-                    error = %err,
-                    "drop-time shutdown failed"
-                );
-            }
-            // Drain the reaper's status message so it doesn't linger
-            // in the channel buffer.
-            let _ = self.status_rx.try_recv();
-        }
-
-        if let Some(reaper) = self.reaper.take() {
-            if reaper.join().is_err() {
-                tracing::warn!(daemon = self.name, "reaper thread panicked during drop");
-            }
-        }
+        self.cached_status
+            .ok_or_else(|| anyhow::anyhow!("{} child produced no exit status", self.name))
     }
 }
 
 /// Spawns `binary` under a `lockin` sandbox (or bypassed via
-/// `CAPSA_DISABLE_SANDBOX`), starts a reaper thread, and returns a
-/// [`ChildHandle`].
-///
-/// `fds` are file descriptors to inherit into the child. In sandbox
-/// mode they are registered on the builder via `inherit_fd`; in
-/// bypass mode they are applied directly via `CommandFdExt`.
+/// `CAPSA_DISABLE_SANDBOX`) as a tokio child with `kill_on_drop`
+/// set, and returns a [`ChildHandle`]. `fds` are file descriptors to
+/// inherit into the child.
 pub(super) fn spawn_sandboxed(
     name: &'static str,
     binary: &Path,
@@ -281,21 +244,18 @@ pub(super) fn spawn_sandboxed(
     stdin_null: bool,
 ) -> Result<ChildHandle> {
     let (child, sandbox) = build_and_spawn(name, binary, builder, fds, args, stdin_null)?;
-    let pid = child.id() as i32;
-
-    let exited = Arc::new(AtomicBool::new(false));
-    let (status_tx, status_rx) = mpsc::sync_channel::<Result<ExitStatus>>(1);
-    let reaper = spawn_reaper(name, child, exited.clone(), status_tx);
+    let pid = child
+        .id()
+        .with_context(|| format!("{name} child has no pid after spawn"))?;
 
     tracing::info!(daemon = name, pid, "spawned");
 
     Ok(ChildHandle {
         name,
         pid,
-        exited,
-        status_rx,
-        reaper: Some(reaper),
+        child,
         _sandbox: sandbox,
+        cached_status: None,
         shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         poll_interval: DEFAULT_POLL_INTERVAL,
     })
@@ -308,22 +268,23 @@ fn build_and_spawn(
     fds: Vec<std::os::fd::OwnedFd>,
     args: &[String],
     stdin_null: bool,
-) -> Result<(Child, Option<Sandbox>)> {
+) -> Result<(tokio::process::Child, Option<Sandbox>)> {
     if sandbox_bypassed_by_env() {
         tracing::warn!(
             daemon = name,
             program = %binary.display(),
             "sandbox disabled via CAPSA_DISABLE_SANDBOX; running without sandbox"
         );
-        let mut command = Command::new(binary);
+        let mut command = tokio::process::Command::new(binary);
         command.args(args);
         if stdin_null {
             command.stdin(Stdio::null());
         }
+        command.kill_on_drop(true);
         use lockin_process::CommandFdExt;
-        command.seal_fds();
+        command.as_std_mut().seal_fds();
         for fd in fds {
-            command.keep_fd(fd);
+            command.as_std_mut().keep_fd(fd);
         }
         let child = command.spawn().with_context(|| {
             format!("failed to spawn {name} daemon binary {}", binary.display())
@@ -335,12 +296,13 @@ fn build_and_spawn(
         builder.inherit_fd(fd);
     }
     let mut sandbox_cmd = builder
-        .command(binary)
+        .tokio_command(binary)
         .with_context(|| format!("failed to prepare sandbox for {}", binary.display()))?;
     sandbox_cmd.args(args);
     if stdin_null {
         sandbox_cmd.stdin(Stdio::null());
     }
+    sandbox_cmd.kill_on_drop(true);
     let sandbox_child = sandbox_cmd.spawn().with_context(|| {
         format!(
             "failed to spawn sandboxed {name} daemon binary {}",
@@ -349,27 +311,6 @@ fn build_and_spawn(
     })?;
     let (child, sandbox) = sandbox_child.into_parts();
     Ok((child, Some(sandbox)))
-}
-
-fn spawn_reaper(
-    name: &'static str,
-    mut child: Child,
-    exited: Arc<AtomicBool>,
-    status_tx: SyncSender<Result<ExitStatus>>,
-) -> JoinHandle<()> {
-    thread::Builder::new()
-        .name(format!("capsa-reap-{name}"))
-        .spawn(move || {
-            let result = child
-                .wait()
-                .with_context(|| format!("failed waiting for {name} process"));
-            exited.store(true, Ordering::Release);
-            // Receiver may already have been dropped (e.g. if the
-            // ChildHandle was dropped before the child exited). Fire
-            // and forget in that case.
-            let _ = status_tx.send(result);
-        })
-        .expect("spawning reaper thread should not fail")
 }
 
 /// Nix VM integration tests and CI environments where syd cannot run
@@ -383,55 +324,68 @@ fn sandbox_bypassed_by_env() -> bool {
     )
 }
 
-/// Send SIGTERM, wait up to `shutdown_timeout` for the reaper to flip
-/// `exited`, then escalate to SIGKILL if the child is still running.
-fn kill_with_timeout(
-    pid: i32,
-    exited: &AtomicBool,
+/// SIGTERM, wait up to `shutdown_timeout` for the child to exit,
+/// escalate to SIGKILL if still running, and record the final exit
+/// status in `cached_status`.
+#[cfg(test)]
+async fn shutdown_with_timeout(
+    child: &mut tokio::process::Child,
+    cached_status: &mut Option<ExitStatus>,
     shutdown_timeout: Duration,
     poll_interval: Duration,
 ) -> io::Result<()> {
-    send_signal(pid, libc::SIGTERM)?;
-    if wait_for_flag(exited, shutdown_timeout, poll_interval) {
+    send_signal(child, libc::SIGTERM)?;
+    if let Some(status) = wait_up_to(child, shutdown_timeout, poll_interval).await? {
+        *cached_status = Some(status);
         return Ok(());
     }
 
-    send_signal(pid, libc::SIGKILL)?;
-    if wait_for_flag(exited, shutdown_timeout, poll_interval) {
+    send_signal(child, libc::SIGKILL)?;
+    if let Some(status) = wait_up_to(child, shutdown_timeout, poll_interval).await? {
+        *cached_status = Some(status);
         return Ok(());
     }
 
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        format!("process {pid} did not exit after SIGKILL"),
+        "process did not exit after SIGKILL",
     ))
 }
 
-fn send_signal(pid: i32, sig: i32) -> io::Result<()> {
+#[cfg(test)]
+fn send_signal(child: &tokio::process::Child, sig: i32) -> io::Result<()> {
+    let Some(pid) = child.id() else {
+        // Already reaped.
+        return Ok(());
+    };
     // SAFETY: kill(2) with a valid pid is safe; the syscall reports
     // errors via errno rather than memory unsafety.
-    let rc = unsafe { libc::kill(pid, sig) };
+    let rc = unsafe { libc::kill(pid as i32, sig) };
     if rc == 0 {
         return Ok(());
     }
     let err = io::Error::last_os_error();
-    // ESRCH means the process is already gone, which is the happy
-    // path for our use case (the reaper raced us to the finish line).
+    // ESRCH means the process is already gone, which is fine.
     if err.raw_os_error() == Some(libc::ESRCH) {
         return Ok(());
     }
     Err(err)
 }
 
-fn wait_for_flag(flag: &AtomicBool, timeout: Duration, interval: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if flag.load(Ordering::Acquire) {
-            return true;
+#[cfg(test)]
+async fn wait_up_to(
+    child: &mut tokio::process::Child,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> io::Result<Option<ExitStatus>> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
         }
-        thread::sleep(interval);
+        tokio::time::sleep(poll_interval).await;
     }
-    flag.load(Ordering::Acquire)
+    Ok(child.try_wait()?)
 }
 
 #[cfg(test)]
@@ -516,46 +470,46 @@ mod tests {
 
     // ── spawn_sandboxed (bypass path) ────────────────────────────────
 
-    fn wait_for_exit(handle: &ChildHandle) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if handle.has_exited() {
+    async fn wait_for_exit(handle: &mut ChildHandle) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            if handle.try_wait_by_ref().expect("try_wait_by_ref").is_some() {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(5));
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
         panic!("{} child did not exit in 5s", handle.name());
     }
 
-    #[test]
-    fn spawn_true_reports_success_via_shutdown() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_true_reports_success_via_shutdown() {
         let _lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("true");
 
-        let handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
+        let mut handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
             .expect("spawn should succeed");
-        wait_for_exit(&handle);
+        wait_for_exit(&mut handle).await;
 
-        let status = handle.shutdown().expect("shutdown should succeed");
+        let status = handle.shutdown().await.expect("shutdown should succeed");
         assert!(status.success(), "expected success, got {status:?}");
     }
 
-    #[test]
-    fn spawn_false_reports_non_zero_exit_via_shutdown() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_false_reports_non_zero_exit_via_shutdown() {
         let _lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("false");
 
-        let handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
+        let mut handle = spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false)
             .expect("spawn should succeed");
-        wait_for_exit(&handle);
+        wait_for_exit(&mut handle).await;
 
-        let status = handle.shutdown().expect("shutdown should succeed");
+        let status = handle.shutdown().await.expect("shutdown should succeed");
         assert!(!status.success(), "expected failure, got {status:?}");
     }
 
@@ -577,8 +531,8 @@ mod tests {
 
     // ── shutdown escalation ──────────────────────────────────────────
 
-    #[test]
-    fn shutdown_escalates_to_sigkill_when_sigterm_ignored() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_escalates_to_sigkill_when_sigterm_ignored() {
         let _lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -597,6 +551,7 @@ mod tests {
         let started = Instant::now();
         let status = handle
             .shutdown()
+            .await
             .expect("shutdown should eventually succeed via SIGKILL");
         let elapsed = started.elapsed();
 
@@ -614,24 +569,26 @@ mod tests {
 
     // ── Drop path ────────────────────────────────────────────────────
 
-    #[test]
-    fn drop_does_not_signal_already_reaped_child() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_does_not_panic_on_already_reaped_child() {
         let _lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
         let binary = find_binary_on_path("true");
 
-        let handle =
+        let mut handle =
             spawn_sandboxed("test", &binary, bypass_builder(), vec![], &[], false).unwrap();
 
-        // Wait for the reaper to mark the child as exited.
-        while !handle.has_exited() {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        // Drive to exit.
+        let status = handle
+            .wait_by_ref()
+            .await
+            .expect("wait_by_ref should succeed");
+        assert!(status.success());
 
-        // Drop should not send any signals and should not block on
-        // kill_with_timeout. Most importantly, it must not panic.
+        // Drop on a handle whose cached status is already set must
+        // not panic or block.
         drop(handle);
     }
 }

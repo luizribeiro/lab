@@ -102,15 +102,17 @@ impl NetworkAttach {
     /// times to forward multiple ports; order is preserved.
     ///
     /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use capsa::{Boot, Network, PortForward, Vm};
-    /// # let net = Network::builder().build()?.start()?;
+    /// # let net = Network::builder().build()?.start().await?;
     /// Vm::builder(Boot::kernel("/boot/vmlinuz"))
     ///     .attach_with(&net, |a| {
     ///         a.forward(PortForward { host: 8080, guest: 80 })
     ///             .forward(PortForward { host: 8443, guest: 443 })
     ///     })
     ///     .build()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn forward(mut self, forward: PortForward) -> Self {
         self.port_forwards.push((forward.host, forward.guest));

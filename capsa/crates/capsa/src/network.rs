@@ -26,8 +26,9 @@ impl Network {
     /// VMs can attach to. The daemon stays alive as long as at least
     /// one clone of the returned handle exists; the last drop
     /// SIGKILLs it.
-    pub fn start(&self) -> Result<NetworkHandle, StartError> {
+    pub async fn start(&self) -> Result<NetworkHandle, StartError> {
         let processes = NetworkProcesses::spawn(Some(self.policy.clone()))
+            .await
             .map_err(|e| StartError::NetworkSpawn(e.into()))?;
         Ok(NetworkHandle {
             inner: Arc::new(processes),

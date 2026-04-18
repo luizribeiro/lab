@@ -9,21 +9,25 @@ device attachments, plus a small runtime API to launch them.
 ## Quick start
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Network, PortForward, Vm};
 
 let api_net = Network::builder()
     .allow_host("api.example.com")
     .allow_host("*.cdn.example.com")
     .build()?
-    .start()?;
+    .start()
+    .await?;
 
 Vm::builder(Boot::kernel("/boot/vmlinuz").cmdline("console=hvc0"))
     .vcpus(2)
     .memory_mib(1024)
     .attach_with(&api_net, |a| a.forward(PortForward { host: 8080, guest: 80 }))
     .build()?
-    .run()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+    .run()
+    .await?;
+# Ok(())
+# }
 ```
 
 ## Design principles
@@ -92,26 +96,35 @@ let net = Network::builder().allow_all_hosts().build()?;
 shares the same daemon — and dropping the last clone SIGKILLs it.
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::Network;
 
 let handle = Network::builder()
     .allow_host("api.example.com")
     .build()?
-    .start()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+    .start()
+    .await?;
+# Ok(())
+# }
 ```
 
 Multiple VMs can share a single running network:
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Network, Vm};
 
-let api = Network::builder().allow_host("api.example.com").build()?.start()?;
+let api = Network::builder()
+    .allow_host("api.example.com")
+    .build()?
+    .start()
+    .await?;
 
 let vm1 = Vm::builder(Boot::kernel("/boot/vmlinuz")).attach(&api).build()?;
 let vm2 = Vm::builder(Boot::kernel("/boot/vmlinuz")).attach(&api).build()?;
 // vm1 and vm2 share the same netd; they're on the same virtual subnet.
-# Ok::<(), Box<dyn std::error::Error>>(())
+# Ok(())
+# }
 ```
 
 ## Attaching a VM
@@ -121,9 +134,10 @@ forwards). `.attach_with(&handle, |a| ...)` lets you set a MAC or
 forward TCP/UDP ports on this attachment:
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Network, PortForward, Vm};
 
-let net = Network::builder().allow_all_hosts().build()?.start()?;
+let net = Network::builder().allow_all_hosts().build()?.start().await?;
 
 let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
     .attach_with(&net, |a| {
@@ -132,7 +146,8 @@ let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
             .forward_udp(PortForward { host: 5353, guest: 53 })
     })
     .build()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+# Ok(())
+# }
 ```
 
 From `capsa-cli`, the `--forward` flag accepts the same split via
@@ -159,40 +174,52 @@ let vm = Vm::builder(Boot::kernel("/boot/vmlinuz"))
 
 ## Running a VM
 
-Two entry points. `Vm::run()` blocks until the VM exits; `Vm::start()`
-returns a `VmHandle` you can hold, kill, or drop.
+Two entry points. `Vm::run()` awaits until the VM exits; `Vm::start()`
+returns a `VmHandle` you can hold, kill, or drop. Both require a
+tokio runtime on the caller's side.
 
-Blocking (simplest — mirrors `Command::status()`):
+Awaiting completion (simplest — mirrors `Command::status()`):
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Vm};
 
-Vm::builder(Boot::kernel("/boot/vmlinuz")).build()?.run()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+Vm::builder(Boot::kernel("/boot/vmlinuz"))
+    .build()?
+    .run()
+    .await?;
+# Ok(())
+# }
 ```
 
 Holding a handle for programmatic control:
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Vm};
 
-let handle = Vm::builder(Boot::kernel("/boot/vmlinuz")).build()?.start()?;
+let handle = Vm::builder(Boot::kernel("/boot/vmlinuz"))
+    .build()?
+    .start()?;
 // ... do other work while the VM is running ...
-handle.wait()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+handle.wait().await?;
+# Ok(())
+# }
 ```
 
 Explicit kill:
 
 ```rust,no_run
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
 use capsa::{Boot, Vm};
 
 let mut handle = Vm::builder(Boot::kernel("/boot/vmlinuz"))
     .build()?
     .start()?;
-handle.kill()?;
-handle.wait()?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+handle.kill().await?;
+handle.wait().await?;
+# Ok(())
+# }
 ```
 
 Dropping a running `VmHandle` SIGKILLs the vmm. The

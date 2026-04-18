@@ -15,15 +15,17 @@ use super::control_client::ControlClient;
 use super::netd::{netd_sandbox_builder, wait_ready, READINESS_TIMEOUT};
 
 pub struct NetworkProcesses {
-    netd: Mutex<Option<ChildHandle>>,
+    // Held for its lifetime; dropping triggers kill_on_drop SIGKILL.
+    #[allow(dead_code)]
+    netd: ChildHandle,
     control: Mutex<ControlClient>,
 }
 
 impl NetworkProcesses {
-    /// Spawn a `capsa-netd` daemon and wait for it to signal
-    /// readiness. The returned handle can accept interface
+    /// Spawn a `capsa-netd` daemon and await its readiness
+    /// handshake. The returned handle can accept interface
     /// attachments via [`NetworkProcesses::attach`].
-    pub fn spawn(policy: Option<NetworkPolicy>) -> Result<Self> {
+    pub async fn spawn(policy: Option<NetworkPolicy>) -> Result<Self> {
         let binary = child::resolve_binary("CAPSA_NETD_PATH", "capsa-netd")
             .context("failed to resolve net daemon binary")?;
         let (ready_reader, ready_writer) =
@@ -56,10 +58,11 @@ impl NetworkProcesses {
             .context("failed to spawn network daemon")?;
 
         wait_ready(OwnedFd::from(ready_reader), READINESS_TIMEOUT)
+            .await
             .context("netd readiness check failed")?;
 
         Ok(Self {
-            netd: Mutex::new(Some(netd)),
+            netd,
             control: Mutex::new(ControlClient::new(client_sock)),
         })
     }
@@ -81,15 +84,9 @@ impl NetworkProcesses {
     }
 }
 
-impl Drop for NetworkProcesses {
-    fn drop(&mut self) {
-        if let Some(mut netd) = self.netd.lock().ok().and_then(|mut g| g.take()) {
-            if let Err(err) = netd.kill() {
-                tracing::warn!(error = %err, "drop-time SIGKILL of netd failed");
-            }
-        }
-    }
-}
+// No explicit Drop: the underlying `tokio::process::Child` is
+// spawned with `kill_on_drop(true)`, so dropping a `ChildHandle`
+// (and therefore a `NetworkProcesses`) sends SIGKILL automatically.
 
 #[cfg(test)]
 mod tests {
@@ -125,19 +122,22 @@ mod tests {
         matches!(err.raw_os_error(), Some(libc::EPERM))
     }
 
-    fn wait_for_process_exit(pid: u32, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
+    async fn wait_for_process_exit(pid: u32, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while tokio::time::Instant::now() < deadline {
             if !process_exists(pid) {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(25));
+            // Async sleep: yields to the tokio runtime so the
+            // pidfd-backed child reaper can drive SIGKILL delivery
+            // and waitpid while we poll.
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
         panic!("process {pid} should have exited within {timeout:?}");
     }
 
-    #[test]
-    fn spawn_fails_when_netd_readiness_times_out() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_fails_when_netd_readiness_times_out() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -145,15 +145,15 @@ mod tests {
         let _skip_ready = EnvVarGuard::set("FAKE_NETD_SKIP_READY", "1");
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let err = match NetworkProcesses::spawn(None) {
+        let err = match NetworkProcesses::spawn(None).await {
             Ok(_) => panic!("spawn should fail without readiness signal"),
             Err(err) => err,
         };
         assert!(format!("{err:#}").contains("timed out waiting for net daemon readiness signal"));
     }
 
-    #[test]
-    fn dropping_network_processes_sigkills_netd() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_network_processes_sigkills_netd() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -164,14 +164,14 @@ mod tests {
         let _trap_guard = EnvVarGuard::set("FAKE_NETD_TRAP_SIGTERM", "1");
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let network = NetworkProcesses::spawn(None).expect("spawn netd");
+        let network = NetworkProcesses::spawn(None).await.expect("spawn netd");
         let pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
 
         let started = Instant::now();
         drop(network);
         let elapsed = started.elapsed();
 
-        wait_for_process_exit(pid, Duration::from_secs(2));
+        wait_for_process_exit(pid, Duration::from_secs(2)).await;
 
         let _ = std::fs::remove_file(&netd_pid_file);
 
