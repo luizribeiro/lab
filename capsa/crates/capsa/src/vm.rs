@@ -9,6 +9,8 @@ use crate::boot::{Boot, BootKind};
 use crate::error::{BuildError, RuntimeError, StartError};
 use crate::network::NetworkHandle;
 
+/// A validated VM specification, ready to launch. Produced by
+/// [`VmBuilder::build`]; consumed by [`Vm::start`] or [`Vm::run`].
 pub struct Vm {
     pub(crate) config: VmConfig,
     pub(crate) attachments: Vec<NetworkAttachment>,
@@ -24,6 +26,10 @@ impl std::fmt::Debug for Vm {
 }
 
 impl Vm {
+    /// Start a fresh VM builder. `boot` is required up front so a
+    /// VM can never be constructed without one; pass a [`Boot`]
+    /// directly (`Boot::root(path)`) or a [`KernelBoot`] which
+    /// implicitly converts.
     pub fn builder(boot: impl Into<Boot>) -> VmBuilder {
         VmBuilder {
             boot: boot.into(),
@@ -81,6 +87,12 @@ impl Vm {
     }
 }
 
+/// Fluent builder for a [`Vm`]. Created by [`Vm::builder`].
+///
+/// Defaults: 1 vCPU, 512 MiB of memory, quiet logging, no attached
+/// networks. Chain setters to override; finish with [`build`].
+///
+/// [`build`]: VmBuilder::build
 pub struct VmBuilder {
     boot: Boot,
     vcpus: u8,
@@ -90,21 +102,32 @@ pub struct VmBuilder {
 }
 
 impl VmBuilder {
+    /// Number of virtual CPUs exposed to the guest. Default: `1`.
     pub fn vcpus(mut self, n: u8) -> Self {
         self.vcpus = n;
         self
     }
 
+    /// Guest memory size in mebibytes (1 MiB = 1024 * 1024 bytes).
+    /// Default: `512`.
     pub fn memory_mib(mut self, mib: u32) -> Self {
         self.memory_mib = mib;
         self
     }
 
+    /// Guest-side logging verbosity, forwarded to the vmm. The scale
+    /// is libkrun's: `0` quiet, higher values enable increasingly
+    /// verbose diagnostics. Default: `0`.
     pub fn verbosity(mut self, level: u8) -> Self {
         self.verbosity = level;
         self
     }
 
+    /// Attach a device (currently only [`NetworkHandle`]) with the
+    /// device's default configuration. For per-attachment tweaks —
+    /// MAC overrides, port forwards — use [`attach_with`] instead.
+    ///
+    /// [`attach_with`]: VmBuilder::attach_with
     pub fn attach<D>(mut self, device: &D) -> Self
     where
         D: Attachable + AttachApply,
@@ -113,6 +136,20 @@ impl VmBuilder {
         self
     }
 
+    /// Attach a device and configure the attachment inline. The
+    /// closure receives the device's default [`Attachment`] and
+    /// returns the modified version.
+    ///
+    /// ```no_run
+    /// # use capsa::{Boot, Network, Vm};
+    /// # let api = Network::builder().build()?.start()?;
+    /// Vm::builder(Boot::root("/rootfs"))
+    ///     .attach_with(&api, |a| a.forward_tcp(8080, 80))
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// [`Attachment`]: Attachable::Attachment
     pub fn attach_with<D, F>(mut self, device: &D, configure: F) -> Self
     where
         D: Attachable + AttachApply,
@@ -123,6 +160,9 @@ impl VmBuilder {
         self
     }
 
+    /// Finalize the builder into a launchable [`Vm`]. Fails if any
+    /// deferred input is invalid (today: none — validation happens
+    /// at `Network::build` time).
     pub fn build(self) -> Result<Vm, BuildError> {
         let (root, kernel, initramfs, kernel_cmdline) = match self.boot.kind {
             BootKind::Root(path) => (Some(path), None, None, None),
