@@ -54,27 +54,34 @@ impl std::error::Error for StartError {
 }
 
 #[derive(Debug)]
-pub struct RuntimeError {
-    source: Box<dyn std::error::Error + Send + Sync>,
-}
-
-impl RuntimeError {
-    pub(crate) fn new(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
-        Self {
-            source: source.into(),
-        }
-    }
+#[non_exhaustive]
+pub enum RuntimeError {
+    /// The VM failed to start before it began running.
+    Start(StartError),
+    /// Reaping the VMM process failed, or it exited with a non-zero
+    /// status.
+    Wait(BoxedError),
+    /// Sending SIGKILL to the VMM process failed.
+    Kill(std::io::Error),
 }
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "VM runtime error: {}", self.source)
+        match self {
+            Self::Start(e) => write!(f, "VM failed to start: {e}"),
+            Self::Wait(e) => write!(f, "VM did not exit cleanly: {e}"),
+            Self::Kill(e) => write!(f, "failed to kill VM: {e}"),
+        }
     }
 }
 
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
+        match self {
+            Self::Start(e) => Some(e),
+            Self::Wait(e) => Some(e.as_ref()),
+            Self::Kill(e) => Some(e),
+        }
     }
 }
 
@@ -140,14 +147,28 @@ mod tests {
     }
 
     #[test]
-    fn runtime_error_preserves_source() {
+    fn runtime_error_wait_preserves_source() {
         use std::error::Error;
 
         let cause = std::io::Error::other("reaper bailed");
-        let err = RuntimeError::new(cause);
+        let err = RuntimeError::Wait(Box::new(cause));
 
         let msg = err.to_string();
         assert!(msg.contains("reaper bailed"), "unexpected: {msg}");
         assert!(err.source().is_some(), "source should be set");
+    }
+
+    #[test]
+    fn runtime_error_start_wraps_start_error_source_chain() {
+        use std::error::Error;
+
+        let inner = StartError::Socketpair(std::io::Error::other("eperm"));
+        let err = RuntimeError::Start(inner);
+
+        let chain_head = err.source().expect("Start should expose StartError source");
+        let second = chain_head
+            .source()
+            .expect("StartError should itself expose its io::Error source");
+        assert!(second.to_string().contains("eperm"));
     }
 }

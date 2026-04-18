@@ -75,9 +75,7 @@ impl Vm {
 
     /// Blocking convenience: start the VM and wait for it to exit.
     pub fn run(self) -> Result<(), RuntimeError> {
-        self.start()
-            .map_err(|e| RuntimeError::new(e.to_string()))?
-            .wait()
+        self.start().map_err(RuntimeError::Start)?.wait()
     }
 }
 
@@ -171,12 +169,12 @@ impl VmHandle {
     /// attached networks — those are owned by the caller's
     /// [`NetworkHandle`] clones.
     pub fn kill(&mut self) -> Result<(), RuntimeError> {
-        self.inner.kill().map_err(RuntimeError::new)
+        self.inner.kill().map_err(RuntimeError::Kill)
     }
 
     /// Block until the VM exits.
     pub fn wait(mut self) -> Result<(), RuntimeError> {
-        self.inner.wait().map_err(RuntimeError::new)
+        self.inner.wait().map_err(|e| RuntimeError::Wait(e.into()))
     }
 }
 
