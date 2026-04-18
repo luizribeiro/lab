@@ -124,6 +124,7 @@ dependencies = [
  "libc",
  "lockin",
  "lockin-process",
+ "nix",
  "serde",
  "serde_json",
  "tracing",

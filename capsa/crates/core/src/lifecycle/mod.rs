@@ -27,6 +27,8 @@ use crate::config::VmConfig;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod child;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod control_client;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod netd;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod orchestrate;

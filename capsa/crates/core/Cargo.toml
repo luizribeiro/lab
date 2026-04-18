@@ -10,8 +10,7 @@ lockin = { path = "../../../lockin/crates/sandbox" }
 lockin-process = { path = "../../../lockin/crates/process" }
 capsa-spec = { path = "../spec" }
 libc = "0.2"
+nix = { version = "0.29", features = ["socket", "uio"] }
 serde = { version = "1.0", features = ["derive"] }
-tracing = "0.1"
-
-[dev-dependencies]
 serde_json = "1.0"
+tracing = "0.1"
