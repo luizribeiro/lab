@@ -51,12 +51,11 @@ impl VmProcesses {
         })
     }
 
-    pub(super) fn wait(self) -> Result<()> {
-        let Self { vmm, netd } = self;
-
-        let Some(mut netd) = netd else {
-            let status = vmm
-                .wait()
+    pub(super) fn wait(&mut self) -> Result<()> {
+        let Some(netd) = self.netd.as_mut() else {
+            let status = self
+                .vmm
+                .wait_by_ref()
                 .context("failed to wait on sandboxed VMM child")?;
             return if status.success() {
                 Ok(())
@@ -65,8 +64,7 @@ impl VmProcesses {
             };
         };
 
-        let mut vmm = vmm;
-        match child::wait_either(&mut vmm, &mut netd) {
+        match child::wait_either(&mut self.vmm, netd) {
             Exited::First(Ok(status)) if status.success() => Ok(()),
             Exited::First(Ok(status)) => {
                 bail!("sandboxed VMM process exited with status {status}")
@@ -82,8 +80,25 @@ impl VmProcesses {
     }
 }
 
+impl Drop for VmProcesses {
+    fn drop(&mut self) {
+        // Supervisor policy: SIGKILL on drop, no SIGTERM grace period.
+        // Callers that want graceful shutdown should kill the child
+        // gracefully themselves before dropping.
+        if let Some(netd) = self.netd.as_mut() {
+            if let Err(err) = netd.kill() {
+                tracing::warn!(daemon = "netd", error = %err, "drop-time SIGKILL failed");
+            }
+        }
+        if let Err(err) = self.vmm.kill() {
+            tracing::warn!(daemon = "vmm", error = %err, "drop-time SIGKILL failed");
+        }
+    }
+}
+
 pub(super) fn run(config: &VmConfig) -> Result<()> {
-    VmProcesses::spawn(config)?.wait()
+    let mut processes = VmProcesses::spawn(config)?;
+    processes.wait()
 }
 
 #[cfg(test)]
@@ -378,6 +393,41 @@ esac
         let _ = std::fs::remove_file(netd);
 
         assert!(format!("{err:#}").contains("network daemon exited unexpectedly"));
+    }
+
+    #[test]
+    fn dropping_vm_processes_sigkills_vmm_without_sigterm_grace() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let vmm_pid_file = unique_temp_path("capsa-vmm-sigkill-pid");
+        // Trap SIGTERM so only SIGKILL can terminate this process.
+        let vmm = make_temp_executable_script(
+            "capsa-vmm-sigterm-trap",
+            &format!(
+                "trap '' TERM\necho $$ > '{}'\nwhile true; do sleep 1; done",
+                vmm_pid_file.display()
+            ),
+        );
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let processes = super::VmProcesses::spawn(&sample_config()).expect("spawn should succeed");
+        let pid = read_pid_file_with_timeout(&vmm_pid_file, Duration::from_secs(2));
+
+        let started = Instant::now();
+        drop(processes);
+        let elapsed = started.elapsed();
+
+        wait_for_process_exit(pid, Duration::from_secs(2));
+
+        let _ = std::fs::remove_file(&vmm_pid_file);
+        let _ = std::fs::remove_file(&vmm);
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "drop should SIGKILL immediately, not wait the 2s SIGTERM grace; elapsed = {elapsed:?}"
+        );
     }
 
     #[test]

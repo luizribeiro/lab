@@ -162,20 +162,27 @@ impl ChildHandle {
     }
 
     /// Block until the child exits on its own and return its status.
-    /// Does **not** send any signals. Use this when the caller expects
-    /// the child to exit without intervention; for teardown use
-    /// [`shutdown`](Self::shutdown) instead.
-    pub(super) fn wait(mut self) -> Result<ExitStatus> {
-        let result = self
-            .status_rx
+    /// Does **not** send any signals. Borrows the handle so
+    /// supervisors that need to Drop it later can still block on exit.
+    pub(super) fn wait_by_ref(&mut self) -> Result<ExitStatus> {
+        self.status_rx
             .recv()
-            .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?;
-        if let Some(reaper) = self.reaper.take() {
-            if reaper.join().is_err() {
-                tracing::warn!(daemon = self.name, "reaper thread panicked");
-            }
+            .with_context(|| format!("{} reaper thread dropped its result channel", self.name))?
+    }
+
+    /// SIGKILL the child if it has not already exited and wait for
+    /// the reaper to publish its status. Drains the status channel so
+    /// subsequent `Drop` sees `exited == true` and is a no-op. Used by
+    /// supervisors (like `VmProcesses::Drop`) that want immediate
+    /// termination instead of SIGTERM+escalate.
+    pub(super) fn kill(&mut self) -> io::Result<()> {
+        if self.exited.load(Ordering::Acquire) {
+            return Ok(());
         }
-        result
+        send_signal(self.pid, libc::SIGKILL)?;
+        wait_for_flag(&self.exited, self.shutdown_timeout, self.poll_interval);
+        let _ = self.status_rx.try_recv();
+        Ok(())
     }
 
     /// Explicit teardown: request shutdown if the child is still
