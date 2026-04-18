@@ -8,6 +8,7 @@ mod lease;
 pub(super) mod outbound_buffer;
 mod run;
 pub(super) mod tcp;
+mod udp_forward;
 
 use crate::dns::DnsCache;
 use crate::dns::DnsProxy;
@@ -25,6 +26,8 @@ use self::lease::LeaseRequest;
 pub use self::lease::{LeasePreallocationError, LeasePreallocator};
 pub use self::tcp::PortForwardRequest;
 use self::tcp::{TcpHostEvent, TcpManager};
+pub use self::udp_forward::UdpPortForwardRequest;
+use self::udp_forward::UdpPortForwardTable;
 
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -61,6 +64,8 @@ pub struct GatewayStack {
     pub(super) tcp_host_rx: tokio::sync::mpsc::Receiver<TcpHostEvent>,
     pub(super) tcp_host_tx: tokio::sync::mpsc::Sender<TcpHostEvent>,
     pub(super) port_forward_rx: tokio::sync::mpsc::Receiver<PortForwardRequest>,
+    pub(super) udp_port_forward_rx: tokio::sync::mpsc::Receiver<UdpPortForwardRequest>,
+    udp_port_forward_table: UdpPortForwardTable,
     preallocate_tx: tokio::sync::mpsc::Sender<LeaseRequest>,
     preallocate_rx: tokio::sync::mpsc::Receiver<LeaseRequest>,
     pub(super) policy_checker: Option<PolicyChecker>,
@@ -153,6 +158,9 @@ impl GatewayStack {
         let (port_forward_tx, port_forward_rx) = tokio::sync::mpsc::channel(1);
         drop(port_forward_tx);
 
+        let (udp_port_forward_tx, udp_port_forward_rx) = tokio::sync::mpsc::channel(1);
+        drop(udp_port_forward_tx);
+
         let (preallocate_tx, preallocate_rx) =
             tokio::sync::mpsc::channel(crate::config::channel::DEFAULT);
 
@@ -171,6 +179,8 @@ impl GatewayStack {
             tcp_host_rx,
             tcp_host_tx,
             port_forward_rx,
+            udp_port_forward_rx,
+            udp_port_forward_table: UdpPortForwardTable::new(),
             preallocate_tx,
             preallocate_rx,
             policy_checker,
@@ -185,6 +195,18 @@ impl GatewayStack {
         port_forward_rx: tokio::sync::mpsc::Receiver<PortForwardRequest>,
     ) -> Self {
         self.port_forward_rx = port_forward_rx;
+        self
+    }
+
+    /// Install the receiver end of the inbound UDP forward channel.
+    /// Datagrams sent on the matching sender arrive as
+    /// [`UdpPortForwardRequest`]s and are routed to the guest via a
+    /// per-source NAT entry.
+    pub fn with_udp_port_forward_rx(
+        mut self,
+        udp_port_forward_rx: tokio::sync::mpsc::Receiver<UdpPortForwardRequest>,
+    ) -> Self {
+        self.udp_port_forward_rx = udp_port_forward_rx;
         self
     }
 

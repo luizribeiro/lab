@@ -9,7 +9,7 @@ mod util;
 
 pub use gateway::{
     GatewayStack, GatewayStackConfig, LeasePreallocationError, LeasePreallocator,
-    PortForwardRequest,
+    PortForwardRequest, UdpPortForwardRequest,
 };
 pub use policy::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PacketInfo, PolicyAction,

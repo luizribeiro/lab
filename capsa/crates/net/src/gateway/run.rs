@@ -120,6 +120,10 @@ impl GatewayStack {
                     }
                 }
 
+                Some(request) = self.udp_port_forward_rx.recv() => {
+                    self.udp_port_forward_table.handle_ingress(&mut self.sockets, request);
+                }
+
                 Ok(permit) = tx_to_guest.reserve(), if outbound.pending_len() > 0 => {
                     if let Some(frame) = outbound.pop_next() {
                         permit.send(frame);
@@ -133,6 +137,7 @@ impl GatewayStack {
                     self.dns.cleanup_cache();
                     self.tcp_manager.cleanup(&mut self.sockets);
                     let _ = self.dhcp_server.cleanup_expired(DHCP_LEASE_TIMEOUT);
+                    self.udp_port_forward_table.cleanup_expired(&mut self.sockets);
                 }
             }
 
@@ -140,6 +145,7 @@ impl GatewayStack {
             self.iface
                 .poll(timestamp, &mut self.device, &mut self.sockets);
             self.process_dhcp();
+            self.udp_port_forward_table.poll_replies(&mut self.sockets);
 
             self.tcp_manager.poll_connect_results(&mut self.sockets);
             self.tcp_manager
