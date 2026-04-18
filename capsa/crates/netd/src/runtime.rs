@@ -1,12 +1,17 @@
 use std::future::pending;
 use std::io;
+use std::net::Ipv4Addr;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, NetworkPolicy, VirtualSwitch};
+use capsa_net::{
+    bridge_to_switch, GatewayStack, GatewayStackConfig, LeasePreallocator, NetworkPolicy,
+    PortForwardRequest, VirtualSwitch,
+};
 use capsa_spec::{ControlResponse, NetLaunchSpec};
-use tokio::sync::Mutex;
+use tokio::net::TcpListener;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::control::{run_control_loop, AttachInterface};
@@ -72,7 +77,12 @@ impl NetworkRuntime {
             policy: Some(policy.unwrap_or_else(NetworkPolicy::deny_all)),
             ..GatewayStackConfig::default()
         };
-        let gateway = GatewayStack::new(gateway_port, gateway_config).await;
+        let (port_forward_tx, port_forward_rx) =
+            mpsc::channel::<PortForwardRequest>(PORT_FORWARD_CHANNEL_CAPACITY);
+        let gateway = GatewayStack::new(gateway_port, gateway_config)
+            .await
+            .with_port_forward_rx(port_forward_rx);
+        let preallocator = gateway.lease_preallocator();
         let gateway_task: JoinHandle<io::Result<()>> =
             tokio::spawn(async move { gateway.run().await });
         tasks.lock().await.push(gateway_task);
@@ -86,8 +96,18 @@ impl NetworkRuntime {
             let result = run_control_loop(control_fd, move |iface: AttachInterface| {
                 let tasks = tasks_for_handler.clone();
                 let switch = switch_for_handler.clone();
+                let preallocator = preallocator.clone();
+                let port_forward_tx = port_forward_tx.clone();
                 async move {
-                    match attach_interface_port(iface, switch.as_ref(), &tasks).await {
+                    match attach_interface_port(
+                        iface,
+                        switch.as_ref(),
+                        &tasks,
+                        &preallocator,
+                        &port_forward_tx,
+                    )
+                    .await
+                    {
                         Ok(()) => ControlResponse::Ok,
                         Err(err) => ControlResponse::Error {
                             message: err.to_string(),
@@ -152,37 +172,82 @@ impl NetworkRuntime {
     }
 }
 
+const PORT_FORWARD_CHANNEL_CAPACITY: usize = 64;
+
 async fn attach_interface_port(
     iface: AttachInterface,
     switch: &VirtualSwitch,
     tasks: &TaskHandles,
+    preallocator: &LeasePreallocator,
+    port_forward_tx: &mpsc::Sender<PortForwardRequest>,
 ) -> Result<()> {
     let AttachInterface {
-        mac: _,
+        mac,
         port_forwards,
         host_fd,
     } = iface;
 
-    // TODO(shared-subnet): per-interface port forwards require
-    // knowing the guest's DHCP IP. Plumbing that through the shared
-    // gateway is a follow-up; for now log and drop them.
+    // Bind TCP listeners first: if a host port is unavailable we want
+    // the AddInterface to fail before we stand up the bridge so the
+    // caller sees a clean error instead of a half-wired interface.
+    let mut listeners = Vec::with_capacity(port_forwards.len());
     if !port_forwards.is_empty() {
-        tracing::warn!(
-            count = port_forwards.len(),
-            "AddInterface port_forwards are not yet supported under the shared gateway; ignoring"
-        );
+        let guest_ip = preallocator
+            .preallocate(mac)
+            .await
+            .with_context(|| format!("failed to preallocate DHCP lease for MAC {mac:02x?}"))?;
+
+        for (host_port, guest_port) in port_forwards {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host_port))
+                .await
+                .with_context(|| {
+                    format!("failed to bind TCP port forward listener on host port {host_port}")
+                })?;
+            listeners.push((listener, guest_ip, guest_port));
+        }
     }
 
     let vm_port = switch.create_port().await;
     let bridge_task: JoinHandle<io::Result<()>> =
         tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
-    tasks.lock().await.push(bridge_task);
+
+    let mut task_vec = tasks.lock().await;
+    task_vec.push(bridge_task);
+    for (listener, guest_ip, guest_port) in listeners {
+        let tx = port_forward_tx.clone();
+        let listener_task: JoinHandle<io::Result<()>> = tokio::spawn(async move {
+            run_port_forward_listener(listener, tx, guest_ip, guest_port).await
+        });
+        task_vec.push(listener_task);
+    }
     Ok(())
+}
+
+async fn run_port_forward_listener(
+    listener: TcpListener,
+    tx: mpsc::Sender<PortForwardRequest>,
+    guest_ip: Ipv4Addr,
+    guest_port: u16,
+) -> io::Result<()> {
+    loop {
+        let (stream, _peer_addr) = listener.accept().await?;
+        let request = PortForwardRequest {
+            stream,
+            guest_ip,
+            guest_port,
+        };
+
+        if tx.send(request).await.is_err() {
+            return Ok(());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::run;
+    use super::{attach_interface_port, run};
+    use crate::control::AttachInterface;
+    use capsa_net::{GatewayStack, GatewayStackConfig, VirtualSwitch};
     use capsa_spec::NetLaunchSpec;
     use std::io::Read;
     use std::os::fd::FromRawFd;
@@ -269,5 +334,104 @@ mod tests {
 
         daemon.abort();
         let _ = daemon.await;
+    }
+
+    async fn setup_preallocator_and_channel() -> (
+        capsa_net::LeasePreallocator,
+        tokio::sync::mpsc::Sender<capsa_net::PortForwardRequest>,
+    ) {
+        let switch = VirtualSwitch::new();
+        let gateway_port = switch.create_port().await;
+        let (pf_tx, pf_rx) = tokio::sync::mpsc::channel(16);
+        let gateway = GatewayStack::new(gateway_port, GatewayStackConfig::default())
+            .await
+            .with_port_forward_rx(pf_rx);
+        let preallocator = gateway.lease_preallocator();
+        tokio::spawn(async move { gateway.run().await });
+        (preallocator, pf_tx)
+    }
+
+    fn dummy_host_fd() -> std::os::fd::OwnedFd {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use std::os::fd::{AsFd, OwnedFd};
+        let (a, _b) = socketpair(
+            AddressFamily::Unix,
+            SockType::Datagram,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("socketpair");
+        OwnedFd::from(a.as_fd().try_clone_to_owned().expect("clone"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_interface_port_binds_host_listener() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (preallocator, pf_tx) = setup_preallocator_and_channel().await;
+        let switch = Arc::new(VirtualSwitch::new());
+        let tasks = Arc::new(Mutex::new(Vec::new()));
+
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("probe bind");
+        let host_port = probe.local_addr().expect("local_addr").port();
+        drop(probe);
+
+        let iface = AttachInterface {
+            mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x10],
+            port_forwards: vec![(host_port, 80)],
+            host_fd: dummy_host_fd(),
+        };
+
+        attach_interface_port(iface, switch.as_ref(), &tasks, &preallocator, &pf_tx)
+            .await
+            .expect("attach should succeed");
+
+        // Listener + bridge tasks should have been spawned.
+        assert_eq!(tasks.lock().await.len(), 2);
+
+        // The host port should now be bound by our listener.
+        let rebind = tokio::net::TcpListener::bind(("127.0.0.1", host_port)).await;
+        assert!(
+            rebind.is_err(),
+            "host_port {host_port} should already be bound by the forward listener"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_interface_port_fails_when_host_port_busy() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (preallocator, pf_tx) = setup_preallocator_and_channel().await;
+        let switch = Arc::new(VirtualSwitch::new());
+        let tasks = Arc::new(Mutex::new(Vec::new()));
+
+        let blocker = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("blocker bind");
+        let host_port = blocker.local_addr().expect("local_addr").port();
+
+        let iface = AttachInterface {
+            mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x11],
+            port_forwards: vec![(host_port, 80)],
+            host_fd: dummy_host_fd(),
+        };
+
+        let err = attach_interface_port(iface, switch.as_ref(), &tasks, &preallocator, &pf_tx)
+            .await
+            .expect_err("bind on busy port should fail");
+        assert!(
+            err.to_string().contains("failed to bind"),
+            "unexpected: {err}"
+        );
+        assert!(
+            tasks.lock().await.is_empty(),
+            "no bridge task should be spawned when bind fails"
+        );
+
+        drop(blocker);
     }
 }
