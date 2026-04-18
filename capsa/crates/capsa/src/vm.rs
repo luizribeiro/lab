@@ -149,6 +149,14 @@ impl VmBuilder {
     }
 }
 
+/// A handle to a running VM. Single-owner: dropping `VmHandle`
+/// SIGKILLs the vmm child, so the type is intentionally not `Clone`.
+/// If you need to observe the VM from multiple places, share the
+/// handle behind an `Arc<Mutex<…>>` or pass `&mut self` methods
+/// through a supervisor.
+///
+/// Attached networks outlive the VM only as long as the caller holds
+/// their own [`NetworkHandle`] clones.
 pub struct VmHandle {
     inner: VmProcesses,
     // Held across the VM's lifetime so the network daemons it

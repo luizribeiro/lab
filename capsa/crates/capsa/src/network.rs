@@ -29,9 +29,12 @@ impl Network {
     }
 }
 
-/// Handle to a running network daemon. Cheaply cloneable — every
-/// clone shares the same daemon. SIGKILLs the daemon when the last
-/// clone is dropped.
+/// Handle to a running network daemon.
+///
+/// Unlike [`VmHandle`](crate::VmHandle), `NetworkHandle` is `Clone` —
+/// every clone refcounts the same underlying daemon. The daemon stays
+/// alive as long as at least one clone exists; the last drop SIGKILLs
+/// it. Clone freely to attach the same network to many VMs.
 #[derive(Clone)]
 pub struct NetworkHandle {
     #[allow(dead_code)]
