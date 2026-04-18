@@ -10,11 +10,6 @@ pub struct Vm {
 }
 
 impl Vm {
-    #[doc(hidden)]
-    pub fn __into_core_config(self) -> VmConfig {
-        self.config
-    }
-
     /// Spawn the VM's supervisor processes and return a
     /// [`VmHandle`]. The handle blocks the VM's lifecycle until you
     /// call [`VmHandle::wait`], or dropped it to SIGKILL both

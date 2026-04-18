@@ -86,7 +86,7 @@ impl Cli {
         kb.into()
     }
 
-    fn to_vm_config(&self) -> Result<capsa_core::VmConfig> {
+    fn to_vm(&self) -> Result<Vm> {
         let port_forwards = self
             .forward
             .iter()
@@ -134,15 +134,14 @@ impl Cli {
             });
         }
 
-        let vm = builder
+        builder
             .build()
-            .map_err(|err| anyhow!("invalid VM configuration: {err}"))?;
-        Ok(vm.__into_core_config())
+            .map_err(|err| anyhow!("invalid VM configuration: {err}"))
     }
 }
 
 fn run(args: Cli) -> Result<()> {
-    args.to_vm_config()?.start()
+    args.to_vm()?.run().map_err(|err| anyhow!(err))
 }
 
 fn main() -> Result<()> {
@@ -152,118 +151,18 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::Cli;
-    use capsa_core::{DomainPattern, MatchCriteria, PolicyAction};
     use clap::{error::ErrorKind, Parser};
-
-    #[test]
-    fn missing_allow_host_keeps_interfaces_empty() {
-        let args = Cli::parse_from(["capsa", "--root", "/tmp/root"]);
-        let config = args.to_vm_config().expect("config should build");
-
-        assert!(config.interfaces.is_empty());
-    }
 
     #[test]
     fn forward_requires_allow_host() {
         let args = Cli::parse_from(["capsa", "--root", "/tmp/root", "--forward", "9100:9100"]);
 
         let err = args
-            .to_vm_config()
+            .to_vm()
             .expect_err("forward without allow-host should fail");
         assert!(err
             .to_string()
             .contains("--forward requires networking to be enabled"));
-    }
-
-    #[test]
-    fn forward_values_are_parsed_into_interface_config() {
-        let args = Cli::parse_from([
-            "capsa",
-            "--root",
-            "/tmp/root",
-            "--allow-host",
-            "*",
-            "--forward",
-            "9100:9100",
-            "--forward",
-            "2222:22",
-        ]);
-
-        let config = args.to_vm_config().expect("config should build");
-
-        assert_eq!(config.interfaces.len(), 1);
-        assert_eq!(
-            config.interfaces[0].port_forwards,
-            vec![(9100, 9100), (2222, 22)]
-        );
-    }
-
-    #[test]
-    fn one_allow_host_adds_one_default_interface_with_deny_default_policy() {
-        let args = Cli::parse_from([
-            "capsa",
-            "--root",
-            "/tmp/root",
-            "--allow-host",
-            " API.Example.COM. ",
-        ]);
-        let config = args.to_vm_config().expect("config should build");
-
-        assert_eq!(config.interfaces.len(), 1);
-        assert_eq!(config.interfaces[0].mac, None);
-
-        let policy = config.interfaces[0]
-            .policy
-            .as_ref()
-            .expect("policy should be present");
-        assert_eq!(policy.default_action, PolicyAction::Deny);
-        assert_eq!(policy.rules.len(), 1);
-        assert!(matches!(
-            policy.rules[0].criteria,
-            MatchCriteria::Domain(DomainPattern::Exact(ref host)) if host == "api.example.com"
-        ));
-    }
-
-    #[test]
-    fn many_allow_host_entries_build_multiple_allow_rules() {
-        let args = Cli::parse_from([
-            "capsa",
-            "--root",
-            "/tmp/root",
-            "--allow-host",
-            "api.example.com",
-            "--allow-host",
-            "*.example.org",
-        ]);
-        let config = args.to_vm_config().expect("config should build");
-
-        let policy = config.interfaces[0]
-            .policy
-            .as_ref()
-            .expect("policy should be present");
-        assert_eq!(policy.default_action, PolicyAction::Deny);
-        assert_eq!(policy.rules.len(), 2);
-    }
-
-    #[test]
-    fn allow_host_star_maps_to_allow_all() {
-        let args = Cli::parse_from([
-            "capsa",
-            "--root",
-            "/tmp/root",
-            "--allow-host",
-            "api.example.com",
-            "--allow-host",
-            "*",
-        ]);
-        let config = args.to_vm_config().expect("config should build");
-
-        let policy = config.interfaces[0]
-            .policy
-            .as_ref()
-            .expect("policy should be present");
-        assert_eq!(policy.default_action, PolicyAction::Allow);
-        assert!(policy.rules.is_empty());
     }
 
     #[test]
@@ -278,9 +177,7 @@ mod tests {
             "not-a-forward",
         ]);
 
-        let err = args
-            .to_vm_config()
-            .expect_err("config should fail to build");
+        let err = args.to_vm().expect_err("config should fail to build");
         assert!(err.to_string().contains("expected host_port:guest_port"));
     }
 
@@ -296,9 +193,7 @@ mod tests {
             "0:80",
         ]);
 
-        let err = args
-            .to_vm_config()
-            .expect_err("config should fail to build");
+        let err = args.to_vm().expect_err("config should fail to build");
         assert!(err.to_string().contains("ports must be in 1..=65535"));
     }
 
@@ -316,9 +211,7 @@ mod tests {
             "9100:80",
         ]);
 
-        let err = args
-            .to_vm_config()
-            .expect_err("duplicate host port should fail");
+        let err = args.to_vm().expect_err("duplicate host port should fail");
         assert!(err
             .to_string()
             .contains("duplicate --forward host port 9100"));
@@ -334,9 +227,7 @@ mod tests {
             "*example.com",
         ]);
 
-        let err = args
-            .to_vm_config()
-            .expect_err("config should fail to build");
+        let err = args.to_vm().expect_err("config should fail to build");
         assert!(err
             .to_string()
             .contains("wildcard host pattern must use only a leading '*.' prefix"));

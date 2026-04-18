@@ -11,7 +11,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 capsa = { path = "../capsa" }
-capsa-core = { path = "../core" }
 clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
