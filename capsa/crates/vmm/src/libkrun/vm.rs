@@ -12,12 +12,12 @@ use crate::boot::kernel_format::{detect_kernel_image_format, KernelImageFormat};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 
-pub(crate) fn init_logging(verbosity: u8) -> Result<()> {
-    let level = match verbosity {
-        0 => ffi::KRUN_LOG_LEVEL_ERROR,
-        1 => ffi::KRUN_LOG_LEVEL_INFO,
-        _ => ffi::KRUN_LOG_LEVEL_DEBUG,
-    };
+/// Initialize libkrun's stderr logger. Log level is taken from the
+/// `CAPSA_VMM_LOG` environment variable (case-insensitive), defaulting
+/// to `error`. Unknown values also fall back to `error` so a typo
+/// never crashes a VM launch.
+pub(crate) fn init_logging() -> Result<()> {
+    let level = log_level_from_env();
 
     // SAFETY: primitive scalar arguments to libkrun.
     check_rc(
@@ -31,6 +31,18 @@ pub(crate) fn init_logging(verbosity: u8) -> Result<()> {
         },
         "failed to initialize libkrun logging",
     )
+}
+
+fn log_level_from_env() -> u32 {
+    parse_log_level(std::env::var("CAPSA_VMM_LOG").ok().as_deref())
+}
+
+fn parse_log_level(raw: Option<&str>) -> u32 {
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("info") => ffi::KRUN_LOG_LEVEL_INFO,
+        Some("debug") => ffi::KRUN_LOG_LEVEL_DEBUG,
+        _ => ffi::KRUN_LOG_LEVEL_ERROR,
+    }
 }
 
 pub(crate) struct Created;
@@ -242,7 +254,24 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
 
 #[cfg(test)]
 mod tests {
-    use super::add_network_unixstream_with;
+    use super::{add_network_unixstream_with, ffi, parse_log_level};
+
+    #[test]
+    fn parse_log_level_defaults_to_error() {
+        assert_eq!(parse_log_level(None), ffi::KRUN_LOG_LEVEL_ERROR);
+        assert_eq!(parse_log_level(Some("")), ffi::KRUN_LOG_LEVEL_ERROR);
+        assert_eq!(parse_log_level(Some("nonsense")), ffi::KRUN_LOG_LEVEL_ERROR);
+    }
+
+    #[test]
+    fn parse_log_level_is_case_insensitive() {
+        assert_eq!(parse_log_level(Some("info")), ffi::KRUN_LOG_LEVEL_INFO);
+        assert_eq!(parse_log_level(Some("INFO")), ffi::KRUN_LOG_LEVEL_INFO);
+        assert_eq!(
+            parse_log_level(Some("  Debug  ")),
+            ffi::KRUN_LOG_LEVEL_DEBUG
+        );
+    }
 
     #[test]
     fn add_network_unixstream_succeeds_on_non_negative_rc() {

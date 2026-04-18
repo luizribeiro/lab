@@ -8,7 +8,7 @@ mod libkrun;
 pub fn start_vm(spec: &VmmLaunchSpec) -> Result<()> {
     spec.validate()?;
 
-    libkrun::init_logging(spec.verbosity)?;
+    libkrun::init_logging()?;
 
     let vm = libkrun::KrunVm::new()?
         .configure(spec.vcpus, spec.memory_mib)?
