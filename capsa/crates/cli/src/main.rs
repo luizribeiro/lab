@@ -41,6 +41,24 @@ struct Cli {
     verbose: u8,
 }
 
+/// Assemble the kernel command line the CLI wants to boot with. This
+/// is CLI-layer policy — library users pass their own cmdline through
+/// `Boot::kernel(..).cmdline(..)` directly and none of this logic
+/// applies to them.
+fn assemble_kernel_cmdline(verbose: u8, user_cmdline: Option<&str>) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if verbose == 0 {
+        parts.push("quiet loglevel=0");
+    } else {
+        parts.push("capsa_init_verbose=1");
+    }
+    let user = user_cmdline.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(user) = user {
+        parts.push(user);
+    }
+    parts.join(" ")
+}
+
 fn parse_port_forward(value: &str) -> Result<(u16, u16)> {
     let (host, guest) = value.split_once(':').ok_or_else(|| {
         anyhow!("invalid --forward value '{value}': expected host_port:guest_port")
@@ -68,8 +86,9 @@ impl Cli {
         if let Some(initramfs) = &self.initramfs {
             kb = kb.initramfs(initramfs.clone());
         }
-        if let Some(cmdline) = &self.kernel_cmdline {
-            kb = kb.cmdline(cmdline.clone());
+        let cmdline = assemble_kernel_cmdline(self.verbose, self.kernel_cmdline.as_deref());
+        if !cmdline.is_empty() {
+            kb = kb.cmdline(cmdline);
         }
         kb.into()
     }
@@ -147,8 +166,35 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{assemble_kernel_cmdline, Cli};
     use clap::{error::ErrorKind, Parser};
+
+    #[test]
+    fn assemble_kernel_cmdline_is_quiet_at_verbose_zero() {
+        let cmdline = assemble_kernel_cmdline(0, None);
+        assert_eq!(cmdline, "quiet loglevel=0");
+    }
+
+    #[test]
+    fn assemble_kernel_cmdline_switches_to_verbose_init_at_verbose_one() {
+        let cmdline = assemble_kernel_cmdline(1, None);
+        assert_eq!(cmdline, "capsa_init_verbose=1");
+
+        let cmdline = assemble_kernel_cmdline(3, None);
+        assert_eq!(cmdline, "capsa_init_verbose=1");
+    }
+
+    #[test]
+    fn assemble_kernel_cmdline_appends_user_segment() {
+        let cmdline = assemble_kernel_cmdline(0, Some("console=hvc0 rdinit=/init"));
+        assert_eq!(cmdline, "quiet loglevel=0 console=hvc0 rdinit=/init");
+    }
+
+    #[test]
+    fn assemble_kernel_cmdline_ignores_empty_user_segment() {
+        assert_eq!(assemble_kernel_cmdline(0, Some("")), "quiet loglevel=0");
+        assert_eq!(assemble_kernel_cmdline(0, Some("   ")), "quiet loglevel=0");
+    }
 
     #[test]
     fn forward_requires_allow_host() {
