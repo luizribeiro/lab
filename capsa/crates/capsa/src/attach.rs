@@ -21,9 +21,9 @@ mod sealed {
 /// this. See the [module-level docs](self) for the rationale.
 pub trait Attachable: sealed::Sealed {
     /// Per-attachment configuration (MAC overrides, port forwards,
-    /// etc.). Must have a sensible default so bare
-    /// [`attach`](crate::VmBuilder::attach) works without a closure.
-    type Attachment: Default;
+    /// etc.). Constructed internally by `attach_with` and handed to
+    /// the user's configuration closure.
+    type Attachment;
 }
 
 #[doc(hidden)]
@@ -32,6 +32,7 @@ pub mod __private {
     use crate::network::NetworkHandle;
 
     pub trait AttachApply: Attachable {
+        fn default_attachment() -> Self::Attachment;
         fn apply(&self, attachment: Self::Attachment, ctx: &mut AttachCtx);
     }
 
@@ -62,17 +63,28 @@ pub struct PortForward {
     pub guest: u16,
 }
 
-/// Per-VM attachment configuration for a [`NetworkHandle`].
+/// Per-VM attachment configuration for a [`NetworkHandle`]. Users
+/// never construct this directly — it arrives as the argument to
+/// the closure passed to
+/// [`VmBuilder::attach_with`](crate::VmBuilder::attach_with), and
+/// the method chain in the closure (`|a| a.mac(…).forward(…)`)
+/// returns it back.
 ///
-/// Received by the closure passed to
-/// [`VmBuilder::attach_with`](crate::VmBuilder::attach_with); the
-/// default has no MAC override (one is generated) and no port
-/// forwards. Builder-style setters consume and return `self` so the
-/// closure body can be written as a single `.forward(…).…` chain.
-#[derive(Debug, Clone, Default)]
+/// The starting state has no MAC override (one is generated) and
+/// no port forwards.
+#[derive(Debug, Clone)]
 pub struct NetworkAttach {
     pub(crate) mac: Option<[u8; 6]>,
     pub(crate) port_forwards: Vec<(u16, u16)>,
+}
+
+impl NetworkAttach {
+    pub(crate) fn new() -> Self {
+        Self {
+            mac: None,
+            port_forwards: Vec::new(),
+        }
+    }
 }
 
 impl NetworkAttach {
@@ -87,12 +99,16 @@ impl NetworkAttach {
     /// Forward a host TCP port to a guest TCP port. Call multiple
     /// times to forward multiple ports; order is preserved.
     ///
-    /// ```
-    /// use capsa::{NetworkAttach, PortForward};
-    /// let attach = NetworkAttach::default()
-    ///     .forward(PortForward { host: 8080, guest: 80 })
-    ///     .forward(PortForward { host: 8443, guest: 443 });
-    /// # drop(attach);
+    /// ```no_run
+    /// # use capsa::{Boot, Network, PortForward, Vm};
+    /// # let net = Network::builder().build()?.start()?;
+    /// Vm::builder(Boot::root("/rootfs"))
+    ///     .attach_with(&net, |a| {
+    ///         a.forward(PortForward { host: 8080, guest: 80 })
+    ///             .forward(PortForward { host: 8443, guest: 443 })
+    ///     })
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn forward(mut self, forward: PortForward) -> Self {
         self.port_forwards.push((forward.host, forward.guest));
@@ -107,6 +123,10 @@ impl Attachable for NetworkHandle {
 }
 
 impl __private::AttachApply for NetworkHandle {
+    fn default_attachment() -> NetworkAttach {
+        NetworkAttach::new()
+    }
+
     fn apply(&self, attachment: NetworkAttach, ctx: &mut __private::AttachCtx) {
         ctx.attachments.push(NetworkAttachment {
             handle: self.clone(),
@@ -121,20 +141,20 @@ mod tests {
 
     #[test]
     fn network_attach_defaults_are_empty() {
-        let attach = NetworkAttach::default();
+        let attach = NetworkAttach::new();
         assert_eq!(attach.mac, None);
         assert!(attach.port_forwards.is_empty());
     }
 
     #[test]
     fn network_attach_sets_mac() {
-        let attach = NetworkAttach::default().mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
+        let attach = NetworkAttach::new().mac([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]);
         assert_eq!(attach.mac, Some([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]));
     }
 
     #[test]
     fn network_attach_accumulates_forwards_in_order() {
-        let attach = NetworkAttach::default()
+        let attach = NetworkAttach::new()
             .forward(PortForward {
                 host: 8080,
                 guest: 80,

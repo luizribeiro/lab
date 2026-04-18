@@ -132,7 +132,7 @@ impl VmBuilder {
     where
         D: Attachable + AttachApply,
     {
-        device.apply(D::Attachment::default(), &mut self.ctx);
+        device.apply(D::default_attachment(), &mut self.ctx);
         self
     }
 
@@ -155,7 +155,7 @@ impl VmBuilder {
         D: Attachable + AttachApply,
         F: FnOnce(D::Attachment) -> D::Attachment,
     {
-        let attachment = configure(D::Attachment::default());
+        let attachment = configure(D::default_attachment());
         device.apply(attachment, &mut self.ctx);
         self
     }
