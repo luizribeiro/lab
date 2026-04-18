@@ -147,9 +147,14 @@ mod tests {
     use crate::lifecycle::test_helpers::{
         env_lock, fake_netd_path, find_binary_on_path, unique_temp_path, EnvVarGuard,
     };
-    use crate::{VmConfig, VmNetworkInterfaceConfig};
+    use crate::lifecycle::NetworkProcesses;
+    use crate::VmConfig;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixDatagram;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
+
+    use super::{VmAttachment, VmProcesses};
 
     fn make_temp_file(prefix: &str, contents: &[u8]) -> PathBuf {
         let path = unique_temp_path(prefix);
@@ -158,19 +163,8 @@ mod tests {
     }
 
     fn make_temp_executable_script(prefix: &str, body: &str) -> PathBuf {
-        // Test scripts emulate netd, which receives its launch
-        // spec as the argument to `--launch-spec-json`. Extract
-        // `ready_fd` from that JSON so the body can reference it
-        // as `$READY_FD` without hardcoding a kernel-assigned fd.
-        let prelude = r#"
-case "$1" in
-  --launch-spec-json)
-    READY_FD=$(printf '%s' "$2" | sed -n 's/.*"ready_fd":\([0-9]*\).*/\1/p')
-    ;;
-esac
-"#;
         let path = unique_temp_path(prefix);
-        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{prelude}\n{body}\n"))
+        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n"))
             .expect("script file should be written");
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&path)
@@ -194,14 +188,18 @@ esac
         }
     }
 
-    fn sample_networked_config() -> VmConfig {
-        let mut config = sample_config();
-        config.interfaces = vec![VmNetworkInterfaceConfig {
-            mac: None,
-            policy: None,
-            port_forwards: vec![],
-        }];
-        config
+    /// Create a host/guest socketpair and return the guest-side
+    /// `VmAttachment` plus the host-side fd (to be handed to
+    /// `NetworkProcesses::attach`).
+    fn make_attachment(mac: [u8; 6]) -> (VmAttachment, OwnedFd) {
+        let (host, guest) = UnixDatagram::pair().expect("socketpair");
+        (
+            VmAttachment {
+                mac,
+                guest_fd: guest.into(),
+            },
+            host.into(),
+        )
     }
 
     fn read_pid_file_with_timeout(path: &Path, timeout: Duration) -> u32 {
@@ -242,34 +240,10 @@ esac
         panic!("process {pid} should have exited within {timeout:?}");
     }
 
-    // ── validation path ──────────────────────────────────────
+    // ── no-network path (spawn_with_attachments, empty) ──────
 
     #[test]
-    fn start_rejects_multiple_interfaces_before_spawning_anything() {
-        let mut config = sample_config();
-        config.interfaces = vec![
-            VmNetworkInterfaceConfig {
-                mac: None,
-                policy: None,
-                port_forwards: vec![],
-            },
-            VmNetworkInterfaceConfig {
-                mac: None,
-                policy: None,
-                port_forwards: vec![],
-            },
-        ];
-
-        let err = config.start().expect_err("start should fail validation");
-        let rendered = format!("{err:#}");
-        assert!(rendered.contains("invalid VM configuration"));
-        assert!(rendered.contains("multiple network interfaces are not supported yet"));
-    }
-
-    // ── no-network path ──────────────────────────────────────
-
-    #[test]
-    fn no_network_start_succeeds_when_vmm_exits_zero() {
+    fn spawn_with_empty_attachments_succeeds_when_vmm_exits_zero() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -277,13 +251,13 @@ esac
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_true);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        sample_config()
-            .start()
-            .expect("no-network start should succeed for zero exit");
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
+            .expect("spawn_with_attachments should succeed");
+        processes.wait().expect("wait should succeed for exit 0");
     }
 
     #[test]
-    fn no_network_start_does_not_require_netd_binary() {
+    fn spawn_with_empty_attachments_does_not_require_netd_binary() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -293,13 +267,13 @@ esac
             EnvVarGuard::set_path("CAPSA_NETD_PATH", Path::new("/definitely/missing/netd"));
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        sample_config()
-            .start()
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
             .expect("no-network path should not try to spawn netd");
+        processes.wait().expect("wait should succeed");
     }
 
     #[test]
-    fn no_network_start_reports_vmm_spawn_failure() {
+    fn spawn_with_empty_attachments_reports_vmm_spawn_failure() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -307,15 +281,13 @@ esac
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let err = sample_config()
-            .start()
-            .expect_err("no-network start should fail when VMM cannot be spawned");
+        let err = match VmProcesses::spawn_with_attachments(&sample_config(), vec![]) {
+            Ok(_) => panic!("spawn should fail when VMM cannot be resolved"),
+            Err(err) => err,
+        };
 
         let _ = std::fs::remove_file(non_executable);
 
-        // resolve_binary now catches non-executable files up
-        // front, so the error points at resolution rather than
-        // `Command::spawn`.
         let rendered = format!("{err:#}");
         assert!(
             rendered.contains("failed to resolve VMM binary"),
@@ -324,7 +296,7 @@ esac
     }
 
     #[test]
-    fn no_network_start_propagates_vmm_non_zero_exit_status() {
+    fn spawn_with_empty_attachments_propagates_vmm_non_zero_exit_status() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -332,97 +304,33 @@ esac
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm_false);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let err = sample_config()
-            .start()
-            .expect_err("no-network start should fail for non-zero VMM exit");
-        let rendered = format!("{err:#}");
-        assert!(rendered.contains("sandboxed VMM process exited with status"));
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
+            .expect("spawn should succeed");
+        let err = processes.wait().expect_err("non-zero exit should fail");
+        assert!(format!("{err:#}").contains("sandboxed VMM process exited with status"));
     }
 
-    // ── network path ─────────────────────────────────────────
+    // ── networked path (external NetworkProcesses) ──────────
 
     #[test]
-    fn network_start_aborts_when_netd_readiness_times_out() {
+    fn spawn_with_external_network_succeeds_end_to_end() {
         let _env_lock = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let netd = fake_netd_path();
-        let vmm = find_binary_on_path("true");
-        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
-        let _skip_ready = EnvVarGuard::set("FAKE_NETD_SKIP_READY", "1");
-        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &fake_netd_path());
+        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &find_binary_on_path("true"));
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let err = sample_networked_config()
-            .start()
-            .expect_err("startup should fail if netd does not signal readiness");
+        let network = NetworkProcesses::spawn(None).expect("spawn fake netd");
+        let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        let (attachment, host_fd) = make_attachment(mac);
+        network
+            .attach(mac, vec![], &host_fd)
+            .expect("attach interface via control socket");
 
-        assert!(format!("{err:#}").contains("timed out waiting for net daemon readiness signal"));
-    }
-
-    #[test]
-    fn network_start_vmm_spawn_failure_tears_down_netd() {
-        let _env_lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let netd_pid_file = unique_temp_path("capsa-netd-pid");
-        let netd = fake_netd_path();
-        let non_executable_vmm = make_temp_file("capsa-vmm-non-executable", b"not executable");
-
-        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
-        let _pid_file_guard = EnvVarGuard::set_path("FAKE_NETD_PID_FILE", &netd_pid_file);
-        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &non_executable_vmm);
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-
-        let err = sample_networked_config()
-            .start()
-            .expect_err("VMM spawn failure should fail startup");
-
-        let netd_pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
-        wait_for_process_exit(netd_pid, Duration::from_secs(4));
-
-        let _ = std::fs::remove_file(netd_pid_file);
-        let _ = std::fs::remove_file(non_executable_vmm);
-
-        let rendered = format!("{err:#}");
-        assert!(
-            rendered.contains("failed to spawn sandboxed VMM process")
-                || rendered.contains("failed to resolve VMM binary"),
-            "unexpected: {rendered}"
-        );
-    }
-
-    #[test]
-    fn network_start_netd_runtime_exit_tears_down_vmm() {
-        let _env_lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let vmm_pid_file = unique_temp_path("capsa-vmm-pid");
-        let vmm = make_temp_executable_script(
-            "capsa-vmm-loop",
-            &format!(
-                "echo $$ > '{}'\nwhile true; do sleep 1; done",
-                vmm_pid_file.display()
-            ),
-        );
-        let netd = fake_netd_path();
-
-        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
-        let _netd_exit = EnvVarGuard::set("FAKE_NETD_EXIT_AFTER_READY_MS", "500");
-        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-
-        let err = sample_networked_config()
-            .start()
-            .expect_err("net daemon runtime exit should fail launcher");
-
-        let vmm_pid = read_pid_file_with_timeout(&vmm_pid_file, Duration::from_secs(2));
-        wait_for_process_exit(vmm_pid, Duration::from_secs(4));
-
-        let _ = std::fs::remove_file(vmm_pid_file);
-        let _ = std::fs::remove_file(vmm);
-
-        assert!(format!("{err:#}").contains("network daemon exited unexpectedly"));
+        let mut processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![attachment])
+            .expect("spawn with attachment");
+        processes.wait().expect("wait should succeed for exit 0");
     }
 
     #[test]
@@ -442,7 +350,8 @@ esac
         let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
         let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
 
-        let processes = super::VmProcesses::spawn(&sample_config()).expect("spawn should succeed");
+        let processes = VmProcesses::spawn_with_attachments(&sample_config(), vec![])
+            .expect("spawn should succeed");
         let pid = read_pid_file_with_timeout(&vmm_pid_file, Duration::from_secs(2));
 
         let started = Instant::now();
@@ -458,29 +367,5 @@ esac
             elapsed < Duration::from_secs(1),
             "drop should SIGKILL immediately, not wait the 2s SIGTERM grace; elapsed = {elapsed:?}"
         );
-    }
-
-    #[test]
-    fn network_start_vmm_exit_tears_down_netd() {
-        let _env_lock = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let netd_pid_file = unique_temp_path("capsa-netd-pid");
-        let netd = fake_netd_path();
-        let vmm = find_binary_on_path("true");
-
-        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &netd);
-        let _pid_file_guard = EnvVarGuard::set_path("FAKE_NETD_PID_FILE", &netd_pid_file);
-        let _vmm_guard = EnvVarGuard::set_path("CAPSA_VMM_PATH", &vmm);
-        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
-
-        sample_networked_config()
-            .start()
-            .expect("VMM zero exit should propagate success");
-
-        let netd_pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
-        wait_for_process_exit(netd_pid, Duration::from_secs(4));
-
-        let _ = std::fs::remove_file(netd_pid_file);
     }
 }

@@ -104,3 +104,93 @@ fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
     }
     builder
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lifecycle::test_helpers::{env_lock, fake_netd_path, unique_temp_path, EnvVarGuard};
+    use std::time::{Duration, Instant};
+
+    fn read_pid_file_with_timeout(path: &Path, timeout: Duration) -> u32 {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(raw) = std::fs::read_to_string(path) {
+                return raw
+                    .trim()
+                    .parse::<u32>()
+                    .expect("pid file should contain a valid pid");
+            }
+            if Instant::now() >= deadline {
+                panic!("pid file {} did not appear in time", path.display());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        // SAFETY: `kill(pid, 0)` does not send a signal; it is
+        // only used for existence probing.
+        let rc = unsafe { libc::kill(pid as i32, 0) };
+        if rc == 0 {
+            return true;
+        }
+        let err = std::io::Error::last_os_error();
+        matches!(err.raw_os_error(), Some(libc::EPERM))
+    }
+
+    fn wait_for_process_exit(pid: u32, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("process {pid} should have exited within {timeout:?}");
+    }
+
+    #[test]
+    fn spawn_fails_when_netd_readiness_times_out() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &fake_netd_path());
+        let _skip_ready = EnvVarGuard::set("FAKE_NETD_SKIP_READY", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let err = match NetworkProcesses::spawn(None) {
+            Ok(_) => panic!("spawn should fail without readiness signal"),
+            Err(err) => err,
+        };
+        assert!(format!("{err:#}").contains("timed out waiting for net daemon readiness signal"));
+    }
+
+    #[test]
+    fn dropping_network_processes_sigkills_netd() {
+        let _env_lock = env_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let netd_pid_file = unique_temp_path("capsa-netd-drop-pid");
+        let _netd_guard = EnvVarGuard::set_path("CAPSA_NETD_PATH", &fake_netd_path());
+        let _pid_file_guard = EnvVarGuard::set_path("FAKE_NETD_PID_FILE", &netd_pid_file);
+        // Trap SIGTERM so only SIGKILL can terminate the fake netd.
+        let _trap_guard = EnvVarGuard::set("FAKE_NETD_TRAP_SIGTERM", "1");
+        let _sandbox_guard = EnvVarGuard::set("CAPSA_DISABLE_SANDBOX", "1");
+
+        let network = NetworkProcesses::spawn(None).expect("spawn netd");
+        let pid = read_pid_file_with_timeout(&netd_pid_file, Duration::from_secs(2));
+
+        let started = Instant::now();
+        drop(network);
+        let elapsed = started.elapsed();
+
+        wait_for_process_exit(pid, Duration::from_secs(2));
+
+        let _ = std::fs::remove_file(&netd_pid_file);
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "drop should SIGKILL immediately; elapsed = {elapsed:?}"
+        );
+    }
+}
