@@ -5,7 +5,7 @@ pub use capsa_net::{
     DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
 };
 pub use config::{VmConfig, VmNetworkInterfaceConfig};
-pub use lifecycle::VmProcesses;
+pub use lifecycle::{NetworkProcesses, VmProcesses};
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {

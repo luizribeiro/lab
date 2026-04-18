@@ -31,6 +31,8 @@ mod control_client;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod netd;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod network;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod orchestrate;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod plan;
@@ -39,6 +41,8 @@ mod test_helpers;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vmm;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use network::NetworkProcesses;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use orchestrate::VmProcesses;
 

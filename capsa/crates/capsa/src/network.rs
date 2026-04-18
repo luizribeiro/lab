@@ -1,6 +1,10 @@
-use capsa_core::{DomainPattern, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule};
+use std::sync::Arc;
 
-use crate::error::BuildError;
+use capsa_core::{
+    DomainPattern, MatchCriteria, NetworkPolicy, NetworkProcesses, PolicyAction, PolicyRule,
+};
+
+use crate::error::{BuildError, StartError};
 
 #[derive(Debug, Clone)]
 pub struct Network {
@@ -11,6 +15,27 @@ impl Network {
     pub fn builder() -> NetworkBuilder {
         NetworkBuilder::default()
     }
+
+    /// Spawn the network daemon and return a [`NetworkHandle`] that
+    /// VMs can attach to. The daemon stays alive as long as at least
+    /// one clone of the returned handle exists; the last drop
+    /// SIGKILLs it.
+    pub fn start(&self) -> Result<NetworkHandle, StartError> {
+        let processes =
+            NetworkProcesses::spawn(Some(self.policy.clone())).map_err(StartError::new)?;
+        Ok(NetworkHandle {
+            inner: Arc::new(processes),
+        })
+    }
+}
+
+/// Handle to a running network daemon. Cheaply cloneable — every
+/// clone shares the same daemon. SIGKILLs the daemon when the last
+/// clone is dropped.
+#[derive(Clone)]
+pub struct NetworkHandle {
+    #[allow(dead_code)]
+    pub(crate) inner: Arc<NetworkProcesses>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -7,5 +7,5 @@ mod vm;
 pub use self::attach::{Attachable, NetworkAttach};
 pub use self::boot::{Boot, KernelBoot};
 pub use self::error::{BuildError, RuntimeError, StartError};
-pub use self::network::{Network, NetworkBuilder};
+pub use self::network::{Network, NetworkBuilder, NetworkHandle};
 pub use self::vm::{Vm, VmBuilder, VmHandle};
