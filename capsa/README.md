@@ -144,10 +144,14 @@ let vm = Vm::builder(Boot::root("/rootfs"))
 ```
 
 `.attach` / `.attach_with` are generic over `Attachable`, so future
-device types plug in through the same pattern:
+device types shipped in-tree (disks, GPU passthrough, …) will plug
+in through the same pattern. The trait is **sealed**: third-party
+crates can't add device types — attachments touch the vmm's fd
+table and sandbox policy, which we don't expose as an unstable
+extension point.
 
 ```rust,ignore
-// Future API
+// Future in-tree API
 let vm = Vm::builder(Boot::root("/rootfs"))
     .attach(&api_net)
     .attach_with(&scratch_disk, |d| d.mount("/var/lib/data"))
