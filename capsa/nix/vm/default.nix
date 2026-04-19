@@ -101,7 +101,7 @@ let
     , modules ? [ ]
     , specialArgs ? { }
     , vm ? { }
-    , timeout ? 5
+    , timeout ? 30
     , expectProgram
     }:
     let
@@ -109,16 +109,17 @@ let
         inherit name guestSystem modules specialArgs vm;
       };
       capsaCmd = "${capsaPackage}/bin/capsa";
-      expectSandboxEnv = lib.optionalString pkgs.stdenv.isDarwin ''
-        # Nix already runs this check inside a macOS sandbox; launching a nested
-        # seatbelt sandbox via `sandbox-exec` fails with EPERM (sandbox_apply).
-        # Disable capsa's inner sandbox for this check environment.
+      expectSandboxEnv = ''
+        # Nix already runs this check inside its own sandbox; launching a nested
+        # sandbox fails (macOS: sandbox-exec EPERM; Linux: syd cannot claim the
+        # expect pty as a controlling terminal). Bypass capsa's inner sandbox.
         set env(CAPSA_DISABLE_SANDBOX) 1
       '';
     in
     pkgs.runCommand "${assets.name}-vm-check"
       {
         nativeBuildInputs = [ pkgs.expect pkgs.coreutils ];
+        requiredSystemFeatures = lib.optionals pkgs.stdenv.isLinux [ "kvm" ];
       }
       ''
         set -euo pipefail

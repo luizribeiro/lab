@@ -1,13 +1,14 @@
 { vmLib, pkgs }:
 let
   vm = vmLib.mkVM { name = "capsa-net-dhcp"; };
-  expectSandboxEnv = pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+  expectSandboxEnv = ''
     set env(CAPSA_DISABLE_SANDBOX) 1
   '';
 in
 pkgs.runCommand "capsa-net-dhcp-vm-check"
 {
   nativeBuildInputs = [ pkgs.expect pkgs.coreutils ];
+  requiredSystemFeatures = pkgs.lib.optionals pkgs.stdenv.isLinux [ "kvm" ];
 }
   ''
     set -euo pipefail
