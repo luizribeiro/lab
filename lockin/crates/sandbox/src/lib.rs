@@ -34,6 +34,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) ioctl_paths: Vec<PathBuf>,
     pub(crate) ioctl_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
+    pub(crate) raw_seatbelt_rules: Vec<String>,
 }
 
 /// A prepared sandbox environment: holds the private tmp directory and
@@ -329,6 +330,22 @@ impl SandboxBuilder {
     /// perform ioctl operations on recursively.
     pub fn ioctl_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.spec.ioctl_dirs.push(path.into());
+        self
+    }
+
+    /// Appends a raw sandbox-exec (Seatbelt) S-expression rule to the
+    /// generated darwin profile. Rules are emitted verbatim after the
+    /// structured allows, so they extend — but cannot weaken — the
+    /// deny-default base.
+    ///
+    /// Escape hatch for darwin-specific operations not expressible
+    /// through the structured API (e.g. `iokit-open`, `mach-lookup`,
+    /// `sysctl-read`). Malformed rules make `sandbox-exec` reject the
+    /// profile at spawn time.
+    ///
+    /// Ignored on non-darwin platforms.
+    pub fn raw_seatbelt_rule(mut self, rule: impl Into<String>) -> Self {
+        self.spec.raw_seatbelt_rules.push(rule.into());
         self
     }
 

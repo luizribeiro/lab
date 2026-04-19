@@ -66,6 +66,10 @@ pub(super) fn build_policy(
         policy.allow(&["network*"]);
     }
 
+    for rule in &spec.raw_seatbelt_rules {
+        policy.append_raw(rule.as_str());
+    }
+
     policy
 }
 
@@ -110,6 +114,55 @@ mod tests {
         assert!(
             rendered.contains(&ioctl_rule),
             "ioctl path missing ioctl rule: {ioctl_rule}"
+        );
+    }
+
+    #[test]
+    fn raw_seatbelt_rules_are_appended_after_structured_allows() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-raw-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let raw_rule = "(allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\"))";
+        let spec = SandboxSpec {
+            allow_network: true,
+            raw_seatbelt_rules: vec![raw_rule.to_string()],
+            ..SandboxSpec::default()
+        };
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+
+        assert!(
+            rendered.contains(raw_rule),
+            "raw rule missing from rendered policy:\n{rendered}"
+        );
+
+        let network_idx = rendered
+            .find("(allow network*)")
+            .expect("network allow should be present");
+        let raw_idx = rendered.find(raw_rule).unwrap();
+        assert!(
+            raw_idx > network_idx,
+            "raw rules should come after structured allows"
+        );
+    }
+
+    #[test]
+    fn raw_seatbelt_rules_default_empty() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-raw-empty-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let rendered: String =
+            build_policy(Path::new("/bin/ls"), &SandboxSpec::default(), &private_tmp).into();
+        assert!(
+            !rendered.contains("iokit-open"),
+            "default spec should not emit raw rules, got:\n{rendered}"
         );
     }
 

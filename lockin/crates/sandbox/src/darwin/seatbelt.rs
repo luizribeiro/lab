@@ -80,6 +80,7 @@ impl SeatbeltRule {
 pub(super) struct SeatbeltPolicy {
     imports: Vec<String>,
     rules: Vec<SeatbeltRule>,
+    raw_rules: Vec<String>,
 }
 
 impl SeatbeltPolicy {
@@ -108,6 +109,10 @@ impl SeatbeltPolicy {
         self.rules
             .push(SeatbeltRule::allow_regex(operations, pattern));
     }
+
+    pub(super) fn append_raw(&mut self, rule: impl Into<String>) {
+        self.raw_rules.push(rule.into());
+    }
 }
 
 impl From<SeatbeltPolicy> for String {
@@ -124,6 +129,13 @@ impl From<SeatbeltPolicy> for String {
 
         for rule in policy.rules {
             out.push_str(&rule.render());
+        }
+
+        for raw in policy.raw_rules {
+            out.push_str(&raw);
+            if !raw.ends_with('\n') {
+                out.push('\n');
+            }
         }
 
         out

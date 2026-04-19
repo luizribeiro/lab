@@ -133,6 +133,35 @@ assert!(status.success());
 # Ok::<(), anyhow::Error>(())
 ```
 
+## Raw sandbox-exec rules (macOS)
+
+Escape hatch for darwin sandbox operations not expressible through
+the structured API — `iokit-open`, `mach-lookup`, `sysctl-read`, and
+the rest of the sandbox-exec S-expression surface. Rules are
+appended verbatim after the structured allows; they extend but
+cannot weaken the deny-default base. Ignored on non-darwin platforms.
+
+```rust,no_run,ignore
+use std::path::Path;
+use lockin::Sandbox;
+
+let status = Sandbox::builder()
+    .library_paths_from_env()
+    .raw_seatbelt_rule(
+        r#"(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient"))"#,
+    )
+    .raw_seatbelt_rule(
+        r#"(allow mach-lookup (global-name "com.apple.windowserver.active"))"#,
+    )
+    .raw_seatbelt_rule("(allow sysctl-read)")
+    .command(Path::new("/usr/bin/env"))?
+    .status()?;
+# Ok::<(), anyhow::Error>(())
+```
+
+Malformed rules cause `sandbox-exec` to reject the profile at spawn
+time, surfacing as a startup error (exit 125).
+
 ## Tokio support
 
 Enable with `--features tokio`.

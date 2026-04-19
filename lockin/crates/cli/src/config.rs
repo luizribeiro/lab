@@ -12,6 +12,7 @@ pub struct Config {
     pub filesystem: FilesystemConfig,
     pub limits: LimitsConfig,
     pub env: EnvConfig,
+    pub darwin: DarwinConfig,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -42,6 +43,12 @@ pub struct EnvConfig {
     pub pass: Vec<String>,
     pub set: BTreeMap<String, String>,
     pub block: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DarwinConfig {
+    pub raw_seatbelt_rules: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -110,6 +117,10 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
     }
     if config.limits.disable_core_dumps {
         builder = builder.disable_core_dumps();
+    }
+
+    for rule in &config.darwin.raw_seatbelt_rules {
+        builder = builder.raw_seatbelt_rule(rule);
     }
 
     Ok(builder)
@@ -200,6 +211,11 @@ mod tests {
             pass = ["PATH", "HOME"]
             set = { LANG = "C.UTF-8" }
             block = ["AWS_*", "GITHUB_TOKEN"]
+
+            [darwin]
+            raw_seatbelt_rules = [
+                "(allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\"))",
+            ]
             "#,
         )
         .unwrap();
@@ -235,6 +251,12 @@ mod tests {
                     pass: vec!["PATH".to_string(), "HOME".to_string()],
                     set: [("LANG".to_string(), "C.UTF-8".to_string())].into(),
                     block: vec!["AWS_*".to_string(), "GITHUB_TOKEN".to_string()],
+                },
+                darwin: DarwinConfig {
+                    raw_seatbelt_rules: vec![
+                        "(allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\"))"
+                            .to_string(),
+                    ],
                 },
             }
         );
@@ -414,6 +436,31 @@ mod tests {
             program.contains(expected),
             "expected {expected} in program, got: {program}"
         );
+    }
+
+    #[test]
+    fn apply_config_threads_darwin_raw_seatbelt_rules_into_builder() {
+        let rule = "(allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\"))";
+        let config = Config {
+            darwin: DarwinConfig {
+                raw_seatbelt_rules: vec![rule.to_string()],
+            },
+            ..Default::default()
+        };
+        let builder = apply_config(&config).unwrap();
+        let cmd = builder.command(Path::new("/bin/echo")).unwrap();
+        if cfg!(target_os = "macos") {
+            let args: Vec<String> = cmd
+                .as_command()
+                .get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+            let joined = args.join(" ");
+            assert!(
+                joined.contains(rule),
+                "raw seatbelt rule not threaded into sandbox-exec args: {joined}"
+            );
+        }
     }
 
     #[test]
