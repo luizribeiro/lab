@@ -328,6 +328,8 @@ mod tests {
         (reader, fds[1])
     }
 
+    // Uses AF_UNIX SOCK_SEQPACKET, unsupported on darwin (EPROTONOSUPPORT).
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn control_fd_peer_close_fails_daemon_fast() {
         use capsa_control::unix_socketpair_cloexec;

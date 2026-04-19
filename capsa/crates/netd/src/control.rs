@@ -116,7 +116,10 @@ fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// AF_UNIX SOCK_SEQPACKET is unsupported on darwin (EPROTONOSUPPORT
+// from socketpair(2)), so these protocol tests can only exercise the
+// real wire on linux.
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 

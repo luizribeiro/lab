@@ -84,7 +84,9 @@ impl NetworkProcesses {
 // spawned with `kill_on_drop(true)`, so dropping a `ChildHandle`
 // (and therefore a `NetworkProcesses`) sends SIGKILL automatically.
 
-#[cfg(test)]
+// Spawn lifecycle exercises the AF_UNIX SOCK_SEQPACKET control socket,
+// which darwin doesn't support (EPROTONOSUPPORT) — gate to linux.
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use crate::lifecycle::test_helpers::{env_lock, fake_netd_path, unique_temp_path, EnvVarGuard};

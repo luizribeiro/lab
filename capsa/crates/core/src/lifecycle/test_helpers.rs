@@ -76,6 +76,7 @@ pub(crate) fn find_binary_on_path(name: &str) -> PathBuf {
 /// of this crate. Cargo builds the `[[bin]]` target into
 /// `target/<profile>/capsa-fake-netd`; `env::current_exe()` lets us
 /// reach it from any test binary.
+#[cfg(target_os = "linux")]
 pub(crate) fn fake_netd_path() -> PathBuf {
     let test_exe = std::env::current_exe().expect("current_exe should succeed");
     test_exe

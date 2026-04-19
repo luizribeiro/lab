@@ -91,16 +91,21 @@ impl VmProcesses {
 #[cfg(test)]
 mod tests {
     use crate::lifecycle::test_helpers::{
-        env_lock, fake_netd_path, find_binary_on_path, unique_temp_path, EnvVarGuard,
+        env_lock, find_binary_on_path, unique_temp_path, EnvVarGuard,
     };
-    use crate::lifecycle::NetworkProcesses;
+    #[cfg(target_os = "linux")]
+    use crate::lifecycle::{test_helpers::fake_netd_path, NetworkProcesses};
     use crate::VmConfig;
+    #[cfg(target_os = "linux")]
     use std::os::fd::OwnedFd;
+    #[cfg(target_os = "linux")]
     use std::os::unix::net::UnixDatagram;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
-    use super::{VmAttachment, VmProcesses};
+    #[cfg(target_os = "linux")]
+    use super::VmAttachment;
+    use super::VmProcesses;
 
     fn make_temp_file(prefix: &str, contents: &[u8]) -> PathBuf {
         let path = unique_temp_path(prefix);
@@ -134,6 +139,7 @@ mod tests {
     /// Create a host/guest socketpair and return the guest-side
     /// `VmAttachment` plus the host-side fd (to be handed to
     /// `NetworkProcesses::attach`).
+    #[cfg(target_os = "linux")]
     fn make_attachment(mac: [u8; 6]) -> (VmAttachment, OwnedFd) {
         let (host, guest) = UnixDatagram::pair().expect("socketpair");
         (
@@ -310,7 +316,12 @@ mod tests {
     }
 
     // ── networked path (external NetworkProcesses) ──────────
+    //
+    // These spawn real NetworkProcesses, which open the AF_UNIX
+    // SOCK_SEQPACKET control socket — unsupported on darwin
+    // (EPROTONOSUPPORT) — so gate to linux.
 
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_with_external_network_succeeds_end_to_end() {
         let _env_lock = env_lock()
@@ -337,6 +348,7 @@ mod tests {
             .expect("wait should succeed for exit 0");
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_with_two_external_networks_attaches_both() {
         let _env_lock = env_lock()
