@@ -405,9 +405,14 @@ mod tests {
         let builder = apply_config(&config).unwrap();
         let cmd = builder.command(Path::new("/bin/echo")).unwrap();
         let program = cmd.as_command().get_program().to_string_lossy().to_string();
+        let expected = if cfg!(target_os = "macos") {
+            "sandbox-exec"
+        } else {
+            "syd"
+        };
         assert!(
-            program.contains("syd"),
-            "expected syd in program, got: {program}"
+            program.contains(expected),
+            "expected {expected} in program, got: {program}"
         );
     }
 
