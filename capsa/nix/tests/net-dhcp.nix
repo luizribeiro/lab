@@ -45,12 +45,12 @@ pkgs.runCommand "capsa-net-dhcp-vm-check"
       eof { fail "capsa exited before VM prompt" }
     }
 
-    send -- "/bin/busybox sh -c 'iface=; for _ in 1 2 3 4 5 6 7 8 9 10; do iface=\$(/bin/busybox ls /sys/class/net | /bin/busybox grep -v \"^lo\$\" | /bin/busybox head -n1); \[ -n \"\$iface\" \] && break; /bin/busybox sleep 1; done; \[ -n \"\$iface\" \] || { echo NO_IFACE; exit 1; }; /bin/busybox udhcpc -f -q -n -t 5 -T 2 -i \"\$iface\" 2>&1 | /bin/busybox grep -E \"lease of 10\\.0\\.2\\.\[0-9\]+ obtained\"; rc=\$?; echo DHCP_GREP_RC:\$rc'\r"
+    send -- "/bin/busybox sh -c 'iface=; for _ in 1 2 3 4 5 6 7 8 9 10; do iface=\$(/bin/busybox ls /sys/class/net | /bin/busybox grep -v \"^lo\$\" | /bin/busybox head -n1); \[ -n \"\$iface\" \] && break; /bin/busybox sleep 1; done; if \[ -z \"\$iface\" \]; then rc=99; else /bin/busybox udhcpc -f -q -n -t 5 -T 2 -i \"\$iface\" 2>&1 | /bin/busybox grep -E \"lease of 10\\.0\\.2\\.\[0-9\]+ obtained\"; rc=\$?; fi; echo DHCP_GREP_RC:\$rc'\r"
 
     expect {
-      -re {DHCP_GREP_RC:0} {}
-      -re {DHCP_GREP_RC:[1-9][0-9]*} { fail "DHCP lease check failed" }
-      -re {NO_IFACE} { fail "no non-loopback interface present after wait window" }
+      -re {DHCP_GREP_RC:0\r} {}
+      -re {DHCP_GREP_RC:99\r} { fail "no non-loopback interface present after wait window" }
+      -re {DHCP_GREP_RC:[1-9][0-9]*\r} { fail "DHCP lease check failed" }
       timeout { fail "did not observe DHCP lease in expected subnet" }
       eof { fail "capsa exited while waiting for DHCP result" }
     }
