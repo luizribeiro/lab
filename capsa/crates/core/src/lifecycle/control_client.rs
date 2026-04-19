@@ -44,27 +44,15 @@ impl ControlClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capsa_control::{recv_request, send_response, IncomingRequest};
-    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+    use capsa_control::{recv_request, send_response, unix_socketpair_cloexec, IncomingRequest};
+    use nix::sys::socket::SockType;
 
     fn seqpacket_pair() -> (OwnedFd, OwnedFd) {
-        socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("seqpacket pair")
+        unix_socketpair_cloexec(SockType::SeqPacket).expect("seqpacket pair")
     }
 
     fn dummy_fd() -> OwnedFd {
-        let (a, _b) = socketpair(
-            AddressFamily::Unix,
-            SockType::Datagram,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("dummy pair");
+        let (a, _b) = unix_socketpair_cloexec(SockType::Datagram).expect("dummy pair");
         a
     }
 

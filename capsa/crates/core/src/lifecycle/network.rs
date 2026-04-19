@@ -6,9 +6,10 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use capsa_control::unix_socketpair_cloexec;
 use capsa_net::NetworkPolicy;
 use capsa_spec::{encode_launch_spec_args, NetLaunchSpec};
-use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+use nix::sys::socket::SockType;
 
 use super::child::{self, ChildHandle};
 use super::control_client::ControlClient;
@@ -31,13 +32,8 @@ impl NetworkProcesses {
         let (ready_reader, ready_writer) =
             std::io::pipe().context("failed to create netd readiness pipe")?;
 
-        let (client_sock, netd_sock) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .context("failed to create netd control socketpair")?;
+        let (client_sock, netd_sock) = unix_socketpair_cloexec(SockType::SeqPacket)
+            .context("failed to create netd control socketpair")?;
 
         let builder = netd_sandbox_builder(&binary);
 

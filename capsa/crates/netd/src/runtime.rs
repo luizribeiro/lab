@@ -330,16 +330,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn control_fd_peer_close_fails_daemon_fast() {
-        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use capsa_control::unix_socketpair_cloexec;
+        use nix::sys::socket::SockType;
         use std::os::fd::IntoRawFd;
 
-        let (server, client) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("seqpacket pair");
+        let (server, client) =
+            unix_socketpair_cloexec(SockType::SeqPacket).expect("seqpacket pair");
         let server_fd = server.into_raw_fd();
 
         let (_reader, writer_fd) = pipe();
@@ -420,15 +416,10 @@ mod tests {
     }
 
     fn dummy_host_fd() -> std::os::fd::OwnedFd {
-        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        use capsa_control::unix_socketpair_cloexec;
+        use nix::sys::socket::SockType;
         use std::os::fd::{AsFd, OwnedFd};
-        let (a, _b) = socketpair(
-            AddressFamily::Unix,
-            SockType::Datagram,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("socketpair");
+        let (a, _b) = unix_socketpair_cloexec(SockType::Datagram).expect("socketpair");
         OwnedFd::from(a.as_fd().try_clone_to_owned().expect("clone"))
     }
 

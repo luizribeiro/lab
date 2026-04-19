@@ -11,13 +11,50 @@
 //! reference wrapper.
 
 use std::io::{self, IoSlice, IoSliceMut};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use capsa_spec::{ControlRequest, ControlResponse};
 use nix::cmsg_space;
-use nix::sys::socket::{recvmsg, sendmsg, ControlMessage, ControlMessageOwned, MsgFlags};
+use nix::sys::socket::{
+    recvmsg, sendmsg, socketpair, AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags,
+    SockFlag, SockType,
+};
 
 pub const MAX_MESSAGE_LEN: usize = 64 * 1024;
+
+/// Creates a `AF_UNIX` socketpair with `FD_CLOEXEC` set on both ends,
+/// portably across linux and macOS.
+///
+/// `nix`'s `SockFlag::SOCK_CLOEXEC` is gated to linux/BSD/solaris (the
+/// underlying `socketpair(2)` flag doesn't exist on darwin), so on
+/// macOS we set `FD_CLOEXEC` via `fcntl` after creation. The race
+/// window between `socketpair` and `fcntl` is acceptable here: capsa
+/// only spawns sockets from single-threaded init paths before the
+/// runtime forks any children.
+pub fn unix_socketpair_cloexec(ty: SockType) -> nix::Result<(OwnedFd, OwnedFd)> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = SockFlag::SOCK_CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = SockFlag::empty();
+
+    let (a, b) = socketpair(AddressFamily::Unix, ty, None, flags)?;
+
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        set_cloexec(a.as_raw_fd())?;
+        set_cloexec(b.as_raw_fd())?;
+    }
+
+    Ok((a, b))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn set_cloexec(fd: RawFd) -> nix::Result<()> {
+    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    let current = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD)?);
+    fcntl(fd, FcntlArg::F_SETFD(current | FdFlag::FD_CLOEXEC))?;
+    Ok(())
+}
 
 /// A received request packet, together with any fd that was passed
 /// via `SCM_RIGHTS`. `Malformed` preserves the parse error text so

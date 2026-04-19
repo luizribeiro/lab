@@ -123,28 +123,17 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use capsa_control::{recv_response, send_request};
-    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+    use capsa_control::{recv_response, send_request, unix_socketpair_cloexec};
+    use nix::sys::socket::SockType;
     use tokio::sync::Mutex;
 
     fn seqpacket_pair() -> (OwnedFd, OwnedFd) {
-        socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("seqpacket pair")
+        unix_socketpair_cloexec(SockType::SeqPacket).expect("seqpacket pair")
     }
 
     fn dummy_fd() -> OwnedFd {
-        let (a, _b) = socketpair(
-            AddressFamily::Unix,
-            SockType::Datagram,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("datagram pair for dummy fd");
+        let (a, _b) =
+            unix_socketpair_cloexec(SockType::Datagram).expect("datagram pair for dummy fd");
         a
     }
 
