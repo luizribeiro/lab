@@ -175,7 +175,7 @@ From the flake:
 ```nix
 # flake.nix of a downstream project
 {
-  inputs.lockin.url = "path:/your/checkout/of/lab";  # or a git URL
+  inputs.lockin.url = "github:luizribeiro/lab";
 
   outputs = { self, nixpkgs, lockin, ... }:
     let
