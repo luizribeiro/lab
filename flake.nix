@@ -36,11 +36,15 @@
           capsa = import ./capsa/nix {
             inherit lib pkgs nixpkgs hostSystem;
           };
+
+          lockin = import ./lockin/nix {
+            inherit lib pkgs;
+          };
         in
         {
-          inherit (capsa) lib;
+          lib = capsa.lib // lockin.lib;
 
-          packages = capsa.packages // {
+          packages = capsa.packages // lockin.packages // {
             default = capsa.packages.capsa;
           };
 
