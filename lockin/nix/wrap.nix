@@ -6,7 +6,10 @@
 , libraryDirs ? null
 , extraLibraryDirs ? [ ]
 , sydPath ? null
+, nixStoreAccess ? "closure"
 }:
+
+assert lib.assertOneOf "nixStoreAccess" nixStoreAccess [ "closure" "full" "none" ];
 
 let
   autoDirs =
@@ -18,14 +21,53 @@ let
   userLibDirs = policy.filesystem.library_paths or [ ];
   mergedLibDirs = lib.unique (userLibDirs ++ autoDirsList ++ extraLibraryDirs);
 
-  basePolicy = builtins.removeAttrs policy [ "filesystem" ];
+  closurePaths =
+    let
+      info = pkgs.closureInfo { rootPaths = [ package ]; };
+      raw = builtins.readFile "${info}/store-paths";
+    in
+    lib.filter (s: s != "") (lib.splitString "\n" raw);
+
+  storeReadOnlyDirs =
+    if nixStoreAccess == "closure" then closurePaths
+    else if nixStoreAccess == "full" then [ "/nix/store" ]
+    else [ ];
+
+  userReadOnlyDirs = policy.filesystem.read_only_dirs or [ ];
+  mergedReadOnlyDirs = lib.unique (userReadOnlyDirs ++ storeReadOnlyDirs);
+
+  userDarwin = policy.darwin or { };
+  userDarwinRules = userDarwin.raw_seatbelt_rules or [ ];
+  storeSeatbeltRules =
+    if !pkgs.stdenv.isDarwin then [ ]
+    else if nixStoreAccess == "closure" then
+      map (p: ''(allow process-exec (subpath "${p}"))'') closurePaths
+    else if nixStoreAccess == "full" then
+      [ ''(allow process-exec (subpath "/nix/store"))'' ]
+    else [ ];
+  mergedDarwinRules = userDarwinRules ++ storeSeatbeltRules;
+
+  basePolicy = builtins.removeAttrs policy [ "filesystem" "darwin" ];
   userFilesystem = policy.filesystem or { };
+
+  filesystemOut = userFilesystem // {
+    library_paths = mergedLibDirs;
+  } // lib.optionalAttrs (mergedReadOnlyDirs != [ ]) {
+    read_only_dirs = mergedReadOnlyDirs;
+  };
+
+  darwinOut =
+    if pkgs.stdenv.isDarwin then
+      userDarwin // lib.optionalAttrs (mergedDarwinRules != [ ]) {
+        raw_seatbelt_rules = mergedDarwinRules;
+      }
+    else { };
 
   mkConfig = binPath: basePolicy // {
     command = [ binPath ];
-    filesystem = userFilesystem // {
-      library_paths = mergedLibDirs;
-    };
+    filesystem = filesystemOut;
+  } // lib.optionalAttrs (darwinOut != { }) {
+    darwin = darwinOut;
   };
 
   tomlFormat = pkgs.formats.toml { };

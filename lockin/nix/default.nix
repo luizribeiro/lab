@@ -5,6 +5,10 @@ let
     inherit pkgs;
     src = ../..;
   };
+  wrapWithLockin = import ./wrap.nix {
+    inherit lib pkgs;
+    lockin = lockinPackage;
+  };
 in
 {
   packages = {
@@ -12,9 +16,12 @@ in
   };
 
   lib = {
-    wrapWithLockin = import ./wrap.nix {
-      inherit lib pkgs;
-      lockin = lockinPackage;
+    inherit wrapWithLockin;
+  };
+
+  checks = {
+    lockin-wrap-tests = import ./tests/wrap.nix {
+      inherit lib pkgs wrapWithLockin;
     };
   };
 }

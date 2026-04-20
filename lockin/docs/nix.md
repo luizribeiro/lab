@@ -22,7 +22,7 @@ From the flake:
           package = pkgs.curl;
           policy = {
             sandbox.allow_network = true;
-            filesystem.read_only_dirs = [ "/etc" "/nix/store" ];
+            filesystem.read_only_dirs = [ "/etc" ];
             env.pass = [
               "PATH" "HOME" "USER" "TERM"
               "SSL_CERT_FILE" "NIX_SSL_CERT_FILE"
@@ -43,6 +43,13 @@ automatically for each binary in `${package}/bin`:
   `otool -L` (Darwin) on the target binaries and collecting the
   `/nix/store` directories. Your own `library_paths` entries are
   preserved and merged.
+- `filesystem.read_only_dirs` — the package's runtime closure
+  (computed via `pkgs.closureInfo`) is prepended so every store path
+  the binary can reach is readable, and nothing else from
+  `/nix/store` is. Controlled by `nixStoreAccess` (see below).
+- `darwin.raw_seatbelt_rules` — on darwin, a per-closure-path
+  `(allow process-exec (subpath "…"))` rule is appended for each
+  closure entry so the wrapped binary can re-exec helpers it ships.
 
 On Linux the wrapper also sets `LOCKIN_SYD_PATH` to the `syd` from
 nixpkgs, so the sandbox backend is found without any ambient
@@ -58,6 +65,7 @@ configuration.
 | `libraryDirs` | string \| null | Override auto-derivation with a colon-separated list. `null` (default) auto-derives. |
 | `extraLibraryDirs` | list of paths | Appended to the auto-derived list. Useful when a binary loads plugins via `dlopen` that `ldd` won't see. |
 | `sydPath` | path \| null | Override the `syd` binary used on Linux. `null` uses `pkgs.sydbox`. |
+| `nixStoreAccess` | `"closure" \| "full" \| "none"` | How to grant `/nix/store` access. `"closure"` (default) scopes read + darwin exec to exactly `package`'s runtime closure. `"full"` grants all of `/nix/store` (useful for dev shells that exec arbitrary tools). `"none"` adds no store entries; caller controls them via `policy.filesystem.read_only_dirs` and `policy.darwin.raw_seatbelt_rules`. |
 
 ## Example: deny-by-default
 
@@ -76,7 +84,7 @@ lockin.lib.${system}.wrapWithLockin {
   package = pkgs.redis;
   policy = {
     sandbox.allow_network = true;
-    filesystem.read_only_dirs = [ "/etc" "/nix/store" ];
+    filesystem.read_only_dirs = [ "/etc" ];
     filesystem.read_write_dirs = [ "/var/lib/redis" ];
     limits.max_open_files = 4096;
     env.pass = [ "PATH" "HOME" ];

@@ -48,7 +48,7 @@
             default = capsa.packages.capsa;
           };
 
-          inherit (capsa) checks;
+          checks = capsa.checks // lockin.checks;
 
           devShells = {
             default = devenv.lib.mkShell {
