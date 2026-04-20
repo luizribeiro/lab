@@ -36,3 +36,8 @@ jobs:
             cargo test --manifest-path lockin/Cargo.toml --workspace &&
           nix develop .#lockin --impure -L --command \
             cargo test --manifest-path lockin/Cargo.toml -p lockin --features tokio --test tokio
+
+      - name: Run nix checks
+        run: |
+          system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
+          nix build -L ".#checks.${system}.lockin-wrap-tests"
