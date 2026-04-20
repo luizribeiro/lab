@@ -36,6 +36,12 @@ pkgs.runCommand "capsa-daemon-no-network-fast-path-vm-check"
 
     proc fail {message} {
       puts "ERROR: $message"
+      global expect_out
+      if {[info exists expect_out(buffer)]} {
+        puts "---- received before failure ----"
+        puts -nonewline $expect_out(buffer)
+        puts "\n---- end received ----"
+      }
       exit 1
     }
 
