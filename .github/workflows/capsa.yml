@@ -41,4 +41,9 @@ jobs:
           '
 
       - name: Run nix checks
-        run: nix flake check --impure -L
+        # --max-jobs 1 serializes the VM checks. Concurrent VMs on a
+        # ~2-4 core runner oversubscribe the scheduler and occasionally
+        # starve a guest's init long enough to exceed the per-check
+        # expect timeout; running them serially adds ~1 minute total
+        # and eliminates the flake.
+        run: nix flake check --impure -L --max-jobs 1
