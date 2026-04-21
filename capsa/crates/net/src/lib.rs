@@ -11,10 +11,10 @@ pub use gateway::{
     GatewayStack, GatewayStackConfig, LeasePreallocationError, LeasePreallocator,
     PortForwardRequest, UdpPortForwardRequest,
 };
-pub use policy::{
-    DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PacketInfo, PolicyAction,
-    PolicyChecker, PolicyResult, PolicyRule, TransportProtocol,
+pub use outpost::{
+    DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
 };
+pub use policy::{PacketInfo, PolicyChecker, PolicyResult, TransportProtocol};
 pub use switch::{SwitchPort, VirtualSwitch};
 
 pub use switch::bridge::bridge_to_switch;

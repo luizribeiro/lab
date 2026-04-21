@@ -5,3 +5,9 @@
 //! here; enforcement backends (packet filtering in capsa-vmnet, HTTP
 //! CONNECT proxy in outpost-proxy) live alongside and consume these
 //! types.
+
+pub mod policy;
+
+pub use policy::{
+    DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
+};

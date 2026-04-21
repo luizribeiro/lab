@@ -319,7 +319,7 @@ mod tests {
     use super::*;
     use crate::dns::DnsCache;
     use crate::frame::{frame_channel, EthernetFrameIO, FrameReader, FrameWriter};
-    use crate::policy::NetworkPolicy;
+    use outpost::NetworkPolicy;
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::wire::{ArpRepr, EthernetRepr, Ipv4Repr, UdpRepr};
     use std::io;
