@@ -94,6 +94,92 @@ fn no_command_exits_125() {
 }
 
 #[test]
+fn proxy_mode_injects_http_proxy_env_into_child() {
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "print-env",
+        "HTTP_PROXY",
+    ]);
+    assert!(
+        output.status.success(),
+        "probe should read HTTP_PROXY: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().starts_with("http://127.0.0.1:"),
+        "HTTP_PROXY should point at a loopback port, got: {stdout:?}"
+    );
+}
+
+#[test]
+fn proxy_mode_denies_non_loopback_tcp_connect() {
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-connect",
+        "1.1.1.1",
+        "80",
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny non-loopback TCP; exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn legacy_allow_network_bool_still_works() {
+    let config = write_config(
+        r#"
+        [sandbox]
+        allow_network = true
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "print-env",
+        "HTTP_PROXY",
+    ]);
+    assert!(
+        !output.status.success(),
+        "legacy allow_network=true must NOT inject HTTP_PROXY (allow-all mode); exit={:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("env var `HTTP_PROXY`"),
+        "expected probe to report HTTP_PROXY missing; got stderr: {stderr:?}"
+    );
+}
+
+#[test]
 fn invalid_config_exits_125() {
     let config = write_config("not_valid { toml");
     let output = run_lockin(&["-c", config.path().to_str().unwrap(), "--", "/usr/bin/env"]);

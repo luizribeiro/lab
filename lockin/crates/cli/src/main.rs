@@ -6,9 +6,10 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
 
+use anyhow::Context;
 use clap::Parser;
 
-use config::{apply_config, load_config, resolve_command};
+use config::{apply_config, load_config, resolve_command, resolve_network_plan, NetworkPlan};
 
 const EXIT_LOCKIN_ERROR: u8 = 125;
 
@@ -53,11 +54,97 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let config = resolve_config(&cli.config)?;
     let (program, args) = resolve_command(&config, &cli.command)?;
-    let mut cmd = apply_config(&config)?.command(&program)?;
+
+    let proxy = ProxyLifecycle::start(resolve_network_plan(&config)?)?;
+    let network_mode = proxy.sandbox_mode();
+
+    let mut cmd = apply_config(&config)?
+        .network(network_mode)
+        .command(&program)?;
     cmd.args(&args);
     apply_env(&config.env, &mut cmd, std::env::vars_os());
+    proxy.inject_env(&mut cmd);
+
     let status = cmd.status()?;
+    drop(proxy);
     Ok(ExitCode::from(child_exit_code(status)))
+}
+
+/// Owns the tokio runtime and `outpost-proxy` handle when the child
+/// is running in proxy mode. Dropping this value shuts the proxy
+/// down, so it must outlive `cmd.status()`.
+struct ProxyLifecycle {
+    proxy: Option<ActiveProxy>,
+    mode: lockin::NetworkMode,
+}
+
+struct ActiveProxy {
+    // Field order matters for Drop: the handle must drop before the
+    // runtime it was spawned on. Rust drops struct fields in
+    // declaration order, top to bottom.
+    _handle: outpost_proxy::ProxyHandle,
+    _runtime: tokio::runtime::Runtime,
+    port: u16,
+}
+
+impl ProxyLifecycle {
+    fn start(plan: NetworkPlan) -> anyhow::Result<Self> {
+        match plan {
+            NetworkPlan::Deny => Ok(Self {
+                proxy: None,
+                mode: lockin::NetworkMode::Deny,
+            }),
+            NetworkPlan::AllowAll => Ok(Self {
+                proxy: None,
+                mode: lockin::NetworkMode::AllowAll,
+            }),
+            NetworkPlan::Proxy { policy } => {
+                // Multi-thread runtime so the proxy keeps driving
+                // while main thread blocks on `cmd.status()`.
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .context("failed to build tokio runtime for outpost-proxy")?;
+                let handle = runtime
+                    .block_on(outpost_proxy::start(policy))
+                    .context("failed to start outpost-proxy daemon")?;
+                let port = handle.listen_addr().port();
+                Ok(Self {
+                    proxy: Some(ActiveProxy {
+                        _handle: handle,
+                        _runtime: runtime,
+                        port,
+                    }),
+                    mode: lockin::NetworkMode::Proxy {
+                        loopback_port: port,
+                    },
+                })
+            }
+        }
+    }
+
+    fn sandbox_mode(&self) -> lockin::NetworkMode {
+        self.mode
+    }
+
+    /// Writes `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and clears
+    /// `NO_PROXY` on the child command so every standard HTTP client
+    /// (libcurl, Python requests, Go net/http) routes through the
+    /// loopback proxy. No-op when not in proxy mode.
+    fn inject_env(&self, cmd: &mut lockin::SandboxCommand) {
+        if let Some(active) = &self.proxy {
+            let url = format!("http://127.0.0.1:{}", active.port);
+            cmd.env("HTTP_PROXY", &url)
+                .env("HTTPS_PROXY", &url)
+                .env("http_proxy", &url)
+                .env("https_proxy", &url)
+                .env("ALL_PROXY", &url)
+                .env("all_proxy", &url)
+                .env("NO_PROXY", "")
+                .env("no_proxy", "");
+        }
+    }
 }
 
 // Non-UTF-8 env keys are skipped in pass matching and block filtering;
