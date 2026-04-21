@@ -1,22 +1,20 @@
-name: lockin
+name: outpost
 
 on:
   push:
     paths:
-      - "lockin/**"
       - "outpost/**"
       - "shared/**"
       - "flake.nix"
       - "flake.lock"
-      - ".github/workflows/lockin.yml"
+      - ".github/workflows/outpost.yml"
   pull_request:
     paths:
-      - "lockin/**"
       - "outpost/**"
       - "shared/**"
       - "flake.nix"
       - "flake.lock"
-      - ".github/workflows/lockin.yml"
+      - ".github/workflows/outpost.yml"
 
 jobs:
   test:
@@ -34,12 +32,10 @@ jobs:
 
       - name: Run tests
         run: |
-          nix develop .#lockin --impure -L --command \
-            cargo test --manifest-path lockin/Cargo.toml --workspace &&
-          nix develop .#lockin --impure -L --command \
-            cargo test --manifest-path lockin/Cargo.toml -p lockin --features tokio --test tokio
+          nix develop .#outpost --impure -L --command \
+            cargo test --manifest-path outpost/Cargo.toml --workspace
 
-      - name: Run nix checks
+      - name: Build nix package
         run: |
           system=$(nix eval --impure --raw --expr 'builtins.currentSystem')
-          nix build -L ".#checks.${system}.lockin-wrap-tests"
+          nix build -L ".#packages.${system}.outpost"
