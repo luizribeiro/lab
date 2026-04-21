@@ -30,7 +30,10 @@ const MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
 /// Upper bound on how long we wait for the client to finish sending
 /// its request head. Bounds slow-loris from a misbehaving sandboxed
 /// child.
+#[cfg(not(test))]
 const REQUEST_HEAD_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const REQUEST_HEAD_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Handle to a running proxy. Dropping the handle shuts the proxy
 /// down: a shutdown signal is sent to the accept loop and the
@@ -267,5 +270,48 @@ mod tests {
             Err(err) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
             Ok(_) => panic!("Log default must be rejected"),
         }
+    }
+
+    /// Relies on the cfg(test) override shortening `REQUEST_HEAD_TIMEOUT`
+    /// to 250ms so the test doesn't wait 10s of wall-clock.
+    #[tokio::test]
+    async fn request_head_timeout_returns_408() {
+        use tokio::io::AsyncReadExt;
+
+        let handle = start(NetworkPolicy::allow_all()).await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(handle.listen_addr())
+            .await
+            .unwrap();
+
+        // Send a partial request line and never finish it.
+        client
+            .write_all(b"CONNECT example.com:443 HT")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        // Give the proxy time past its head-read timeout to emit 408.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let n = client.read(&mut byte).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            head.push(byte[0]);
+            if head.ends_with(b"\r\n\r\n") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "proxy did not emit response within deadline"
+            );
+        }
+        let text = String::from_utf8(head).unwrap();
+        assert!(
+            text.starts_with("HTTP/1.1 408 "),
+            "expected 408 Request Timeout, got: {text:?}"
+        );
     }
 }
