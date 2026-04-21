@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -147,6 +149,90 @@ fn proxy_mode_denies_non_loopback_tcp_connect() {
         "proxy mode must deny non-loopback TCP; exit={:?} stderr={}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Echo server on `127.0.0.1:0`. Accepts one connection, echoes
+/// bytes until the peer closes. Returns its bound port. Used by the
+/// proxy-mode E2E test as the target the sandboxed probe talks to
+/// through the proxy.
+fn start_echo_server() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind echo");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        while let Ok((mut sock, _)) = listener.accept() {
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1];
+                while let Ok(n) = sock.read(&mut buf) {
+                    if n == 0 {
+                        return;
+                    }
+                    if sock.write_all(&buf[..n]).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn proxy_mode_end_to_end_reaches_allowlisted_host() {
+    let echo_port = start_echo_server();
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["localhost"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-proxy-connect",
+        &format!("localhost:{echo_port}"),
+    ]);
+    assert!(
+        output.status.success(),
+        "E2E proxy path failed: exit={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn proxy_mode_denies_host_not_in_allowlist() {
+    let echo_port = start_echo_server();
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["only-me.example"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-proxy-connect",
+        &format!("localhost:{echo_port}"),
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy must reject hosts outside allow_hosts; exit={:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CONNECT rejected: HTTP/1.1 403"),
+        "expected probe to report 403 rejection, got stderr: {stderr:?}"
     );
 }
 

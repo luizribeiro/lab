@@ -110,6 +110,12 @@ fn main() {
             };
             print_env(&name)
         }
+        "can-proxy-connect" => {
+            let Some(target) = args.next() else {
+                usage_and_exit();
+            };
+            can_proxy_connect(&target)
+        }
         "can-write-temp" => can_write_temp(),
         "fd-read-byte" => {
             let pairs: Vec<String> = args.collect();
@@ -332,6 +338,64 @@ fn print_env(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads `HTTP_PROXY` from env, opens a TCP connection to that
+/// proxy, sends a CONNECT request for `target`, expects HTTP/1.1 200,
+/// then writes and reads back a handshake byte over the tunnel to
+/// verify bidirectional forwarding. Used by lockin's end-to-end
+/// proxy-mode integration test to prove the full chain (env
+/// injection + sandbox rules + proxy tunneling) works for an
+/// allowlisted host.
+fn can_proxy_connect(target: &str) -> Result<(), String> {
+    let proxy_url =
+        std::env::var("HTTP_PROXY").map_err(|e| format!("env var `HTTP_PROXY`: {e}"))?;
+    let proxy_addr = proxy_url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("proxy url `{proxy_url}` must start with http://"))?;
+    let mut stream =
+        TcpStream::connect(proxy_addr).map_err(|e| format!("connect proxy `{proxy_addr}`: {e}"))?;
+
+    let request = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("write CONNECT: {e}"))?;
+    stream.flush().map_err(|e| format!("flush: {e}"))?;
+
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = stream.read(&mut byte).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            return Err("proxy closed before response completed".into());
+        }
+        head.push(byte[0]);
+        if head.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if head.len() > 4096 {
+            return Err("response head too long".into());
+        }
+    }
+    let text = String::from_utf8(head).map_err(|e| format!("response not utf-8: {e}"))?;
+    if !text.starts_with("HTTP/1.1 200 ") {
+        return Err(format!(
+            "CONNECT rejected: {}",
+            text.lines().next().unwrap_or("")
+        ));
+    }
+
+    stream
+        .write_all(b"P")
+        .map_err(|e| format!("write handshake: {e}"))?;
+    let mut echoed = [0u8; 1];
+    stream
+        .read_exact(&mut echoed)
+        .map_err(|e| format!("read echoed handshake: {e}"))?;
+    if echoed != *b"P" {
+        return Err(format!("echo mismatch: expected 'P', got {echoed:?}"));
+    }
+    Ok(())
+}
+
 fn can_write_temp() -> Result<(), String> {
     let mut path = effective_temp_dir();
     path.push(format!(
@@ -539,6 +603,7 @@ actions:\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
   print-env <var-name>\n\
+  can-proxy-connect <host:port>  (reads HTTP_PROXY from env)\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
