@@ -79,12 +79,21 @@ struct ProxyLifecycle {
 }
 
 struct ActiveProxy {
-    // Field order matters for Drop: the handle must drop before the
-    // runtime it was spawned on. Rust drops struct fields in
-    // declaration order, top to bottom.
-    _handle: outpost_proxy::ProxyHandle,
-    _runtime: tokio::runtime::Runtime,
+    handle: Option<outpost_proxy::ProxyHandle>,
+    runtime: Option<tokio::runtime::Runtime>,
     port: u16,
+}
+
+impl Drop for ActiveProxy {
+    fn drop(&mut self) {
+        // The handle shuts down tasks spawned on the runtime; the
+        // runtime must still be alive while that happens, so drop it
+        // only after the handle is gone. Encoded here rather than
+        // relying on field-declaration order so refactors can't
+        // regress it.
+        drop(self.handle.take());
+        drop(self.runtime.take());
+    }
 }
 
 impl ProxyLifecycle {
@@ -112,8 +121,8 @@ impl ProxyLifecycle {
                 let port = handle.listen_addr().port();
                 Ok(Self {
                     proxy: Some(ActiveProxy {
-                        _handle: handle,
-                        _runtime: runtime,
+                        handle: Some(handle),
+                        runtime: Some(runtime),
                         port,
                     }),
                     mode: lockin::NetworkMode::Proxy {
