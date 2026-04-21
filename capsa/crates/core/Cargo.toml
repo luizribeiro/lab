@@ -11,6 +11,7 @@ path = "src/bin/fake_netd.rs"
 anyhow = "1.0"
 capsa-control = { path = "../control" }
 capsa-net = { path = "../net" }
+outpost = { path = "../../../outpost/crates/outpost" }
 lockin = { path = "../../../lockin/crates/sandbox", features = ["tokio"] }
 lockin-process = { path = "../../../lockin/crates/process" }
 capsa-spec = { path = "../spec" }
