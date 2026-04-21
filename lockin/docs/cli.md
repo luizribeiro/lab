@@ -17,8 +17,9 @@ neither is found, a deny-all default policy applies.
 # lockin.toml
 command = ["/usr/bin/python3"]
 
-[sandbox]
-allow_network = false
+[sandbox.network]
+mode = "proxy"
+allow_hosts = ["huggingface.co", "*.hf.co"]
 
 [filesystem]
 read_only_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
@@ -63,7 +64,9 @@ All fields are optional. Everything defaults to deny/false/empty.
 | Field | Type | Description |
 |---|---|---|
 | `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. |
-| `sandbox.allow_network` | `bool` | Allow outbound/inbound networking. |
+| `sandbox.allow_network` | `bool` | Deprecated; prefer `[sandbox.network]`. Legacy shim: `true` maps to `mode = "allow_all"`, `false` to `mode = "deny"`. Ignored when `[sandbox.network]` is set. |
+| `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy. `deny` blocks all sockets. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, injects `HTTP_PROXY`/`HTTPS_PROXY` into the child, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. |
+| `sandbox.network.allow_hosts` | `[string, ...]` | Host allowlist for `mode = "proxy"`. Exact hostnames (`"api.example.com"`) or wildcard patterns (`"*.cdn.example.com"`). Must be empty for `deny` / `allow_all` modes. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
 | `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |

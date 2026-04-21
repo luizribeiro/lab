@@ -18,10 +18,34 @@ pub struct Config {
 #[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxConfig {
+    /// Legacy shim for the previous `allow_network: bool` API.
+    /// Prefer `[sandbox.network]` for new configs. Ignored when
+    /// `network` is set.
     pub allow_network: bool,
     pub allow_kvm: bool,
     pub allow_interactive_tty: bool,
     pub allow_non_pie_exec: bool,
+    pub network: Option<NetworkConfig>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkConfig {
+    pub mode: NetworkConfigMode,
+    /// Host allowlist consulted when `mode = "proxy"`. Ignored
+    /// otherwise. Entries are host-pattern strings
+    /// (`"api.example.com"`, `"*.cdn.example.com"`) as parsed by
+    /// `outpost::DomainPattern`.
+    pub allow_hosts: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkConfigMode {
+    #[default]
+    Deny,
+    AllowAll,
+    Proxy,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -72,9 +96,63 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
+/// How the child's network should be enforced, resolved from the TOML
+/// config. `Proxy` carries a compiled `outpost::NetworkPolicy` that
+/// the caller must spawn an `outpost-proxy` with before launching the
+/// sandbox; the resulting loopback port is then handed to
+/// `SandboxBuilder::network_proxy`.
+#[derive(Debug)]
+pub enum NetworkPlan {
+    Deny,
+    AllowAll,
+    Proxy { policy: outpost::NetworkPolicy },
+}
+
+/// Resolves the [`NetworkPlan`] from the user's config. Prefers the
+/// structured `[sandbox.network]` section; falls back to the legacy
+/// `allow_network` bool for backwards compatibility.
+pub fn resolve_network_plan(config: &Config) -> Result<NetworkPlan> {
+    match &config.sandbox.network {
+        Some(NetworkConfig {
+            mode: NetworkConfigMode::Deny,
+            allow_hosts,
+        }) => {
+            ensure_no_allow_hosts(allow_hosts, "deny")?;
+            Ok(NetworkPlan::Deny)
+        }
+        Some(NetworkConfig {
+            mode: NetworkConfigMode::AllowAll,
+            allow_hosts,
+        }) => {
+            ensure_no_allow_hosts(allow_hosts, "allow_all")?;
+            Ok(NetworkPlan::AllowAll)
+        }
+        Some(NetworkConfig {
+            mode: NetworkConfigMode::Proxy,
+            allow_hosts,
+        }) => {
+            let policy =
+                outpost::NetworkPolicy::from_allowed_hosts(allow_hosts.iter().map(String::as_str))
+                    .context("failed to parse [sandbox.network].allow_hosts")?;
+            Ok(NetworkPlan::Proxy { policy })
+        }
+        None if config.sandbox.allow_network => Ok(NetworkPlan::AllowAll),
+        None => Ok(NetworkPlan::Deny),
+    }
+}
+
+fn ensure_no_allow_hosts(allow_hosts: &[String], mode: &str) -> Result<()> {
+    if !allow_hosts.is_empty() {
+        anyhow::bail!(
+            "[sandbox.network]: allow_hosts has no effect when mode = \"{mode}\"; \
+             set mode = \"proxy\" to enforce it"
+        );
+    }
+    Ok(())
+}
+
 pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
     let mut builder = lockin::Sandbox::builder()
-        .allow_network(config.sandbox.allow_network)
         .allow_kvm(config.sandbox.allow_kvm)
         .allow_interactive_tty(config.sandbox.allow_interactive_tty)
         .allow_non_pie_exec(config.sandbox.allow_non_pie_exec);
@@ -229,6 +307,7 @@ mod tests {
                     allow_kvm: false,
                     allow_interactive_tty: true,
                     allow_non_pie_exec: true,
+                    network: None,
                 },
                 filesystem: FilesystemConfig {
                     read_only_paths: vec![PathBuf::from("/etc/hosts")],
@@ -480,5 +559,131 @@ mod tests {
     fn load_missing_file_errors() {
         let err = load_config(Path::new("/nonexistent/lockin.toml")).unwrap_err();
         assert!(err.to_string().contains("failed to read config file"));
+    }
+
+    #[test]
+    fn network_section_parses_proxy_mode_with_allow_hosts() {
+        let config = parse(
+            r#"
+            [sandbox.network]
+            mode = "proxy"
+            allow_hosts = ["api.example.com", "*.cdn.example.com"]
+            "#,
+        )
+        .unwrap();
+
+        let net = config.sandbox.network.expect("network must parse");
+        assert_eq!(net.mode, NetworkConfigMode::Proxy);
+        assert_eq!(
+            net.allow_hosts,
+            vec![
+                "api.example.com".to_string(),
+                "*.cdn.example.com".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn network_mode_defaults_to_deny_when_section_absent() {
+        let config = parse("").unwrap();
+        assert!(config.sandbox.network.is_none());
+    }
+
+    #[test]
+    fn resolve_network_plan_prefers_structured_section_over_legacy_bool() {
+        let config = Config {
+            sandbox: SandboxConfig {
+                allow_network: true,
+                network: Some(NetworkConfig {
+                    mode: NetworkConfigMode::Deny,
+                    allow_hosts: vec![],
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve_network_plan(&config).unwrap(),
+            NetworkPlan::Deny
+        ));
+    }
+
+    #[test]
+    fn resolve_network_plan_honors_legacy_bool_when_no_section() {
+        let config = Config {
+            sandbox: SandboxConfig {
+                allow_network: true,
+                network: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(matches!(
+            resolve_network_plan(&config).unwrap(),
+            NetworkPlan::AllowAll
+        ));
+    }
+
+    #[test]
+    fn resolve_network_plan_compiles_proxy_allow_hosts_into_policy() {
+        let config = Config {
+            sandbox: SandboxConfig {
+                network: Some(NetworkConfig {
+                    mode: NetworkConfigMode::Proxy,
+                    allow_hosts: vec!["huggingface.co".into(), "*.hf.co".into()],
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let plan = resolve_network_plan(&config).unwrap();
+        let NetworkPlan::Proxy { policy } = plan else {
+            panic!("expected Proxy plan, got Deny/AllowAll");
+        };
+        assert_eq!(
+            policy.matches_host("huggingface.co"),
+            outpost::PolicyAction::Allow
+        );
+        assert_eq!(
+            policy.matches_host("api.hf.co"),
+            outpost::PolicyAction::Allow
+        );
+        assert_eq!(policy.matches_host("evil.com"), outpost::PolicyAction::Deny);
+    }
+
+    #[test]
+    fn resolve_network_plan_rejects_allow_hosts_with_non_proxy_mode() {
+        for mode in [NetworkConfigMode::Deny, NetworkConfigMode::AllowAll] {
+            let config = Config {
+                sandbox: SandboxConfig {
+                    network: Some(NetworkConfig {
+                        mode,
+                        allow_hosts: vec!["example.com".into()],
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let err = resolve_network_plan(&config).unwrap_err();
+            assert!(
+                err.to_string().contains("allow_hosts has no effect"),
+                "expected inconsistent-config error for mode {mode:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_network_plan_rejects_invalid_host_patterns() {
+        let config = Config {
+            sandbox: SandboxConfig {
+                network: Some(NetworkConfig {
+                    mode: NetworkConfigMode::Proxy,
+                    allow_hosts: vec!["bad..host".into()],
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(resolve_network_plan(&config).is_err());
     }
 }

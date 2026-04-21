@@ -104,6 +104,12 @@ fn main() {
             };
             can_connect(&host, &port)
         }
+        "print-env" => {
+            let Some(name) = args.next() else {
+                usage_and_exit();
+            };
+            print_env(&name)
+        }
         "can-write-temp" => can_write_temp(),
         "fd-read-byte" => {
             let pairs: Vec<String> = args.collect();
@@ -320,6 +326,12 @@ fn open_marked_fd(fd_arg: &str, marker_arg: &str) -> Result<(std::fs::File, RawF
     Ok((std::fs::File::from(owned), raw, marker_bytes[0]))
 }
 
+fn print_env(name: &str) -> Result<(), String> {
+    let value = std::env::var(name).map_err(|e| format!("env var `{name}`: {e}"))?;
+    println!("{value}");
+    Ok(())
+}
+
 fn can_write_temp() -> Result<(), String> {
     let mut path = effective_temp_dir();
     path.push(format!(
@@ -526,6 +538,7 @@ actions:\n\
   can-chmod <path> <octal-mode>\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
+  print-env <var-name>\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
