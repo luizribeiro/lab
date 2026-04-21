@@ -234,6 +234,11 @@ mod tests {
             !proxy.contains("(allow network*)"),
             "Proxy mode must not grant all network, got:\n{proxy}"
         );
+        let network_outbound_rules = proxy.matches("network-outbound").count();
+        assert_eq!(
+            network_outbound_rules, 1,
+            "Proxy mode must emit exactly one network-outbound rule, got {network_outbound_rules} in:\n{proxy}"
+        );
     }
 
     #[test]
