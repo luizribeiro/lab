@@ -17,11 +17,31 @@ mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
 
+/// Network enforcement strategy for the sandboxed child.
+///
+/// `Deny` is the default — no outbound or inbound sockets. `AllowAll`
+/// opens the network unconditionally (needed by capsa's VM runtime,
+/// which owns its own per-host policy inside the guest). `Proxy`
+/// allows outbound only to a loopback port, where lockin's caller
+/// has stood up an `outpost-proxy` instance enforcing a host
+/// allowlist via HTTP CONNECT — apps in the sandbox see their
+/// traffic filtered per-hostname if they honor `HTTP_PROXY`, and
+/// fail closed at the sandbox if they don't.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NetworkMode {
+    #[default]
+    Deny,
+    AllowAll,
+    Proxy {
+        loopback_port: u16,
+    },
+}
+
 /// Internal representation of sandbox policy. Not part of the public
 /// API; use [`SandboxBuilder`] to configure a sandbox.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SandboxSpec {
-    pub(crate) allow_network: bool,
+    pub(crate) network: NetworkMode,
     pub(crate) allow_kvm: bool,
     pub(crate) allow_interactive_tty: bool,
     pub(crate) allow_non_pie_exec: bool,
@@ -211,11 +231,48 @@ impl SandboxBuilder {
         }
     }
 
-    /// Enables or disables outbound/inbound networking from the
-    /// sandboxed child.
-    pub fn allow_network(mut self, allow: bool) -> Self {
-        self.spec.allow_network = allow;
+    /// Sets the network enforcement mode directly. Prefer the
+    /// dedicated helpers ([`network_deny`](Self::network_deny),
+    /// [`network_allow_all`](Self::network_allow_all),
+    /// [`network_proxy`](Self::network_proxy)) for readable call
+    /// sites.
+    pub fn network(mut self, mode: NetworkMode) -> Self {
+        self.spec.network = mode;
         self
+    }
+
+    /// Denies all network access from the sandboxed child. This is
+    /// the default.
+    pub fn network_deny(self) -> Self {
+        self.network(NetworkMode::Deny)
+    }
+
+    /// Allows unrestricted inbound and outbound networking. Use when
+    /// the child runs its own policy-aware network runtime (e.g.
+    /// capsa's VM, which enforces per-host rules on the guest side).
+    pub fn network_allow_all(self) -> Self {
+        self.network(NetworkMode::AllowAll)
+    }
+
+    /// Allows outbound network only to `127.0.0.1:loopback_port`, where
+    /// the caller is expected to have stood up an HTTP CONNECT proxy
+    /// (see the `outpost-proxy` crate). All other outbound traffic is
+    /// denied at the OS sandbox layer, so apps that ignore
+    /// `HTTP_PROXY` fail closed rather than silently leaking.
+    pub fn network_proxy(self, loopback_port: u16) -> Self {
+        self.network(NetworkMode::Proxy { loopback_port })
+    }
+
+    /// Legacy shim for the previous `allow_network: bool` API. Maps
+    /// `true` to [`NetworkMode::AllowAll`] and `false` to
+    /// [`NetworkMode::Deny`]. New code should call one of the
+    /// `network_*` helpers directly.
+    pub fn allow_network(self, allow: bool) -> Self {
+        self.network(if allow {
+            NetworkMode::AllowAll
+        } else {
+            NetworkMode::Deny
+        })
     }
 
     /// Grants or denies access to `/dev/kvm` and the KVM ioctl set.

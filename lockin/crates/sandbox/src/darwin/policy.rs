@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::SandboxSpec;
+use crate::{NetworkMode, SandboxSpec};
 
 use super::paths::PathSets;
 use super::seatbelt::SeatbeltPolicy;
@@ -62,8 +62,16 @@ pub(super) fn build_policy(
         policy.allow_subpath(&["file-ioctl"], dir);
     }
 
-    if spec.allow_network {
-        policy.allow(&["network*"]);
+    match spec.network {
+        NetworkMode::AllowAll => {
+            policy.allow(&["network*"]);
+        }
+        NetworkMode::Proxy { loopback_port } => {
+            policy.append_raw(&format!(
+                r#"(allow network-outbound (remote ip "localhost:{loopback_port}"))"#
+            ));
+        }
+        NetworkMode::Deny => {}
     }
 
     for rule in &spec.raw_seatbelt_rules {
@@ -77,7 +85,7 @@ pub(super) fn build_policy(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::SandboxSpec;
+    use crate::{NetworkMode, SandboxSpec};
 
     use super::build_policy;
 
@@ -128,7 +136,7 @@ mod tests {
 
         let raw_rule = "(allow iokit-open (iokit-user-client-class \"AGXDeviceUserClient\"))";
         let spec = SandboxSpec {
-            allow_network: true,
+            network: NetworkMode::AllowAll,
             raw_seatbelt_rules: vec![raw_rule.to_string()],
             ..SandboxSpec::default()
         };
