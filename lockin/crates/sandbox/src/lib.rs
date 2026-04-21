@@ -207,7 +207,7 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 /// fn spawn_with_ready_pipe(ready_writer: OwnedFd) -> anyhow::Result<()> {
 ///     let ready_raw = ready_writer.as_raw_fd();
 ///
-///     let mut builder = Sandbox::builder().allow_network(true);
+///     let mut builder = Sandbox::builder().network_allow_all();
 ///     builder.inherit_fd(ready_writer);
 ///
 ///     let mut cmd = builder.command(Path::new("/usr/bin/capsa-netd"))?;
@@ -261,18 +261,6 @@ impl SandboxBuilder {
     /// `HTTP_PROXY` fail closed rather than silently leaking.
     pub fn network_proxy(self, loopback_port: u16) -> Self {
         self.network(NetworkMode::Proxy { loopback_port })
-    }
-
-    /// Legacy shim for the previous `allow_network: bool` API. Maps
-    /// `true` to [`NetworkMode::AllowAll`] and `false` to
-    /// [`NetworkMode::Deny`]. New code should call one of the
-    /// `network_*` helpers directly.
-    pub fn allow_network(self, allow: bool) -> Self {
-        self.network(if allow {
-            NetworkMode::AllowAll
-        } else {
-            NetworkMode::Deny
-        })
     }
 
     /// Grants or denies access to `/dev/kvm` and the KVM ioctl set.
@@ -739,7 +727,7 @@ mod tests {
         let b_raw_before = b.as_raw_fd();
         assert_ne!(a_raw_before, b_raw_before);
 
-        let mut builder = super::SandboxBuilder::new().allow_network(true);
+        let mut builder = super::SandboxBuilder::new().network_allow_all();
         let a_raw = builder.inherit_fd(a);
         let b_raw = builder.inherit_fd(b);
         assert_eq!(a_raw, a_raw_before);

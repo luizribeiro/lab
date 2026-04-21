@@ -19,7 +19,7 @@ const READY_SIGNAL: u8 = b'R';
 
 pub(super) fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
     let mut builder = lockin::Sandbox::builder()
-        .allow_network(true)
+        .network_allow_all()
         .read_only_path(plan::canonical_or_unchanged(binary_path));
     builder = child::apply_syd_path(builder);
     builder = child::apply_library_dirs(builder);

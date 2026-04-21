@@ -45,7 +45,7 @@ fn netd_signals_readiness_under_real_sandbox() {
     // from. If that list ever drops a path netd actually opens, this
     // test will fail before production silently falls back.
     let mut builder = sandbox_builder()
-        .allow_network(true)
+        .network_allow_all()
         .read_only_path(netd_bin.clone());
     for runtime_path in capsa_net::runtime_read_paths() {
         builder = builder.read_only_path(PathBuf::from(*runtime_path));
