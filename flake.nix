@@ -40,15 +40,19 @@
           lockin = import ./lockin/nix {
             inherit lib pkgs;
           };
+
+          outpost = import ./outpost/nix {
+            inherit pkgs;
+          };
         in
         {
-          lib = capsa.lib // lockin.lib;
+          lib = capsa.lib // lockin.lib // outpost.lib;
 
-          packages = capsa.packages // lockin.packages // {
+          packages = capsa.packages // lockin.packages // outpost.packages // {
             default = capsa.packages.capsa;
           };
 
-          checks = capsa.checks // lockin.checks;
+          checks = capsa.checks // lockin.checks // outpost.checks;
 
           devShells = {
             default = devenv.lib.mkShell {
