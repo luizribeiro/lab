@@ -11,9 +11,6 @@ pub use gateway::{
     GatewayStack, GatewayStackConfig, LeasePreallocationError, LeasePreallocator,
     PortForwardRequest, UdpPortForwardRequest,
 };
-pub use outpost::{
-    DomainPattern, DomainPatternParseError, MatchCriteria, NetworkPolicy, PolicyAction, PolicyRule,
-};
 pub use policy::{PacketInfo, PolicyChecker, PolicyResult, TransportProtocol};
 pub use switch::{SwitchPort, VirtualSwitch};
 

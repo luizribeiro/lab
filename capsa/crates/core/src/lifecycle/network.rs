@@ -7,9 +7,9 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use capsa_control::unix_socketpair_cloexec;
-use capsa_net::NetworkPolicy;
 use capsa_spec::{encode_launch_spec_args, NetLaunchSpec};
 use nix::sys::socket::SockType;
+use outpost::NetworkPolicy;
 
 use super::child::{self, ChildHandle};
 use super::control_client::ControlClient;

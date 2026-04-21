@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use capsa_net::{
-    bridge_to_switch, GatewayStack, GatewayStackConfig, LeasePreallocator, NetworkPolicy,
-    PortForwardRequest, UdpPortForwardRequest, VirtualSwitch,
+    bridge_to_switch, GatewayStack, GatewayStackConfig, LeasePreallocator, PortForwardRequest,
+    UdpPortForwardRequest, VirtualSwitch,
 };
 use capsa_spec::{ControlResponse, NetLaunchSpec};
+use outpost::NetworkPolicy;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;

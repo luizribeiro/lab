@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{bail, ensure, Context, Result};
-use capsa_net::NetworkPolicy;
+use outpost::NetworkPolicy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
