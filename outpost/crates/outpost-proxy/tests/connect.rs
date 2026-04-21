@@ -119,14 +119,21 @@ async fn malformed_authority_returns_400() {
 
 #[tokio::test]
 async fn connect_allow_returns_502_when_upstream_refuses() {
-    // Policy allows 127.0.0.1 but port 1 is reserved and nothing
-    // listens there, so the kernel should RST the outbound connect.
-    // The proxy must translate that to 502 Bad Gateway, not 403.
+    // Grab an ephemeral port and close the listener so the port is
+    // guaranteed to refuse — no ambient assumptions about reserved
+    // ports or host firewall behavior. Policy allows 127.0.0.1, so
+    // the failure must be at the upstream-dial stage (502), not
+    // policy (403).
+    let closed_port = {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
+    };
+
     let policy = NetworkPolicy::from_allowed_hosts(["127.0.0.1"]).unwrap();
     let handle = outpost_proxy::start(policy).await.unwrap();
 
     let mut client = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let (code, _) = send_connect(&mut client, "127.0.0.1:1").await;
+    let (code, _) = send_connect(&mut client, &format!("127.0.0.1:{closed_port}")).await;
     assert_eq!(code, 502);
 }
 

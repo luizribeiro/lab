@@ -230,9 +230,12 @@ fn proxy_mode_denies_host_not_in_allowlist() {
         output.status.code()
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Assert on the HTTP status evidence only, not the probe's full
+    // error prefix, so the test doesn't break if probe formatting
+    // changes.
     assert!(
-        stderr.contains("CONNECT rejected: HTTP/1.1 403"),
-        "expected probe to report 403 rejection, got stderr: {stderr:?}"
+        stderr.contains("HTTP/1.1 403"),
+        "expected 403 status in probe stderr, got: {stderr:?}"
     );
 }
 
