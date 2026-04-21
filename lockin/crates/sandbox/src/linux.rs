@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
-use crate::SandboxSpec;
+use crate::{NetworkMode, SandboxSpec};
 
 /// Builds a `Command` that runs `program` under `syd` with rules derived from
 /// `spec`. `syd` must be an absolute path supplied by the caller.
@@ -49,16 +49,23 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         rules.push("trace/allow_unsafe_exec_nopie:1".to_string());
     }
 
-    if spec.allow_network {
-        // Network-enabled daemons (e.g. capsa-netd) disable syd's
-        // seccomp-level network mediation so the daemon can own
-        // outbound traffic policy. Landlock is still enabled (below)
-        // with an all-ports allowlist so filesystem enforcement
-        // remains two-layer.
-        rules.push("sandbox/net:off".to_string());
-    } else {
-        rules.push("sandbox/net:on".to_string());
-        rules.push("default/net:deny".to_string());
+    match spec.network {
+        NetworkMode::AllowAll => {
+            // Network-enabled daemons (e.g. capsa-netd) disable syd's
+            // seccomp-level network mediation so the daemon can own
+            // outbound traffic policy. Landlock is still enabled (below)
+            // with an all-ports allowlist so filesystem enforcement
+            // remains two-layer.
+            rules.push("sandbox/net:off".to_string());
+        }
+        NetworkMode::Deny => {
+            rules.push("sandbox/net:on".to_string());
+            rules.push("default/net:deny".to_string());
+        }
+        NetworkMode::Proxy { .. } => {
+            rules.push("sandbox/net:on".to_string());
+            rules.push("default/net:deny".to_string());
+        }
     }
 
     // Landlock is always enabled as a second enforcement layer for
@@ -67,11 +74,24 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     // degrades gracefully to filesystem-only Landlock.
     rules.push("sandbox/lock:on".to_string());
 
-    if spec.allow_network {
-        // Permit all TCP connect/bind via Landlock so network-enabled
-        // daemons are not blocked by the Landlock network ruleset.
-        rules.push("allow/lock/connect+0-65535".to_string());
-        rules.push("allow/lock/bind+0-65535".to_string());
+    match spec.network {
+        NetworkMode::AllowAll => {
+            // Permit all TCP connect/bind via Landlock so network-enabled
+            // daemons are not blocked by the Landlock network ruleset.
+            rules.push("allow/lock/connect+0-65535".to_string());
+            rules.push("allow/lock/bind+0-65535".to_string());
+        }
+        NetworkMode::Proxy { loopback_port } => {
+            // Seccomp-level allowlist: connect only to the loopback
+            // proxy endpoint.
+            rules.push(format!("allow/net/connect+127.0.0.1/32!{loopback_port}"));
+            // Landlock is port-only (Linux 6.7+); narrow the allowed
+            // port to the proxy's ephemeral port.
+            rules.push(format!(
+                "allow/lock/connect+{loopback_port}-{loopback_port}"
+            ));
+        }
+        NetworkMode::Deny => {}
     }
 
     // Allow common filesystem types touched by capsa-vmm and host runtime.
@@ -499,28 +519,28 @@ mod tests {
         );
 
         let with_net = rules_for(&SandboxSpec {
-            allow_network: true,
+            network: NetworkMode::AllowAll,
             ..SandboxSpec::default()
         });
         assert!(
             with_net.iter().any(|r| r == "sandbox/lock:on"),
-            "allow_network=true should still enable Landlock, got: {with_net:?}"
+            "AllowAll should still enable Landlock, got: {with_net:?}"
         );
     }
 
     #[test]
-    fn landlock_network_allowlist_is_gated_on_allow_network() {
+    fn allow_all_emits_landlock_network_allowlist() {
         let with_net = rules_for(&SandboxSpec {
-            allow_network: true,
+            network: NetworkMode::AllowAll,
             ..SandboxSpec::default()
         });
         assert!(
             with_net.iter().any(|r| r == "allow/lock/connect+0-65535"),
-            "allow_network=true should emit Landlock connect allowlist"
+            "AllowAll should emit Landlock connect allowlist"
         );
         assert!(
             with_net.iter().any(|r| r == "allow/lock/bind+0-65535"),
-            "allow_network=true should emit Landlock bind allowlist"
+            "AllowAll should emit Landlock bind allowlist"
         );
 
         let without = rules_for(&SandboxSpec::default());
@@ -531,6 +551,43 @@ mod tests {
         assert!(
             !without.iter().any(|r| r.starts_with("allow/lock/bind")),
             "default spec should not emit Landlock bind rules"
+        );
+    }
+
+    #[test]
+    fn proxy_mode_allows_only_loopback_port() {
+        let rules = rules_for(&SandboxSpec {
+            network: NetworkMode::Proxy {
+                loopback_port: 51234,
+            },
+            ..SandboxSpec::default()
+        });
+
+        assert!(
+            rules.iter().any(|r| r == "sandbox/net:on"),
+            "proxy mode must enable seccomp net sandbox"
+        );
+        assert!(
+            rules.iter().any(|r| r == "default/net:deny"),
+            "proxy mode must deny network by default at seccomp layer"
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|r| r == "allow/net/connect+127.0.0.1/32!51234"),
+            "proxy mode must allow only the loopback proxy endpoint at seccomp layer"
+        );
+        assert!(
+            rules.iter().any(|r| r == "allow/lock/connect+51234-51234"),
+            "proxy mode must narrow Landlock allow to the proxy port"
+        );
+        assert!(
+            !rules.iter().any(|r| r == "allow/lock/connect+0-65535"),
+            "proxy mode must not emit the all-ports Landlock allow"
+        );
+        assert!(
+            !rules.iter().any(|r| r.starts_with("allow/lock/bind")),
+            "proxy mode does not need inbound bind, got: {rules:?}"
         );
     }
 }
