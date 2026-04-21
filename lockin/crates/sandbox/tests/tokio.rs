@@ -66,13 +66,13 @@ async fn write_scoped_to_explicit_rw_paths() {
 }
 
 #[tokio::test]
-async fn network_blocked_when_disabled() {
+async fn network_blocked_when_denied() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
 
     assert!(
         !run_probe(
-            common::sandbox_builder().allow_network(false),
+            common::sandbox_builder().network_deny(),
             &["can-connect", "127.0.0.1", &port.to_string()]
         )
         .await
@@ -80,7 +80,7 @@ async fn network_blocked_when_disabled() {
 }
 
 #[tokio::test]
-async fn network_allowed_when_enabled() {
+async fn network_allowed_in_allow_all_mode() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
     let port = listener.local_addr().expect("addr").port();
 
@@ -90,7 +90,7 @@ async fn network_allowed_when_enabled() {
 
     assert!(
         run_probe(
-            common::sandbox_builder().allow_network(true),
+            common::sandbox_builder().network_allow_all(),
             &["can-connect", "127.0.0.1", &port.to_string()]
         )
         .await

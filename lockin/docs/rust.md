@@ -84,7 +84,7 @@ use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .library_paths_from_env()
-    .allow_network(true)
+    .network_allow_all()
     .command(Path::new("/usr/bin/env"))?
     .status()?;
 assert!(status.success());
@@ -172,7 +172,7 @@ use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .library_paths_from_env()
-    .allow_network(true)
+    .network_allow_all()
     .tokio_command(Path::new("/usr/bin/env"))?
     .status()
     .await?;

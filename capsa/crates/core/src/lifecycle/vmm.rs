@@ -73,7 +73,7 @@ impl VmmPaths {
 
 fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
     let mut builder = lockin::Sandbox::builder()
-        .allow_network(false)
+        .network_deny()
         .allow_kvm(true)
         .allow_interactive_tty(true)
         .read_only_path(plan::canonical_or_unchanged(vmm_exe))

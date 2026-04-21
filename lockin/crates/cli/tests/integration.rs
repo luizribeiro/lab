@@ -151,11 +151,11 @@ fn proxy_mode_denies_non_loopback_tcp_connect() {
 }
 
 #[test]
-fn legacy_allow_network_bool_still_works() {
+fn allow_all_mode_does_not_inject_proxy_env() {
     let config = write_config(
         r#"
-        [sandbox]
-        allow_network = true
+        [sandbox.network]
+        mode = "allow_all"
         "#,
     );
     let probe = probe_binary();
@@ -169,7 +169,7 @@ fn legacy_allow_network_bool_still_works() {
     ]);
     assert!(
         !output.status.success(),
-        "legacy allow_network=true must NOT inject HTTP_PROXY (allow-all mode); exit={:?}",
+        "allow_all mode must NOT inject HTTP_PROXY; exit={:?}",
         output.status.code()
     );
     let stderr = String::from_utf8_lossy(&output.stderr);

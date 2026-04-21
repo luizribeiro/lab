@@ -21,7 +21,7 @@ From the flake:
         lockin.lib.${system}.wrapWithLockin {
           package = pkgs.curl;
           policy = {
-            sandbox.allow_network = true;
+            sandbox.network.mode = "allow_all";
             filesystem.read_only_dirs = [ "/etc" ];
             env.pass = [
               "PATH" "HOME" "USER" "TERM"
@@ -83,7 +83,7 @@ lockin.lib.${system}.wrapWithLockin {
 lockin.lib.${system}.wrapWithLockin {
   package = pkgs.redis;
   policy = {
-    sandbox.allow_network = true;
+    sandbox.network.mode = "allow_all";
     filesystem.read_only_dirs = [ "/etc" ];
     filesystem.read_write_dirs = [ "/var/lib/redis" ];
     limits.max_open_files = 4096;

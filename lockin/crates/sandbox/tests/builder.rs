@@ -6,11 +6,11 @@ use std::path::Path;
 mod common;
 
 #[test]
-fn command_accepts_allow_network() {
+fn command_accepts_network_allow_all() {
     common::sandbox_builder()
-        .allow_network(true)
+        .network_allow_all()
         .command(Path::new("/usr/bin/env"))
-        .expect("builder.command must accept allow_network=true");
+        .expect("builder.command must accept network_allow_all()");
 }
 
 #[test]
