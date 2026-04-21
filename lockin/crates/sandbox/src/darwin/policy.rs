@@ -175,6 +175,68 @@ mod tests {
     }
 
     #[test]
+    fn network_mode_renders_expected_rules() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-net-policy-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let deny: String = build_policy(
+            Path::new("/bin/ls"),
+            &SandboxSpec {
+                network: NetworkMode::Deny,
+                ..SandboxSpec::default()
+            },
+            &private_tmp,
+        )
+        .into();
+        assert!(
+            !deny.contains("network*"),
+            "Deny mode must not grant network*, got:\n{deny}"
+        );
+        assert!(
+            !deny.contains("network-outbound"),
+            "Deny mode must not emit network-outbound, got:\n{deny}"
+        );
+
+        let allow_all: String = build_policy(
+            Path::new("/bin/ls"),
+            &SandboxSpec {
+                network: NetworkMode::AllowAll,
+                ..SandboxSpec::default()
+            },
+            &private_tmp,
+        )
+        .into();
+        assert!(
+            allow_all.contains("(allow network*)"),
+            "AllowAll must grant network*, got:\n{allow_all}"
+        );
+
+        let proxy: String = build_policy(
+            Path::new("/bin/ls"),
+            &SandboxSpec {
+                network: NetworkMode::Proxy {
+                    loopback_port: 51234,
+                },
+                ..SandboxSpec::default()
+            },
+            &private_tmp,
+        )
+        .into();
+        assert!(
+            proxy.contains(r#"(allow network-outbound (remote ip "localhost:51234"))"#),
+            "Proxy mode must allow the loopback proxy endpoint, got:\n{proxy}"
+        );
+        assert!(
+            !proxy.contains("(allow network*)"),
+            "Proxy mode must not grant all network, got:\n{proxy}"
+        );
+    }
+
+    #[test]
     fn interactive_tty_rules_are_gated_on_allow_interactive_tty() {
         let base = tempfile::Builder::new()
             .prefix("lockin-tty-test-")
