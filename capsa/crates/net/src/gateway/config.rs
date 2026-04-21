@@ -1,4 +1,4 @@
-use crate::policy::NetworkPolicy;
+use outpost::NetworkPolicy;
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
