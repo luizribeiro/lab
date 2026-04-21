@@ -13,7 +13,7 @@ pkgs.rustPlatform.buildRustPackage {
     lockFile = src + "/outpost/Cargo.lock";
   };
 
-  cargoBuildFlags = [ "-p" "outpost" ];
+  cargoBuildFlags = [ "-p" "outpost" "-p" "outpost-proxy" ];
 
   doCheck = false;
 }

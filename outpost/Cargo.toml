@@ -1,5 +1,6 @@
 [workspace]
 members = [
   "crates/outpost",
+  "crates/outpost-proxy",
 ]
 resolver = "2"
