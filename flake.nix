@@ -86,6 +86,13 @@
                 ./capsa/nix/devenv.nix
               ];
             };
+
+            outpost = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+              ];
+            };
           };
 
           formatter = pkgs.nixpkgs-fmt;
