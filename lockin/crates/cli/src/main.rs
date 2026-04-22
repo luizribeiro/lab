@@ -1,8 +1,9 @@
 mod config;
 mod glob;
+mod supervise;
 
 use std::ffi::OsString;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
 
@@ -55,7 +56,15 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let config = resolve_config(&cli.config)?;
     let (program, args) = resolve_command(&config, &cli.command)?;
 
-    let proxy = ProxyLifecycle::start(resolve_network_plan(&config)?)?;
+    // One runtime drives both outpost-proxy (when configured) and the
+    // signal-forwarding supervisor (always).
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?;
+
+    let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(&config)?)?;
     let network_mode = proxy.sandbox_mode();
 
     let mut cmd = apply_config(&config)?
@@ -65,66 +74,70 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     apply_env(&config.env, &mut cmd, std::env::vars_os());
     proxy.inject_env(&mut cmd);
 
-    let status = cmd.status()?;
+    place_child_in_own_pgroup(cmd.as_command_mut());
+
+    // Install signal handlers BEFORE forking the child so a signal
+    // arriving in the spawn->supervise window can't kill lockin via
+    // SIG_DFL and orphan the freshly-forked tree (issue #10). The
+    // handlers reset to SIG_DFL across exec, so the child sees a
+    // normal signal disposition.
+    let status = runtime
+        .block_on(async {
+            let signals = supervise::Signals::install()?;
+            let child = cmd.spawn()?;
+            let pid = child.id() as i32;
+            supervise::run(child, pid, signals).await
+        })
+        .context("supervising sandbox child")?;
     drop(proxy);
+    drop(runtime);
     Ok(ExitCode::from(child_exit_code(status)))
 }
 
-/// Owns the tokio runtime and `outpost-proxy` handle when the child
-/// is running in proxy mode. Dropping this value shuts the proxy
-/// down, so it must outlive `cmd.status()`.
-struct ProxyLifecycle {
-    proxy: Option<ActiveProxy>,
-    mode: lockin::NetworkMode,
-}
-
-struct ActiveProxy {
-    handle: Option<outpost_proxy::ProxyHandle>,
-    runtime: Option<tokio::runtime::Runtime>,
-    port: u16,
-}
-
-impl Drop for ActiveProxy {
-    fn drop(&mut self) {
-        // The handle shuts down tasks spawned on the runtime; the
-        // runtime must still be alive while that happens, so drop it
-        // only after the handle is gone. Encoded here rather than
-        // relying on field-declaration order so refactors can't
-        // regress it.
-        drop(self.handle.take());
-        drop(self.runtime.take());
+/// Adds a `pre_exec` hook that puts the sandbox wrapper (syd /
+/// sandbox-exec) into a fresh process group equal to its own PID.
+/// That makes `killpg(pid, sig)` from the supervisor reach the
+/// wrapper and every grand-child it spawns, so signal forwarding on
+/// shutdown does not orphan the tree (issue #10).
+fn place_child_in_own_pgroup(cmd: &mut std::process::Command) {
+    // SAFETY: setpgid is async-signal-safe per POSIX. The hook does
+    // no allocation and touches no shared state.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
 }
 
+/// Holds the `outpost-proxy` handle for proxy-mode runs, plus the
+/// resolved sandbox network mode. Dropping this value shuts the
+/// proxy down, so it must outlive the supervised child.
+struct ProxyLifecycle {
+    handle: Option<outpost_proxy::ProxyHandle>,
+    mode: lockin::NetworkMode,
+}
+
 impl ProxyLifecycle {
-    fn start(plan: NetworkPlan) -> anyhow::Result<Self> {
+    fn start(rt: &tokio::runtime::Handle, plan: NetworkPlan) -> anyhow::Result<Self> {
         match plan {
             NetworkPlan::Deny => Ok(Self {
-                proxy: None,
+                handle: None,
                 mode: lockin::NetworkMode::Deny,
             }),
             NetworkPlan::AllowAll => Ok(Self {
-                proxy: None,
+                handle: None,
                 mode: lockin::NetworkMode::AllowAll,
             }),
             NetworkPlan::Proxy { policy } => {
-                // Multi-thread runtime so the proxy keeps driving
-                // while main thread blocks on `cmd.status()`.
-                let runtime = tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(1)
-                    .enable_all()
-                    .build()
-                    .context("failed to build tokio runtime for outpost-proxy")?;
-                let handle = runtime
+                let handle = rt
                     .block_on(outpost_proxy::start(policy))
                     .context("failed to start outpost-proxy daemon")?;
                 let port = handle.listen_addr().port();
                 Ok(Self {
-                    proxy: Some(ActiveProxy {
-                        handle: Some(handle),
-                        runtime: Some(runtime),
-                        port,
-                    }),
+                    handle: Some(handle),
                     mode: lockin::NetworkMode::Proxy {
                         loopback_port: port,
                     },
@@ -142,8 +155,8 @@ impl ProxyLifecycle {
     /// (libcurl, Python requests, Go net/http) routes through the
     /// loopback proxy. No-op when not in proxy mode.
     fn inject_env(&self, cmd: &mut lockin::SandboxCommand) {
-        if let Some(active) = &self.proxy {
-            let url = format!("http://127.0.0.1:{}", active.port);
+        if let Some(handle) = &self.handle {
+            let url = format!("http://127.0.0.1:{}", handle.listen_addr().port());
             cmd.env("HTTP_PROXY", &url)
                 .env("HTTPS_PROXY", &url)
                 .env("http_proxy", &url)

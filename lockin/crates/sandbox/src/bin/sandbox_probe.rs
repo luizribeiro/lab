@@ -163,6 +163,11 @@ fn main() {
             });
             open_many_fds(count)
         }
+        "pause" => {
+            let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(60);
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+            Ok(())
+        }
         _ => {
             usage_and_exit();
         }
@@ -609,6 +614,7 @@ actions:\n\
   fd-write-byte <fd> <byte> [<fd> <byte>...]\n\
   check-rlimit <resource-name> <expected-value>\n\
   open-many-fds <count>\n\
+  pause [seconds]\n\
   check-no-new-privs\n\
   check-has-cap <cap-number>\n\
   check-has-effective-cap <cap-number>"
