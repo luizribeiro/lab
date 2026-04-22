@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 fn lockin_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lockin"))
@@ -266,6 +268,117 @@ fn allow_all_mode_does_not_inject_proxy_env() {
         stderr.contains("env var `HTTP_PROXY`"),
         "expected probe to report HTTP_PROXY missing; got stderr: {stderr:?}"
     );
+}
+
+/// Regression test for issue #10: lockin must forward SIGTERM/SIGINT
+/// to the sandboxed child's process group and exit with a child-derived
+/// numeric status, rather than being killed by the signal's default
+/// disposition (which would orphan the child to PID 1).
+///
+/// The assertion `status.code().is_some() && status.signal().is_none()`
+/// is what distinguishes the two outcomes: lockin's supervisor waits
+/// for the child and converts the child's signal-termination into a
+/// `128 + signal` numeric exit code, leaving lockin itself cleanly
+/// exited.
+#[test]
+fn sigterm_forwarded_to_child_then_lockin_exits_normally() {
+    let probe = probe_binary();
+    // Tight grace so the test's SIGKILL escalation (needed because
+    // syd traps SIGTERM under ptrace) completes within seconds. The
+    // production default is 30s — see DEFAULT_SHUTDOWN_GRACE.
+    let mut child = Command::new(lockin_binary())
+        .env("LOCKIN_SHUTDOWN_GRACE_MS", "500")
+        .args(["--", probe.to_str().unwrap(), "pause", "30"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn lockin");
+
+    wait_for_descendant_process(child.id() as i32, Duration::from_secs(5));
+
+    // SAFETY: kill() with a valid pid and signal number is sound.
+    let lockin_pid = child.id() as i32;
+    assert_eq!(
+        unsafe { libc::kill(lockin_pid, libc::SIGTERM) },
+        0,
+        "SIGTERM lockin: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let status = match wait_with_timeout(&mut child, Duration::from_secs(10)) {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let mut stderr = String::new();
+            if let Some(mut e) = child.stderr.take() {
+                let _ = e.read_to_string(&mut stderr);
+            }
+            panic!("lockin did not exit within 10s of SIGTERM; stderr=\n{stderr}");
+        }
+    };
+
+    assert!(
+        status.code().is_some() && status.signal().is_none(),
+        "lockin must return a child-derived exit code after forwarding SIGTERM, \
+         not be killed by the signal itself; got status.signal()={:?}, code={:?}",
+        status.signal(),
+        status.code()
+    );
+}
+
+/// Polls `/proc/<lockin_pid>/task/.../children` (Linux) or `pgrep`
+/// (macOS) until the lockin parent has at least one descendant, so
+/// the test doesn't race the wrapper's spawn of the probe.
+fn wait_for_descendant_process(lockin_pid: i32, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if has_descendant(lockin_pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("lockin pid {lockin_pid} never spawned a descendant within {timeout:?}");
+}
+
+#[cfg(target_os = "linux")]
+fn has_descendant(lockin_pid: i32) -> bool {
+    let task_dir = format!("/proc/{lockin_pid}/task");
+    let Ok(entries) = std::fs::read_dir(&task_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path().join("children");
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if !contents.trim().is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn has_descendant(lockin_pid: i32) -> bool {
+    Command::new("pgrep")
+        .args(["-P", &lockin_pid.to_string()])
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 #[test]
