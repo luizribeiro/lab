@@ -11,7 +11,7 @@
 //! reference wrapper.
 
 use std::io::{self, IoSlice, IoSliceMut};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use capsa_spec::{ControlRequest, ControlResponse};
 use nix::cmsg_space;

@@ -67,7 +67,7 @@ pub(super) fn build_policy(
             policy.allow(&["network*"]);
         }
         NetworkMode::Proxy { loopback_port } => {
-            policy.append_raw(&format!(
+            policy.append_raw(format!(
                 r#"(allow network-outbound (remote ip "localhost:{loopback_port}"))"#
             ));
         }
