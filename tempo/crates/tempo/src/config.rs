@@ -45,7 +45,7 @@ pub enum Scenario {
     },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Generation {
     pub max_tokens: u32,
