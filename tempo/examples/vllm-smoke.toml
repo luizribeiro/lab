@@ -1,0 +1,26 @@
+[suite]
+name = "vllm-smoke"
+
+[providers.vllm]
+kind        = "openai_compatible"
+base_url    = "http://litellm.internal/v1"
+api_key_env = "LITELLM_KEY"
+
+[prompts.short]
+kind = "inline"
+text = "Write a haiku about caching."
+
+[prompts.long]
+kind = "inline"
+text = "Summarize the history of TCP congestion control."
+
+[scenarios.decode]
+kind     = "throughput"
+provider = "vllm"
+warmup   = 1
+runs     = 5
+generation = { max_tokens = 256, temperature = 0.0 }
+
+[scenarios.decode.matrix]
+model  = ["llama-3.1-70b", "qwen2.5-72b"]
+prompt = ["short", "long"]

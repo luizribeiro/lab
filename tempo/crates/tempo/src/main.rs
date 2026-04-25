@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod config;
+
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
