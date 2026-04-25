@@ -10,6 +10,7 @@ use crate::provider::openai::run_request;
 #[derive(Debug)]
 pub struct RunnerOutput {
     pub runs: Vec<Run>,
+    pub total_cells: usize,
     pub zero_success_cells: usize,
 }
 
@@ -24,6 +25,7 @@ pub enum RunnerError {
 pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
     let suite = config.suite.name.clone();
     let mut runs: Vec<Run> = Vec::new();
+    let mut total_cells: usize = 0;
     let mut zero_success_cells: usize = 0;
 
     for (scenario_name, scenario) in &config.scenarios {
@@ -47,6 +49,7 @@ pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
             env::var(api_key_env).map_err(|_| RunnerError::MissingApiKey(api_key_env.clone()))?;
 
         let cells = matrix::expand(scenario_name, scenario, config)?;
+        total_cells += cells.len();
         for cell in &cells {
             for _ in 0..*warmup {
                 let _ = run_request(cell, base_url, &api_key, *timeout_secs).await;
@@ -70,6 +73,7 @@ pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
 
     Ok(RunnerOutput {
         runs,
+        total_cells,
         zero_success_cells,
     })
 }
@@ -77,23 +81,9 @@ pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::happy_sse_body;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    fn happy_sse_body() -> String {
-        let frames = [
-            r#"{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
-            r#"{"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#,
-            r#"{"choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}"#,
-            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
-            r#"{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}"#,
-            "[DONE]",
-        ];
-        frames
-            .iter()
-            .map(|f| format!("data: {f}\n\n"))
-            .collect::<String>()
-    }
 
     const TEST_KEY_ENV: &str = "TEMPO_RUNNER_TEST_KEY";
 
@@ -156,6 +146,7 @@ prompt = ["s"]
         let out = run_all(&cfg).await.expect("runner ok");
 
         assert_eq!(out.runs.len(), 3);
+        assert_eq!(out.total_cells, 1);
         assert_eq!(out.zero_success_cells, 0);
         for (i, run) in out.runs.iter().enumerate() {
             assert!(run.error.is_none(), "run {i} error: {:?}", run.error);
