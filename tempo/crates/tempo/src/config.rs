@@ -40,9 +40,15 @@ pub enum Scenario {
         provider: String,
         warmup: u32,
         runs: u32,
+        #[serde(default = "default_timeout_secs")]
+        timeout_secs: u64,
         generation: Generation,
         matrix: Matrix,
     },
+}
+
+fn default_timeout_secs() -> u64 {
+    120
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,12 +124,14 @@ mod tests {
             provider,
             warmup,
             runs,
+            timeout_secs,
             generation,
             matrix,
         } = cfg.scenarios.get("decode").expect("decode scenario");
         assert_eq!(provider, "vllm");
         assert_eq!(*warmup, 1);
         assert_eq!(*runs, 5);
+        assert_eq!(*timeout_secs, 120);
         assert_eq!(generation.max_tokens, 256);
         assert_eq!(matrix.model.len(), 2);
         assert_eq!(matrix.prompt, vec!["short", "long"]);
