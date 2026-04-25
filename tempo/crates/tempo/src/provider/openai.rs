@@ -48,16 +48,19 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
     });
 
     let client = reqwest::Client::new();
-    let send_fut = client.post(&url).bearer_auth(api_key).json(&body).send();
+    let request = client.post(&url).bearer_auth(api_key).json(&body);
 
     let result = timeout(Duration::from_secs(timeout_secs), async {
-        let resp = send_fut.await.map_err(|e| format!("stream_send:{e}"))?;
+        let request_initiated = Instant::now();
+        let resp = request
+            .send()
+            .await
+            .map_err(|e| format!("stream_send:{e}"))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(format!("http_{}", status.as_u16()));
         }
-        let send_complete = Instant::now();
-        consume_stream(resp, send_complete).await
+        consume_stream(resp, request_initiated).await
     })
     .await;
 
@@ -77,7 +80,7 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
     let e2e_ms = started.elapsed().as_secs_f64() * 1000.0;
     let ttft_ms = outcome
         .first_content
-        .map(|t| t.duration_since(outcome.send_complete).as_secs_f64() * 1000.0);
+        .map(|t| t.duration_since(outcome.request_initiated).as_secs_f64() * 1000.0);
     let decode_tok_s = match (
         outcome.first_content,
         outcome.last_content,
@@ -101,7 +104,7 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
 }
 
 struct StreamOutcome {
-    send_complete: Instant,
+    request_initiated: Instant,
     first_content: Option<Instant>,
     last_content: Option<Instant>,
     input_tokens: Option<u64>,
@@ -110,7 +113,7 @@ struct StreamOutcome {
 
 async fn consume_stream(
     resp: reqwest::Response,
-    send_complete: Instant,
+    request_initiated: Instant,
 ) -> Result<StreamOutcome, String> {
     let mut stream = resp.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
@@ -156,7 +159,7 @@ async fn consume_stream(
     }
 
     Ok(StreamOutcome {
-        send_complete,
+        request_initiated,
         first_content,
         last_content,
         input_tokens,
@@ -223,6 +226,32 @@ mod tests {
         assert_eq!(run.input_tokens, Some(7));
         assert_eq!(run.output_tokens, Some(2));
         assert!(run.e2e_ms.unwrap() > 0.0);
+    }
+
+    #[tokio::test]
+    async fn ttft_includes_header_delay() {
+        let server = MockServer::start().await;
+        let delay = Duration::from_millis(150);
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(happy_sse_body())
+                    .set_delay(delay),
+            )
+            .mount(&server)
+            .await;
+
+        let run = run_request(&cell(), &server.uri(), "test-key", 5).await;
+
+        assert!(run.error.is_none(), "error: {:?}", run.error);
+        let ttft_ms = run.ttft_ms.expect("ttft_ms should be present");
+        assert!(
+            ttft_ms >= delay.as_secs_f64() * 1000.0,
+            "ttft_ms {ttft_ms} should be >= delay {}ms",
+            delay.as_millis(),
+        );
     }
 
     #[tokio::test]
