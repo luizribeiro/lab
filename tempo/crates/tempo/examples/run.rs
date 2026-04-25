@@ -3,6 +3,7 @@ use std::env;
 use serde::Deserialize;
 use tempo::config::{Config, Generation, Provider, Scenario};
 use tempo::matrix::Cell;
+use tempo::output::write_runs_to_path;
 use tempo::provider::openai::run_request;
 use tempo::runner::run_all;
 
@@ -72,7 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         out.runs.len(),
         out.zero_success_cells,
     );
-    println!("{}", serde_json::to_string_pretty(&out.runs)?);
+    let out_path = env::var("TEMPO_OUT").unwrap_or_else(|_| "/tmp/tempo-results.json".to_string());
+    write_runs_to_path(&out_path, &out.runs)?;
+    eprintln!("wrote results to {out_path}");
+
+    let bytes = std::fs::read(&out_path)?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes)?;
+    println!("{}", serde_json::to_string_pretty(&parsed)?);
     Ok(())
 }
 
