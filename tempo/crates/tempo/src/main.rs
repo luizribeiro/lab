@@ -2,6 +2,8 @@
 mod config;
 #[allow(dead_code)]
 mod matrix;
+#[allow(dead_code)]
+mod provider;
 
 fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
