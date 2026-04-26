@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use tempo::config::Config;
 use tempo::output::write_runs_to_path;
 use tempo::progress::{IndicatifReporter, NoopReporter, ProgressReporter};
+use tempo::report::render_report_from_path;
 use tempo::runner::run_all;
 use tempo::stats;
 use tempo::summary;
@@ -32,6 +33,9 @@ enum Command {
         no_summary: bool,
         #[arg(long)]
         no_progress: bool,
+    },
+    Report {
+        results: PathBuf,
     },
 }
 
@@ -61,7 +65,25 @@ async fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Command::Report { results } => match report_command(&results) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("error: {err:#}");
+                ExitCode::from(1)
+            }
+        },
     }
+}
+
+fn color_enabled(is_tty: bool) -> bool {
+    is_tty && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn report_command(results_path: &Path) -> Result<ExitCode> {
+    let table =
+        render_report_from_path(results_path, color_enabled(std::io::stdout().is_terminal()))?;
+    println!("{table}");
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn run_command(
@@ -118,7 +140,7 @@ async fn run_command(
     }
 
     if !no_summary {
-        let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let color = color_enabled(std::io::stderr().is_terminal());
         let cell_stats = stats::aggregate(&result.runs);
         let table = summary::render(&cell_stats, color);
         eprintln!("{table}");

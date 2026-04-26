@@ -46,3 +46,10 @@ cargo run --bin tempo -- run examples/vllm-smoke.toml -o results.json
 
 The `-v` flag enables INFO-level tracing on stderr. The process exits with
 status `1` if any matrix cell had zero successful runs.
+
+To re-render the summary table from a previously written results JSON file
+without re-running the suite:
+
+```
+cargo run --bin tempo -- report results.json
+```

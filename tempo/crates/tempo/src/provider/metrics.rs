@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::var::VarValue;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     pub suite: String,
     pub scenario: String,
