@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::{Config, Generation, Matrix, Prompt, Scenario};
+use crate::dimensions::Dimensions;
 use crate::var::VarValue;
 
 #[derive(Debug, Clone)]
@@ -64,6 +65,14 @@ impl Cell {
     }
     pub fn vars(&self) -> &IndexMap<String, VarValue> {
         &self.vars
+    }
+
+    pub fn dimensions(&self) -> Dimensions {
+        Dimensions {
+            scenario: self.scenario.clone(),
+            provider: self.provider.clone(),
+            vars: self.vars.clone(),
+        }
     }
 }
 

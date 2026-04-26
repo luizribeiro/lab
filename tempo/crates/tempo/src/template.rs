@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::dimensions::Dimensions;
 use crate::var::VarValue;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -78,23 +79,50 @@ pub fn render_typed(template: &str, resolver: &dyn Resolver) -> Option<VarValue>
     resolver.resolve_typed(inner)
 }
 
-pub fn cell_id(scenario: &str, model: &str, prompt: &str) -> String {
+pub fn cell_id_for(d: &Dimensions) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x100_0000_01b3;
-    let mut h: u64 = FNV_OFFSET;
-    for part in [
-        "tempo-cell-id-v1",
-        "\x1f",
-        scenario,
-        "\x1f",
-        model,
-        "\x1f",
-        prompt,
-    ] {
-        for &b in part.as_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(FNV_PRIME);
+    const SEP: u8 = 0x1f;
+
+    fn feed(h: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *h ^= b as u64;
+            *h = h.wrapping_mul(FNV_PRIME);
         }
+    }
+
+    let mut h: u64 = FNV_OFFSET;
+    feed(&mut h, b"tempo-cell-id-v2");
+    feed(&mut h, &[SEP]);
+    feed(&mut h, d.scenario.as_bytes());
+    feed(&mut h, &[SEP]);
+    feed(&mut h, d.provider.as_bytes());
+    feed(&mut h, &[SEP]);
+
+    let mut keys: Vec<&str> = d.vars.keys().map(String::as_str).collect();
+    keys.sort();
+    for key in keys {
+        let value = d.vars.get(key).expect("key came from d.vars");
+        feed(&mut h, key.as_bytes());
+        feed(&mut h, &[SEP]);
+        match value {
+            VarValue::String(s) => {
+                feed(&mut h, &[b's', SEP]);
+                feed(&mut h, s.as_bytes());
+            }
+            VarValue::Integer(i) => {
+                feed(&mut h, &[b'i', SEP]);
+                feed(&mut h, &i.to_be_bytes());
+            }
+            VarValue::Float(f) => {
+                feed(&mut h, &[b'f', SEP]);
+                feed(&mut h, &f.to_bits().to_be_bytes());
+            }
+            VarValue::Bool(b) => {
+                feed(&mut h, &[b'b', SEP, u8::from(*b)]);
+            }
+        }
+        feed(&mut h, &[SEP]);
     }
     format!("{:08x}", h as u32)
 }
@@ -344,11 +372,44 @@ mod tests {
         );
     }
 
+    fn dim(scenario: &str, provider: &str, vars: &[(&str, VarValue)]) -> Dimensions {
+        let mut m = indexmap::IndexMap::new();
+        for (k, v) in vars {
+            m.insert((*k).to_owned(), v.clone());
+        }
+        Dimensions {
+            scenario: scenario.to_owned(),
+            provider: provider.to_owned(),
+            vars: m,
+        }
+    }
+
     #[test]
-    fn cell_id_is_stable_and_distinct() {
-        let a = cell_id("decode", "m1", "short");
-        let b = cell_id("decode", "m1", "short");
-        let c = cell_id("decode", "m2", "short");
+    fn cell_id_for_is_stable_and_distinct() {
+        let a = cell_id_for(&dim(
+            "decode",
+            "p",
+            &[
+                ("model", VarValue::from("m1")),
+                ("prompt", VarValue::from("short")),
+            ],
+        ));
+        let b = cell_id_for(&dim(
+            "decode",
+            "p",
+            &[
+                ("model", VarValue::from("m1")),
+                ("prompt", VarValue::from("short")),
+            ],
+        ));
+        let c = cell_id_for(&dim(
+            "decode",
+            "p",
+            &[
+                ("model", VarValue::from("m2")),
+                ("prompt", VarValue::from("short")),
+            ],
+        ));
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.len(), 8);
@@ -356,9 +417,82 @@ mod tests {
     }
 
     #[test]
-    fn cell_id_separator_prevents_collisions() {
-        let a = cell_id("ab", "c", "d");
-        let b = cell_id("a", "bc", "d");
+    fn cell_id_for_separator_prevents_collisions() {
+        let a = cell_id_for(&dim(
+            "ab",
+            "p",
+            &[
+                ("model", VarValue::from("c")),
+                ("prompt", VarValue::from("d")),
+            ],
+        ));
+        let b = cell_id_for(&dim(
+            "a",
+            "p",
+            &[
+                ("model", VarValue::from("bc")),
+                ("prompt", VarValue::from("d")),
+            ],
+        ));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cell_id_for_invariant_to_var_insertion_order() {
+        let a = cell_id_for(&dim(
+            "decode",
+            "litellm",
+            &[
+                ("model", VarValue::from("gpt")),
+                ("max_tokens", VarValue::from(2048i64)),
+                ("topic", VarValue::from("a")),
+            ],
+        ));
+        let b = cell_id_for(&dim(
+            "decode",
+            "litellm",
+            &[
+                ("topic", VarValue::from("a")),
+                ("model", VarValue::from("gpt")),
+                ("max_tokens", VarValue::from(2048i64)),
+            ],
+        ));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn cell_id_for_changes_with_provider() {
+        let a = cell_id_for(&dim("decode", "p1", &[("model", VarValue::from("m1"))]));
+        let b = cell_id_for(&dim("decode", "p2", &[("model", VarValue::from("m1"))]));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cell_id_for_distinguishes_int_from_float_and_string() {
+        let i = cell_id_for(&dim("s", "p", &[("x", VarValue::from(1i64))]));
+        let f = cell_id_for(&dim("s", "p", &[("x", VarValue::float(1.0).unwrap())]));
+        let s = cell_id_for(&dim("s", "p", &[("x", VarValue::from("1"))]));
+        let b = cell_id_for(&dim("s", "p", &[("x", VarValue::from(true))]));
+        let bs = cell_id_for(&dim("s", "p", &[("x", VarValue::from("true"))]));
+        assert_ne!(i, f);
+        assert_ne!(i, s);
+        assert_ne!(f, s);
+        assert_ne!(b, bs);
+        assert_ne!(b, i);
+    }
+
+    #[test]
+    fn cell_id_for_golden() {
+        let d = dim(
+            "decode",
+            "litellm",
+            &[
+                ("model", VarValue::from("vllm/qwen3.6-27b")),
+                ("prompt", VarValue::from("short")),
+                ("max_tokens", VarValue::from(2048i64)),
+                ("temperature", VarValue::float(0.0).unwrap()),
+            ],
+        );
+        assert_eq!(cell_id_for(&d), "bacccb11");
     }
 }

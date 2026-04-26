@@ -88,14 +88,11 @@ pub async fn run_all(
 
         let cells = matrix::expand(scenario_name, scenario, config)?;
         for cell in &cells {
-            let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
+            let dimensions = cell.dimensions();
+            let cell_id = template::cell_id_for(&dimensions);
             previews.push(CellPreview {
                 cell_id,
-                dimensions: crate::dimensions::Dimensions {
-                    scenario: cell.scenario().to_string(),
-                    provider: cell.provider().to_string(),
-                    vars: cell.vars().clone(),
-                },
+                dimensions,
                 total_runs: *runs_count,
             });
         }
@@ -114,7 +111,7 @@ pub async fn run_all(
 
     for plan in &plans {
         for cell in &plan.cells {
-            let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
+            let cell_id = template::cell_id_for(&cell.dimensions());
             reporter.cell_started(&cell_id, plan.runs_count);
 
             for warmup_idx in 0..plan.warmup {
@@ -163,13 +160,7 @@ pub async fn run_all(
             let cell_stats = stats::aggregate(&cell_runs)
                 .into_iter()
                 .next()
-                .unwrap_or_else(|| {
-                    stats::CellStats::empty(crate::dimensions::Dimensions {
-                        scenario: cell.scenario().to_string(),
-                        provider: cell.provider().to_string(),
-                        vars: cell.vars().clone(),
-                    })
-                });
+                .unwrap_or_else(|| stats::CellStats::empty(cell.dimensions()));
             runs.extend(cell_runs);
             reporter.cell_finished(&cell_id, &cell_stats);
         }
@@ -411,7 +402,9 @@ prompt = ["s"]
             "run_id should differ between runs"
         );
 
-        let cell_token = template::cell_id("decode", "m1", "s");
+        let cell_token = template::cell_id_for(&crate::dimensions::test_dimensions(
+            "decode", "p", "m1", "s",
+        ));
         for c in &contents {
             assert!(
                 c.contains(&format!("cell={cell_token}")),
@@ -443,7 +436,9 @@ prompt = ["s"]
         assert_eq!(out.runs.len(), 2);
 
         let evs = reporter.events();
-        let cell_id = template::cell_id("decode", "m1", "s");
+        let cell_id = template::cell_id_for(&crate::dimensions::test_dimensions(
+            "decode", "p", "m1", "s",
+        ));
 
         assert!(matches!(
             &evs[0],
