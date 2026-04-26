@@ -99,12 +99,23 @@ async fn run_command(
         .with_context(|| format!("writing results to {}", output_path.display()))?;
 
     eprintln!(
-        "wrote {} rows to {} ({} cells, {} with zero successes)",
+        "wrote {} rows to {}",
         result.runs.len(),
         output_path.display(),
-        result.total_cells,
-        result.zero_success_cells,
     );
+    if result.zero_success_cells > 0 {
+        eprintln!(
+            "{}/{} cells succeeded ({} failed)",
+            result.total_cells - result.zero_success_cells,
+            result.total_cells,
+            result.zero_success_cells,
+        );
+    } else {
+        eprintln!(
+            "{}/{} cells succeeded",
+            result.total_cells, result.total_cells
+        );
+    }
 
     if !no_summary {
         let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
