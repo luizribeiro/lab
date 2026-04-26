@@ -7,6 +7,7 @@ pub mod runner;
 pub mod stats;
 pub mod summary;
 pub mod template;
+pub mod var;
 
 #[doc(hidden)]
 pub mod test_support;
