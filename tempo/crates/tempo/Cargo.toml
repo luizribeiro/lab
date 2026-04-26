@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-comfy-table = "7"
+comfy-table = { version = "7", features = ["custom_styling"] }
 futures-util = "0.3"
 indicatif = "0.17"
 owo-colors = "4"
