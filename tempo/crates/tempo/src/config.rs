@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::template::{self, TemplateError};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -30,7 +32,15 @@ pub enum Provider {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Prompt {
-    Inline { text: String },
+    Inline {
+        text: String,
+        #[serde(default = "default_template")]
+        template: bool,
+    },
+}
+
+fn default_template() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +83,12 @@ pub enum ConfigError {
     UnknownProvider { scenario: String, provider: String },
     #[error("scenario {scenario:?} references unknown prompt {prompt:?}")]
     UnknownPrompt { scenario: String, prompt: String },
+    #[error("prompt {prompt:?} has invalid template: {source}")]
+    InvalidTemplate {
+        prompt: String,
+        #[source]
+        source: TemplateError,
+    },
 }
 
 impl Config {
@@ -100,6 +116,15 @@ impl Config {
                         prompt: prompt.clone(),
                     });
                 }
+            }
+        }
+        for (name, prompt) in &self.prompts {
+            let Prompt::Inline { text, template } = prompt;
+            if *template {
+                template::validate(text).map_err(|source| ConfigError::InvalidTemplate {
+                    prompt: name.clone(),
+                    source,
+                })?;
             }
         }
         Ok(())
@@ -233,6 +258,70 @@ prompt = ["ghost"]
             matches!(err, ConfigError::UnknownPrompt { ref scenario, ref prompt } if scenario == "t" && prompt == "ghost"),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn rejects_prompt_with_unknown_template_var() {
+        let toml = r#"
+[suite]
+name = "x"
+
+[providers.p]
+kind = "openai_compatible"
+base_url = "http://x"
+api_key_env = "K"
+
+[prompts.s]
+kind = "inline"
+text = "hello {bogus}"
+
+[scenarios.t]
+kind = "throughput"
+provider = "p"
+warmup = 0
+runs = 1
+generation = { max_tokens = 1, temperature = 0.0 }
+[scenarios.t.matrix]
+model = ["m"]
+prompt = ["s"]
+"#;
+        let err = Config::from_toml_str(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidTemplate { ref prompt, .. } if prompt == "s"),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn template_false_skips_validation() {
+        let toml = r#"
+[suite]
+name = "x"
+
+[providers.p]
+kind = "openai_compatible"
+base_url = "http://x"
+api_key_env = "K"
+
+[prompts.s]
+kind = "inline"
+text = "hello {bogus}"
+template = false
+
+[scenarios.t]
+kind = "throughput"
+provider = "p"
+warmup = 0
+runs = 1
+generation = { max_tokens = 1, temperature = 0.0 }
+[scenarios.t.matrix]
+model = ["m"]
+prompt = ["s"]
+"#;
+        let cfg = Config::from_toml_str(toml).expect("parses with template=false");
+        let Prompt::Inline { text, template } = cfg.prompts.get("s").unwrap();
+        assert_eq!(text, "hello {bogus}");
+        assert!(!template);
     }
 
     #[test]

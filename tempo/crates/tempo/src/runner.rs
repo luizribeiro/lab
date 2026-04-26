@@ -3,9 +3,10 @@ use std::env;
 use thiserror::Error;
 
 use crate::config::{Config, Provider, Scenario};
-use crate::matrix::{self, MatrixError};
+use crate::matrix::{self, Cell, MatrixError};
 use crate::provider::metrics::Run;
 use crate::provider::openai::run_request;
+use crate::template::{self, TemplateError, TemplateVars};
 
 #[derive(Debug)]
 pub struct RunnerOutput {
@@ -20,6 +21,28 @@ pub enum RunnerError {
     MissingApiKey(String),
     #[error(transparent)]
     Matrix(#[from] MatrixError),
+    #[error("failed to render prompt template for cell ({scenario}, {model}, {prompt}): {source}")]
+    Template {
+        scenario: String,
+        model: String,
+        prompt: String,
+        #[source]
+        source: TemplateError,
+    },
+}
+
+fn render_prompt(cell: &Cell, cell_id: &str, run_id: &str) -> Result<String, RunnerError> {
+    if !cell.prompt_template {
+        return Ok(cell.prompt_text.clone());
+    }
+    template::render(&cell.prompt_text, &TemplateVars { run_id, cell_id }).map_err(|source| {
+        RunnerError::Template {
+            scenario: cell.scenario.clone(),
+            model: cell.model.clone(),
+            prompt: cell.prompt.clone(),
+            source,
+        }
+    })
 }
 
 pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
@@ -51,13 +74,17 @@ pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
         let cells = matrix::expand(scenario_name, scenario, config)?;
         total_cells += cells.len();
         for cell in &cells {
+            let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
             for _ in 0..*warmup {
-                let _ = run_request(cell, base_url, &api_key, *timeout_secs).await;
+                let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
+                let _ = run_request(cell, &prompt_text, base_url, &api_key, *timeout_secs).await;
             }
 
             let mut successes = 0u32;
             for run_idx in 0..*runs_count {
-                let mut run = run_request(cell, base_url, &api_key, *timeout_secs).await;
+                let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
+                let mut run =
+                    run_request(cell, &prompt_text, base_url, &api_key, *timeout_secs).await;
                 run.suite = suite.clone();
                 run.run_idx = run_idx;
                 if run.error.is_none() {
@@ -226,6 +253,83 @@ prompt = ["s"]
         assert_eq!(out.runs.len(), 3, "warmups must not appear in output");
         let received = server.received_requests().await.unwrap();
         assert_eq!(received.len(), 5, "2 warmup + 3 measured = 5 total HTTP");
+    }
+
+    fn config_with_template_prompt(base_url: &str, runs: u32, prompt_text: &str) -> Config {
+        let toml = format!(
+            r#"
+[suite]
+name = "test-suite"
+
+[providers.p]
+kind = "openai_compatible"
+base_url = "{base_url}"
+api_key_env = "{TEST_KEY_ENV}"
+
+[prompts.s]
+kind = "inline"
+text = "{prompt_text}"
+
+[scenarios.decode]
+kind = "throughput"
+provider = "p"
+warmup = 0
+runs = {runs}
+timeout_secs = 5
+generation = {{ max_tokens = 4, temperature = 0.0 }}
+[scenarios.decode.matrix]
+model = ["m1"]
+prompt = ["s"]
+"#
+        );
+        Config::from_toml_str(&toml).expect("config parses")
+    }
+
+    #[tokio::test]
+    async fn templated_prompt_varies_run_id_and_keeps_cell_id_stable() {
+        set_test_key();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(happy_sse_body()),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = config_with_template_prompt(&server.uri(), 2, "cell={cell_id} run={run_id}");
+        let out = run_all(&cfg).await.expect("runner ok");
+        assert_eq!(out.runs.len(), 2);
+
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 2);
+
+        let contents: Vec<String> = received
+            .iter()
+            .map(|r| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).expect("json body");
+                body["messages"][0]["content"]
+                    .as_str()
+                    .expect("content string")
+                    .to_string()
+            })
+            .collect();
+
+        assert_ne!(
+            contents[0], contents[1],
+            "run_id should differ between runs"
+        );
+
+        let cell_token = template::cell_id("decode", "m1", "s");
+        for c in &contents {
+            assert!(
+                c.contains(&format!("cell={cell_token}")),
+                "rendered content {c:?} should contain stable cell_id {cell_token}",
+            );
+            assert!(c.starts_with("cell="), "unexpected content prefix: {c:?}");
+        }
     }
 
     #[tokio::test]

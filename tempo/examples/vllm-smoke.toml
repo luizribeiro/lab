@@ -14,6 +14,10 @@ text = "Write a haiku about caching."
 kind = "inline"
 text = "Summarize the history of TCP congestion control."
 
+[prompts.cache_buster]
+kind = "inline"
+text = "Run {run_id}: write a haiku about caching."
+
 [scenarios.decode]
 kind     = "throughput"
 provider = "vllm"

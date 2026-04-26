@@ -9,7 +9,13 @@ use crate::matrix::Cell;
 use crate::provider::metrics::Run;
 use crate::provider::sse::{parse_data_line, ParsedChunk};
 
-pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_secs: u64) -> Run {
+pub async fn run_request(
+    cell: &Cell,
+    prompt_text: &str,
+    base_url: &str,
+    api_key: &str,
+    timeout_secs: u64,
+) -> Run {
     let started_at = Utc::now();
     let started = Instant::now();
 
@@ -40,7 +46,7 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = json!({
         "model": cell.model,
-        "messages": [{"role": "user", "content": cell.prompt_text}],
+        "messages": [{"role": "user", "content": prompt_text}],
         "max_tokens": cell.generation.max_tokens,
         "temperature": cell.generation.temperature,
         "stream": true,
@@ -179,6 +185,7 @@ mod tests {
             model: "test-model".into(),
             prompt: "short".into(),
             prompt_text: "Hello".into(),
+            prompt_template: false,
             generation: Generation {
                 max_tokens: 16,
                 temperature: 0.0,
@@ -215,7 +222,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "test-key", 5).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "test-key", 5).await;
 
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.ttft_ms.unwrap() > 0.0);
@@ -241,7 +248,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "test-key", 5).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "test-key", 5).await;
 
         assert!(run.error.is_none(), "error: {:?}", run.error);
         let ttft_ms = run.ttft_ms.expect("ttft_ms should be present");
@@ -261,7 +268,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "k", 5).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
         assert_eq!(run.error.as_deref(), Some("http_500"));
         assert!(run.ttft_ms.is_none());
         assert!(run.decode_tok_s.is_none());
@@ -282,7 +289,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "k", 1).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "k", 1).await;
         assert_eq!(run.error.as_deref(), Some("timeout"));
         assert!(run.ttft_ms.is_none());
         assert!(run.decode_tok_s.is_none());
@@ -311,7 +318,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "k", 5).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.ttft_ms.unwrap() > 0.0);
         let rate = run.decode_tok_s.expect("decode_tok_s should be present");
@@ -340,7 +347,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), &server.uri(), "k", 5).await;
+        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.input_tokens.is_none());
         assert!(run.output_tokens.is_none());

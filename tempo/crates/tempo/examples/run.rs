@@ -100,12 +100,13 @@ async fn probe_for_working_model(
             model: entry.id.clone(),
             prompt: "probe".into(),
             prompt_text: "Hi.".into(),
+            prompt_template: false,
             generation: Generation {
                 max_tokens: 16,
                 temperature: 0.0,
             },
         };
-        let run = run_request(&cell, base_url, api_key, 30).await;
+        let run = run_request(&cell, &cell.prompt_text, base_url, api_key, 30).await;
         if run.error.is_none() && run.ttft_ms.is_some() {
             return Some(entry.id.clone());
         }

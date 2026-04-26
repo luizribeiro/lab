@@ -9,6 +9,7 @@ pub struct Cell {
     pub model: String,
     pub prompt: String,
     pub prompt_text: String,
+    pub prompt_template: bool,
     pub generation: Generation,
 }
 
@@ -44,7 +45,7 @@ pub fn expand(
     let mut cells = Vec::with_capacity(matrix.model.len() * matrix.prompt.len());
     for model in &matrix.model {
         for prompt_name in &matrix.prompt {
-            let Prompt::Inline { text } =
+            let Prompt::Inline { text, template } =
                 config
                     .prompts
                     .get(prompt_name)
@@ -58,6 +59,7 @@ pub fn expand(
                 model: model.clone(),
                 prompt: prompt_name.clone(),
                 prompt_text: text.clone(),
+                prompt_template: *template,
                 generation: generation.clone(),
             });
         }
