@@ -5,27 +5,19 @@ use std::time::Duration;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
 
+use crate::dimensions::Dimensions;
 use crate::stats::CellStats;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellPreview {
     pub cell_id: String,
-    pub scenario: String,
-    pub model: String,
-    pub prompt: String,
+    pub dimensions: Dimensions,
     pub total_runs: u32,
 }
 
 pub trait ProgressReporter: Send + Sync {
     fn suite_started(&self, suite_name: &str, cells: &[CellPreview]);
-    fn cell_started(
-        &self,
-        cell_id: &str,
-        scenario: &str,
-        model: &str,
-        prompt: &str,
-        total_runs: u32,
-    );
+    fn cell_started(&self, cell_id: &str, total_runs: u32);
     fn run_started(&self, cell_id: &str, run_idx: u32, is_warmup: bool);
     fn token_received(&self, cell_id: &str);
     fn run_finished(&self, cell_id: &str, success: bool);
@@ -37,7 +29,7 @@ pub struct NoopReporter;
 
 impl ProgressReporter for NoopReporter {
     fn suite_started(&self, _: &str, _: &[CellPreview]) {}
-    fn cell_started(&self, _: &str, _: &str, _: &str, _: &str, _: u32) {}
+    fn cell_started(&self, _: &str, _: u32) {}
     fn run_started(&self, _: &str, _: u32, _: bool) {}
     fn token_received(&self, _: &str) {}
     fn run_finished(&self, _: &str, _: bool) {}
@@ -45,8 +37,12 @@ impl ProgressReporter for NoopReporter {
     fn suite_finished(&self) {}
 }
 
-fn cell_label(scenario: &str, model: &str, prompt: &str) -> String {
-    format!("{scenario}·{model}·{prompt}")
+fn dim_label(dimensions: &Dimensions, varying: &[String]) -> String {
+    varying
+        .iter()
+        .map(|axis| dimensions.axis_value(axis))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 struct CellState {
@@ -64,6 +60,7 @@ struct ReporterState {
     total_runs_overall: u32,
     done_runs: u32,
     total_cells: usize,
+    varying: Vec<String>,
     cells: HashMap<String, CellState>,
 }
 
@@ -75,19 +72,21 @@ impl ReporterState {
             total_runs_overall: 0,
             done_runs: 0,
             total_cells: 0,
+            varying: Vec::new(),
             cells: HashMap::new(),
         }
     }
 
     fn render_header(&self) -> String {
-        format!(
-            "Suite: {} · {} cells · {} runs · {}/{} runs done",
-            self.suite_name,
-            self.total_cells,
-            self.total_runs_overall,
-            self.done_runs,
-            self.total_runs_overall,
-        )
+        let base = format!(
+            "Suite: {} · {} cells · {} runs",
+            self.suite_name, self.total_cells, self.total_runs_overall,
+        );
+        if self.varying.is_empty() {
+            base
+        } else {
+            format!("{} · varying: {}", base, self.varying.join(", "))
+        }
     }
 }
 
@@ -124,24 +123,31 @@ impl IndicatifReporter {
     }
 
     fn pending_prefix(label: &str) -> String {
-        format!("  {}", label.dimmed())
-    }
-
-    fn active_prefix(label: &str) -> String {
-        format!("{}", label.bold())
-    }
-
-    fn done_prefix(label: &str, success: bool) -> String {
-        if success {
-            format!("{} {}", "✓".green(), label)
+        if label.is_empty() {
+            String::new()
         } else {
-            format!("{} {}", "✗".red(), label)
+            format!("  {}", label.dimmed())
         }
     }
 
-    fn refresh_header(state: &ReporterState) {
-        if let Some(h) = state.header.as_ref() {
-            h.set_message(state.render_header());
+    fn active_prefix(label: &str) -> String {
+        if label.is_empty() {
+            String::new()
+        } else {
+            format!("{}", label.bold())
+        }
+    }
+
+    fn done_prefix(label: &str, success: bool) -> String {
+        let mark = if success {
+            format!("{}", "✓".green())
+        } else {
+            format!("{}", "✗".red())
+        };
+        if label.is_empty() {
+            mark
+        } else {
+            format!("{mark} {label}")
         }
     }
 
@@ -183,22 +189,33 @@ impl ProgressReporter for IndicatifReporter {
         state.total_runs_overall = cells.iter().map(|c| c.total_runs).sum();
         state.done_runs = 0;
 
+        let dims: Vec<Dimensions> = cells.iter().map(|c| c.dimensions.clone()).collect();
+        state.varying = Dimensions::varying(&dims)
+            .into_iter()
+            .map(String::from)
+            .collect();
+
         let header = self.multi.add(ProgressBar::new_spinner());
         header.set_style(Self::header_style());
         header.set_message(state.render_header());
         header.enable_steady_tick(Duration::from_secs(1));
         state.header = Some(header);
 
+        let varying = state.varying.clone();
         let max_label = cells
             .iter()
-            .map(|c| cell_label(&c.scenario, &c.model, &c.prompt).chars().count())
+            .map(|c| dim_label(&c.dimensions, &varying).chars().count())
             .max()
             .unwrap_or(0);
 
         for preview in cells {
-            let raw = cell_label(&preview.scenario, &preview.model, &preview.prompt);
-            let pad = max_label.saturating_sub(raw.chars().count());
-            let label = format!("{raw}{}", " ".repeat(pad));
+            let raw = dim_label(&preview.dimensions, &varying);
+            let label = if max_label == 0 {
+                String::new()
+            } else {
+                let pad = max_label.saturating_sub(raw.chars().count());
+                format!("{raw}{}", " ".repeat(pad))
+            };
             let bar = self.multi.add(ProgressBar::new_spinner());
             bar.set_style(Self::pending_style());
             bar.set_prefix(Self::pending_prefix(&label));
@@ -217,14 +234,7 @@ impl ProgressReporter for IndicatifReporter {
         }
     }
 
-    fn cell_started(
-        &self,
-        cell_id: &str,
-        _scenario: &str,
-        _model: &str,
-        _prompt: &str,
-        _total_runs: u32,
-    ) {
+    fn cell_started(&self, cell_id: &str, _total_runs: u32) {
         let state = self.state.lock().unwrap();
         if let Some(cell) = state.cells.get(cell_id) {
             cell.bar.set_style(Self::active_style());
@@ -262,7 +272,6 @@ impl ProgressReporter for IndicatifReporter {
         if !was_warmup {
             state.done_runs += 1;
         }
-        Self::refresh_header(&state);
     }
 
     fn cell_finished(&self, cell_id: &str, stats: &CellStats) {
@@ -294,6 +303,7 @@ pub mod testing {
     use crate::stats::CellStats;
 
     #[derive(Debug, Clone, PartialEq)]
+    #[allow(clippy::large_enum_variant)]
     pub enum Event {
         SuiteStarted {
             suite_name: String,
@@ -301,9 +311,6 @@ pub mod testing {
         },
         CellStarted {
             cell_id: String,
-            scenario: String,
-            model: String,
-            prompt: String,
             total_runs: u32,
         },
         RunStarted {
@@ -347,19 +354,9 @@ pub mod testing {
                 cells: cells.to_vec(),
             });
         }
-        fn cell_started(
-            &self,
-            cell_id: &str,
-            scenario: &str,
-            model: &str,
-            prompt: &str,
-            total_runs: u32,
-        ) {
+        fn cell_started(&self, cell_id: &str, total_runs: u32) {
             self.events.lock().unwrap().push(Event::CellStarted {
                 cell_id: cell_id.into(),
-                scenario: scenario.into(),
-                model: model.into(),
-                prompt: prompt.into(),
                 total_runs,
             });
         }
@@ -396,10 +393,11 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimensions::test_dimensions;
 
     fn dummy_stats() -> CellStats {
         CellStats {
-            dimensions: crate::dimensions::test_dimensions("s", "p", "m", "pr"),
+            dimensions: test_dimensions("s", "p", "m", "pr"),
             total_runs: 1,
             success_runs: 1,
             error_runs: 0,
@@ -413,18 +411,20 @@ mod tests {
         }
     }
 
+    fn preview(cell_id: &str, model: &str, prompt: &str, total_runs: u32) -> CellPreview {
+        CellPreview {
+            cell_id: cell_id.into(),
+            dimensions: test_dimensions("s", "p", model, prompt),
+            total_runs,
+        }
+    }
+
     #[test]
     fn fake_reporter_records_events_in_order() {
         let r = testing::FakeReporter::new();
-        let preview = CellPreview {
-            cell_id: "c".into(),
-            scenario: "s".into(),
-            model: "m".into(),
-            prompt: "p".into(),
-            total_runs: 1,
-        };
-        r.suite_started("suite", std::slice::from_ref(&preview));
-        r.cell_started("c", "s", "m", "p", 1);
+        let p = preview("c", "m", "pr", 1);
+        r.suite_started("suite", std::slice::from_ref(&p));
+        r.cell_started("c", 1);
         r.run_started("c", 0, false);
         r.token_received("c");
         r.run_finished("c", true);
@@ -448,15 +448,9 @@ mod tests {
     #[test]
     fn indicatif_reporter_excludes_warmup_from_suite_progress() {
         let r = IndicatifReporter::new();
-        let preview = CellPreview {
-            cell_id: "c".into(),
-            scenario: "s".into(),
-            model: "m".into(),
-            prompt: "p".into(),
-            total_runs: 2,
-        };
-        r.suite_started("suite", std::slice::from_ref(&preview));
-        r.cell_started("c", "s", "m", "p", 2);
+        let p = preview("c", "m", "pr", 2);
+        r.suite_started("suite", std::slice::from_ref(&p));
+        r.cell_started("c", 2);
 
         for warmup_idx in 0..3 {
             r.run_started("c", warmup_idx, true);
@@ -472,5 +466,88 @@ mod tests {
 
         r.cell_finished("c", &dummy_stats());
         r.suite_finished();
+    }
+
+    #[test]
+    fn header_includes_varying_axes_when_present() {
+        let r = IndicatifReporter::new();
+        let cells = vec![preview("a", "m1", "pr", 1), preview("b", "m2", "pr", 1)];
+        r.suite_started("decode", &cells);
+        let header = r.state.lock().unwrap().render_header();
+        assert!(header.contains("varying: model"), "got {header:?}");
+        assert!(!header.contains("prompt"), "constant axes must not appear");
+        assert!(header.contains("decode"));
+        assert!(header.contains("2 cells"));
+    }
+
+    #[test]
+    fn header_omits_varying_when_single_cell() {
+        let r = IndicatifReporter::new();
+        let p = preview("c", "m", "pr", 1);
+        r.suite_started("decode", std::slice::from_ref(&p));
+        let header = r.state.lock().unwrap().render_header();
+        assert!(!header.contains("varying"), "got {header:?}");
+    }
+
+    #[test]
+    fn cell_label_is_only_varying_axes_joined() {
+        let r = IndicatifReporter::new();
+        let cells = vec![preview("a", "m1", "pr", 1), preview("b", "m2", "pr", 1)];
+        r.suite_started("suite", &cells);
+        let state = r.state.lock().unwrap();
+        let a_label = state.cells.get("a").unwrap().label.trim_end().to_string();
+        let b_label = state.cells.get("b").unwrap().label.trim_end().to_string();
+        assert_eq!(a_label, "m1");
+        assert_eq!(b_label, "m2");
+        assert_eq!(
+            state.cells.get("a").unwrap().label.chars().count(),
+            state.cells.get("b").unwrap().label.chars().count(),
+            "labels must be padded to equal width",
+        );
+    }
+
+    #[test]
+    fn cell_label_joins_multiple_varying_axes() {
+        use crate::var::VarValue;
+        use indexmap::IndexMap;
+
+        fn dim(model: &str, max_tokens: i64) -> Dimensions {
+            let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+            vars.insert("model".into(), VarValue::from(model));
+            vars.insert("prompt".into(), VarValue::from("pr"));
+            vars.insert("max_tokens".into(), VarValue::from(max_tokens));
+            Dimensions {
+                scenario: "s".into(),
+                provider: "p".into(),
+                vars,
+            }
+        }
+
+        let r = IndicatifReporter::new();
+        let cells = vec![
+            CellPreview {
+                cell_id: "a".into(),
+                dimensions: dim("m1", 2048),
+                total_runs: 1,
+            },
+            CellPreview {
+                cell_id: "b".into(),
+                dimensions: dim("m2", 4096),
+                total_runs: 1,
+            },
+        ];
+        r.suite_started("suite", &cells);
+        let state = r.state.lock().unwrap();
+        assert_eq!(state.cells.get("a").unwrap().label.trim_end(), "m1 · 2048");
+        assert_eq!(state.cells.get("b").unwrap().label.trim_end(), "m2 · 4096");
+    }
+
+    #[test]
+    fn cell_label_empty_when_nothing_varies() {
+        let r = IndicatifReporter::new();
+        let p = preview("c", "m", "pr", 1);
+        r.suite_started("suite", std::slice::from_ref(&p));
+        let state = r.state.lock().unwrap();
+        assert_eq!(state.cells.get("c").unwrap().label, "");
     }
 }

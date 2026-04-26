@@ -91,9 +91,11 @@ pub async fn run_all(
             let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
             previews.push(CellPreview {
                 cell_id,
-                scenario: cell.scenario().to_string(),
-                model: cell.model().to_string(),
-                prompt: cell.prompt().to_string(),
+                dimensions: crate::dimensions::Dimensions {
+                    scenario: cell.scenario().to_string(),
+                    provider: cell.provider().to_string(),
+                    vars: cell.vars().clone(),
+                },
                 total_runs: *runs_count,
             });
         }
@@ -113,13 +115,7 @@ pub async fn run_all(
     for plan in &plans {
         for cell in &plan.cells {
             let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
-            reporter.cell_started(
-                &cell_id,
-                cell.scenario(),
-                cell.model(),
-                cell.prompt(),
-                plan.runs_count,
-            );
+            reporter.cell_started(&cell_id, plan.runs_count);
 
             for warmup_idx in 0..plan.warmup {
                 reporter.run_started(&cell_id, warmup_idx, true);
