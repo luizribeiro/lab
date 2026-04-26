@@ -125,6 +125,11 @@ impl IndicatifReporter {
         }
     }
 
+    #[cfg(test)]
+    pub fn done_runs(&self) -> u32 {
+        self.state.lock().unwrap().done_runs
+    }
+
     fn header_style() -> ProgressStyle {
         ProgressStyle::with_template("{wide_msg:.bold}").expect("valid template")
     }
@@ -268,9 +273,16 @@ impl ProgressReporter for IndicatifReporter {
         }
     }
 
-    fn run_finished(&self, _cell_id: &str, _success: bool) {
+    fn run_finished(&self, cell_id: &str, _success: bool) {
         let mut state = self.state.lock().unwrap();
-        state.done_runs += 1;
+        let was_warmup = state
+            .cells
+            .get(cell_id)
+            .map(|c| c.is_warmup)
+            .unwrap_or(false);
+        if !was_warmup {
+            state.done_runs += 1;
+        }
         Self::refresh_header(&state);
     }
 
@@ -455,5 +467,34 @@ mod tests {
             testing::Event::CellFinished { stats, .. } if stats.success_runs == 1
         ));
         assert!(matches!(evs[6], testing::Event::SuiteFinished));
+    }
+
+    #[test]
+    fn indicatif_reporter_excludes_warmup_from_suite_progress() {
+        let r = IndicatifReporter::new();
+        let preview = CellPreview {
+            cell_id: "c".into(),
+            scenario: "s".into(),
+            model: "m".into(),
+            prompt: "p".into(),
+            total_runs: 2,
+        };
+        r.suite_started("suite", std::slice::from_ref(&preview));
+        r.cell_started("c", "s", "m", "p", 2);
+
+        for warmup_idx in 0..3 {
+            r.run_started("c", warmup_idx, true);
+            r.run_finished("c", true);
+        }
+        assert_eq!(r.done_runs(), 0, "warmups must not advance suite progress");
+
+        for run_idx in 0..2 {
+            r.run_started("c", run_idx, false);
+            r.run_finished("c", true);
+        }
+        assert_eq!(r.done_runs(), 2, "only measured runs count");
+
+        r.cell_finished("c", &dummy_stats());
+        r.suite_finished();
     }
 }
