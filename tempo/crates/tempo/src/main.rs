@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -7,6 +8,8 @@ use clap::{Parser, Subcommand};
 use tempo::config::Config;
 use tempo::output::write_runs_to_path;
 use tempo::runner::run_all;
+use tempo::stats;
+use tempo::summary;
 
 #[derive(Debug, Parser)]
 #[command(name = "tempo", version, about = "LLM inference throughput benchmark")]
@@ -24,6 +27,8 @@ enum Command {
         suite: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        #[arg(long)]
+        no_summary: bool,
     },
 }
 
@@ -41,7 +46,11 @@ async fn main() -> ExitCode {
     }
 
     match cli.command {
-        Command::Run { suite, output } => match run_command(&suite, &output).await {
+        Command::Run {
+            suite,
+            output,
+            no_summary,
+        } => match run_command(&suite, &output, no_summary).await {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("error: {err:#}");
@@ -51,7 +60,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_command(suite_path: &Path, output_path: &Path) -> Result<ExitCode> {
+async fn run_command(suite_path: &Path, output_path: &Path, no_summary: bool) -> Result<ExitCode> {
     let toml_text = std::fs::read_to_string(suite_path)
         .with_context(|| format!("reading suite file {}", suite_path.display()))?;
     let config = Config::from_toml_str(&toml_text).context("parsing suite TOML")?;
@@ -67,6 +76,13 @@ async fn run_command(suite_path: &Path, output_path: &Path) -> Result<ExitCode> 
         result.total_cells,
         result.zero_success_cells,
     );
+
+    if !no_summary {
+        let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let cell_stats = stats::aggregate(&result.runs);
+        let table = summary::render(&cell_stats, color);
+        eprintln!("{table}");
+    }
 
     Ok(if result.zero_success_cells > 0 {
         ExitCode::from(1)
