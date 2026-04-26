@@ -8,7 +8,7 @@ use crate::progress::{CellPreview, ProgressReporter};
 use crate::provider::metrics::Run;
 use crate::provider::openai::run_request;
 use crate::stats;
-use crate::template::{self, TemplateError, TemplateVars};
+use crate::template::{self, SimpleResolver, TemplateError};
 
 #[derive(Debug)]
 pub struct RunnerOutput {
@@ -37,13 +37,14 @@ fn render_prompt(cell: &Cell, cell_id: &str, run_id: &str) -> Result<String, Run
     if !cell.prompt_template {
         return Ok(cell.prompt_text.clone());
     }
-    template::render(&cell.prompt_text, &TemplateVars { run_id, cell_id }).map_err(|source| {
-        RunnerError::Template {
-            scenario: cell.scenario.clone(),
-            model: cell.model.clone(),
-            prompt: cell.prompt.clone(),
-            source,
-        }
+    let mut resolver = SimpleResolver::new();
+    resolver.insert("run_id", run_id);
+    resolver.insert("cell_id", cell_id);
+    template::render(&cell.prompt_text, &resolver).map_err(|source| RunnerError::Template {
+        scenario: cell.scenario.clone(),
+        model: cell.model.clone(),
+        prompt: cell.prompt.clone(),
+        source,
     })
 }
 

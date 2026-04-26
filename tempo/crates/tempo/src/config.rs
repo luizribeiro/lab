@@ -121,9 +121,11 @@ impl Config {
         for (name, prompt) in &self.prompts {
             let Prompt::Inline { text, template } = prompt;
             if *template {
-                template::validate(text).map_err(|source| ConfigError::InvalidTemplate {
-                    prompt: name.clone(),
-                    source,
+                template::validate(text, &["run_id", "cell_id"]).map_err(|source| {
+                    ConfigError::InvalidTemplate {
+                        prompt: name.clone(),
+                        source,
+                    }
                 })?;
             }
         }

@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+
 use thiserror::Error;
+
+use crate::var::VarValue;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TemplateError {
@@ -12,17 +16,66 @@ pub enum TemplateError {
     EmptyVariable,
 }
 
-pub struct TemplateVars<'a> {
-    pub run_id: &'a str,
-    pub cell_id: &'a str,
+pub trait Resolver {
+    fn resolve(&self, name: &str) -> Option<&str>;
+    fn resolve_typed(&self, _name: &str) -> Option<VarValue> {
+        None
+    }
 }
 
-pub fn render(template: &str, vars: &TemplateVars) -> Result<String, TemplateError> {
-    process(template, Some(vars))
+#[derive(Debug, Default, Clone)]
+pub struct SimpleResolver {
+    values: BTreeMap<String, VarValue>,
+    strings: BTreeMap<String, String>,
 }
 
-pub fn validate(template: &str) -> Result<(), TemplateError> {
-    process(template, None).map(|_| ())
+impl SimpleResolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, name: impl Into<String>, value: impl Into<VarValue>) -> &mut Self {
+        let name = name.into();
+        let value = value.into();
+        self.strings.insert(name.clone(), value_to_string(&value));
+        self.values.insert(name, value);
+        self
+    }
+}
+
+impl Resolver for SimpleResolver {
+    fn resolve(&self, name: &str) -> Option<&str> {
+        self.strings.get(name).map(String::as_str)
+    }
+
+    fn resolve_typed(&self, name: &str) -> Option<VarValue> {
+        self.values.get(name).cloned()
+    }
+}
+
+fn value_to_string(v: &VarValue) -> String {
+    match v {
+        VarValue::String(s) => s.clone(),
+        VarValue::Integer(i) => i.to_string(),
+        VarValue::Float(f) => f.to_string(),
+        VarValue::Bool(b) => b.to_string(),
+    }
+}
+
+pub fn render(template: &str, resolver: &dyn Resolver) -> Result<String, TemplateError> {
+    process(template, Mode::Render(resolver))
+}
+
+pub fn validate(template: &str, allowed: &[&str]) -> Result<(), TemplateError> {
+    process(template, Mode::Validate(allowed)).map(|_| ())
+}
+
+pub fn render_typed(template: &str, resolver: &dyn Resolver) -> Option<VarValue> {
+    let inner = template.strip_prefix('{')?.strip_suffix('}')?;
+    if inner.is_empty() || inner.contains('{') || inner.contains('}') {
+        return None;
+    }
+    resolver.resolve_typed(inner)
 }
 
 pub fn cell_id(scenario: &str, model: &str, prompt: &str) -> String {
@@ -50,7 +103,36 @@ pub fn new_run_id() -> String {
     format!("{:08x}", rand::random::<u32>())
 }
 
-fn process(template: &str, vars: Option<&TemplateVars>) -> Result<String, TemplateError> {
+enum Mode<'a> {
+    Render(&'a dyn Resolver),
+    Validate(&'a [&'a str]),
+}
+
+enum Lookup<'a> {
+    Found(&'a str),
+    Allowed,
+    Unknown,
+}
+
+impl Mode<'_> {
+    fn lookup(&self, name: &str) -> Lookup<'_> {
+        match self {
+            Mode::Render(r) => match r.resolve(name) {
+                Some(v) => Lookup::Found(v),
+                None => Lookup::Unknown,
+            },
+            Mode::Validate(allowed) => {
+                if allowed.contains(&name) {
+                    Lookup::Allowed
+                } else {
+                    Lookup::Unknown
+                }
+            }
+        }
+    }
+}
+
+fn process(template: &str, mode: Mode<'_>) -> Result<String, TemplateError> {
     let mut out = String::with_capacity(template.len());
     let mut chars = template.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
@@ -69,13 +151,12 @@ fn process(template: &str, vars: Option<&TemplateVars>) -> Result<String, Templa
                 if name.is_empty() {
                     return Err(TemplateError::EmptyVariable);
                 }
-                let value = match name {
-                    "run_id" => vars.map(|v| v.run_id),
-                    "cell_id" => vars.map(|v| v.cell_id),
-                    other => return Err(TemplateError::UnknownVariable(other.to_string())),
-                };
-                if let Some(v) = value {
-                    out.push_str(v);
+                match mode.lookup(name) {
+                    Lookup::Found(v) => out.push_str(v),
+                    Lookup::Allowed => {}
+                    Lookup::Unknown => {
+                        return Err(TemplateError::UnknownVariable(name.to_string()))
+                    }
                 }
                 let target = i + 1 + close_off + 1;
                 while let Some(&(j, _)) = chars.peek() {
@@ -103,75 +184,164 @@ fn process(template: &str, vars: Option<&TemplateVars>) -> Result<String, Templa
 mod tests {
     use super::*;
 
-    fn vars() -> TemplateVars<'static> {
-        TemplateVars {
-            run_id: "abcd1234",
-            cell_id: "deadbeef",
-        }
+    fn resolver() -> SimpleResolver {
+        let mut r = SimpleResolver::new();
+        r.insert("run_id", "abcd1234");
+        r.insert("cell_id", "deadbeef");
+        r
     }
 
     #[test]
     fn renders_known_variables() {
-        let out = render("run={run_id} cell={cell_id}", &vars()).unwrap();
+        let out = render("run={run_id} cell={cell_id}", &resolver()).unwrap();
         assert_eq!(out, "run=abcd1234 cell=deadbeef");
     }
 
     #[test]
     fn brace_doubling_escapes_to_literals() {
-        assert_eq!(render("{{a}}", &vars()).unwrap(), "{a}");
-        assert_eq!(render("{{", &vars()).unwrap(), "{");
-        assert_eq!(render("}}", &vars()).unwrap(), "}");
+        let r = resolver();
+        assert_eq!(render("{{a}}", &r).unwrap(), "{a}");
+        assert_eq!(render("{{", &r).unwrap(), "{");
+        assert_eq!(render("}}", &r).unwrap(), "}");
     }
 
     #[test]
     fn unknown_variable_is_error() {
-        let err = render("hi {foobar}", &vars()).unwrap_err();
+        let err = render("hi {foobar}", &resolver()).unwrap_err();
         assert_eq!(err, TemplateError::UnknownVariable("foobar".into()));
     }
 
     #[test]
     fn unmatched_open_brace_is_error() {
-        let err = render("hello {run_id", &vars()).unwrap_err();
+        let err = render("hello {run_id", &resolver()).unwrap_err();
         assert_eq!(err, TemplateError::UnmatchedOpenBrace);
     }
 
     #[test]
     fn unmatched_close_brace_is_error() {
-        let err = render("hello }", &vars()).unwrap_err();
+        let err = render("hello }", &resolver()).unwrap_err();
         assert_eq!(err, TemplateError::UnmatchedCloseBrace);
     }
 
     #[test]
     fn empty_variable_is_error() {
-        let err = render("hi {}", &vars()).unwrap_err();
+        let err = render("hi {}", &resolver()).unwrap_err();
         assert_eq!(err, TemplateError::EmptyVariable);
-        assert_eq!(validate("hi {}").unwrap_err(), TemplateError::EmptyVariable);
-    }
-
-    #[test]
-    fn empty_string_passes_through() {
-        assert_eq!(render("", &vars()).unwrap(), "");
-    }
-
-    #[test]
-    fn mixed_escape_and_var() {
-        let out = render("See {{example}} with id={run_id}", &vars()).unwrap();
-        assert_eq!(out, "See {example} with id=abcd1234");
-    }
-
-    #[test]
-    fn validate_catches_unknown_var_without_values() {
         assert_eq!(
-            validate("oops {bogus}").unwrap_err(),
-            TemplateError::UnknownVariable("bogus".into()),
+            validate("hi {}", &["run_id"]).unwrap_err(),
+            TemplateError::EmptyVariable
         );
     }
 
     #[test]
-    fn validate_accepts_known_vars() {
-        assert!(validate("run={run_id} cell={cell_id}").is_ok());
-        assert!(validate("plain text with no vars").is_ok());
-        assert!(validate("escaped {{braces}}").is_ok());
+    fn empty_string_passes_through() {
+        assert_eq!(render("", &resolver()).unwrap(), "");
+    }
+
+    #[test]
+    fn mixed_escape_and_var() {
+        let out = render("See {{example}} with id={run_id}", &resolver()).unwrap();
+        assert_eq!(out, "See {example} with id=abcd1234");
+    }
+
+    #[test]
+    fn validate_with_empty_slice_rejects_all_vars() {
+        assert_eq!(
+            validate("oops {bogus}", &[]).unwrap_err(),
+            TemplateError::UnknownVariable("bogus".into()),
+        );
+        assert_eq!(
+            validate("hi {run_id}", &[]).unwrap_err(),
+            TemplateError::UnknownVariable("run_id".into()),
+        );
+    }
+
+    #[test]
+    fn validate_accepts_listed_names() {
+        let allowed = ["run_id", "cell_id"];
+        assert!(validate("run={run_id} cell={cell_id}", &allowed).is_ok());
+        assert!(validate("plain text with no vars", &allowed).is_ok());
+        assert!(validate("escaped {{braces}}", &allowed).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_var_not_in_allowed() {
+        assert_eq!(
+            validate("{model}", &["run_id"]).unwrap_err(),
+            TemplateError::UnknownVariable("model".into()),
+        );
+    }
+
+    #[test]
+    fn resolver_trait_is_dyn_dispatched() {
+        struct Always(&'static str);
+        impl Resolver for Always {
+            fn resolve(&self, _name: &str) -> Option<&str> {
+                Some(self.0)
+            }
+        }
+        let r: &dyn Resolver = &Always("x");
+        assert_eq!(render("{anything}", r).unwrap(), "x");
+    }
+
+    #[test]
+    fn render_typed_returns_some_for_exact_var() {
+        let mut r = SimpleResolver::new();
+        r.insert("max_tokens", 2048i64);
+        let v = render_typed("{max_tokens}", &r).unwrap();
+        assert_eq!(v, VarValue::from(2048i64));
+    }
+
+    #[test]
+    fn render_typed_returns_some_for_each_typed_value() {
+        let mut r = SimpleResolver::new();
+        r.insert("s", "hi");
+        r.insert("i", 7i64);
+        r.insert("f", VarValue::float(1.5).unwrap());
+        r.insert("b", true);
+        assert_eq!(render_typed("{s}", &r), Some(VarValue::from("hi")));
+        assert_eq!(render_typed("{i}", &r), Some(VarValue::from(7i64)));
+        assert_eq!(render_typed("{f}", &r), Some(VarValue::float(1.5).unwrap()));
+        assert_eq!(render_typed("{b}", &r), Some(VarValue::from(true)));
+    }
+
+    #[test]
+    fn render_typed_returns_none_for_mixed_template() {
+        let mut r = SimpleResolver::new();
+        r.insert("max_tokens", 2048i64);
+        assert_eq!(render_typed("prefix {max_tokens}", &r), None);
+        assert_eq!(render_typed("{max_tokens} suffix", &r), None);
+        assert_eq!(render_typed("{max_tokens}{other}", &r), None);
+        assert_eq!(render_typed("plain", &r), None);
+        assert_eq!(render_typed("", &r), None);
+    }
+
+    #[test]
+    fn render_typed_returns_none_for_escaped_braces() {
+        let mut r = SimpleResolver::new();
+        r.insert("x", 1i64);
+        assert_eq!(render_typed("{{x}}", &r), None);
+        assert_eq!(render_typed("{{}}", &r), None);
+        assert_eq!(render_typed("}}", &r), None);
+        assert_eq!(render_typed("{{", &r), None);
+    }
+
+    #[test]
+    fn render_typed_returns_none_for_unknown_var() {
+        let r = SimpleResolver::new();
+        assert_eq!(render_typed("{nope}", &r), None);
+    }
+
+    #[test]
+    fn simple_resolver_stringifies_typed_values() {
+        let mut r = SimpleResolver::new();
+        r.insert("max_tokens", 2048i64);
+        r.insert("temperature", VarValue::float(0.5).unwrap());
+        r.insert("flag", true);
+        assert_eq!(
+            render("mt={max_tokens} t={temperature} f={flag}", &r).unwrap(),
+            "mt=2048 t=0.5 f=true"
+        );
     }
 
     #[test]
