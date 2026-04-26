@@ -66,7 +66,9 @@ prompt = ["short", "long"]
     let out_path = dir.path().join("results.json");
 
     let cfg = Config::from_toml_str(&toml).expect("config parses");
-    let result = run_all(&cfg).await.expect("runner ok");
+    let result = run_all(&cfg, &tempo::progress::NoopReporter)
+        .await
+        .expect("runner ok");
     write_runs_to_path(&out_path, &result.runs).expect("write results");
 
     assert_eq!(result.total_cells, 4);

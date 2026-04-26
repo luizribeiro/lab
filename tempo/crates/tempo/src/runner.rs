@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::config::{Config, Provider, Scenario};
 use crate::matrix::{self, Cell, MatrixError};
+use crate::progress::ProgressReporter;
 use crate::provider::metrics::Run;
 use crate::provider::openai::run_request;
 use crate::template::{self, TemplateError, TemplateVars};
@@ -45,7 +46,10 @@ fn render_prompt(cell: &Cell, cell_id: &str, run_id: &str) -> Result<String, Run
     })
 }
 
-pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
+pub async fn run_all(
+    config: &Config,
+    reporter: &dyn ProgressReporter,
+) -> Result<RunnerOutput, RunnerError> {
     let suite = config.suite.name.clone();
     let mut runs: Vec<Run> = Vec::new();
     let mut total_cells: usize = 0;
@@ -75,28 +79,61 @@ pub async fn run_all(config: &Config) -> Result<RunnerOutput, RunnerError> {
         total_cells += cells.len();
         for cell in &cells {
             let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
-            for _ in 0..*warmup {
+            reporter.cell_started(
+                &cell_id,
+                &cell.scenario,
+                &cell.model,
+                &cell.prompt,
+                *runs_count,
+            );
+
+            for warmup_idx in 0..*warmup {
+                reporter.run_started(&cell_id, warmup_idx, true);
                 let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
-                let _ = run_request(cell, &prompt_text, base_url, &api_key, *timeout_secs).await;
+                let run = run_request(
+                    cell,
+                    &prompt_text,
+                    base_url,
+                    &api_key,
+                    *timeout_secs,
+                    reporter,
+                    &cell_id,
+                )
+                .await;
+                reporter.run_finished(&cell_id, run.error.is_none());
             }
 
             let mut successes = 0u32;
             for run_idx in 0..*runs_count {
+                reporter.run_started(&cell_id, run_idx, false);
                 let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
-                let mut run =
-                    run_request(cell, &prompt_text, base_url, &api_key, *timeout_secs).await;
+                let mut run = run_request(
+                    cell,
+                    &prompt_text,
+                    base_url,
+                    &api_key,
+                    *timeout_secs,
+                    reporter,
+                    &cell_id,
+                )
+                .await;
                 run.suite = suite.clone();
                 run.run_idx = run_idx;
-                if run.error.is_none() {
+                let success = run.error.is_none();
+                if success {
                     successes += 1;
                 }
                 runs.push(run);
+                reporter.run_finished(&cell_id, success);
             }
             if successes == 0 {
                 zero_success_cells += 1;
             }
+            reporter.cell_finished(&cell_id);
         }
     }
+
+    reporter.suite_finished();
 
     Ok(RunnerOutput {
         runs,
@@ -170,7 +207,9 @@ prompt = ["s"]
             .await;
 
         let cfg = config_for(&server.uri(), 0, 3);
-        let out = run_all(&cfg).await.expect("runner ok");
+        let out = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .expect("runner ok");
 
         assert_eq!(out.runs.len(), 3);
         assert_eq!(out.total_cells, 1);
@@ -193,7 +232,9 @@ prompt = ["s"]
             .await;
 
         let cfg = config_for(&server.uri(), 0, 2);
-        let out = run_all(&cfg).await.expect("runner ok");
+        let out = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .expect("runner ok");
 
         assert_eq!(out.runs.len(), 2);
         assert_eq!(out.zero_success_cells, 1);
@@ -223,7 +264,9 @@ prompt = ["s"]
             .await;
 
         let cfg = config_for(&server.uri(), 0, 3);
-        let out = run_all(&cfg).await.expect("runner ok");
+        let out = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .expect("runner ok");
 
         assert_eq!(out.runs.len(), 3);
         assert_eq!(out.zero_success_cells, 0);
@@ -248,7 +291,9 @@ prompt = ["s"]
             .await;
 
         let cfg = config_for(&server.uri(), 2, 3);
-        let out = run_all(&cfg).await.expect("runner ok");
+        let out = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .expect("runner ok");
 
         assert_eq!(out.runs.len(), 3, "warmups must not appear in output");
         let received = server.received_requests().await.unwrap();
@@ -300,7 +345,9 @@ prompt = ["s"]
             .await;
 
         let cfg = config_with_template_prompt(&server.uri(), 2, "cell={cell_id} run={run_id}");
-        let out = run_all(&cfg).await.expect("runner ok");
+        let out = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .expect("runner ok");
         assert_eq!(out.runs.len(), 2);
 
         let received = server.received_requests().await.unwrap();
@@ -333,6 +380,72 @@ prompt = ["s"]
     }
 
     #[tokio::test]
+    async fn reporter_receives_expected_event_sequence() {
+        use crate::progress::testing::{Event, FakeReporter};
+
+        set_test_key();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(happy_sse_body()),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = config_for(&server.uri(), 1, 2);
+        let reporter = FakeReporter::new();
+        let out = run_all(&cfg, &reporter).await.expect("runner ok");
+        assert_eq!(out.runs.len(), 2);
+
+        let evs = reporter.events();
+        let cell_id = template::cell_id("decode", "m1", "s");
+
+        assert!(matches!(
+            &evs[0],
+            Event::CellStarted { cell_id: c, total_runs: 2, .. } if c == &cell_id
+        ));
+        assert_eq!(evs.last().expect("non-empty events"), &Event::SuiteFinished);
+        assert_eq!(
+            evs[evs.len() - 2],
+            Event::CellFinished {
+                cell_id: cell_id.clone()
+            }
+        );
+
+        let token_count = evs
+            .iter()
+            .filter(|e| matches!(e, Event::TokenReceived { .. }))
+            .count();
+        assert!(
+            token_count >= 2 * 2,
+            "expected at least 2 tokens per measured run, got {token_count}",
+        );
+
+        let starts: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::RunStarted {
+                    run_idx, is_warmup, ..
+                } => Some((*run_idx, *is_warmup)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, vec![(0, true), (0, false), (1, false)]);
+
+        let finishes: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match e {
+                Event::RunFinished { success, .. } => Some(*success),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finishes, vec![true, true, true]);
+    }
+
+    #[tokio::test]
     async fn missing_api_key_env_returns_setup_error() {
         const MISSING_KEY: &str = "TEMPO_RUNNER_MISSING_KEY";
         // unsafe required: env::remove_var is not thread-safe (Rust 2024 edition).
@@ -340,7 +453,9 @@ prompt = ["s"]
             env::remove_var(MISSING_KEY);
         }
         let cfg = config_with_key("http://unused.example", 0, 1, MISSING_KEY);
-        let err = run_all(&cfg).await.unwrap_err();
+        let err = run_all(&cfg, &crate::progress::NoopReporter)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, RunnerError::MissingApiKey(ref k) if k == MISSING_KEY),
             "got {err:?}"

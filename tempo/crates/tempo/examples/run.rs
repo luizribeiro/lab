@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         matrix.model = vec![model.clone()];
     }
 
-    let out = run_all(&cfg).await?;
+    let out = run_all(&cfg, &tempo::progress::NoopReporter).await?;
     eprintln!(
         "runs: {}, zero_success_cells: {}",
         out.runs.len(),
@@ -106,7 +106,16 @@ async fn probe_for_working_model(
                 temperature: 0.0,
             },
         };
-        let run = run_request(&cell, &cell.prompt_text, base_url, api_key, 30).await;
+        let run = run_request(
+            &cell,
+            &cell.prompt_text,
+            base_url,
+            api_key,
+            30,
+            &tempo::progress::NoopReporter,
+            "probe",
+        )
+        .await;
         if run.error.is_none() && run.ttft_ms.is_some() {
             return Some(entry.id.clone());
         }

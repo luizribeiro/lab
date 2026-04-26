@@ -50,7 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 temperature: 0.0,
             },
         };
-        let run = run_request(&cell, &cell.prompt_text, &base_url, &api_key, 60).await;
+        let run = run_request(
+            &cell,
+            &cell.prompt_text,
+            &base_url,
+            &api_key,
+            60,
+            &tempo::progress::NoopReporter,
+            "smoke",
+        )
+        .await;
         let is_upstream_5xx = run
             .error
             .as_deref()

@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 use tempo::config::Config;
 use tempo::output::write_runs_to_path;
+use tempo::progress::{IndicatifReporter, NoopReporter, ProgressReporter};
 use tempo::runner::run_all;
 use tempo::stats;
 use tempo::summary;
@@ -29,6 +30,8 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         no_summary: bool,
+        #[arg(long)]
+        no_progress: bool,
     },
 }
 
@@ -50,7 +53,8 @@ async fn main() -> ExitCode {
             suite,
             output,
             no_summary,
-        } => match run_command(&suite, &output, no_summary).await {
+            no_progress,
+        } => match run_command(&suite, &output, no_summary, no_progress).await {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("error: {err:#}");
@@ -60,12 +64,25 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_command(suite_path: &Path, output_path: &Path, no_summary: bool) -> Result<ExitCode> {
+async fn run_command(
+    suite_path: &Path,
+    output_path: &Path,
+    no_summary: bool,
+    no_progress: bool,
+) -> Result<ExitCode> {
     let toml_text = std::fs::read_to_string(suite_path)
         .with_context(|| format!("reading suite file {}", suite_path.display()))?;
     let config = Config::from_toml_str(&toml_text).context("parsing suite TOML")?;
 
-    let result = run_all(&config).await.context("running suite")?;
+    let reporter: Box<dyn ProgressReporter> = if !no_progress && std::io::stderr().is_terminal() {
+        Box::new(IndicatifReporter::new())
+    } else {
+        Box::new(NoopReporter)
+    };
+
+    let result = run_all(&config, reporter.as_ref())
+        .await
+        .context("running suite")?;
     write_runs_to_path(output_path, &result.runs)
         .with_context(|| format!("writing results to {}", output_path.display()))?;
 

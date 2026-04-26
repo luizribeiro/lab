@@ -6,6 +6,7 @@ use serde_json::json;
 use tokio::time::timeout;
 
 use crate::matrix::Cell;
+use crate::progress::ProgressReporter;
 use crate::provider::metrics::Run;
 use crate::provider::sse::{parse_data_line, ParsedChunk};
 
@@ -15,6 +16,8 @@ pub async fn run_request(
     base_url: &str,
     api_key: &str,
     timeout_secs: u64,
+    reporter: &dyn ProgressReporter,
+    cell_id: &str,
 ) -> Run {
     let started_at = Utc::now();
     let started = Instant::now();
@@ -66,7 +69,7 @@ pub async fn run_request(
         if !status.is_success() {
             return Err(format!("http_{}", status.as_u16()));
         }
-        consume_stream(resp, request_initiated).await
+        consume_stream(resp, request_initiated, reporter, cell_id).await
     })
     .await;
 
@@ -120,6 +123,8 @@ struct StreamOutcome {
 async fn consume_stream(
     resp: reqwest::Response,
     request_initiated: Instant,
+    reporter: &dyn ProgressReporter,
+    cell_id: &str,
 ) -> Result<StreamOutcome, String> {
     let mut stream = resp.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
@@ -152,6 +157,7 @@ async fn consume_stream(
                             first_token = Some(now);
                         }
                         last_token = Some(now);
+                        reporter.token_received(cell_id);
                     }
                     if let Some(u) = c.usage {
                         input_tokens = Some(u.prompt_tokens);
@@ -222,7 +228,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "test-key", 5).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "test-key",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
 
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.ttft_ms.unwrap() > 0.0);
@@ -248,7 +263,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "test-key", 5).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "test-key",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
 
         assert!(run.error.is_none(), "error: {:?}", run.error);
         let ttft_ms = run.ttft_ms.expect("ttft_ms should be present");
@@ -268,7 +292,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "k",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
         assert_eq!(run.error.as_deref(), Some("http_500"));
         assert!(run.ttft_ms.is_none());
         assert!(run.decode_tok_s.is_none());
@@ -289,7 +322,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "k", 1).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "k",
+            1,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
         assert_eq!(run.error.as_deref(), Some("timeout"));
         assert!(run.ttft_ms.is_none());
         assert!(run.decode_tok_s.is_none());
@@ -318,7 +360,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "k",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.ttft_ms.unwrap() > 0.0);
         let rate = run.decode_tok_s.expect("decode_tok_s should be present");
@@ -347,7 +398,16 @@ mod tests {
             .mount(&server)
             .await;
 
-        let run = run_request(&cell(), "Hello", &server.uri(), "k", 5).await;
+        let run = run_request(
+            &cell(),
+            "Hello",
+            &server.uri(),
+            "k",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
         assert!(run.error.is_none(), "error: {:?}", run.error);
         assert!(run.input_tokens.is_none());
         assert!(run.output_tokens.is_none());
