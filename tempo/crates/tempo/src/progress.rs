@@ -399,10 +399,7 @@ mod tests {
 
     fn dummy_stats() -> CellStats {
         CellStats {
-            scenario: "s".into(),
-            provider: "p".into(),
-            model: "m".into(),
-            prompt: "pr".into(),
+            dimensions: crate::dimensions::test_dimensions("s", "p", "m", "pr"),
             total_runs: 1,
             success_runs: 1,
             error_runs: 0,

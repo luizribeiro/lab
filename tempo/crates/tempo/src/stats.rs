@@ -1,11 +1,12 @@
+use indexmap::IndexMap;
+
+use crate::dimensions::Dimensions;
 use crate::provider::metrics::Run;
+use crate::var::VarValue;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellStats {
-    pub scenario: String,
-    pub provider: String,
-    pub model: String,
-    pub prompt: String,
+    pub dimensions: Dimensions,
     pub total_runs: u32,
     pub success_runs: u32,
     pub error_runs: u32,
@@ -19,12 +20,9 @@ pub struct CellStats {
 }
 
 impl CellStats {
-    pub fn empty(scenario: String, provider: String, model: String, prompt: String) -> Self {
+    pub fn empty(dimensions: Dimensions) -> Self {
         Self {
-            scenario,
-            provider,
-            model,
-            prompt,
+            dimensions,
             total_runs: 0,
             success_runs: 0,
             error_runs: 0,
@@ -36,6 +34,17 @@ impl CellStats {
             e2e_ms_p50: None,
             output_tokens_mean: None,
         }
+    }
+}
+
+fn dimensions_for(run: &Run) -> Dimensions {
+    let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+    vars.insert("model".to_string(), VarValue::from(run.model.as_str()));
+    vars.insert("prompt".to_string(), VarValue::from(run.prompt.as_str()));
+    Dimensions {
+        scenario: run.scenario.clone(),
+        provider: run.provider.clone(),
+        vars,
     }
 }
 
@@ -78,28 +87,20 @@ fn p(sorted: &[f64], pct: f64) -> Option<f64> {
 }
 
 pub fn aggregate(runs: &[Run]) -> Vec<CellStats> {
-    let mut groups: Vec<(String, String, String, String, Vec<&Run>)> = Vec::new();
+    let mut groups: Vec<(Dimensions, Vec<&Run>)> = Vec::new();
 
     for run in runs {
-        let key = (
-            run.scenario.clone(),
-            run.provider.clone(),
-            run.model.clone(),
-            run.prompt.clone(),
-        );
-        if let Some(existing) = groups
-            .iter_mut()
-            .find(|g| g.0 == key.0 && g.1 == key.1 && g.2 == key.2 && g.3 == key.3)
-        {
-            existing.4.push(run);
+        let dims = dimensions_for(run);
+        if let Some(existing) = groups.iter_mut().find(|g| g.0 == dims) {
+            existing.1.push(run);
         } else {
-            groups.push((key.0, key.1, key.2, key.3, vec![run]));
+            groups.push((dims, vec![run]));
         }
     }
 
     groups
         .into_iter()
-        .map(|(scenario, provider, model, prompt, cell_runs)| {
+        .map(|(dimensions, cell_runs)| {
             let total_runs = cell_runs.len() as u32;
             let successes: Vec<&Run> = cell_runs
                 .iter()
@@ -118,10 +119,7 @@ pub fn aggregate(runs: &[Run]) -> Vec<CellStats> {
                 .collect();
 
             CellStats {
-                scenario,
-                provider,
-                model,
-                prompt,
+                dimensions,
                 total_runs,
                 success_runs,
                 error_runs,
@@ -143,12 +141,23 @@ mod tests {
     use chrono::Utc;
 
     fn run(model: &str, ttft: Option<f64>, decode: Option<f64>, error: Option<&str>) -> Run {
+        run_in("decode", model, "short", ttft, decode, error)
+    }
+
+    fn run_in(
+        scenario: &str,
+        model: &str,
+        prompt: &str,
+        ttft: Option<f64>,
+        decode: Option<f64>,
+        error: Option<&str>,
+    ) -> Run {
         Run {
             suite: "s".into(),
-            scenario: "decode".into(),
+            scenario: scenario.into(),
             provider: "p".into(),
             model: model.into(),
-            prompt: "short".into(),
+            prompt: prompt.into(),
             run_idx: 0,
             started_at: Utc::now(),
             ttft_ms: ttft,
@@ -230,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn groups_by_scenario_provider_model_prompt() {
+    fn groups_by_dimensions() {
         let runs = vec![
             run("m1", Some(1.0), Some(1.0), None),
             run("m2", Some(2.0), Some(2.0), None),
@@ -238,9 +247,86 @@ mod tests {
         ];
         let stats = aggregate(&runs);
         assert_eq!(stats.len(), 2);
-        let m1 = stats.iter().find(|s| s.model == "m1").unwrap();
-        let m2 = stats.iter().find(|s| s.model == "m2").unwrap();
+        let m1 = stats
+            .iter()
+            .find(|s| s.dimensions.var_str("model") == "m1")
+            .unwrap();
+        let m2 = stats
+            .iter()
+            .find(|s| s.dimensions.var_str("model") == "m2")
+            .unwrap();
         assert_eq!(m1.success_runs, 2);
         assert_eq!(m2.success_runs, 1);
+    }
+
+    #[test]
+    fn canonical_2x2_matrix_yields_four_cells_with_expected_aggregates() {
+        let mut runs: Vec<Run> = Vec::new();
+        for model in ["m1", "m2"] {
+            for prompt in ["short", "long"] {
+                for i in 1..=3 {
+                    runs.push(run_in(
+                        "decode",
+                        model,
+                        prompt,
+                        Some(i as f64),
+                        Some(i as f64 * 10.0),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        let stats = aggregate(&runs);
+        assert_eq!(stats.len(), 4);
+
+        for s in &stats {
+            assert_eq!(s.total_runs, 3);
+            assert_eq!(s.success_runs, 3);
+            assert!((s.ttft_ms_p50.unwrap() - 2.0).abs() < 1e-9);
+            assert!((s.decode_tok_s_mean.unwrap() - 20.0).abs() < 1e-9);
+        }
+
+        let mut keys: Vec<(&str, &str)> = stats
+            .iter()
+            .map(|s| {
+                (
+                    s.dimensions.var_str("model"),
+                    s.dimensions.var_str("prompt"),
+                )
+            })
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                ("m1", "long"),
+                ("m1", "short"),
+                ("m2", "long"),
+                ("m2", "short")
+            ]
+        );
+    }
+
+    #[test]
+    fn same_model_prompt_different_scenario_groups_separately() {
+        let runs = vec![
+            run_in("decode", "m1", "short", Some(10.0), Some(50.0), None),
+            run_in("encode", "m1", "short", Some(20.0), Some(60.0), None),
+        ];
+        let stats = aggregate(&runs);
+        assert_eq!(stats.len(), 2);
+        let decode = stats
+            .iter()
+            .find(|s| s.dimensions.scenario == "decode")
+            .unwrap();
+        let encode = stats
+            .iter()
+            .find(|s| s.dimensions.scenario == "encode")
+            .unwrap();
+        assert_eq!(decode.success_runs, 1);
+        assert_eq!(encode.success_runs, 1);
+        assert!((decode.ttft_ms_p50.unwrap() - 10.0).abs() < 1e-9);
+        assert!((encode.ttft_ms_p50.unwrap() - 20.0).abs() < 1e-9);
     }
 }

@@ -36,6 +36,16 @@ impl Hash for Dimensions {
 }
 
 impl Dimensions {
+    pub fn var_str(&self, key: &str) -> &str {
+        match self.vars.get(key) {
+            Some(VarValue::String(s)) => s.as_str(),
+            Some(other) => {
+                panic!("Dimensions::var_str: vars[{key:?}] must be String, got {other:?}")
+            }
+            None => panic!("Dimensions::var_str: vars is missing required key {key:?}"),
+        }
+    }
+
     /// Returns the names of axes whose values differ across `slice`, in order:
     /// scenario, provider, then vars in the insertion order of `slice[0]`.
     ///
@@ -66,6 +76,23 @@ impl Dimensions {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_dimensions(
+    scenario: &str,
+    provider: &str,
+    model: &str,
+    prompt: &str,
+) -> Dimensions {
+    let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+    vars.insert("model".into(), VarValue::from(model));
+    vars.insert("prompt".into(), VarValue::from(prompt));
+    Dimensions {
+        scenario: scenario.to_owned(),
+        provider: provider.to_owned(),
+        vars,
     }
 }
 

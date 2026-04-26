@@ -168,12 +168,11 @@ pub async fn run_all(
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| {
-                    stats::CellStats::empty(
-                        cell.scenario().to_string(),
-                        cell.provider().to_string(),
-                        cell.model().to_string(),
-                        cell.prompt().to_string(),
-                    )
+                    stats::CellStats::empty(crate::dimensions::Dimensions {
+                        scenario: cell.scenario().to_string(),
+                        provider: cell.provider().to_string(),
+                        vars: cell.vars().clone(),
+                    })
                 });
             runs.extend(cell_runs);
             reporter.cell_finished(&cell_id, &cell_stats);

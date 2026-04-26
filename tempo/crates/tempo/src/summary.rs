@@ -93,9 +93,9 @@ pub fn render(stats: &[CellStats], color: bool) -> String {
         };
 
         let row = vec![
-            Cell::new(paint(s.scenario.clone())),
-            Cell::new(paint(s.model.clone())),
-            Cell::new(paint(s.prompt.clone())),
+            Cell::new(paint(s.dimensions.scenario.clone())),
+            Cell::new(paint(s.dimensions.var_str("model").to_string())),
+            Cell::new(paint(s.dimensions.var_str("prompt").to_string())),
             Cell::new(paint(format!("{}/{}", s.success_runs, s.total_runs))).set_alignment(right),
             Cell::new(paint(fmt_ms(s.ttft_ms_p50))).set_alignment(right),
             Cell::new(paint(fmt_ms(s.ttft_ms_p95))).set_alignment(right),
@@ -114,10 +114,7 @@ mod tests {
 
     fn cell(model: &str, ttft: Option<f64>, decode: Option<f64>, total: u32, ok: u32) -> CellStats {
         CellStats {
-            scenario: "decode".into(),
-            provider: "p".into(),
-            model: model.into(),
-            prompt: "short".into(),
+            dimensions: crate::dimensions::test_dimensions("decode", "p", model, "short"),
             total_runs: total,
             success_runs: ok,
             error_runs: total - ok,
