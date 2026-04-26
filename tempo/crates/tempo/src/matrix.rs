@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use indexmap::IndexMap;
 use thiserror::Error;
 
-use crate::config::{Config, Generation, Prompt, Scenario};
+use crate::config::{Config, Generation, Matrix, Prompt, Scenario};
 use crate::var::VarValue;
 
 #[derive(Debug, Clone)]
@@ -77,12 +79,18 @@ fn require_string_var(vars: &IndexMap<String, VarValue>, key: &str) -> String {
 
 #[derive(Debug, Error)]
 pub enum MatrixError {
-    #[error("scenario {0:?}: matrix.model is empty")]
-    EmptyModelAxis(String),
-    #[error("scenario {0:?}: matrix.prompt is empty")]
-    EmptyPromptAxis(String),
     #[error("scenario {scenario:?} references unknown prompt {prompt:?}")]
     UnknownPrompt { scenario: String, prompt: String },
+    #[error("scenario {scenario:?}: matrix tuple is missing required {which:?} variable")]
+    MissingConventionalVar {
+        scenario: String,
+        which: &'static str,
+    },
+    #[error("scenario {scenario:?}: matrix tuple has non-string {which:?} variable")]
+    NonStringConventionalVar {
+        scenario: String,
+        which: &'static str,
+    },
 }
 
 pub fn expand(
@@ -97,54 +105,105 @@ pub fn expand(
         ..
     } = scenario;
 
-    if matrix.model.is_empty() {
-        return Err(MatrixError::EmptyModelAxis(scenario_name.to_string()));
-    }
-    if matrix.prompt.is_empty() {
-        return Err(MatrixError::EmptyPromptAxis(scenario_name.to_string()));
-    }
+    let tuples = build_tuples(matrix);
 
-    let mut cells = Vec::with_capacity(matrix.model.len() * matrix.prompt.len());
-    for model in &matrix.model {
-        for prompt_name in &matrix.prompt {
-            let Prompt::Inline { text, template } =
-                config
-                    .prompts
-                    .get(prompt_name)
-                    .ok_or_else(|| MatrixError::UnknownPrompt {
-                        scenario: scenario_name.to_string(),
-                        prompt: prompt_name.clone(),
-                    })?;
-            let mut vars: IndexMap<String, VarValue> = IndexMap::new();
-            vars.insert("model".to_string(), VarValue::from(model.as_str()));
-            vars.insert("prompt".to_string(), VarValue::from(prompt_name.as_str()));
-            cells.push(Cell::new(
-                scenario_name.to_string(),
-                provider.clone(),
-                vars,
-                text.clone(),
-                *template,
-                generation.clone(),
-            ));
+    let mut cells = Vec::with_capacity(tuples.len());
+    for vars in tuples {
+        let prompt_name = match vars.get("prompt") {
+            Some(VarValue::String(s)) => s.clone(),
+            Some(_) => {
+                return Err(MatrixError::NonStringConventionalVar {
+                    scenario: scenario_name.to_string(),
+                    which: "prompt",
+                });
+            }
+            None => {
+                return Err(MatrixError::MissingConventionalVar {
+                    scenario: scenario_name.to_string(),
+                    which: "prompt",
+                });
+            }
+        };
+        match vars.get("model") {
+            Some(VarValue::String(_)) => {}
+            Some(_) => {
+                return Err(MatrixError::NonStringConventionalVar {
+                    scenario: scenario_name.to_string(),
+                    which: "model",
+                });
+            }
+            None => {
+                return Err(MatrixError::MissingConventionalVar {
+                    scenario: scenario_name.to_string(),
+                    which: "model",
+                });
+            }
         }
+        let Prompt::Inline { text, template } =
+            config
+                .prompts
+                .get(&prompt_name)
+                .ok_or_else(|| MatrixError::UnknownPrompt {
+                    scenario: scenario_name.to_string(),
+                    prompt: prompt_name.clone(),
+                })?;
+        cells.push(Cell::new(
+            scenario_name.to_string(),
+            provider.clone(),
+            vars,
+            text.clone(),
+            *template,
+            generation.clone(),
+        ));
     }
     Ok(cells)
+}
+
+fn build_tuples(matrix: &Matrix) -> Vec<IndexMap<String, VarValue>> {
+    let cross = cross_product(&matrix.axes);
+    let mut seen: HashSet<Vec<(String, VarValue)>> = HashSet::new();
+    let mut out: Vec<IndexMap<String, VarValue>> = Vec::new();
+    for tuple in cross.into_iter().chain(matrix.include.iter().cloned()) {
+        if seen.insert(canonical_key(&tuple)) {
+            out.push(tuple);
+        }
+    }
+    out.retain(|t| !matrix.skip.iter().any(|s| matches_skip(t, s)));
+    out
+}
+
+fn cross_product(axes: &IndexMap<String, Vec<VarValue>>) -> Vec<IndexMap<String, VarValue>> {
+    let mut out: Vec<IndexMap<String, VarValue>> = vec![IndexMap::new()];
+    for (name, values) in axes {
+        let mut next = Vec::with_capacity(out.len() * values.len());
+        for existing in &out {
+            for v in values {
+                let mut row = existing.clone();
+                row.insert(name.clone(), v.clone());
+                next.push(row);
+            }
+        }
+        out = next;
+    }
+    out
+}
+
+fn canonical_key(m: &IndexMap<String, VarValue>) -> Vec<(String, VarValue)> {
+    let mut entries: Vec<(String, VarValue)> =
+        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn matches_skip(tuple: &IndexMap<String, VarValue>, skip: &IndexMap<String, VarValue>) -> bool {
+    skip.iter().all(|(k, v)| tuple.get(k) == Some(v))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn config_with(model: &[&str], prompt: &[&str]) -> Config {
-        let quote = |items: &[&str]| {
-            items
-                .iter()
-                .map(|s| format!("\"{s}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let model_list = quote(model);
-        let prompt_list = quote(prompt);
+    fn make_config(matrix_toml: &str) -> Config {
         let toml = format!(
             r#"
 [suite]
@@ -170,62 +229,142 @@ warmup = 0
 runs = 1
 generation = {{ max_tokens = 16, temperature = 0.0 }}
 [scenarios.decode.matrix]
-model = [{model_list}]
-prompt = [{prompt_list}]
+{matrix_toml}
 "#
         );
         Config::from_toml_str(&toml).expect("fixture parses")
     }
 
     #[test]
-    fn expands_2x2_in_model_outer_prompt_inner_order() {
-        let cfg = config_with(&["m1", "m2"], &["short", "long"]);
+    fn three_axis_cross_product_count_and_tuples() {
+        let cfg = make_config(
+            r#"
+model = ["m1", "m2"]
+prompt = ["short"]
+topic = ["a", "b"]
+"#,
+        );
         let scenario = cfg.scenarios.get("decode").unwrap();
         let cells = expand("decode", scenario, &cfg).expect("expand ok");
-
         assert_eq!(cells.len(), 4);
-
-        let pairs: Vec<(&str, &str, &str)> = cells
+        let triples: Vec<(&str, &str, VarValue)> = cells
             .iter()
-            .map(|c| (c.model(), c.prompt(), c.prompt_text()))
+            .map(|c| {
+                (
+                    c.model(),
+                    c.prompt(),
+                    c.vars().get("topic").cloned().unwrap(),
+                )
+            })
             .collect();
         assert_eq!(
-            pairs,
+            triples,
             vec![
-                ("m1", "short", "short text"),
-                ("m1", "long", "long text"),
-                ("m2", "short", "short text"),
-                ("m2", "long", "long text"),
+                ("m1", "short", VarValue::from("a")),
+                ("m1", "short", VarValue::from("b")),
+                ("m2", "short", VarValue::from("a")),
+                ("m2", "short", VarValue::from("b")),
             ]
         );
+    }
 
-        for cell in &cells {
-            assert_eq!(cell.scenario(), "decode");
-            assert_eq!(cell.provider(), "vllm");
-            assert_eq!(cell.generation().max_tokens, 16);
-        }
+    #[test]
+    fn include_adds_tuples_not_in_cross_product() {
+        let cfg = make_config(
+            r#"
+model = ["m1"]
+prompt = ["short"]
+[scenarios.decode.matrix.include]
+combinations = [
+  { model = "m_extra", prompt = "long", max_tokens = 4096 },
+]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[1].model(), "m_extra");
+        assert_eq!(cells[1].prompt(), "long");
+        assert_eq!(
+            cells[1].vars().get("max_tokens"),
+            Some(&VarValue::from(4096i64))
+        );
+    }
+
+    #[test]
+    fn include_duplicates_are_deduped() {
+        let cfg = make_config(
+            r#"
+model = ["m1"]
+prompt = ["short"]
+[scenarios.decode.matrix.include]
+combinations = [
+  { model = "m1", prompt = "short" },
+  { model = "m_extra", prompt = "long" },
+  { model = "m_extra", prompt = "long" },
+]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert_eq!(cells.len(), 2);
+        let pairs: Vec<(&str, &str)> = cells.iter().map(|c| (c.model(), c.prompt())).collect();
+        assert_eq!(pairs, vec![("m1", "short"), ("m_extra", "long")]);
+    }
+
+    #[test]
+    fn skip_partial_pattern_removes_matching_tuples() {
+        let cfg = make_config(
+            r#"
+model = ["m1", "m2"]
+prompt = ["short", "long"]
+
+[[scenarios.decode.matrix.skip]]
+model = "m1"
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        let pairs: Vec<(&str, &str)> = cells.iter().map(|c| (c.model(), c.prompt())).collect();
+        assert_eq!(pairs, vec![("m2", "short"), ("m2", "long")]);
+    }
+
+    #[test]
+    fn skip_after_include_works() {
+        let cfg = make_config(
+            r#"
+model = ["m1"]
+prompt = ["short"]
+[scenarios.decode.matrix.include]
+combinations = [
+  { model = "m_extra", prompt = "long" },
+]
+
+[[scenarios.decode.matrix.skip]]
+model = "m_extra"
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        let pairs: Vec<(&str, &str)> = cells.iter().map(|c| (c.model(), c.prompt())).collect();
+        assert_eq!(pairs, vec![("m1", "short")]);
     }
 
     #[test]
     fn expanded_cells_have_vars_matching_accessors() {
-        let cfg = config_with(&["m1", "m2"], &["short", "long"]);
+        let cfg = make_config(
+            r#"
+model = ["m1", "m2"]
+prompt = ["short", "long"]
+"#,
+        );
         let scenario = cfg.scenarios.get("decode").unwrap();
         let cells = expand("decode", scenario, &cfg).expect("expand ok");
 
         for cell in &cells {
             let vars = cell.vars();
-            assert_eq!(
-                vars.get("model"),
-                Some(&VarValue::from(cell.model())),
-                "vars.model must match cell.model() for cell {:?}",
-                (cell.model(), cell.prompt())
-            );
-            assert_eq!(
-                vars.get("prompt"),
-                Some(&VarValue::from(cell.prompt())),
-                "vars.prompt must match cell.prompt() for cell {:?}",
-                (cell.model(), cell.prompt())
-            );
+            assert_eq!(vars.get("model"), Some(&VarValue::from(cell.model())));
+            assert_eq!(vars.get("prompt"), Some(&VarValue::from(cell.prompt())));
         }
     }
 
@@ -281,28 +420,6 @@ prompt = [{prompt_list}]
                 max_tokens: 16,
                 temperature: 0.0,
             },
-        );
-    }
-
-    #[test]
-    fn empty_model_axis_returns_error() {
-        let cfg = config_with(&[], &["short"]);
-        let scenario = cfg.scenarios.get("decode").unwrap();
-        let err = expand("decode", scenario, &cfg).unwrap_err();
-        assert!(
-            matches!(err, MatrixError::EmptyModelAxis(ref s) if s == "decode"),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn empty_prompt_axis_returns_error() {
-        let cfg = config_with(&["m1"], &[]);
-        let scenario = cfg.scenarios.get("decode").unwrap();
-        let err = expand("decode", scenario, &cfg).unwrap_err();
-        assert!(
-            matches!(err, MatrixError::EmptyPromptAxis(ref s) if s == "decode"),
-            "got {err:?}"
         );
     }
 }

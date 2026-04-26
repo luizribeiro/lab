@@ -64,7 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } = scenario;
         *warmup = 1;
         *runs = 3;
-        matrix.model = vec![model.clone()];
+        matrix.axes.insert(
+            "model".into(),
+            vec![tempo::var::VarValue::from(model.as_str())],
+        );
     }
 
     let out = run_all(&cfg, &tempo::progress::NoopReporter).await?;

@@ -1,0 +1,38 @@
+[suite]
+name = "multiaxis-demo"
+
+[providers.litellm]
+kind        = "openai_compatible"
+base_url    = "https://litellm.thepromisedlan.club/v1"
+api_key_env = "LITELLM_API_KEY"
+
+[prompts.haiku]
+kind = "inline"
+text = "Write a haiku about {topic}."
+
+[prompts.essay]
+kind = "inline"
+text = "Write a short essay about {topic}."
+
+[scenarios.decode]
+kind         = "throughput"
+provider     = "litellm"
+warmup       = 1
+runs         = 3
+timeout_secs = 300
+generation   = { max_tokens = 256, temperature = 0.0 }
+
+[scenarios.decode.matrix]
+model      = ["mlx/qwen2.5-coder-7b", "mlx/qwen3.6-35b"]
+prompt     = ["haiku", "essay"]
+topic      = ["caching", "schedulers"]
+max_tokens = [256, 1024]
+
+[scenarios.decode.matrix.include]
+combinations = [
+  { model = "anthropic/claude-sonnet-4-6", prompt = "essay", topic = "compilers", max_tokens = 4096 },
+]
+
+[[scenarios.decode.matrix.skip]]
+model      = "mlx/qwen2.5-coder-7b"
+max_tokens = 1024
