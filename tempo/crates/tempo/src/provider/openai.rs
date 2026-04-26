@@ -79,11 +79,11 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
 
     let e2e_ms = started.elapsed().as_secs_f64() * 1000.0;
     let ttft_ms = outcome
-        .first_content
+        .first_token
         .map(|t| t.duration_since(outcome.request_initiated).as_secs_f64() * 1000.0);
     let decode_tok_s = match (
-        outcome.first_content,
-        outcome.last_content,
+        outcome.first_token,
+        outcome.last_token,
         outcome.output_tokens,
     ) {
         (Some(first), Some(last), Some(out)) if out > 0 => {
@@ -105,8 +105,8 @@ pub async fn run_request(cell: &Cell, base_url: &str, api_key: &str, timeout_sec
 
 struct StreamOutcome {
     request_initiated: Instant,
-    first_content: Option<Instant>,
-    last_content: Option<Instant>,
+    first_token: Option<Instant>,
+    last_token: Option<Instant>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 }
@@ -117,8 +117,8 @@ async fn consume_stream(
 ) -> Result<StreamOutcome, String> {
     let mut stream = resp.bytes_stream();
     let mut buffer: Vec<u8> = Vec::new();
-    let mut first_content: Option<Instant> = None;
-    let mut last_content: Option<Instant> = None;
+    let mut first_token: Option<Instant> = None;
+    let mut last_token: Option<Instant> = None;
     let mut input_tokens: Option<u64> = None;
     let mut output_tokens: Option<u64> = None;
 
@@ -140,14 +140,12 @@ async fn consume_stream(
             match parsed {
                 ParsedChunk::Done => {}
                 ParsedChunk::Chunk(c) => {
-                    if let Some(content) = c.delta.content.as_deref() {
-                        if !content.is_empty() {
-                            let now = Instant::now();
-                            if first_content.is_none() {
-                                first_content = Some(now);
-                            }
-                            last_content = Some(now);
+                    if c.delta.any_token_text().is_some() {
+                        let now = Instant::now();
+                        if first_token.is_none() {
+                            first_token = Some(now);
                         }
+                        last_token = Some(now);
                     }
                     if let Some(u) = c.usage {
                         input_tokens = Some(u.prompt_tokens);
@@ -160,8 +158,8 @@ async fn consume_stream(
 
     Ok(StreamOutcome {
         request_initiated,
-        first_content,
-        last_content,
+        first_token,
+        last_token,
         input_tokens,
         output_tokens,
     })
@@ -188,19 +186,19 @@ mod tests {
         }
     }
 
+    fn sse_body(frames: &[&str]) -> String {
+        frames.iter().map(|f| format!("data: {f}\n\n")).collect()
+    }
+
     fn happy_sse_body() -> String {
-        let frames = [
+        sse_body(&[
             r#"{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
             r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}"#,
             "[DONE]",
-        ];
-        frames
-            .iter()
-            .map(|f| format!("data: {f}\n\n"))
-            .collect::<String>()
+        ])
     }
 
     #[tokio::test]
@@ -291,15 +289,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reasoning_only_stream_sets_ttft_and_decode_rate() {
+        let body = sse_body(&[
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"","reasoning_content":"Hmm"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"","reasoning_content":" let"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{"content":"","reasoning_content":" me"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}"#,
+            "[DONE]",
+        ]);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+
+        let run = run_request(&cell(), &server.uri(), "k", 5).await;
+        assert!(run.error.is_none(), "error: {:?}", run.error);
+        assert!(run.ttft_ms.unwrap() > 0.0);
+        let rate = run.decode_tok_s.expect("decode_tok_s should be present");
+        assert!(rate.is_finite() && rate > 0.0, "decode_tok_s={rate}");
+        assert_eq!(run.output_tokens, Some(3));
+    }
+
+    #[tokio::test]
     async fn missing_usage_emits_null_token_counts() {
-        let frames = [
+        let body = sse_body(&[
             r#"{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}"#,
             r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
             "[DONE]",
-        ];
-        let body: String = frames.iter().map(|f| format!("data: {f}\n\n")).collect();
+        ]);
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))

@@ -7,6 +7,23 @@ pub struct Delta {
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+}
+
+impl Delta {
+    pub fn any_token_text(&self) -> Option<&str> {
+        [
+            self.content.as_deref(),
+            self.reasoning_content.as_deref(),
+            self.reasoning.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -124,6 +141,61 @@ mod tests {
                 completion_tokens: 34,
             })
         );
+    }
+
+    #[test]
+    fn any_token_text_prefers_content() {
+        let d = Delta {
+            content: Some("hi".into()),
+            reasoning_content: Some("rc".into()),
+            reasoning: Some("r".into()),
+            ..Default::default()
+        };
+        assert_eq!(d.any_token_text(), Some("hi"));
+    }
+
+    #[test]
+    fn any_token_text_falls_back_to_reasoning_content() {
+        let d = Delta {
+            reasoning_content: Some("thinking".into()),
+            ..Default::default()
+        };
+        assert_eq!(d.any_token_text(), Some("thinking"));
+    }
+
+    #[test]
+    fn any_token_text_falls_back_to_reasoning() {
+        let d = Delta {
+            reasoning: Some("ponder".into()),
+            ..Default::default()
+        };
+        assert_eq!(d.any_token_text(), Some("ponder"));
+    }
+
+    #[test]
+    fn any_token_text_none_when_all_absent() {
+        assert_eq!(Delta::default().any_token_text(), None);
+    }
+
+    #[test]
+    fn any_token_text_skips_empty_content_and_uses_reasoning() {
+        let d = Delta {
+            content: Some(String::new()),
+            reasoning_content: Some("rc".into()),
+            ..Default::default()
+        };
+        assert_eq!(d.any_token_text(), Some("rc"));
+    }
+
+    #[test]
+    fn any_token_text_none_when_all_empty() {
+        let d = Delta {
+            content: Some(String::new()),
+            reasoning_content: Some(String::new()),
+            reasoning: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(d.any_token_text(), None);
     }
 
     #[test]
