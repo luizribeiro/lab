@@ -27,7 +27,7 @@ enum Command {
     Run {
         suite: PathBuf,
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
         #[arg(long)]
         no_summary: bool,
         #[arg(long)]
@@ -54,7 +54,7 @@ async fn main() -> ExitCode {
             output,
             no_summary,
             no_progress,
-        } => match run_command(&suite, &output, no_summary, no_progress).await {
+        } => match run_command(&suite, output.as_deref(), no_summary, no_progress).await {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("error: {err:#}");
@@ -66,13 +66,25 @@ async fn main() -> ExitCode {
 
 async fn run_command(
     suite_path: &Path,
-    output_path: &Path,
+    output_path: Option<&Path>,
     no_summary: bool,
     no_progress: bool,
 ) -> Result<ExitCode> {
     let toml_text = std::fs::read_to_string(suite_path)
         .with_context(|| format!("reading suite file {}", suite_path.display()))?;
     let config = Config::from_toml_str(&toml_text).context("parsing suite TOML")?;
+
+    let owned_temp_path;
+    let output_path = match output_path {
+        Some(p) => p,
+        None => {
+            owned_temp_path = std::env::temp_dir().join(format!(
+                "tempo-{}.json",
+                chrono::Utc::now().format("%Y%m%dT%H%M%S")
+            ));
+            owned_temp_path.as_path()
+        }
+    };
 
     let reporter: Box<dyn ProgressReporter> = if !no_progress && std::io::stderr().is_terminal() {
         Box::new(IndicatifReporter::new())
