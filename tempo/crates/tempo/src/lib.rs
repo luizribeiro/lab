@@ -1,4 +1,5 @@
 pub mod config;
+pub mod dimensions;
 pub mod matrix;
 pub mod output;
 pub mod progress;
