@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
@@ -39,8 +39,7 @@ struct CellState {
     total_runs: u32,
     run_idx: u32,
     is_warmup: bool,
-    tokens: u64,
-    first_token_at: Option<Instant>,
+    chunks: u64,
 }
 
 pub struct IndicatifReporter {
@@ -74,24 +73,16 @@ impl IndicatifReporter {
 
     fn render_message(state: &CellState) -> String {
         let phase = if state.is_warmup { "warmup" } else { "run" };
-        let mut msg = format!(
-            "{}/{}/{} [{} {}/{}] {} tok",
+        format!(
+            "{}/{}/{} [{} {}/{}] {} chunks",
             state.scenario,
             state.model,
             state.prompt,
             phase,
             state.run_idx + 1,
             state.total_runs,
-            state.tokens,
-        );
-        if let Some(first) = state.first_token_at {
-            let since_first = Instant::now().saturating_duration_since(first);
-            if since_first > Duration::ZERO && state.tokens > 1 {
-                let rate = (state.tokens - 1) as f64 / since_first.as_secs_f64();
-                msg.push_str(&format!(" • {rate:.1} tok/s"));
-            }
-        }
-        msg
+            state.chunks,
+        )
     }
 }
 
@@ -122,8 +113,7 @@ impl ProgressReporter for IndicatifReporter {
             total_runs,
             run_idx: 0,
             is_warmup: false,
-            tokens: 0,
-            first_token_at: None,
+            chunks: 0,
         };
         let msg = Self::render_message(&state);
         state.bar.set_message(msg);
@@ -137,17 +127,13 @@ impl ProgressReporter for IndicatifReporter {
         self.update_bar(cell_id, |state| {
             state.run_idx = run_idx;
             state.is_warmup = is_warmup;
-            state.tokens = 0;
-            state.first_token_at = None;
+            state.chunks = 0;
         });
     }
 
     fn token_received(&self, cell_id: &str) {
         self.update_bar(cell_id, |state| {
-            state.tokens += 1;
-            if state.first_token_at.is_none() {
-                state.first_token_at = Some(Instant::now());
-            }
+            state.chunks += 1;
         });
     }
 
