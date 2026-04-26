@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
@@ -49,20 +49,6 @@ fn cell_label(scenario: &str, model: &str, prompt: &str) -> String {
     format!("{scenario}·{model}·{prompt}")
 }
 
-fn format_elapsed(d: Duration) -> String {
-    let secs = d.as_secs();
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 {
-        format!("{h}h {m}m {s}s")
-    } else if m > 0 {
-        format!("{m}m {s}s")
-    } else {
-        format!("{s}s")
-    }
-}
-
 struct CellState {
     bar: ProgressBar,
     label: String,
@@ -75,7 +61,6 @@ struct CellState {
 struct ReporterState {
     header: Option<ProgressBar>,
     suite_name: String,
-    started: Option<Instant>,
     total_runs_overall: u32,
     done_runs: u32,
     total_cells: usize,
@@ -87,7 +72,6 @@ impl ReporterState {
         Self {
             header: None,
             suite_name: String::new(),
-            started: None,
             total_runs_overall: 0,
             done_runs: 0,
             total_cells: 0,
@@ -96,18 +80,13 @@ impl ReporterState {
     }
 
     fn render_header(&self) -> String {
-        let elapsed = self
-            .started
-            .map(|i| format_elapsed(i.elapsed()))
-            .unwrap_or_else(|| "0s".into());
         format!(
-            "Suite: {} · {} cells · {} runs · {}/{} runs done · {} elapsed",
+            "Suite: {} · {} cells · {} runs · {}/{} runs done",
             self.suite_name,
             self.total_cells,
             self.total_runs_overall,
             self.done_runs,
             self.total_runs_overall,
-            elapsed,
         )
     }
 }
@@ -131,7 +110,7 @@ impl IndicatifReporter {
     }
 
     fn header_style() -> ProgressStyle {
-        ProgressStyle::with_template("{wide_msg:.bold}").expect("valid template")
+        ProgressStyle::with_template("{msg:.bold} · {elapsed}").expect("valid template")
     }
 
     fn pending_style() -> ProgressStyle {
@@ -200,7 +179,6 @@ impl ProgressReporter for IndicatifReporter {
     fn suite_started(&self, suite_name: &str, cells: &[CellPreview]) {
         let mut state = self.state.lock().unwrap();
         state.suite_name = suite_name.to_string();
-        state.started = Some(Instant::now());
         state.total_cells = cells.len();
         state.total_runs_overall = cells.iter().map(|c| c.total_runs).sum();
         state.done_runs = 0;
@@ -208,6 +186,7 @@ impl ProgressReporter for IndicatifReporter {
         let header = self.multi.add(ProgressBar::new_spinner());
         header.set_style(Self::header_style());
         header.set_message(state.render_header());
+        header.enable_steady_tick(Duration::from_secs(1));
         state.header = Some(header);
 
         let max_label = cells
