@@ -1,13 +1,15 @@
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use serde::Serialize;
+
+use crate::var::VarValue;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Run {
     pub suite: String,
     pub scenario: String,
     pub provider: String,
-    pub model: String,
-    pub prompt: String,
+    pub vars: IndexMap<String, VarValue>,
     pub run_idx: u32,
     pub started_at: DateTime<Utc>,
     pub ttft_ms: Option<f64>,

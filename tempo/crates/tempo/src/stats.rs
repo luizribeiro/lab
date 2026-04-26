@@ -1,8 +1,5 @@
-use indexmap::IndexMap;
-
 use crate::dimensions::Dimensions;
 use crate::provider::metrics::Run;
-use crate::var::VarValue;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellStats {
@@ -38,13 +35,10 @@ impl CellStats {
 }
 
 fn dimensions_for(run: &Run) -> Dimensions {
-    let mut vars: IndexMap<String, VarValue> = IndexMap::new();
-    vars.insert("model".to_string(), VarValue::from(run.model.as_str()));
-    vars.insert("prompt".to_string(), VarValue::from(run.prompt.as_str()));
     Dimensions {
         scenario: run.scenario.clone(),
         provider: run.provider.clone(),
-        vars,
+        vars: run.vars.clone(),
     }
 }
 
@@ -138,7 +132,9 @@ pub fn aggregate(runs: &[Run]) -> Vec<CellStats> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::var::VarValue;
     use chrono::Utc;
+    use indexmap::IndexMap;
 
     fn run(model: &str, ttft: Option<f64>, decode: Option<f64>, error: Option<&str>) -> Run {
         run_in("decode", model, "short", ttft, decode, error)
@@ -152,12 +148,14 @@ mod tests {
         decode: Option<f64>,
         error: Option<&str>,
     ) -> Run {
+        let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+        vars.insert("model".into(), VarValue::from(model));
+        vars.insert("prompt".into(), VarValue::from(prompt));
         Run {
             suite: "s".into(),
             scenario: scenario.into(),
             provider: "p".into(),
-            model: model.into(),
-            prompt: prompt.into(),
+            vars,
             run_idx: 0,
             started_at: Utc::now(),
             ttft_ms: ttft,

@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::provider::metrics::Run;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 struct Envelope<'a> {
@@ -34,8 +34,17 @@ pub fn write_runs_to_path<P: AsRef<Path>>(path: P, runs: &[Run]) -> io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::var::VarValue;
     use chrono::TimeZone;
+    use indexmap::IndexMap;
     use serde_json::Value;
+
+    fn sample_vars() -> IndexMap<String, VarValue> {
+        let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+        vars.insert("model".into(), VarValue::from("m1"));
+        vars.insert("prompt".into(), VarValue::from("short"));
+        vars
+    }
 
     fn sample_runs() -> Vec<Run> {
         vec![
@@ -43,8 +52,7 @@ mod tests {
                 suite: "s".into(),
                 scenario: "decode".into(),
                 provider: "p".into(),
-                model: "m1".into(),
-                prompt: "short".into(),
+                vars: sample_vars(),
                 run_idx: 0,
                 started_at: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
                 ttft_ms: Some(12.5),
@@ -58,8 +66,7 @@ mod tests {
                 suite: "s".into(),
                 scenario: "decode".into(),
                 provider: "p".into(),
-                model: "m1".into(),
-                prompt: "short".into(),
+                vars: sample_vars(),
                 run_idx: 1,
                 started_at: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 6).unwrap(),
                 ttft_ms: None,
@@ -79,17 +86,29 @@ mod tests {
         write_runs(&mut buf, &runs).expect("write ok");
 
         let parsed: Value = serde_json::from_slice(&buf).expect("valid json");
-        assert_eq!(parsed["schema_version"], Value::from(1));
+        assert_eq!(parsed["schema_version"], Value::from(2));
 
         let rows = parsed["rows"].as_array().expect("rows is array");
         assert_eq!(rows.len(), 2);
 
         assert_eq!(rows[0]["scenario"], Value::from("decode"));
-        assert_eq!(rows[0]["model"], Value::from("m1"));
+        assert_eq!(rows[0]["vars"]["model"], Value::from("m1"));
+        assert_eq!(rows[0]["vars"]["prompt"], Value::from("short"));
         assert_eq!(rows[0]["run_idx"], Value::from(0));
         assert_eq!(rows[0]["ttft_ms"], Value::from(12.5));
         assert_eq!(rows[0]["output_tokens"], Value::from(20));
         assert!(rows[0]["error"].is_null());
+
+        assert!(
+            rows[0].get("model").is_none(),
+            "v2 must not expose top-level model: {}",
+            rows[0],
+        );
+        assert!(
+            rows[0].get("prompt").is_none(),
+            "v2 must not expose top-level prompt: {}",
+            rows[0],
+        );
 
         assert_eq!(rows[1]["run_idx"], Value::from(1));
         assert!(rows[1]["ttft_ms"].is_null());
@@ -100,8 +119,7 @@ mod tests {
             "suite",
             "scenario",
             "provider",
-            "model",
-            "prompt",
+            "vars",
             "run_idx",
             "started_at",
             "ttft_ms",
@@ -125,7 +143,7 @@ mod tests {
 
         let bytes = std::fs::read(&path).expect("read back");
         let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
-        assert_eq!(parsed["schema_version"], Value::from(1));
+        assert_eq!(parsed["schema_version"], Value::from(2));
         assert_eq!(parsed["rows"].as_array().unwrap().len(), 2);
 
         let text = std::str::from_utf8(&bytes).unwrap();

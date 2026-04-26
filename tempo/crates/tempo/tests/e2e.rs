@@ -76,7 +76,7 @@ prompt = ["short", "long"]
 
     let bytes = std::fs::read(&out_path).expect("read results");
     let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
-    assert_eq!(parsed["schema_version"], Value::from(1));
+    assert_eq!(parsed["schema_version"], Value::from(2));
 
     let rows = parsed["rows"].as_array().expect("rows is array");
     assert_eq!(rows.len(), 8);
@@ -89,9 +89,20 @@ prompt = ["short", "long"]
             row["decode_tok_s"].is_number(),
             "row missing decode_tok_s: {row}"
         );
+        assert!(
+            row.get("model").is_none(),
+            "v2 must not expose top-level model: {row}"
+        );
+        assert!(
+            row.get("prompt").is_none(),
+            "v2 must not expose top-level prompt: {row}"
+        );
+        let vars = row["vars"].as_object().expect("row.vars is object");
+        assert!(vars.contains_key("model"), "vars missing model: {row}");
+        assert!(vars.contains_key("prompt"), "vars missing prompt: {row}");
         cells.insert((
-            row["model"].as_str().unwrap().to_string(),
-            row["prompt"].as_str().unwrap().to_string(),
+            vars["model"].as_str().unwrap().to_string(),
+            vars["prompt"].as_str().unwrap().to_string(),
         ));
     }
     assert_eq!(
