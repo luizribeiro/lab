@@ -36,6 +36,20 @@ impl Hash for Dimensions {
 }
 
 impl Dimensions {
+    pub fn axis_value(&self, axis: &str) -> String {
+        match axis {
+            "scenario" => self.scenario.clone(),
+            "provider" => self.provider.clone(),
+            name => match self.vars.get(name) {
+                Some(VarValue::Bool(b)) => b.to_string(),
+                Some(VarValue::Integer(i)) => i.to_string(),
+                Some(VarValue::Float(f)) => format!("{f}"),
+                Some(VarValue::String(s)) => s.clone(),
+                None => String::new(),
+            },
+        }
+    }
+
     pub fn var_str(&self, key: &str) -> &str {
         match self.vars.get(key) {
             Some(VarValue::String(s)) => s.as_str(),
