@@ -44,15 +44,19 @@
           outpost = import ./outpost/nix {
             inherit pkgs;
           };
+
+          tempo = import ./tempo/nix {
+            inherit pkgs;
+          };
         in
         {
-          lib = capsa.lib // lockin.lib // outpost.lib;
+          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib;
 
-          packages = capsa.packages // lockin.packages // outpost.packages // {
+          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // {
             default = capsa.packages.capsa;
           };
 
-          checks = capsa.checks // lockin.checks // outpost.checks;
+          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks;
 
           devShells = {
             default = devenv.lib.mkShell {

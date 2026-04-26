@@ -6,6 +6,12 @@ expanded into a matrix of model × prompt cells; each cell is run with optional
 warmup and N repetitions, and results are emitted as a versioned JSON
 envelope (`{"schema_version": 1, "rows": [...]}`).
 
+## Build
+
+```
+nix build .#tempo
+```
+
 ## Usage
 
 ```
