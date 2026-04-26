@@ -4,9 +4,10 @@ use thiserror::Error;
 
 use crate::config::{Config, Provider, Scenario};
 use crate::matrix::{self, Cell, MatrixError};
-use crate::progress::ProgressReporter;
+use crate::progress::{CellPreview, ProgressReporter};
 use crate::provider::metrics::Run;
 use crate::provider::openai::run_request;
+use crate::stats;
 use crate::template::{self, TemplateError, TemplateVars};
 
 #[derive(Debug)]
@@ -46,15 +47,25 @@ fn render_prompt(cell: &Cell, cell_id: &str, run_id: &str) -> Result<String, Run
     })
 }
 
+struct ScenarioPlan {
+    cells: Vec<Cell>,
+    api_key: String,
+    base_url: String,
+    warmup: u32,
+    runs_count: u32,
+    timeout_secs: u64,
+}
+
 pub async fn run_all(
     config: &Config,
     reporter: &dyn ProgressReporter,
 ) -> Result<RunnerOutput, RunnerError> {
     let suite = config.suite.name.clone();
     let mut runs: Vec<Run> = Vec::new();
-    let mut total_cells: usize = 0;
     let mut zero_success_cells: usize = 0;
 
+    let mut plans: Vec<ScenarioPlan> = Vec::new();
+    let mut previews: Vec<CellPreview> = Vec::new();
     for (scenario_name, scenario) in &config.scenarios {
         let Scenario::Throughput {
             provider: provider_name,
@@ -63,7 +74,6 @@ pub async fn run_all(
             timeout_secs,
             ..
         } = scenario;
-
         let provider = config
             .providers
             .get(provider_name)
@@ -76,26 +86,49 @@ pub async fn run_all(
             env::var(api_key_env).map_err(|_| RunnerError::MissingApiKey(api_key_env.clone()))?;
 
         let cells = matrix::expand(scenario_name, scenario, config)?;
-        total_cells += cells.len();
         for cell in &cells {
+            let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
+            previews.push(CellPreview {
+                cell_id,
+                scenario: cell.scenario.clone(),
+                model: cell.model.clone(),
+                prompt: cell.prompt.clone(),
+                total_runs: *runs_count,
+            });
+        }
+        plans.push(ScenarioPlan {
+            cells,
+            api_key,
+            base_url: base_url.clone(),
+            warmup: *warmup,
+            runs_count: *runs_count,
+            timeout_secs: *timeout_secs,
+        });
+    }
+
+    let total_cells = previews.len();
+    reporter.suite_started(&suite, &previews);
+
+    for plan in &plans {
+        for cell in &plan.cells {
             let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
             reporter.cell_started(
                 &cell_id,
                 &cell.scenario,
                 &cell.model,
                 &cell.prompt,
-                *runs_count,
+                plan.runs_count,
             );
 
-            for warmup_idx in 0..*warmup {
+            for warmup_idx in 0..plan.warmup {
                 reporter.run_started(&cell_id, warmup_idx, true);
                 let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
                 let run = run_request(
                     cell,
                     &prompt_text,
-                    base_url,
-                    &api_key,
-                    *timeout_secs,
+                    &plan.base_url,
+                    &plan.api_key,
+                    plan.timeout_secs,
                     reporter,
                     &cell_id,
                 )
@@ -103,16 +136,17 @@ pub async fn run_all(
                 reporter.run_finished(&cell_id, run.error.is_none());
             }
 
+            let mut cell_runs: Vec<Run> = Vec::with_capacity(plan.runs_count as usize);
             let mut successes = 0u32;
-            for run_idx in 0..*runs_count {
+            for run_idx in 0..plan.runs_count {
                 reporter.run_started(&cell_id, run_idx, false);
                 let prompt_text = render_prompt(cell, &cell_id, &template::new_run_id())?;
                 let mut run = run_request(
                     cell,
                     &prompt_text,
-                    base_url,
-                    &api_key,
-                    *timeout_secs,
+                    &plan.base_url,
+                    &plan.api_key,
+                    plan.timeout_secs,
                     reporter,
                     &cell_id,
                 )
@@ -123,13 +157,25 @@ pub async fn run_all(
                 if success {
                     successes += 1;
                 }
-                runs.push(run);
+                cell_runs.push(run);
                 reporter.run_finished(&cell_id, success);
             }
             if successes == 0 {
                 zero_success_cells += 1;
             }
-            reporter.cell_finished(&cell_id);
+            let cell_stats = stats::aggregate(&cell_runs)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| {
+                    stats::CellStats::empty(
+                        cell.scenario.clone(),
+                        cell.provider.clone(),
+                        cell.model.clone(),
+                        cell.prompt.clone(),
+                    )
+                });
+            runs.extend(cell_runs);
+            reporter.cell_finished(&cell_id, &cell_stats);
         }
     }
 
@@ -405,15 +451,18 @@ prompt = ["s"]
 
         assert!(matches!(
             &evs[0],
+            Event::SuiteStarted { suite_name, cells }
+                if suite_name == "test-suite" && cells.len() == 1 && cells[0].cell_id == cell_id
+        ));
+        assert!(matches!(
+            &evs[1],
             Event::CellStarted { cell_id: c, total_runs: 2, .. } if c == &cell_id
         ));
         assert_eq!(evs.last().expect("non-empty events"), &Event::SuiteFinished);
-        assert_eq!(
-            evs[evs.len() - 2],
-            Event::CellFinished {
-                cell_id: cell_id.clone()
-            }
-        );
+        assert!(matches!(
+            &evs[evs.len() - 2],
+            Event::CellFinished { cell_id: c, stats } if c == &cell_id && stats.success_runs == 2
+        ));
 
         let token_count = evs
             .iter()

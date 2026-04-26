@@ -18,6 +18,27 @@ pub struct CellStats {
     pub output_tokens_mean: Option<f64>,
 }
 
+impl CellStats {
+    pub fn empty(scenario: String, provider: String, model: String, prompt: String) -> Self {
+        Self {
+            scenario,
+            provider,
+            model,
+            prompt,
+            total_runs: 0,
+            success_runs: 0,
+            error_runs: 0,
+            ttft_ms_p50: None,
+            ttft_ms_p95: None,
+            decode_tok_s_mean: None,
+            decode_tok_s_p50: None,
+            decode_tok_s_p95: None,
+            e2e_ms_p50: None,
+            output_tokens_mean: None,
+        }
+    }
+}
+
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
     if n == 1 {
