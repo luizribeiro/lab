@@ -1,16 +1,78 @@
+use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::{Config, Generation, Prompt, Scenario};
+use crate::var::VarValue;
 
 #[derive(Debug, Clone)]
 pub struct Cell {
-    pub scenario: String,
-    pub provider: String,
-    pub model: String,
-    pub prompt: String,
-    pub prompt_text: String,
-    pub prompt_template: bool,
-    pub generation: Generation,
+    scenario: String,
+    provider: String,
+    model: String,
+    prompt: String,
+    prompt_text: String,
+    prompt_template: bool,
+    generation: Generation,
+    vars: IndexMap<String, VarValue>,
+}
+
+impl Cell {
+    pub fn new(
+        scenario: String,
+        provider: String,
+        vars: IndexMap<String, VarValue>,
+        prompt_text: String,
+        prompt_template: bool,
+        generation: Generation,
+    ) -> Self {
+        let model = require_string_var(&vars, "model");
+        let prompt = require_string_var(&vars, "prompt");
+        Self {
+            scenario,
+            provider,
+            model,
+            prompt,
+            prompt_text,
+            prompt_template,
+            generation,
+            vars,
+        }
+    }
+
+    pub fn scenario(&self) -> &str {
+        &self.scenario
+    }
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+    pub fn prompt_text(&self) -> &str {
+        &self.prompt_text
+    }
+    pub fn prompt_template(&self) -> bool {
+        self.prompt_template
+    }
+    pub fn generation(&self) -> &Generation {
+        &self.generation
+    }
+    pub fn vars(&self) -> &IndexMap<String, VarValue> {
+        &self.vars
+    }
+}
+
+fn require_string_var(vars: &IndexMap<String, VarValue>, key: &str) -> String {
+    match vars.get(key) {
+        Some(VarValue::String(s)) => s.clone(),
+        Some(other) => {
+            panic!("Cell::new: vars[{key:?}] must be VarValue::String, got {other:?}")
+        }
+        None => panic!("Cell::new: vars is missing required key {key:?}"),
+    }
 }
 
 #[derive(Debug, Error)]
@@ -53,15 +115,17 @@ pub fn expand(
                         scenario: scenario_name.to_string(),
                         prompt: prompt_name.clone(),
                     })?;
-            cells.push(Cell {
-                scenario: scenario_name.to_string(),
-                provider: provider.clone(),
-                model: model.clone(),
-                prompt: prompt_name.clone(),
-                prompt_text: text.clone(),
-                prompt_template: *template,
-                generation: generation.clone(),
-            });
+            let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+            vars.insert("model".to_string(), VarValue::from(model.as_str()));
+            vars.insert("prompt".to_string(), VarValue::from(prompt_name.as_str()));
+            cells.push(Cell::new(
+                scenario_name.to_string(),
+                provider.clone(),
+                vars,
+                text.clone(),
+                *template,
+                generation.clone(),
+            ));
         }
     }
     Ok(cells)
@@ -123,7 +187,7 @@ prompt = [{prompt_list}]
 
         let pairs: Vec<(&str, &str, &str)> = cells
             .iter()
-            .map(|c| (c.model.as_str(), c.prompt.as_str(), c.prompt_text.as_str()))
+            .map(|c| (c.model(), c.prompt(), c.prompt_text()))
             .collect();
         assert_eq!(
             pairs,
@@ -136,10 +200,88 @@ prompt = [{prompt_list}]
         );
 
         for cell in &cells {
-            assert_eq!(cell.scenario, "decode");
-            assert_eq!(cell.provider, "vllm");
-            assert_eq!(cell.generation.max_tokens, 16);
+            assert_eq!(cell.scenario(), "decode");
+            assert_eq!(cell.provider(), "vllm");
+            assert_eq!(cell.generation().max_tokens, 16);
         }
+    }
+
+    #[test]
+    fn expanded_cells_have_vars_matching_accessors() {
+        let cfg = config_with(&["m1", "m2"], &["short", "long"]);
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+
+        for cell in &cells {
+            let vars = cell.vars();
+            assert_eq!(
+                vars.get("model"),
+                Some(&VarValue::from(cell.model())),
+                "vars.model must match cell.model() for cell {:?}",
+                (cell.model(), cell.prompt())
+            );
+            assert_eq!(
+                vars.get("prompt"),
+                Some(&VarValue::from(cell.prompt())),
+                "vars.prompt must match cell.prompt() for cell {:?}",
+                (cell.model(), cell.prompt())
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "vars is missing required key \"model\"")]
+    fn cell_new_panics_without_model_var() {
+        let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+        vars.insert("prompt".into(), VarValue::from("short"));
+        let _ = Cell::new(
+            "decode".into(),
+            "vllm".into(),
+            vars,
+            "text".into(),
+            false,
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "vars is missing required key \"prompt\"")]
+    fn cell_new_panics_without_prompt_var() {
+        let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+        vars.insert("model".into(), VarValue::from("m1"));
+        let _ = Cell::new(
+            "decode".into(),
+            "vllm".into(),
+            vars,
+            "text".into(),
+            false,
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must be VarValue::String")]
+    fn cell_new_panics_when_model_is_not_string() {
+        let mut vars: IndexMap<String, VarValue> = IndexMap::new();
+        vars.insert("model".into(), VarValue::from(42i64));
+        vars.insert("prompt".into(), VarValue::from("short"));
+        let _ = Cell::new(
+            "decode".into(),
+            "vllm".into(),
+            vars,
+            "text".into(),
+            false,
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+            },
+        );
     }
 
     #[test]

@@ -38,21 +38,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for model in &candidates {
         eprintln!("trying model: {model}");
-        let cell = Cell {
-            scenario: "smoke".into(),
-            provider: "litellm".into(),
-            model: model.clone(),
-            prompt: "haiku".into(),
-            prompt_text: "Write a haiku about caching.".into(),
-            prompt_template: false,
-            generation: Generation {
+        let mut vars: indexmap::IndexMap<String, tempo::var::VarValue> = indexmap::IndexMap::new();
+        vars.insert("model".into(), tempo::var::VarValue::from(model.as_str()));
+        vars.insert("prompt".into(), tempo::var::VarValue::from("haiku"));
+        let cell = Cell::new(
+            "smoke".into(),
+            "litellm".into(),
+            vars,
+            "Write a haiku about caching.".into(),
+            false,
+            Generation {
                 max_tokens: 64,
                 temperature: 0.0,
             },
-        };
+        );
         let run = run_request(
             &cell,
-            &cell.prompt_text,
+            cell.prompt_text(),
             &base_url,
             &api_key,
             60,

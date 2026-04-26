@@ -31,10 +31,10 @@ pub async fn run_request(
      -> Run {
         Run {
             suite: String::new(),
-            scenario: cell.scenario.clone(),
-            provider: cell.provider.clone(),
-            model: cell.model.clone(),
-            prompt: cell.prompt.clone(),
+            scenario: cell.scenario().to_string(),
+            provider: cell.provider().to_string(),
+            model: cell.model().to_string(),
+            prompt: cell.prompt().to_string(),
             run_idx: 0,
             started_at,
             ttft_ms,
@@ -48,10 +48,10 @@ pub async fn run_request(
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = json!({
-        "model": cell.model,
+        "model": cell.model(),
         "messages": [{"role": "user", "content": prompt_text}],
-        "max_tokens": cell.generation.max_tokens,
-        "temperature": cell.generation.temperature,
+        "max_tokens": cell.generation().max_tokens,
+        "temperature": cell.generation().temperature,
         "stream": true,
         "stream_options": {"include_usage": true},
     });
@@ -81,7 +81,7 @@ pub async fn run_request(
 
     if outcome.input_tokens.is_none() || outcome.output_tokens.is_none() {
         tracing::warn!(
-            model = %cell.model,
+            model = %cell.model(),
             "stream completed without usage chunk; token counts will be null",
         );
     }
@@ -185,18 +185,20 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn cell() -> Cell {
-        Cell {
-            scenario: "decode".into(),
-            provider: "vllm".into(),
-            model: "test-model".into(),
-            prompt: "short".into(),
-            prompt_text: "Hello".into(),
-            prompt_template: false,
-            generation: Generation {
+        let mut vars: indexmap::IndexMap<String, crate::var::VarValue> = indexmap::IndexMap::new();
+        vars.insert("model".into(), crate::var::VarValue::from("test-model"));
+        vars.insert("prompt".into(), crate::var::VarValue::from("short"));
+        Cell::new(
+            "decode".into(),
+            "vllm".into(),
+            vars,
+            "Hello".into(),
+            false,
+            Generation {
                 max_tokens: 16,
                 temperature: 0.0,
             },
-        }
+        )
     }
 
     fn sse_body(frames: &[&str]) -> String {

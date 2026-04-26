@@ -34,16 +34,16 @@ pub enum RunnerError {
 }
 
 fn render_prompt(cell: &Cell, cell_id: &str, run_id: &str) -> Result<String, RunnerError> {
-    if !cell.prompt_template {
-        return Ok(cell.prompt_text.clone());
+    if !cell.prompt_template() {
+        return Ok(cell.prompt_text().to_string());
     }
     let mut resolver = SimpleResolver::new();
     resolver.insert("run_id", run_id);
     resolver.insert("cell_id", cell_id);
-    template::render(&cell.prompt_text, &resolver).map_err(|source| RunnerError::Template {
-        scenario: cell.scenario.clone(),
-        model: cell.model.clone(),
-        prompt: cell.prompt.clone(),
+    template::render(cell.prompt_text(), &resolver).map_err(|source| RunnerError::Template {
+        scenario: cell.scenario().to_string(),
+        model: cell.model().to_string(),
+        prompt: cell.prompt().to_string(),
         source,
     })
 }
@@ -88,12 +88,12 @@ pub async fn run_all(
 
         let cells = matrix::expand(scenario_name, scenario, config)?;
         for cell in &cells {
-            let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
+            let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
             previews.push(CellPreview {
                 cell_id,
-                scenario: cell.scenario.clone(),
-                model: cell.model.clone(),
-                prompt: cell.prompt.clone(),
+                scenario: cell.scenario().to_string(),
+                model: cell.model().to_string(),
+                prompt: cell.prompt().to_string(),
                 total_runs: *runs_count,
             });
         }
@@ -112,12 +112,12 @@ pub async fn run_all(
 
     for plan in &plans {
         for cell in &plan.cells {
-            let cell_id = template::cell_id(&cell.scenario, &cell.model, &cell.prompt);
+            let cell_id = template::cell_id(cell.scenario(), cell.model(), cell.prompt());
             reporter.cell_started(
                 &cell_id,
-                &cell.scenario,
-                &cell.model,
-                &cell.prompt,
+                cell.scenario(),
+                cell.model(),
+                cell.prompt(),
                 plan.runs_count,
             );
 
@@ -169,10 +169,10 @@ pub async fn run_all(
                 .next()
                 .unwrap_or_else(|| {
                     stats::CellStats::empty(
-                        cell.scenario.clone(),
-                        cell.provider.clone(),
-                        cell.model.clone(),
-                        cell.prompt.clone(),
+                        cell.scenario().to_string(),
+                        cell.provider().to_string(),
+                        cell.model().to_string(),
+                        cell.prompt().to_string(),
                     )
                 });
             runs.extend(cell_runs);

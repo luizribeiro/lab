@@ -94,21 +94,26 @@ async fn probe_for_working_model(
         if skip.iter().any(|s| lower.contains(s)) {
             continue;
         }
-        let cell = Cell {
-            scenario: "probe".into(),
-            provider: "litellm".into(),
-            model: entry.id.clone(),
-            prompt: "probe".into(),
-            prompt_text: "Hi.".into(),
-            prompt_template: false,
-            generation: Generation {
+        let mut vars: indexmap::IndexMap<String, tempo::var::VarValue> = indexmap::IndexMap::new();
+        vars.insert(
+            "model".into(),
+            tempo::var::VarValue::from(entry.id.as_str()),
+        );
+        vars.insert("prompt".into(), tempo::var::VarValue::from("probe"));
+        let cell = Cell::new(
+            "probe".into(),
+            "litellm".into(),
+            vars,
+            "Hi.".into(),
+            false,
+            Generation {
                 max_tokens: 16,
                 temperature: 0.0,
             },
-        };
+        );
         let run = run_request(
             &cell,
-            &cell.prompt_text,
+            cell.prompt_text(),
             base_url,
             api_key,
             30,
