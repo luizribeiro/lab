@@ -26,10 +26,11 @@ impl Cell {
         vars: IndexMap<String, VarValue>,
         prompt_text: String,
         prompt_template: bool,
-        generation: Generation,
+        generation_defaults: Generation,
     ) -> Self {
         let model = require_string_var(&vars, "model");
         let prompt = require_string_var(&vars, "prompt");
+        let generation = resolve_generation(&generation_defaults, &vars);
         Self {
             scenario,
             provider,
@@ -73,6 +74,26 @@ impl Cell {
             provider: self.provider.clone(),
             vars: self.vars.clone(),
         }
+    }
+}
+
+fn resolve_generation(defaults: &Generation, vars: &IndexMap<String, VarValue>) -> Generation {
+    let max_tokens = match vars.get("max_tokens") {
+        Some(VarValue::Integer(i)) if *i >= 0 && *i <= u32::MAX as i64 => *i as u32,
+        _ => defaults.max_tokens,
+    };
+    let temperature = match vars.get("temperature") {
+        Some(VarValue::Float(f)) => *f as f32,
+        _ => defaults.temperature,
+    };
+    let top_p = match vars.get("top_p") {
+        Some(VarValue::Float(f)) => Some(*f as f32),
+        _ => defaults.top_p,
+    };
+    Generation {
+        max_tokens,
+        temperature,
+        top_p,
     }
 }
 
@@ -359,6 +380,114 @@ model = "m_extra"
         assert_eq!(pairs, vec![("m1", "short")]);
     }
 
+    fn make_config_with_generation(generation: &str, matrix_toml: &str) -> Config {
+        let toml = format!(
+            r#"
+[suite]
+name = "t"
+
+[providers.vllm]
+kind = "openai_compatible"
+base_url = "http://x"
+api_key_env = "K"
+
+[prompts.short]
+kind = "inline"
+text = "short text"
+
+[prompts.long]
+kind = "inline"
+text = "long text"
+
+[scenarios.decode]
+kind = "throughput"
+provider = "vllm"
+warmup = 0
+runs = 1
+generation = {{ {generation} }}
+[scenarios.decode.matrix]
+{matrix_toml}
+"#
+        );
+        Config::from_toml_str(&toml).expect("fixture parses")
+    }
+
+    #[test]
+    fn matrix_var_overrides_max_tokens_default() {
+        let cfg = make_config_with_generation(
+            "max_tokens = 16, temperature = 0.0",
+            r#"
+model = ["m1"]
+prompt = ["short"]
+max_tokens = [128, 256]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].generation().max_tokens, 128);
+        assert_eq!(cells[1].generation().max_tokens, 256);
+    }
+
+    #[test]
+    fn matrix_var_overrides_temperature_default() {
+        let cfg = make_config_with_generation(
+            "max_tokens = 16, temperature = 0.0",
+            r#"
+model = ["m1"]
+prompt = ["short"]
+temperature = [0.7]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert!((cells[0].generation().temperature - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn matrix_var_sets_top_p_when_default_absent() {
+        let cfg = make_config_with_generation(
+            "max_tokens = 16, temperature = 0.0",
+            r#"
+model = ["m1"]
+prompt = ["short"]
+top_p = [0.95]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert!((cells[0].generation().top_p.unwrap() - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn matrix_var_overrides_top_p_default() {
+        let cfg = make_config_with_generation(
+            "max_tokens = 16, temperature = 0.0, top_p = 0.5",
+            r#"
+model = ["m1"]
+prompt = ["short"]
+top_p = [0.9]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert!((cells[0].generation().top_p.unwrap() - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cell_inherits_top_p_default_when_no_override() {
+        let cfg = make_config_with_generation(
+            "max_tokens = 16, temperature = 0.0, top_p = 0.8",
+            r#"
+model = ["m1"]
+prompt = ["short"]
+"#,
+        );
+        let scenario = cfg.scenarios.get("decode").unwrap();
+        let cells = expand("decode", scenario, &cfg).expect("expand ok");
+        assert_eq!(cells[0].generation().top_p, Some(0.8));
+    }
+
     #[test]
     fn expanded_cells_have_vars_matching_accessors() {
         let cfg = make_config(
@@ -391,6 +520,7 @@ prompt = ["short", "long"]
             Generation {
                 max_tokens: 16,
                 temperature: 0.0,
+                top_p: None,
             },
         );
     }
@@ -409,6 +539,7 @@ prompt = ["short", "long"]
             Generation {
                 max_tokens: 16,
                 temperature: 0.0,
+                top_p: None,
             },
         );
     }
@@ -428,6 +559,7 @@ prompt = ["short", "long"]
             Generation {
                 max_tokens: 16,
                 temperature: 0.0,
+                top_p: None,
             },
         );
     }

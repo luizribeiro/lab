@@ -47,14 +47,18 @@ pub async fn run_request(
     };
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = json!({
+    let gen = cell.generation();
+    let mut body = json!({
         "model": cell.model(),
         "messages": [{"role": "user", "content": prompt_text}],
-        "max_tokens": cell.generation().max_tokens,
-        "temperature": cell.generation().temperature,
+        "max_tokens": gen.max_tokens,
+        "temperature": gen.temperature,
         "stream": true,
         "stream_options": {"include_usage": true},
     });
+    if let Some(top_p) = gen.top_p {
+        body["top_p"] = json!(top_p);
+    }
 
     let client = reqwest::Client::new();
     let request = client.post(&url).bearer_auth(api_key).json(&body);
@@ -184,19 +188,30 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn cell() -> Cell {
+    fn cell_with(vars_extra: &[(&str, crate::var::VarValue)], generation: Generation) -> Cell {
         let mut vars: indexmap::IndexMap<String, crate::var::VarValue> = indexmap::IndexMap::new();
         vars.insert("model".into(), crate::var::VarValue::from("test-model"));
         vars.insert("prompt".into(), crate::var::VarValue::from("short"));
+        for (k, v) in vars_extra {
+            vars.insert((*k).into(), v.clone());
+        }
         Cell::new(
             "decode".into(),
             "vllm".into(),
             vars,
             "Hello".into(),
             false,
+            generation,
+        )
+    }
+
+    fn cell() -> Cell {
+        cell_with(
+            &[],
             Generation {
                 max_tokens: 16,
                 temperature: 0.0,
+                top_p: None,
             },
         )
     }
@@ -415,5 +430,102 @@ mod tests {
         assert!(run.output_tokens.is_none());
         assert!(run.decode_tok_s.is_none(), "no usage means no decode rate");
         assert!(run.ttft_ms.unwrap() > 0.0);
+    }
+
+    async fn capture_body(cell: Cell) -> serde_json::Value {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(happy_sse_body()),
+            )
+            .mount(&server)
+            .await;
+
+        let _ = run_request(
+            &cell,
+            "Hello",
+            &server.uri(),
+            "k",
+            5,
+            &crate::progress::NoopReporter,
+            "test-cell",
+        )
+        .await;
+
+        let received = server.received_requests().await.expect("requests");
+        assert_eq!(received.len(), 1);
+        serde_json::from_slice(&received[0].body).expect("json body")
+    }
+
+    #[tokio::test]
+    async fn request_body_omits_top_p_when_unset() {
+        let body = capture_body(cell()).await;
+        assert!(body.get("top_p").is_none(), "got: {body}");
+        assert_eq!(body["max_tokens"], 16);
+    }
+
+    #[tokio::test]
+    async fn request_body_includes_top_p_when_set() {
+        let cell = cell_with(
+            &[],
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+                top_p: Some(0.9),
+            },
+        );
+        let body = capture_body(cell).await;
+        let top_p = body.get("top_p").and_then(|v| v.as_f64()).expect("top_p");
+        assert!((top_p - 0.9).abs() < 1e-6, "got {top_p}");
+    }
+
+    #[tokio::test]
+    async fn matrix_max_tokens_var_overrides_default_in_request() {
+        let cell = cell_with(
+            &[("max_tokens", crate::var::VarValue::from(2048i64))],
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+                top_p: None,
+            },
+        );
+        let body = capture_body(cell).await;
+        assert_eq!(body["max_tokens"], 2048);
+    }
+
+    #[tokio::test]
+    async fn matrix_temperature_var_overrides_default_in_request() {
+        let cell = cell_with(
+            &[(
+                "temperature",
+                crate::var::VarValue::float(0.7).expect("finite"),
+            )],
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+                top_p: None,
+            },
+        );
+        let body = capture_body(cell).await;
+        let temp = body["temperature"].as_f64().expect("number");
+        assert!((temp - 0.7).abs() < 1e-6, "got {temp}");
+    }
+
+    #[tokio::test]
+    async fn matrix_top_p_var_overrides_default_in_request() {
+        let cell = cell_with(
+            &[("top_p", crate::var::VarValue::float(0.95).expect("finite"))],
+            Generation {
+                max_tokens: 16,
+                temperature: 0.0,
+                top_p: Some(0.5),
+            },
+        );
+        let body = capture_body(cell).await;
+        let top_p = body["top_p"].as_f64().expect("number");
+        assert!((top_p - 0.95).abs() < 1e-6, "got {top_p}");
     }
 }

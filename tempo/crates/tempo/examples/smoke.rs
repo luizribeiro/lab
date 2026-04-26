@@ -50,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Generation {
                 max_tokens: 64,
                 temperature: 0.0,
+                top_p: None,
             },
         );
         let run = run_request(

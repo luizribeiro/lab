@@ -112,6 +112,7 @@ async fn probe_for_working_model(
             Generation {
                 max_tokens: 16,
                 temperature: 0.0,
+                top_p: None,
             },
         );
         let run = run_request(

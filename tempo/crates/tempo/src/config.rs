@@ -68,6 +68,8 @@ fn default_timeout_secs() -> u64 {
 pub struct Generation {
     pub max_tokens: u32,
     pub temperature: f32,
+    #[serde(default)]
+    pub top_p: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -407,6 +409,7 @@ mod tests {
         assert_eq!(*runs, 5);
         assert_eq!(*timeout_secs, 120);
         assert_eq!(generation.max_tokens, 256);
+        assert_eq!(generation.top_p, None);
         assert_eq!(matrix.axes.get("model").unwrap().len(), 2);
         let prompt_axis: Vec<&str> = matrix
             .axes
@@ -426,6 +429,36 @@ mod tests {
         } = cfg.providers.get("vllm").unwrap();
         assert_eq!(base_url, "http://litellm.internal/v1");
         assert_eq!(api_key_env, "LITELLM_KEY");
+    }
+
+    #[test]
+    fn parses_generation_with_top_p() {
+        let toml = r#"
+[suite]
+name = "x"
+
+[providers.p]
+kind = "openai_compatible"
+base_url = "http://x"
+api_key_env = "K"
+
+[prompts.s]
+kind = "inline"
+text = "hi"
+
+[scenarios.t]
+kind = "throughput"
+provider = "p"
+warmup = 0
+runs = 1
+generation = { max_tokens = 1, temperature = 0.0, top_p = 0.9 }
+[scenarios.t.matrix]
+model = ["m"]
+prompt = ["s"]
+"#;
+        let cfg = Config::from_toml_str(toml).expect("parses");
+        let Scenario::Throughput { generation, .. } = cfg.scenarios.get("t").unwrap();
+        assert_eq!(generation.top_p, Some(0.9));
     }
 
     #[test]
