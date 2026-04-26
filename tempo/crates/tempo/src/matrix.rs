@@ -11,8 +11,6 @@ use crate::var::VarValue;
 pub struct Cell {
     scenario: String,
     provider: String,
-    model: String,
-    prompt: String,
     prompt_text: String,
     prompt_template: bool,
     generation: Generation,
@@ -28,14 +26,12 @@ impl Cell {
         prompt_template: bool,
         generation_defaults: Generation,
     ) -> Self {
-        let model = require_string_var(&vars, "model");
-        let prompt = require_string_var(&vars, "prompt");
+        assert_string_var(&vars, "model");
+        assert_string_var(&vars, "prompt");
         let generation = resolve_generation(&generation_defaults, &vars);
         Self {
             scenario,
             provider,
-            model,
-            prompt,
             prompt_text,
             prompt_template,
             generation,
@@ -50,10 +46,16 @@ impl Cell {
         &self.provider
     }
     pub fn model(&self) -> &str {
-        &self.model
+        self.string_var("model")
     }
     pub fn prompt(&self) -> &str {
-        &self.prompt
+        self.string_var("prompt")
+    }
+    fn string_var(&self, key: &str) -> &str {
+        match self.vars.get(key) {
+            Some(VarValue::String(s)) => s,
+            _ => unreachable!("Cell::new guarantees vars[{key:?}] is a string"),
+        }
     }
     pub fn prompt_text(&self) -> &str {
         &self.prompt_text
@@ -97,9 +99,9 @@ fn resolve_generation(defaults: &Generation, vars: &IndexMap<String, VarValue>) 
     }
 }
 
-fn require_string_var(vars: &IndexMap<String, VarValue>, key: &str) -> String {
+fn assert_string_var(vars: &IndexMap<String, VarValue>, key: &str) {
     match vars.get(key) {
-        Some(VarValue::String(s)) => s.clone(),
+        Some(VarValue::String(_)) => {}
         Some(other) => {
             panic!("Cell::new: vars[{key:?}] must be VarValue::String, got {other:?}")
         }
