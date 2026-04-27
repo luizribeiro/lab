@@ -488,3 +488,109 @@ fn host_tmp_is_not_writable_without_explicit_allowlist() {
 fn private_tmpdir_is_writable() {
     assert!(run_probe(common::sandbox_builder(), &["can-write-temp"]));
 }
+
+// ── symlink / hardlink escape regressions ────────────────────
+//
+// Adversarial cases: a symlink that lives inside the allowlist
+// must not become a backdoor to content outside it, and a hardlink
+// that lives inside a writable allowlist exposes inode-vs-path
+// semantics worth pinning in a test.
+
+#[test]
+fn symlink_inside_read_only_dir_does_not_grant_outside_read() {
+    let temp = TestDir::new("symlink-ro-escape");
+    let secret_dir = temp.join("secret_dir");
+    let inside_dir = temp.join("inside_dir");
+    std::fs::create_dir(&secret_dir).expect("mkdir secret_dir");
+    std::fs::create_dir(&inside_dir).expect("mkdir inside_dir");
+
+    let secret = secret_dir.join("secret.txt");
+    std::fs::write(&secret, b"secret").expect("seed secret");
+
+    let link = inside_dir.join("link");
+    std::os::unix::fs::symlink(&secret, &link).expect("create symlink");
+
+    // Allow ONLY inside_dir. secret_dir is outside the allowlist, so
+    // a symlink resolving into it must not bypass enforcement.
+    assert!(
+        !run_probe(
+            common::sandbox_builder().read_only_dir(inside_dir),
+            &["can-read", &link.display().to_string()]
+        ),
+        "reading through a symlink that points outside the allowlist must be denied"
+    );
+}
+
+#[test]
+fn symlink_inside_read_write_dir_cannot_be_used_to_write_outside() {
+    let temp = TestDir::new("symlink-rw-escape");
+    let outside_dir = temp.join("outside_dir");
+    let inside_dir = temp.join("inside_dir");
+    std::fs::create_dir(&outside_dir).expect("mkdir outside_dir");
+    std::fs::create_dir(&inside_dir).expect("mkdir inside_dir");
+
+    let target = outside_dir.join("target.txt");
+    std::fs::write(&target, b"orig").expect("seed target");
+
+    let link = inside_dir.join("link");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    assert!(
+        !run_probe(
+            common::sandbox_builder().read_write_dir(inside_dir),
+            &["can-write", &link.display().to_string()]
+        ),
+        "writing through a symlink that points outside the allowlist must be denied"
+    );
+
+    let after = std::fs::read(&target).expect("read target after attempt");
+    assert_eq!(
+        after, b"orig",
+        "outside file must be unchanged after symlink-write attempt"
+    );
+}
+
+#[test]
+fn hardlink_inside_read_write_dir_to_outside_file_documents_behavior() {
+    // Hardlinks share an inode, but path-based sandboxes (syd +
+    // landlock on Linux, sandbox-exec on macOS) police *paths*, not
+    // inodes. An inside-allowlist path that hardlinks to outside
+    // content is therefore reachable: the policy names the path the
+    // child uses, and that path lives in the allowed dir. This is
+    // intentional — callers must not place hardlinks to sensitive
+    // content into a writable allowed dir.
+    let temp = TestDir::new("hardlink-rw");
+    let outside_dir = temp.join("outside_dir");
+    let inside_dir = temp.join("inside_dir");
+    std::fs::create_dir(&outside_dir).expect("mkdir outside_dir");
+    std::fs::create_dir(&inside_dir).expect("mkdir inside_dir");
+
+    let target = outside_dir.join("target.txt");
+    std::fs::write(&target, b"orig").expect("seed target");
+
+    let link = inside_dir.join("link");
+    std::fs::hard_link(&target, &link).expect("create hardlink");
+
+    // Reading via the inside path should succeed: the path is in the
+    // allowlist regardless of which inode it points at.
+    assert!(
+        run_probe(
+            common::sandbox_builder().read_write_dir(inside_dir.clone()),
+            &["can-read", &link.display().to_string()]
+        ),
+        "reading the hardlink via its inside-allowlist path is expected to succeed \
+         under path-based enforcement; if this starts failing the policy semantics \
+         changed"
+    );
+
+    // Reading via the outside path must still be denied — the outside
+    // dir is not in the allowlist.
+    assert!(
+        !run_probe(
+            common::sandbox_builder().read_write_dir(inside_dir),
+            &["can-read", &target.display().to_string()]
+        ),
+        "reading via the outside path must remain denied even though an inside \
+         hardlink exists"
+    );
+}
