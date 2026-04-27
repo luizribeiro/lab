@@ -49,9 +49,8 @@ def fetch_extract(lang: str, title: str) -> tuple[str, str]:
     return page["title"], page.get("extract", "")
 
 
-def render_markdown(title: str, extract: str, url: str) -> str:
-    body = extract.strip() or "_(no extract available)_"
-    return f"# {title}\n\n{body}\n\nSource: <{url}>\n"
+def render_markdown(extract: str) -> str:
+    return extract.strip() or "_(no extract available)_"
 
 
 def handle_request(request: dict) -> dict:
@@ -69,7 +68,7 @@ def handle_request(request: dict) -> dict:
         "ok": True,
         "title": canonical_title,
         "url": url,
-        "markdown": render_markdown(canonical_title, extract, url),
+        "markdown": render_markdown(extract),
     }
 
 
@@ -94,11 +93,9 @@ def selftest() -> int:
     for url in cases_none:
         got = parse_wiki_url(url)
         assert got is None, f"{url}: expected None, got {got!r}"
-    md = render_markdown("Berlin", "Berlin is the capital of Germany.",
-                         "https://de.wikipedia.org/wiki/Berlin")
-    assert md.startswith("# Berlin\n\n")
-    assert "Berlin is the capital" in md
-    assert "Source: <https://de.wikipedia.org/wiki/Berlin>" in md
+    md = render_markdown("  Berlin is the capital of Germany.  ")
+    assert md == "Berlin is the capital of Germany."
+    assert render_markdown("") == "_(no extract available)_"
     err = handle_request({"url": "https://example.com/wiki/Foo"})
     assert err == {"schema_version": 1, "ok": False, "error": "not a Wikipedia URL: https://example.com/wiki/Foo"}
     print("ok")
