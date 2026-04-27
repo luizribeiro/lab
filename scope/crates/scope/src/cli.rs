@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::providers::ProviderKind;
 
 #[derive(Debug, Parser)]
-#[command(name = "scope", about = "Non-interactive CLI web browser for AI agents")]
+#[command(name = "scope", version, about = "Non-interactive CLI web browser for AI agents")]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
