@@ -13,15 +13,19 @@ Built-ins:
   the page to Markdown
 - a DuckDuckGo search provider
 
-## Build
+## Install
+
+Prebuilt binary (macOS arm64/x86_64, Linux arm64/x86_64):
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/luizribeiro/lab/releases/latest/download/scope-installer.sh | sh
+```
+
+Or build from source:
 
 ```
 nix build .#scope
-```
-
-Or with cargo:
-
-```
+# or
 cargo build --release --manifest-path scope/Cargo.toml
 ```
 
