@@ -74,6 +74,11 @@ pub(super) fn build_policy(
         NetworkMode::Deny => {}
     }
 
+    policy.append_raw(r#"(deny network-outbound (literal "/private/var/run/syslog"))"#);
+    policy.append_raw(r#"(deny mach-register (local-name-prefix ""))"#);
+    policy.append_raw(r#"(deny mach-lookup (xpc-service-name-prefix ""))"#);
+    policy.append_raw(r#"(deny file-write* (subpath "/cores"))"#);
+
     for rule in &spec.raw_seatbelt_rules {
         policy.append_raw(rule.as_str());
     }
@@ -197,8 +202,8 @@ mod tests {
             "Deny mode must not grant network*, got:\n{deny}"
         );
         assert!(
-            !deny.contains("network-outbound"),
-            "Deny mode must not emit network-outbound, got:\n{deny}"
+            !deny.contains("(allow network-outbound"),
+            "Deny mode must not emit any network-outbound allow, got:\n{deny}"
         );
 
         let allow_all: String = build_policy(
@@ -234,10 +239,85 @@ mod tests {
             !proxy.contains("(allow network*)"),
             "Proxy mode must not grant all network, got:\n{proxy}"
         );
-        let network_outbound_rules = proxy.matches("network-outbound").count();
+        let network_outbound_allows = proxy.matches("(allow network-outbound").count();
         assert_eq!(
-            network_outbound_rules, 1,
-            "Proxy mode must emit exactly one network-outbound rule, got {network_outbound_rules} in:\n{proxy}"
+            network_outbound_allows, 1,
+            "Proxy mode must emit exactly one network-outbound allow, got {network_outbound_allows} in:\n{proxy}"
+        );
+    }
+
+    #[test]
+    fn baseline_hardening_denies_are_emitted_after_system_import() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-baseline-deny-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let expected = [
+            r#"(deny network-outbound (literal "/private/var/run/syslog"))"#,
+            r#"(deny mach-register (local-name-prefix ""))"#,
+            r#"(deny mach-lookup (xpc-service-name-prefix ""))"#,
+            r#"(deny file-write* (subpath "/cores"))"#,
+        ];
+
+        for mode in [
+            NetworkMode::Deny,
+            NetworkMode::AllowAll,
+            NetworkMode::Proxy {
+                loopback_port: 4242,
+            },
+        ] {
+            let rendered: String = build_policy(
+                Path::new("/bin/ls"),
+                &SandboxSpec {
+                    network: mode,
+                    ..SandboxSpec::default()
+                },
+                &private_tmp,
+            )
+            .into();
+
+            let import_idx = rendered
+                .find("(import \"system.sb\")")
+                .expect("system.sb import should be present");
+
+            for rule in expected {
+                let idx = rendered
+                    .find(rule)
+                    .unwrap_or_else(|| panic!("missing baseline deny `{rule}` in:\n{rendered}"));
+                assert!(
+                    idx > import_idx,
+                    "baseline deny `{rule}` must come after system.sb import, got:\n{rendered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn baseline_hardening_denies_precede_user_raw_rules() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-baseline-raw-order-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let user_rule = r#"(allow mach-lookup (xpc-service-name "com.example.svc"))"#;
+        let spec = SandboxSpec {
+            raw_seatbelt_rules: vec![user_rule.to_string()],
+            ..SandboxSpec::default()
+        };
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+
+        let baseline_deny_idx = rendered
+            .find(r#"(deny mach-lookup (xpc-service-name-prefix ""))"#)
+            .expect("baseline mach-lookup deny missing");
+        let user_idx = rendered.find(user_rule).expect("user raw rule missing");
+        assert!(
+            user_idx > baseline_deny_idx,
+            "user raw rules must follow baseline denies so callers can re-allow surgically:\n{rendered}"
         );
     }
 
