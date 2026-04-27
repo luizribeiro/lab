@@ -101,6 +101,13 @@
                 ./shared/nix/devenv/base.nix
               ];
             };
+
+            scope = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+              ];
+            };
           };
 
           formatter = pkgs.nixpkgs-fmt;
