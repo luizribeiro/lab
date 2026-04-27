@@ -121,7 +121,12 @@ def fetch_html(lang: str, title: str) -> tuple[str, str]:
 
 def html_to_markdown(html: str) -> str:
     result = subprocess.run(
-        ["pandoc", "--from=html", "--to=gfm-raw_html", "--wrap=none"],
+        [
+            "pandoc",
+            "--from=html",
+            "--to=markdown_strict+pipe_tables+grid_tables+backtick_code_blocks+strikeout+autolink_bare_uris-raw_html",
+            "--wrap=none",
+        ],
         input=html,
         capture_output=True,
         text=True,
