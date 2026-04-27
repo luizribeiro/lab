@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import html
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -8,10 +9,26 @@ import urllib.request
 from typing import Optional
 
 USER_AGENT = "scope-wikipedia-search-plugin/0.1 (https://github.com/luizribeiro/lab)"
-LANG = "en"
+DEFAULT_LANG = "en"
 DEFAULT_LIMIT = 10
+_LOCALE_RE = re.compile(r"^([a-z]{2,3})(?:[_-]|\.|$)")
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+
+
+def lang_from_locale(value: Optional[str]) -> Optional[str]:
+    if not value or value in ("C", "POSIX"):
+        return None
+    match = _LOCALE_RE.match(value)
+    return match.group(1) if match else None
+
+
+def detect_lang(env: dict) -> str:
+    for key in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        lang = lang_from_locale(env.get(key))
+        if lang:
+            return lang
+    return DEFAULT_LANG
 
 
 def strip_snippet_html(snippet: str) -> str:
@@ -59,14 +76,15 @@ def handle_request(request: dict) -> dict:
     if not query:
         return {"schema_version": 1, "ok": False, "error": "empty query"}
     limit = request.get("limit") or DEFAULT_LIMIT
+    lang = detect_lang(os.environ)
     try:
-        raw = fetch_search(LANG, query, limit)
+        raw = fetch_search(lang, query, limit)
     except Exception as exc:
         return {"schema_version": 1, "ok": False, "error": str(exc)}
     return {
         "schema_version": 1,
         "ok": True,
-        "results": to_results(LANG, raw),
+        "results": to_results(lang, raw),
     }
 
 
@@ -100,6 +118,25 @@ def selftest() -> int:
     assert handle_request({"query": "  "}) == {
         "schema_version": 1, "ok": False, "error": "empty query"
     }
+
+    assert lang_from_locale("en_US.UTF-8") == "en"
+    assert lang_from_locale("fr_FR.UTF-8") == "fr"
+    assert lang_from_locale("de_DE") == "de"
+    assert lang_from_locale("pt-BR") == "pt"
+    assert lang_from_locale("zh_CN.UTF-8") == "zh"
+    assert lang_from_locale("ja") == "ja"
+    assert lang_from_locale("C") is None
+    assert lang_from_locale("POSIX") is None
+    assert lang_from_locale("") is None
+    assert lang_from_locale(None) is None
+    assert lang_from_locale("garbage") is None
+
+    assert detect_lang({"LC_ALL": "fr_FR.UTF-8", "LANG": "en_US.UTF-8"}) == "fr"
+    assert detect_lang({"LANG": "de_DE.UTF-8"}) == "de"
+    assert detect_lang({"LC_ALL": "C", "LANG": "ja_JP.UTF-8"}) == "ja"
+    assert detect_lang({}) == "en"
+    assert detect_lang({"LC_ALL": "C", "LANG": "POSIX"}) == "en"
+
     print("ok")
     return 0
 
