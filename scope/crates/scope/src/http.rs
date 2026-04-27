@@ -78,6 +78,18 @@ impl HttpClient {
 }
 
 #[cfg(test)]
+pub(crate) fn test_client() -> std::sync::Arc<HttpClient> {
+    std::sync::Arc::new(
+        HttpClient::from_config(&HttpConfig {
+            timeout_secs: 5,
+            max_body_bytes: 1_000_000,
+            user_agent: "scope-test/1.0".into(),
+        })
+        .unwrap(),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::matchers::{header, method, path};

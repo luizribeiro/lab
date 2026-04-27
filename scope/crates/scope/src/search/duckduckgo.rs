@@ -1,7 +1,63 @@
-use scraper::{Html, Selector};
-use url::form_urlencoded;
+use std::sync::Arc;
 
-use crate::types::SearchResult;
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use scraper::{Html, Selector};
+use url::{form_urlencoded, Url};
+
+use crate::http::HttpClient;
+use crate::types::{SearchOutput, SearchRequest, SearchResult};
+
+use super::SearchProvider;
+
+const DEFAULT_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
+
+pub struct DuckDuckGoSearchProvider {
+    http: Arc<HttpClient>,
+    endpoint: Url,
+}
+
+impl DuckDuckGoSearchProvider {
+    pub fn new(http: Arc<HttpClient>) -> Self {
+        Self {
+            http,
+            endpoint: Url::parse(DEFAULT_ENDPOINT).expect("default DDG endpoint is valid"),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_endpoint(http: Arc<HttpClient>, endpoint: Url) -> Self {
+        Self { http, endpoint }
+    }
+}
+
+#[async_trait]
+impl SearchProvider for DuckDuckGoSearchProvider {
+    fn name(&self) -> &str {
+        "duckduckgo"
+    }
+
+    async fn search(&self, request: SearchRequest) -> Result<SearchOutput> {
+        let mut url = self.endpoint.clone();
+        url.query_pairs_mut().append_pair("q", &request.query);
+
+        let response = self
+            .http
+            .fetch(&url)
+            .await
+            .map_err(|e| anyhow!("duckduckgo search request failed: {e}"))?;
+
+        let mut results = parse_results(&response.body);
+        if let Some(limit) = request.limit {
+            results.truncate(limit);
+        }
+
+        Ok(SearchOutput {
+            query: request.query,
+            results,
+        })
+    }
+}
 
 pub fn parse_results(html: &str) -> Vec<SearchResult> {
     let document = Html::parse_document(html);
@@ -78,21 +134,7 @@ mod tests {
 
     #[test]
     fn parses_three_results() {
-        let html = r#"
-            <div class="result">
-              <a class="result__a" href="https://a.example/">A</a>
-              <a class="result__snippet">snippet a</a>
-            </div>
-            <div class="result">
-              <a class="result__a" href="https://b.example/">B</a>
-              <a class="result__snippet">snippet b</a>
-            </div>
-            <div class="result">
-              <a class="result__a" href="https://c.example/">C</a>
-              <a class="result__snippet">snippet c</a>
-            </div>
-        "#;
-        let results = parse_results(html);
+        let results = parse_results(THREE_RESULT_HTML);
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].url, "https://a.example/");
         assert_eq!(results[1].title, "B");
@@ -138,5 +180,107 @@ mod tests {
             </div>
         "#;
         assert!(parse_results(html).is_empty());
+    }
+
+    use crate::http::test_client;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const THREE_RESULT_HTML: &str = r#"
+        <div class="result">
+          <a class="result__a" href="https://a.example/">A</a>
+          <a class="result__snippet">snippet a</a>
+        </div>
+        <div class="result">
+          <a class="result__a" href="https://b.example/">B</a>
+          <a class="result__snippet">snippet b</a>
+        </div>
+        <div class="result">
+          <a class="result__a" href="https://c.example/">C</a>
+          <a class="result__snippet">snippet c</a>
+        </div>
+    "#;
+
+    fn endpoint(server: &MockServer) -> Url {
+        Url::parse(&format!("{}/html/", server.uri())).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_passes_query_and_returns_parsed_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/html/"))
+            .and(query_param("q", "rust lang"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                THREE_RESULT_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8",
+            ))
+            .mount(&server)
+            .await;
+
+        let provider =
+            DuckDuckGoSearchProvider::with_endpoint(test_client(), endpoint(&server));
+        assert_eq!(provider.name(), "duckduckgo");
+
+        let output = provider
+            .search(SearchRequest {
+                query: "rust lang".into(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.query, "rust lang");
+        assert_eq!(output.results.len(), 3);
+        assert_eq!(output.results[0].url, "https://a.example/");
+        assert_eq!(output.results[1].title, "B");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_truncates_to_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/html/"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                THREE_RESULT_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8",
+            ))
+            .mount(&server)
+            .await;
+
+        let provider =
+            DuckDuckGoSearchProvider::with_endpoint(test_client(), endpoint(&server));
+        let output = provider
+            .search(SearchRequest {
+                query: "rust".into(),
+                limit: Some(2),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.results.len(), 2);
+        assert_eq!(output.results[0].title, "A");
+        assert_eq!(output.results[1].title, "B");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_propagates_http_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/html/"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let provider =
+            DuckDuckGoSearchProvider::with_endpoint(test_client(), endpoint(&server));
+        let err = provider
+            .search(SearchRequest {
+                query: "rust".into(),
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("500"), "got: {err}");
     }
 }
