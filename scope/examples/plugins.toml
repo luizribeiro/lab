@@ -13,3 +13,7 @@ priority = 100
 [[search_providers]]
 name = "example"
 command = ["python3", "examples/search_plugin.py"]
+
+[[search_providers]]
+name = "wikipedia"
+command = ["python3", "examples/wikipedia_search_plugin.py"]
