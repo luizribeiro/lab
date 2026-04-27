@@ -1,11 +1,10 @@
 # scope
 
-Non-interactive CLI "web browser" for AI agents. A single Rust binary that
-exposes two commands — `scope read <url>` and `scope search <query>` — and
-prints the result to stdout as Markdown (or JSON). URLs are routed to
+Non-interactive CLI "web browser" for AI agents. Reads URLs and runs
+searches, printing the result to stdout as Markdown. URLs are routed to
 "reader" backends and searches to "search provider" backends; both kinds
-of backend are pluggable via a small subprocess JSON protocol
-(`scope-json-v1`) so new sites and engines can be added without recompiling.
+of backend are pluggable via a small subprocess JSON protocol so new
+sites and engines can be added without recompiling.
 
 Built-ins:
 
@@ -15,30 +14,25 @@ Built-ins:
 
 ## Install
 
-Prebuilt binary (macOS arm64/x86_64, Linux arm64/x86_64):
+Homebrew (macOS, Linux):
 
 ```
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/luizribeiro/lab/releases/latest/download/scope-installer.sh | sh
+brew install luizribeiro/tap/scope
 ```
 
-Or build from source:
+Or grab a prebuilt binary from the [latest release][releases] (macOS
+and Linux, x86_64 and arm64).
 
-```
-nix build .#scope
-# or
-cargo build --release --manifest-path scope/Cargo.toml
-```
-
-The binary lands at `scope/target/release/scope`.
+[releases]: https://github.com/luizribeiro/lab/releases?q=scope
 
 ## Usage
 
 ```
-scope [--config PATH] [--format markdown|json] read [--reader NAME] <url>
-scope [--config PATH] [--format markdown|json] search [--provider NAME] [--limit N] <query>
+scope read <url>
+scope search [--limit N] <query>
 ```
 
-Markdown is written to stdout and errors to stderr. The process exits
+Markdown is written to stdout, errors to stderr. The process exits
 non-zero on failure.
 
 ### `scope read`
@@ -52,8 +46,10 @@ Source: <https://example.com/>
 This domain is for use in illustrative examples in documents...
 ```
 
-`--reader NAME` forces a specific reader instead of letting the registry
-pick one by route match.
+`scope read file:///path/to/page.html` works for local HTML files too.
+
+`--provider NAME` forces a specific reader instead of letting the
+registry pick one by route match.
 
 ### `scope search`
 
@@ -71,16 +67,15 @@ $ scope search --limit 2 'rust async'
 `--provider NAME` overrides the configured default search provider.
 `--limit N` caps the number of results.
 
-`--format json` emits the underlying `ReadOutput` / `SearchOutput`
-struct as pretty-printed JSON instead of Markdown.
+### `scope providers`
+
+Lists registered readers and search providers (built-in and configured).
 
 ## Configuration
 
 `scope` looks for a TOML config at `$XDG_CONFIG_HOME/scope/config.toml`
 (falling back to `~/.config/scope/config.toml`). Pass `--config PATH` to
 use a specific file. Unknown fields are rejected.
-
-A complete example:
 
 ```toml
 default_search_provider = "duckduckgo"
@@ -110,118 +105,26 @@ Reader `routes` entries support `scheme`, `host`, `host_suffix`, and
 `priority` whose route matches; ties break on the most specific route.
 The built-in HTML reader acts as the fallback when nothing else matches.
 
-## Plugin protocol: `scope-json-v1`
+## Plugins
 
-External readers and search providers are spawned as subprocesses. For
-each request, `scope` writes a single JSON object to the plugin's stdin,
-closes stdin, and reads a single JSON object from stdout. Anything
-written to stderr is captured and surfaced on error. A non-zero exit
-status or malformed response is treated as a failure. Every message
-carries `"schema_version": 1`.
-
-### Reader
-
-Request:
+External readers and search providers are spawned as subprocesses
+speaking the `scope-json-v1` protocol: one JSON request on stdin, one
+JSON response on stdout. Any language works.
 
 ```json
-{
-  "schema_version": 1,
-  "kind": "read",
-  "url": "https://example.com/page",
-  "options": { "timeout_secs": 20 }
-}
+{ "schema_version": 1, "kind": "read", "url": "https://example.com/", "options": { "timeout_secs": 20 } }
 ```
-
-Success response:
 
 ```json
-{
-  "schema_version": 1,
-  "ok": true,
-  "title": "Example Page",
-  "url": "https://example.com/page",
-  "markdown": "# Example\n\n..."
-}
+{ "schema_version": 1, "ok": true, "title": "Example", "url": "https://example.com/", "markdown": "# Example\n..." }
 ```
 
-### Search
+For the full protocol (search requests, error responses, search results
+schema) and runnable Python examples, see
+[`examples/`](./examples/) and
+[CONTRIBUTING.md](./CONTRIBUTING.md#plugin-protocol-scope-json-v1).
 
-Request:
+## Contributing
 
-```json
-{
-  "schema_version": 1,
-  "kind": "search",
-  "query": "rust async",
-  "limit": 10
-}
-```
-
-Success response:
-
-```json
-{
-  "schema_version": 1,
-  "ok": true,
-  "results": [
-    { "title": "...", "url": "https://...", "snippet": "..." }
-  ]
-}
-```
-
-### Errors
-
-A plugin may signal failure with:
-
-```json
-{ "schema_version": 1, "ok": false, "error": "human readable message" }
-```
-
-## Python plugin examples
-
-`scope/examples/` ships two minimal plugins and a sample config:
-
-- `reader_plugin.py` — reads a request from stdin and returns a static
-  Markdown document
-- `search_plugin.py` — synthesizes `limit` fake results for the query
-- `plugins.toml` — registers both with `scope`
-
-Run scope against them with:
-
-```
-scope --config scope/examples/plugins.toml read https://example.com/
-scope --config scope/examples/plugins.toml search --provider example 'hello'
-```
-
-Any language works — a plugin is just a process that reads one JSON
-object from stdin and writes one JSON object to stdout.
-
-## Embedding API
-
-`scope` is also a Rust library. Build a `Scope` from a `Config` and use
-its registries directly:
-
-```rust
-use scope::{Config, Scope, ReadRequest, ReadOptions};
-use url::Url;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let scope = Scope::from_config(&Config::default())?;
-    let url = Url::parse("https://example.com/")?;
-    let reader = scope.readers.pick(&url, None)?;
-    let output = reader
-        .read(ReadRequest {
-            url: url.to_string(),
-            options: ReadOptions::default(),
-        })
-        .await?;
-    println!("{}", output.markdown);
-    Ok(())
-}
-```
-
-`Scope::from_config` registers the built-in HTML reader and DuckDuckGo
-search provider, plus any `[[readers]]` / `[[search_providers]]` from
-the config. You can also register your own `Reader` / `SearchProvider`
-implementations on the registries.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, building
+from source, the embedding API, and the full plugin protocol reference.
