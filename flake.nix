@@ -106,6 +106,7 @@
               inherit inputs pkgs;
               modules = [
                 ./shared/nix/devenv/base.nix
+                ./scope/nix/devenv.nix
               ];
             };
           };

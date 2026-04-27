@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import json
+import shutil
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
 from typing import Optional
+
+USER_AGENT = "scope-wikipedia-plugin/0.1 (https://github.com/luizribeiro/lab)"
 
 
 def parse_wiki_url(url: str) -> Optional[tuple[str, str]]:
@@ -21,36 +25,37 @@ def parse_wiki_url(url: str) -> Optional[tuple[str, str]]:
     raw_title = parsed.path[len("/wiki/"):]
     if not raw_title:
         return None
-    title = urllib.parse.unquote(raw_title)
-    return lang, title
+    return lang, urllib.parse.unquote(raw_title)
 
 
-def fetch_extract(lang: str, title: str) -> tuple[str, str]:
-    api = f"https://{lang}.wikipedia.org/w/api.php"
-    params = urllib.parse.urlencode({
-        "action": "query",
-        "prop": "extracts",
-        "explaintext": "1",
-        "redirects": "1",
-        "titles": title,
-        "format": "json",
-        "formatversion": "2",
-    })
-    req = urllib.request.Request(
-        f"{api}?{params}",
-        headers={"User-Agent": "scope-wikipedia-plugin/0.1 (https://github.com/luizribeiro/lab)"},
-    )
+def fetch_html(lang: str, title: str) -> tuple[str, str]:
+    encoded = urllib.parse.quote(title, safe="")
+    url = f"https://{lang}.wikipedia.org/api/rest_v1/page/html/{encoded}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.load(resp)
-    pages = data.get("query", {}).get("pages", [])
-    if not pages or "missing" in pages[0]:
-        raise LookupError(f"page not found: {title}")
-    page = pages[0]
-    return page["title"], page.get("extract", "")
+        body = resp.read().decode("utf-8")
+        canonical = resp.headers.get("Content-Location", url)
+    return canonical, body
 
 
-def render_markdown(extract: str) -> str:
-    return extract.strip() or "_(no extract available)_"
+def html_to_markdown(html: str) -> str:
+    result = subprocess.run(
+        ["pandoc", "--from=html", "--to=gfm-raw_html", "--wrap=none"],
+        input=html,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def derive_title(canonical_url: str, fallback: str) -> str:
+    parsed = urllib.parse.urlparse(canonical_url)
+    if parsed.path.startswith("/api/rest_v1/page/html/"):
+        slug = parsed.path[len("/api/rest_v1/page/html/"):]
+        if slug:
+            return urllib.parse.unquote(slug).replace("_", " ")
+    return fallback.replace("_", " ")
 
 
 def handle_request(request: dict) -> dict:
@@ -58,17 +63,22 @@ def handle_request(request: dict) -> dict:
     parsed = parse_wiki_url(url)
     if parsed is None:
         return {"schema_version": 1, "ok": False, "error": f"not a Wikipedia URL: {url}"}
+    if shutil.which("pandoc") is None:
+        return {"schema_version": 1, "ok": False, "error": "pandoc not found on PATH (required for HTML→markdown conversion)"}
     lang, title = parsed
     try:
-        canonical_title, extract = fetch_extract(lang, title)
+        canonical_url, html = fetch_html(lang, title)
+        markdown = html_to_markdown(html)
+    except subprocess.CalledProcessError as exc:
+        return {"schema_version": 1, "ok": False, "error": f"pandoc failed: {exc.stderr.strip() or exc}"}
     except Exception as exc:
         return {"schema_version": 1, "ok": False, "error": str(exc)}
     return {
         "schema_version": 1,
         "ok": True,
-        "title": canonical_title,
+        "title": derive_title(canonical_url, title),
         "url": url,
-        "markdown": render_markdown(extract),
+        "markdown": markdown,
     }
 
 
@@ -91,11 +101,11 @@ def selftest() -> int:
         "https://wikipedia.org/wiki/Foo",
     ]
     for url in cases_none:
-        got = parse_wiki_url(url)
-        assert got is None, f"{url}: expected None, got {got!r}"
-    md = render_markdown("  Berlin is the capital of Germany.  ")
-    assert md == "Berlin is the capital of Germany."
-    assert render_markdown("") == "_(no extract available)_"
+        assert parse_wiki_url(url) is None, f"{url}: expected None"
+    assert derive_title(
+        "https://en.wikipedia.org/api/rest_v1/page/html/Berlin", "Berlin"
+    ) == "Berlin"
+    assert derive_title("https://x/", "Some_Page") == "Some Page"
     err = handle_request({"url": "https://example.com/wiki/Foo"})
     assert err == {"schema_version": 1, "ok": False, "error": "not a Wikipedia URL: https://example.com/wiki/Foo"}
     print("ok")
