@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::plugin::protocol::PROTOCOL_NAME;
+use crate::route::Route;
+
 const DEFAULT_SEARCH_PROVIDER: &str = "duckduckgo";
 const DEFAULT_TIMEOUT_SECS: u64 = 20;
 const DEFAULT_MAX_BODY_BYTES: u64 = 5_000_000;
@@ -15,6 +18,28 @@ pub struct Config {
     pub default_search_provider: String,
     #[serde(default)]
     pub http: HttpConfig,
+    #[serde(default)]
+    pub readers: Vec<ExternalReaderConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalReaderConfig {
+    pub name: String,
+    pub command: Vec<String>,
+    #[serde(default = "default_protocol")]
+    pub protocol: String,
+    #[serde(default = "default_external_priority")]
+    pub priority: i32,
+    pub routes: Vec<Route>,
+}
+
+fn default_protocol() -> String {
+    PROTOCOL_NAME.to_string()
+}
+
+fn default_external_priority() -> i32 {
+    50
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +74,7 @@ impl Default for Config {
         Self {
             default_search_provider: default_search_provider(),
             http: HttpConfig::default(),
+            readers: Vec::new(),
         }
     }
 }
@@ -222,6 +248,54 @@ unknown = 1
 
         let config = Config::load(None).unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn parses_external_reader_block() {
+        let toml = r#"
+[[readers]]
+name = "wikipedia"
+command = ["python3", "wiki.py"]
+
+[[readers.routes]]
+host_suffix = "wikipedia.org"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.readers.len(), 1);
+        let reader = &config.readers[0];
+        assert_eq!(reader.name, "wikipedia");
+        assert_eq!(reader.command, vec!["python3", "wiki.py"]);
+        assert_eq!(reader.protocol, "scope-json-v1");
+        assert_eq!(reader.priority, 50);
+        assert_eq!(reader.routes.len(), 1);
+        assert_eq!(reader.routes[0].host_suffix.as_deref(), Some("wikipedia.org"));
+    }
+
+    #[test]
+    fn external_reader_overrides_protocol_and_priority() {
+        let toml = r#"
+[[readers]]
+name = "x"
+command = ["x"]
+protocol = "scope-json-v2"
+priority = 100
+routes = []
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.readers[0].protocol, "scope-json-v2");
+        assert_eq!(config.readers[0].priority, 100);
+    }
+
+    #[test]
+    fn external_reader_rejects_unknown_field() {
+        let toml = r#"
+[[readers]]
+name = "x"
+command = ["x"]
+routes = []
+bogus = true
+"#;
+        assert!(toml::from_str::<Config>(toml).is_err());
     }
 
     #[test]

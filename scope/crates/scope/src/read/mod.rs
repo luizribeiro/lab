@@ -3,6 +3,7 @@ use url::Url;
 
 use crate::types::{ReadOutput, ReadRequest};
 
+pub mod external;
 pub mod html;
 pub mod registry;
 

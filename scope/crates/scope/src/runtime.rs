@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 
 use crate::config::Config;
 use crate::http::HttpClient;
+use crate::read::external::ExternalReader;
 use crate::read::html::HtmlReader;
 use crate::read::ReaderRegistry;
 use crate::search::duckduckgo::DuckDuckGoSearchProvider;
@@ -23,6 +25,12 @@ impl Scope {
         let mut readers = ReaderRegistry::new();
         readers.register(html_reader.clone());
         readers.set_fallback(html_reader);
+
+        let plugin_timeout = Duration::from_secs(config.http.timeout_secs);
+        for cfg in &config.readers {
+            let external = ExternalReader::from_config(cfg.clone(), plugin_timeout)?;
+            readers.register(Arc::new(external));
+        }
 
         let mut searches = SearchRegistry::new(config.default_search_provider.clone());
         searches.register(Arc::new(DuckDuckGoSearchProvider::new(http.clone())));
@@ -58,6 +66,73 @@ mod tests {
     fn default_search_provider_is_duckduckgo() {
         let scope = Scope::from_config(&Config::default()).unwrap();
         assert_eq!(scope.searches.pick(None).unwrap().name(), "duckduckgo");
+    }
+
+    #[tokio::test]
+    async fn external_reader_handles_matching_url() {
+        use crate::config::ExternalReaderConfig;
+        use crate::route::Route;
+        use crate::types::{ReadOptions, ReadRequest};
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let script = dir.path().join("plugin.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{\"schema_version\":1,\"ok\":true,\"title\":\"From Plugin\",\"url\":\"https://plugin.test/x\",\"markdown\":\"# plugin\"}'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let config = Config {
+            readers: vec![ExternalReaderConfig {
+                name: "fixture".into(),
+                command: vec![script.to_string_lossy().into_owned()],
+                protocol: "scope-json-v1".into(),
+                priority: 100,
+                routes: vec![Route {
+                    host_suffix: Some("plugin.test".into()),
+                    ..Default::default()
+                }],
+            }],
+            ..Config::default()
+        };
+        let scope = Scope::from_config(&config).unwrap();
+
+        let url = Url::parse("https://plugin.test/x").unwrap();
+        let reader = scope.readers.pick(&url, None).unwrap();
+        assert_eq!(reader.name(), "fixture");
+
+        let output = reader
+            .read(ReadRequest {
+                url: "https://plugin.test/x".into(),
+                options: ReadOptions::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.title.as_deref(), Some("From Plugin"));
+        assert_eq!(output.markdown, "# plugin");
+        assert_eq!(output.url, "https://plugin.test/x");
+    }
+
+    #[test]
+    fn external_reader_with_bad_protocol_fails_to_build() {
+        use crate::config::ExternalReaderConfig;
+
+        let config = Config {
+            readers: vec![ExternalReaderConfig {
+                name: "x".into(),
+                command: vec!["true".into()],
+                protocol: "scope-json-v2".into(),
+                priority: 50,
+                routes: vec![],
+            }],
+            ..Config::default()
+        };
+        assert!(Scope::from_config(&config).is_err());
     }
 
     #[test]
