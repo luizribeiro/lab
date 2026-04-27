@@ -69,6 +69,7 @@
                 ./shared/nix/devenv/base.nix
                 ./lockin/nix/devenv.nix
                 ./capsa/nix/devenv.nix
+                ./scope/nix/devenv.nix
               ];
             };
 
