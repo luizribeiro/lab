@@ -9,6 +9,7 @@ use crate::read::external::ExternalReader;
 use crate::read::html::HtmlReader;
 use crate::read::ReaderRegistry;
 use crate::search::duckduckgo::DuckDuckGoSearchProvider;
+use crate::search::external::ExternalSearchProvider;
 use crate::search::SearchRegistry;
 
 pub struct Scope {
@@ -34,6 +35,10 @@ impl Scope {
 
         let mut searches = SearchRegistry::new(config.default_search_provider.clone());
         searches.register(Arc::new(DuckDuckGoSearchProvider::new(http.clone())));
+        for cfg in &config.search_providers {
+            let external = ExternalSearchProvider::from_config(cfg.clone(), plugin_timeout)?;
+            searches.register(Arc::new(external));
+        }
 
         Ok(Self {
             readers,
@@ -129,6 +134,61 @@ mod tests {
                 protocol: "scope-json-v2".into(),
                 priority: 50,
                 routes: vec![],
+            }],
+            ..Config::default()
+        };
+        assert!(Scope::from_config(&config).is_err());
+    }
+
+    #[tokio::test]
+    async fn external_search_provider_selected_via_override() {
+        use crate::config::ExternalSearchConfig;
+        use crate::types::SearchRequest;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let script = dir.path().join("plugin.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat > /dev/null\nprintf '%s' '{\"schema_version\":1,\"ok\":true,\"results\":[{\"title\":\"X\",\"url\":\"https://x.test/\"}]}'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let config = Config {
+            search_providers: vec![ExternalSearchConfig {
+                name: "fixture".into(),
+                command: vec![script.to_string_lossy().into_owned()],
+                protocol: "scope-json-v1".into(),
+            }],
+            ..Config::default()
+        };
+        let scope = Scope::from_config(&config).unwrap();
+        let provider = scope.searches.pick(Some("fixture")).unwrap();
+        assert_eq!(provider.name(), "fixture");
+        let out = provider
+            .search(SearchRequest {
+                query: "q".into(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].title, "X");
+    }
+
+    #[test]
+    fn external_search_provider_with_bad_protocol_fails_to_build() {
+        use crate::config::ExternalSearchConfig;
+
+        let config = Config {
+            search_providers: vec![ExternalSearchConfig {
+                name: "x".into(),
+                command: vec!["true".into()],
+                protocol: "scope-json-v2".into(),
             }],
             ..Config::default()
         };

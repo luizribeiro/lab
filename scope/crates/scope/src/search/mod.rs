@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use crate::types::{SearchOutput, SearchRequest};
 
 pub mod duckduckgo;
+pub mod external;
 pub mod registry;
 
 pub use registry::{RegistryError, SearchRegistry};

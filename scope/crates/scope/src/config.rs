@@ -20,6 +20,8 @@ pub struct Config {
     pub http: HttpConfig,
     #[serde(default)]
     pub readers: Vec<ExternalReaderConfig>,
+    #[serde(default)]
+    pub search_providers: Vec<ExternalSearchConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +34,15 @@ pub struct ExternalReaderConfig {
     #[serde(default = "default_external_priority")]
     pub priority: i32,
     pub routes: Vec<Route>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalSearchConfig {
+    pub name: String,
+    pub command: Vec<String>,
+    #[serde(default = "default_protocol")]
+    pub protocol: String,
 }
 
 fn default_protocol() -> String {
@@ -75,6 +86,7 @@ impl Default for Config {
             default_search_provider: default_search_provider(),
             http: HttpConfig::default(),
             readers: Vec::new(),
+            search_providers: Vec::new(),
         }
     }
 }
@@ -293,6 +305,44 @@ routes = []
 name = "x"
 command = ["x"]
 routes = []
+bogus = true
+"#;
+        assert!(toml::from_str::<Config>(toml).is_err());
+    }
+
+    #[test]
+    fn parses_external_search_provider_block() {
+        let toml = r#"
+[[search_providers]]
+name = "kagi"
+command = ["python3", "kagi.py"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.search_providers.len(), 1);
+        let p = &config.search_providers[0];
+        assert_eq!(p.name, "kagi");
+        assert_eq!(p.command, vec!["python3", "kagi.py"]);
+        assert_eq!(p.protocol, "scope-json-v1");
+    }
+
+    #[test]
+    fn external_search_provider_overrides_protocol() {
+        let toml = r#"
+[[search_providers]]
+name = "x"
+command = ["x"]
+protocol = "scope-json-v2"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.search_providers[0].protocol, "scope-json-v2");
+    }
+
+    #[test]
+    fn external_search_provider_rejects_unknown_field() {
+        let toml = r#"
+[[search_providers]]
+name = "x"
+command = ["x"]
 bogus = true
 "#;
         assert!(toml::from_str::<Config>(toml).is_err());
