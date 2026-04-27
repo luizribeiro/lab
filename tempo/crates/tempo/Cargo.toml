@@ -2,6 +2,10 @@
 name = "tempo"
 version = "0.2.0"
 edition = "2021"
+description = "CLI for benchmarking LLM inference throughput (TTFT and decode tok/s) over OpenAI-compatible streaming APIs."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/tempo"
 
 [dependencies]
 anyhow = "1"
