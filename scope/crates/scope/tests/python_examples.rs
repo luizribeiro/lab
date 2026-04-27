@@ -66,6 +66,21 @@ async fn reader_plugin_example_round_trip() {
 }
 
 #[tokio::test]
+async fn wikipedia_plugin_selftest_passes() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+    let script = examples_dir().join("wikipedia_plugin.py");
+    let status = Command::new("python3")
+        .arg(script)
+        .arg("--selftest")
+        .status()
+        .expect("spawn python3");
+    assert!(status.success(), "wikipedia plugin selftest failed");
+}
+
+#[tokio::test]
 async fn search_plugin_example_round_trip() {
     let Some(runner) = script_runner("search_plugin.py") else {
         return;
