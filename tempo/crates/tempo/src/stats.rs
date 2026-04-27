@@ -8,11 +8,12 @@ pub struct CellStats {
     pub success_runs: u32,
     pub error_runs: u32,
     pub ttft_ms_p50: Option<f64>,
-    pub ttft_ms_p95: Option<f64>,
+    pub ttft_ms_stddev: Option<f64>,
     pub decode_tok_s_mean: Option<f64>,
+    pub decode_tok_s_stddev: Option<f64>,
     pub decode_tok_s_p50: Option<f64>,
-    pub decode_tok_s_p95: Option<f64>,
     pub e2e_ms_p50: Option<f64>,
+    pub e2e_ms_total: Option<f64>,
     pub output_tokens_mean: Option<f64>,
 }
 
@@ -24,11 +25,12 @@ impl CellStats {
             success_runs: 0,
             error_runs: 0,
             ttft_ms_p50: None,
-            ttft_ms_p95: None,
+            ttft_ms_stddev: None,
             decode_tok_s_mean: None,
+            decode_tok_s_stddev: None,
             decode_tok_s_p50: None,
-            decode_tok_s_p95: None,
             e2e_ms_p50: None,
+            e2e_ms_total: None,
             output_tokens_mean: None,
         }
     }
@@ -69,6 +71,24 @@ fn mean(values: &[f64]) -> Option<f64> {
         None
     } else {
         Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+fn sample_stddev(values: &[f64]) -> Option<f64> {
+    if values.len() < 2 {
+        return None;
+    }
+    let m = mean(values)?;
+    let n = values.len() as f64;
+    let var = values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (n - 1.0);
+    Some(var.sqrt())
+}
+
+fn sum(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum())
     }
 }
 
@@ -118,11 +138,12 @@ pub fn aggregate(runs: &[Run]) -> Vec<CellStats> {
                 success_runs,
                 error_runs,
                 ttft_ms_p50: p(&ttft, 0.50),
-                ttft_ms_p95: p(&ttft, 0.95),
+                ttft_ms_stddev: sample_stddev(&ttft),
                 decode_tok_s_mean: mean(&decode),
+                decode_tok_s_stddev: sample_stddev(&decode),
                 decode_tok_s_p50: p(&decode, 0.50),
-                decode_tok_s_p95: p(&decode, 0.95),
                 e2e_ms_p50: p(&e2e, 0.50),
+                e2e_ms_total: sum(&e2e),
                 output_tokens_mean: mean(&out_tok),
             }
         })
@@ -186,8 +207,12 @@ mod tests {
         assert_eq!(s.success_runs, 5);
         assert_eq!(s.error_runs, 0);
         assert!((s.ttft_ms_p50.unwrap() - 3.0).abs() < 1e-9);
-        assert!((s.ttft_ms_p95.unwrap() - 4.8).abs() < 1e-9);
         assert!((s.decode_tok_s_mean.unwrap() - 3.0).abs() < 1e-9);
+        // sample stddev of 1..=5 = sqrt(2.5)
+        assert!((s.ttft_ms_stddev.unwrap() - 2.5_f64.sqrt()).abs() < 1e-9);
+        assert!((s.decode_tok_s_stddev.unwrap() - 2.5_f64.sqrt()).abs() < 1e-9);
+        // e2e_ms in test mirrors ttft, so total = 1+2+3+4+5 = 15
+        assert!((s.e2e_ms_total.unwrap() - 15.0).abs() < 1e-9);
     }
 
     #[test]
@@ -204,6 +229,8 @@ mod tests {
         assert_eq!(s.error_runs, 1);
         assert!((s.ttft_ms_p50.unwrap() - 15.0).abs() < 1e-9);
         assert!((s.decode_tok_s_mean.unwrap() - 55.0).abs() < 1e-9);
+        // e2e total only over successes: 10 + 20 = 30
+        assert!((s.e2e_ms_total.unwrap() - 30.0).abs() < 1e-9);
     }
 
     #[test]
@@ -213,7 +240,10 @@ mod tests {
         let s = &stats[0];
         assert_eq!(s.success_runs, 1);
         assert!((s.ttft_ms_p50.unwrap() - 42.0).abs() < 1e-9);
-        assert!((s.ttft_ms_p95.unwrap() - 42.0).abs() < 1e-9);
+        // single sample -> stddev undefined
+        assert!(s.ttft_ms_stddev.is_none());
+        assert!(s.decode_tok_s_stddev.is_none());
+        assert!((s.e2e_ms_total.unwrap() - 42.0).abs() < 1e-9);
     }
 
     #[test]
@@ -228,11 +258,12 @@ mod tests {
         assert_eq!(s.success_runs, 0);
         assert_eq!(s.error_runs, 2);
         assert!(s.ttft_ms_p50.is_none());
-        assert!(s.ttft_ms_p95.is_none());
+        assert!(s.ttft_ms_stddev.is_none());
         assert!(s.decode_tok_s_mean.is_none());
+        assert!(s.decode_tok_s_stddev.is_none());
         assert!(s.decode_tok_s_p50.is_none());
-        assert!(s.decode_tok_s_p95.is_none());
         assert!(s.e2e_ms_p50.is_none());
+        assert!(s.e2e_ms_total.is_none());
         assert!(s.output_tokens_mean.is_none());
     }
 
@@ -326,5 +357,15 @@ mod tests {
         assert_eq!(encode.success_runs, 1);
         assert!((decode.ttft_ms_p50.unwrap() - 10.0).abs() < 1e-9);
         assert!((encode.ttft_ms_p50.unwrap() - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sample_stddev_known_values() {
+        // sample (N-1) stddev of [2, 4, 4, 4, 5, 5, 7, 9] = sqrt(32/7)
+        let xs = vec![2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        let expected = (32.0_f64 / 7.0).sqrt();
+        assert!((sample_stddev(&xs).unwrap() - expected).abs() < 1e-9);
+        assert!(sample_stddev(&[]).is_none());
+        assert!(sample_stddev(&[42.0]).is_none());
     }
 }

@@ -402,11 +402,12 @@ mod tests {
             success_runs: 1,
             error_runs: 0,
             ttft_ms_p50: Some(10.0),
-            ttft_ms_p95: Some(10.0),
+            ttft_ms_stddev: None,
             decode_tok_s_mean: Some(20.0),
+            decode_tok_s_stddev: None,
             decode_tok_s_p50: Some(20.0),
-            decode_tok_s_p95: Some(20.0),
             e2e_ms_p50: Some(50.0),
+            e2e_ms_total: Some(50.0),
             output_tokens_mean: Some(8.0),
         }
     }
