@@ -2,6 +2,7 @@ pub mod cli;
 pub mod config;
 pub mod handler;
 pub mod http;
+pub mod plugin;
 pub mod read;
 pub mod render;
 pub mod route;
