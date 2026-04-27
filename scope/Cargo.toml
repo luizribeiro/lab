@@ -1,3 +1,7 @@
 [workspace]
 members = ["crates/scope"]
 resolver = "2"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
