@@ -48,15 +48,19 @@
           tempo = import ./tempo/nix {
             inherit pkgs;
           };
+
+          scope = import ./scope/nix {
+            inherit pkgs;
+          };
         in
         {
-          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib;
+          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib // scope.lib;
 
-          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // {
+          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // scope.packages // {
             default = capsa.packages.capsa;
           };
 
-          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks;
+          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks // scope.checks;
 
           devShells = {
             default = devenv.lib.mkShell {
