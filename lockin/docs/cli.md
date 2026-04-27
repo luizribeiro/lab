@@ -29,8 +29,11 @@ search would produce a misleading policy.
   is **sydbox 3.49.1**; that is the documented baseline this
   release is tested against.
 - **macOS**: uses the system `sandbox-exec` (Seatbelt). No extra
-  dependency. macOS enforcement is best-effort — see the platform
-  support note in the [README](../README.md).
+  dependencies. Apple-shipped system paths (frameworks, `/usr/lib`,
+  `/usr/share`, timezone data, the standard device nodes, and the
+  `passwd`/`services`/`protocols` lookup files) remain readable so
+  dynamically linked programs can start. User data, application
+  data, and arbitrary system state are denied unless allowlisted.
 
 ## Example
 
@@ -106,7 +109,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
-| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority — use only with trusted, audited rules; treat as a trusted-policy escape hatch. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn (exit 125). |
+| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn (exit 125). |
 
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.

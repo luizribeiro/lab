@@ -148,10 +148,15 @@ Trusted-policy escape hatch for darwin sandbox operations not
 expressible through the structured API — `iokit-open`,
 `mach-lookup`, `sysctl-read`, and the rest of the sandbox-exec
 S-expression surface. Rules are appended verbatim after the
-structured allows. Raw rules can broaden sandbox authority
-arbitrarily; use only with trusted, audited rules. The caller is
-responsible for the safety of every rule passed in. Ignored on
-non-darwin platforms.
+structured allows.
+
+Raw rules can broaden sandbox authority arbitrarily. They can also
+invoke named bundles defined by the macOS system profile but not
+enabled by default: a single `(system-network)` token unlocks
+routing-socket egress, mDNS, and the network-extension service
+surface; `(system-graphics)` unlocks the IOKit GPU surface. The
+caller is responsible for the safety of every rule passed in.
+Ignored on non-darwin platforms.
 
 ```rust,no_run,ignore
 use std::path::Path;

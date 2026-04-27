@@ -387,9 +387,13 @@ impl SandboxBuilder {
     /// **Trusted-policy escape hatch.** Any `(allow ...)` rule passed
     /// here grants the child whatever authority the rule names — it
     /// can broaden the sandbox arbitrarily, including beyond what the
-    /// structured builder methods would permit. The caller is
-    /// responsible for the safety of every rule passed in; treat this
-    /// as policy code, not configuration.
+    /// structured builder methods would permit. Raw rules can also
+    /// invoke named bundles defined by the macOS system profile but
+    /// not enabled by default: a single `(system-network)` token
+    /// unlocks routing-socket egress, mDNS, and the network-extension
+    /// service surface; `(system-graphics)` unlocks the IOKit GPU
+    /// surface. The caller is responsible for the safety of every
+    /// rule passed in; treat this as policy code, not configuration.
     ///
     /// Intended for darwin-specific operations not expressible
     /// through the structured API (e.g. `iokit-open`, `mach-lookup`,
