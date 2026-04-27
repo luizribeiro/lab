@@ -203,11 +203,15 @@ pub fn resolve_command(
     anyhow::ensure!(!argv.is_empty(), "no command specified");
 
     let program_path = Path::new(&argv[0]);
-    let program = if program_path.parent() == Some(Path::new("")) {
-        program_path.to_path_buf()
-    } else {
-        resolve_path(program_path)?
-    };
+    if program_path.parent() == Some(Path::new("")) {
+        anyhow::bail!(
+            "lockin requires an explicit executable path; \
+             use /usr/bin/{name}, ./{name}, or set command = [\"/path/to/{name}\"] in lockin.toml. \
+             Bare PATH lookup is intentionally not supported.",
+            name = program_path.display()
+        );
+    }
+    let program = resolve_path(program_path)?;
     let args = argv[1..].to_vec();
     Ok((program, args))
 }
@@ -473,13 +477,24 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bare_command_passes_through() {
+    fn resolve_bare_command_from_config_rejected() {
         let config = Config {
             command: Some(vec!["python3".into()]),
             ..Default::default()
         };
-        let (prog, _) = resolve_command(&config, &[os("script.py")]).unwrap();
-        assert_eq!(prog, PathBuf::from("python3"));
+        let err = resolve_command(&config, &[os("script.py")]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("explicit executable path") && msg.contains("Bare PATH"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_bare_command_from_cli_rejected() {
+        let config = Config::default();
+        let err = resolve_command(&config, &[os("python3"), os("--help")]).unwrap_err();
+        assert!(err.to_string().contains("explicit executable path"));
     }
 
     #[test]

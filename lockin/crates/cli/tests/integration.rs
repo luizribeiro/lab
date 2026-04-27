@@ -382,6 +382,33 @@ fn wait_with_timeout(
 }
 
 #[test]
+fn bare_argv0_from_cli_rejected_with_125() {
+    let output = run_lockin(&["--", "python3", "--help"]);
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("explicit executable path") && stderr.contains("Bare PATH"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bare_argv0_from_config_rejected_with_125() {
+    let config = write_config(
+        r#"
+        command = ["python3"]
+        "#,
+    );
+    let output = run_lockin(&["-c", config.path().to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("explicit executable path"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn invalid_config_exits_125() {
     let config = write_config("not_valid { toml");
     let output = run_lockin(&["-c", config.path().to_str().unwrap(), "--", "/usr/bin/env"]);
