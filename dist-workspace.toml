@@ -4,7 +4,9 @@ members = ["cargo:scope/"]
 [dist]
 cargo-dist-version = "0.30.4"
 ci = "github"
-installers = ["shell"]
+installers = ["shell", "homebrew"]
+tap = "luizribeiro/homebrew-tap"
+publish-jobs = ["homebrew"]
 targets = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
