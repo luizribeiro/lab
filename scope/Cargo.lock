@@ -1412,6 +1412,7 @@ dependencies = [
  "async-trait",
  "clap",
  "html-to-markdown-rs",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
