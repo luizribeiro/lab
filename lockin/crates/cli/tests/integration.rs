@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, UdpSocket};
+use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -238,6 +239,184 @@ fn proxy_mode_denies_host_not_in_allowlist() {
     assert!(
         stderr.contains("HTTP/1.1 403"),
         "expected 403 status in probe stderr, got: {stderr:?}"
+    );
+}
+
+/// In proxy mode the rendered Seatbelt rule is
+/// `(allow network-outbound (remote ip "localhost:<proxy-port>"))`.
+/// This test pins down that the matcher is exact-port: a direct
+/// connect to a *different* loopback port must be denied. Without
+/// this assertion a liberal interpretation of the rule (e.g. one that
+/// matched any loopback port) would silently allow direct egress to
+/// arbitrary loopback services.
+#[test]
+fn proxy_mode_denies_direct_loopback_tcp_to_wrong_port() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind side-channel listener");
+    let wrong_port = listener.local_addr().expect("addr").port();
+
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-connect",
+        "127.0.0.1",
+        &wrong_port.to_string(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny direct TCP to non-proxy loopback ports; \
+         exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// IPv6 loopback (`::1`) is a separate address family from `127.0.0.1`.
+/// The proxy listens on IPv4 only, so a direct IPv6 connect must be
+/// denied — otherwise proxy mode silently leaks all IPv6 traffic.
+#[test]
+fn proxy_mode_denies_direct_ipv6_loopback() {
+    let Ok(listener) = TcpListener::bind("[::1]:0") else {
+        eprintln!("skip: host has no IPv6 loopback");
+        return;
+    };
+    let port = listener.local_addr().expect("addr").port();
+
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-connect",
+        "::1",
+        &port.to_string(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny direct IPv6 loopback; exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Proxy mode forwards HTTP — i.e. TCP. UDP datagrams must not be
+/// allowed to escape via the proxy port (or any other), or proxy
+/// mode would leak DNS/UDP traffic outside the HTTP-allowlist policy.
+#[test]
+fn proxy_mode_denies_udp() {
+    let host_sock = UdpSocket::bind("127.0.0.1:0").expect("bind host udp");
+    let port = host_sock.local_addr().expect("addr").port();
+
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-udp-send",
+        "127.0.0.1",
+        &port.to_string(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny UDP egress; exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// outpost-proxy is HTTP-over-TCP only; it does not expose an
+/// AF_UNIX endpoint. An AF_UNIX outbound from inside proxy mode must
+/// therefore be denied, just as it is in deny mode. This guards
+/// against a future change to the proxy rendering accidentally
+/// granting `(allow network-outbound (literal "..."))` patterns
+/// alongside the IP allow.
+#[test]
+fn proxy_mode_denies_unix_socket_to_outside_path() {
+    let temp = tempfile::Builder::new()
+        .prefix("lockin-proxy-unix-")
+        .tempdir()
+        .expect("mkdir tempdir");
+    let sock_path = temp.path().join("listener.sock");
+    let _listener = UnixListener::bind(&sock_path).expect("bind unix listener");
+
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-unix-stream-connect",
+        sock_path.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny AF_UNIX outbound; exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Network mode is about *outbound* connectivity through the proxy.
+/// `bind(2)` + `listen(2)` on a loopback port is inbound and is not
+/// part of the proxy contract — it must be denied so a sandboxed
+/// program can't stand up its own listener and accept inbound
+/// connections from siblings on the host.
+#[test]
+fn proxy_mode_denies_loopback_listen() {
+    let config = write_config(
+        r#"
+        [sandbox.network]
+        mode = "proxy"
+        allow_hosts = ["example.com"]
+        "#,
+    );
+    let probe = probe_binary();
+    let output = run_lockin(&[
+        "-c",
+        config.path().to_str().unwrap(),
+        "--",
+        probe.to_str().unwrap(),
+        "can-tcp-listen",
+        "127.0.0.1",
+        "0",
+    ]);
+    assert!(
+        !output.status.success(),
+        "proxy mode must deny inbound bind/listen; exit={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

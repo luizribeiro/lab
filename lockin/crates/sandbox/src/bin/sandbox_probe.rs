@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::net::{TcpStream, UdpSocket};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
@@ -104,6 +104,15 @@ fn main() {
                 usage_and_exit();
             };
             can_connect(&host, &port)
+        }
+        "can-tcp-listen" => {
+            let Some(host) = args.next() else {
+                usage_and_exit();
+            };
+            let Some(port) = args.next() else {
+                usage_and_exit();
+            };
+            can_tcp_listen(&host, &port)
         }
         "can-udp-send" => {
             let Some(host) = args.next() else {
@@ -315,6 +324,14 @@ fn can_connect(host: &str, port: &str) -> Result<(), String> {
         .parse()
         .map_err(|e: std::num::ParseIntError| e.to_string())?;
     TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn can_tcp_listen(host: &str, port: &str) -> Result<(), String> {
+    let port: u16 = port
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    TcpListener::bind((host, port)).map_err(|e| format!("bind: {e}"))?;
     Ok(())
 }
 
@@ -672,6 +689,7 @@ actions:\n\
   can-chmod <path> <octal-mode>\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
+  can-tcp-listen <host> <port>\n\
   can-udp-send <host> <port>\n\
   can-unix-stream-connect <path>\n\
   can-unix-dgram-connect <path>\n\
