@@ -3,7 +3,10 @@ use url::Url;
 
 use crate::types::{ReadOutput, ReadRequest};
 
+pub mod registry;
+
 pub use crate::route::RouteMatch;
+pub use registry::{ReaderRegistry, RegistryError};
 
 #[async_trait]
 pub trait Reader: Send + Sync {
