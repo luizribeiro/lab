@@ -22,6 +22,10 @@ on:
       - "flake.lock"
       - ".github/workflows/capsa.yml"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
