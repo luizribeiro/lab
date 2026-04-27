@@ -126,6 +126,27 @@ fn main() {
             };
             can_unix_dgram_connect(Path::new(&path))
         }
+        #[cfg(target_os = "macos")]
+        "can-mach-lookup" => {
+            let Some(name) = args.next() else {
+                usage_and_exit();
+            };
+            mach::can_mach_lookup(&name)
+        }
+        #[cfg(target_os = "macos")]
+        "can-mach-register" => {
+            let Some(name) = args.next() else {
+                usage_and_exit();
+            };
+            mach::can_mach_register(&name)
+        }
+        #[cfg(target_os = "macos")]
+        "can-xpc-lookup" => {
+            let Some(name) = args.next() else {
+                usage_and_exit();
+            };
+            mach::can_xpc_lookup(&name)
+        }
         "print-env" => {
             let Some(name) = args.next() else {
                 usage_and_exit();
@@ -664,7 +685,172 @@ actions:\n\
   pause [seconds]\n\
   check-no-new-privs\n\
   check-has-cap <cap-number>\n\
-  check-has-effective-cap <cap-number>"
+  check-has-effective-cap <cap-number>\n\
+  can-mach-lookup <service-name>           (macOS only)\n\
+  can-mach-register <service-name>         (macOS only)\n\
+  can-xpc-lookup <service-name>            (macOS only)"
     );
     std::process::exit(2);
+}
+
+#[cfg(target_os = "macos")]
+mod mach {
+    use std::ffi::{c_char, c_void, CString};
+    use std::ptr;
+    use std::sync::OnceLock;
+
+    type KernReturnT = i32;
+    type MachPortT = u32;
+    type NameT = *const c_char;
+
+    const KERN_SUCCESS: KernReturnT = 0;
+    const MACH_PORT_NULL: MachPortT = 0;
+    const MACH_PORT_RIGHT_RECEIVE: u32 = 1;
+    const MACH_MSG_TYPE_MAKE_SEND: u32 = 20;
+    const BLOCK_IS_GLOBAL: i32 = 1 << 28;
+
+    type XpcObject = *mut c_void;
+    type XpcConnection = *mut c_void;
+
+    extern "C" {
+        static bootstrap_port: MachPortT;
+        fn bootstrap_look_up(bp: MachPortT, name: NameT, sp: *mut MachPortT) -> KernReturnT;
+        fn bootstrap_register(bp: MachPortT, name: NameT, sp: MachPortT) -> KernReturnT;
+        static mach_task_self_: MachPortT;
+        fn mach_port_allocate(task: MachPortT, right: u32, name: *mut MachPortT) -> KernReturnT;
+        fn mach_port_insert_right(
+            task: MachPortT,
+            name: MachPortT,
+            poly: MachPortT,
+            type_: u32,
+        ) -> KernReturnT;
+
+        fn xpc_connection_create_mach_service(
+            name: *const c_char,
+            queue: *mut c_void,
+            flags: u64,
+        ) -> XpcConnection;
+        fn xpc_connection_set_event_handler(conn: XpcConnection, handler: *mut c_void);
+        fn xpc_connection_resume(conn: XpcConnection);
+        fn xpc_connection_cancel(conn: XpcConnection);
+        fn xpc_release(obj: XpcObject);
+        fn xpc_dictionary_create(
+            keys: *const *const c_char,
+            values: *const XpcObject,
+            count: usize,
+        ) -> XpcObject;
+        fn xpc_connection_send_message_with_reply_sync(
+            conn: XpcConnection,
+            msg: XpcObject,
+        ) -> XpcObject;
+        fn xpc_get_type(obj: XpcObject) -> *const c_void;
+        static _xpc_type_error: c_void;
+        static _NSConcreteGlobalBlock: c_void;
+    }
+
+    #[repr(C)]
+    struct Block {
+        isa: *const c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: extern "C" fn(*mut Block, XpcObject),
+        descriptor: *const BlockDesc,
+    }
+
+    #[repr(C)]
+    struct BlockDesc {
+        reserved: u64,
+        size: u64,
+    }
+
+    static DESC: BlockDesc = BlockDesc {
+        reserved: 0,
+        size: std::mem::size_of::<Block>() as u64,
+    };
+
+    extern "C" fn noop_block(_blk: *mut Block, _obj: XpcObject) {}
+
+    fn noop_handler() -> *mut c_void {
+        static BLK: OnceLock<usize> = OnceLock::new();
+        let addr = *BLK.get_or_init(|| {
+            let blk = Box::leak(Box::new(Block {
+                isa: unsafe { &_NSConcreteGlobalBlock as *const _ },
+                flags: BLOCK_IS_GLOBAL,
+                reserved: 0,
+                invoke: noop_block,
+                descriptor: &DESC,
+            }));
+            blk as *mut Block as usize
+        });
+        addr as *mut c_void
+    }
+
+    pub fn can_mach_lookup(name: &str) -> Result<(), String> {
+        let cname = CString::new(name).map_err(|e| e.to_string())?;
+        let mut port: MachPortT = MACH_PORT_NULL;
+        let kr = unsafe { bootstrap_look_up(bootstrap_port, cname.as_ptr(), &mut port) };
+        if kr == KERN_SUCCESS && port != MACH_PORT_NULL {
+            Ok(())
+        } else {
+            Err(format!("bootstrap_look_up `{name}` kr={kr} port={port}"))
+        }
+    }
+
+    pub fn can_mach_register(name: &str) -> Result<(), String> {
+        let cname = CString::new(name).map_err(|e| e.to_string())?;
+        let mut port: MachPortT = MACH_PORT_NULL;
+        let task = unsafe { mach_task_self_ };
+        let kr = unsafe { mach_port_allocate(task, MACH_PORT_RIGHT_RECEIVE, &mut port) };
+        if kr != KERN_SUCCESS {
+            return Err(format!("mach_port_allocate kr={kr}"));
+        }
+        let kr = unsafe { mach_port_insert_right(task, port, port, MACH_MSG_TYPE_MAKE_SEND) };
+        if kr != KERN_SUCCESS {
+            return Err(format!("mach_port_insert_right kr={kr}"));
+        }
+        let kr = unsafe { bootstrap_register(bootstrap_port, cname.as_ptr(), port) };
+        if kr == KERN_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("bootstrap_register `{name}` kr={kr}"))
+        }
+    }
+
+    pub fn can_xpc_lookup(name: &str) -> Result<(), String> {
+        let cname = CString::new(name).map_err(|e| e.to_string())?;
+        let conn =
+            unsafe { xpc_connection_create_mach_service(cname.as_ptr(), ptr::null_mut(), 0) };
+        if conn.is_null() {
+            return Err(format!(
+                "xpc_connection_create_mach_service `{name}` -> null"
+            ));
+        }
+        unsafe {
+            xpc_connection_set_event_handler(conn, noop_handler());
+            xpc_connection_resume(conn);
+        }
+
+        let msg = unsafe { xpc_dictionary_create(ptr::null(), ptr::null(), 0) };
+        let reply = unsafe { xpc_connection_send_message_with_reply_sync(conn, msg) };
+        unsafe { xpc_release(msg) };
+        let result = if reply.is_null() {
+            Err(format!("xpc reply null for `{name}`"))
+        } else {
+            let ty = unsafe { xpc_get_type(reply) };
+            let err_ty = unsafe { &_xpc_type_error as *const _ };
+            if ty == err_ty {
+                Err(format!("xpc reply was XPC_TYPE_ERROR for `{name}`"))
+            } else {
+                Ok(())
+            }
+        };
+        if !reply.is_null() {
+            unsafe { xpc_release(reply) };
+        }
+        unsafe {
+            xpc_connection_cancel(conn);
+            xpc_release(conn);
+        }
+        result
+    }
 }
