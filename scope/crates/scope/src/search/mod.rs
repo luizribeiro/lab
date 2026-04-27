@@ -2,6 +2,10 @@ use async_trait::async_trait;
 
 use crate::types::{SearchOutput, SearchRequest};
 
+pub mod registry;
+
+pub use registry::{RegistryError, SearchRegistry};
+
 #[async_trait]
 pub trait SearchProvider: Send + Sync {
     fn name(&self) -> &str;

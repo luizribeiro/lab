@@ -9,6 +9,7 @@ pub mod types;
 
 pub use config::{Config, HttpConfig};
 pub use read::{ReaderRegistry, RegistryError};
+pub use search::{SearchProvider, SearchRegistry};
 
 pub use types::{
     OutputFormat, ReadOptions, ReadOutput, ReadRequest, SearchOutput, SearchRequest, SearchResult,
