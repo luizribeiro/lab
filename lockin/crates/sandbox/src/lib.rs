@@ -307,10 +307,12 @@ impl SandboxBuilder {
     /// on macOS it grants recursive read.
     pub fn library_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        debug_assert!(path.is_absolute(), "library_path must be absolute");
-        if path.is_absolute() {
-            self.spec.library_paths.push(path);
-        }
+        assert!(
+            path.is_absolute(),
+            "library_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.library_paths.push(path);
         self
     }
 
@@ -380,10 +382,16 @@ impl SandboxBuilder {
 
     /// Appends a raw sandbox-exec (Seatbelt) S-expression rule to the
     /// generated darwin profile. Rules are emitted verbatim after the
-    /// structured allows, so they extend — but cannot weaken — the
-    /// deny-default base.
+    /// structured allows.
     ///
-    /// Escape hatch for darwin-specific operations not expressible
+    /// **Trusted-policy escape hatch.** Any `(allow ...)` rule passed
+    /// here grants the child whatever authority the rule names — it
+    /// can broaden the sandbox arbitrarily, including beyond what the
+    /// structured builder methods would permit. The caller is
+    /// responsible for the safety of every rule passed in; treat this
+    /// as policy code, not configuration.
+    ///
+    /// Intended for darwin-specific operations not expressible
     /// through the structured API (e.g. `iokit-open`, `mach-lookup`,
     /// `sysctl-read`). Malformed rules make `sandbox-exec` reject the
     /// profile at spawn time.
@@ -750,17 +758,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "library_path must be absolute")]
     fn library_path_builder_rejects_relative() {
-        let builder = super::SandboxBuilder::new().library_path("/usr/lib");
-        assert_eq!(
-            builder.spec.library_paths.len(),
-            builder
-                .spec
-                .library_paths
-                .iter()
-                .filter(|p| p.is_absolute())
-                .count()
-        );
+        super::SandboxBuilder::new().library_path("usr/lib");
     }
 
     #[test]
