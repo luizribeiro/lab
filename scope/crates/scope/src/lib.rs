@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+pub mod http;
 pub mod read;
 pub mod render;
 pub mod route;
