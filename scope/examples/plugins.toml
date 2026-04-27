@@ -1,0 +1,9 @@
+[[readers]]
+name = "example"
+command = ["python3", "examples/reader_plugin.py"]
+routes = [{ host = "example.com" }]
+priority = 100
+
+[[search_providers]]
+name = "example"
+command = ["python3", "examples/search_plugin.py"]
