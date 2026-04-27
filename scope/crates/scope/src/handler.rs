@@ -3,14 +3,9 @@ use url::Url;
 
 use crate::render::{render_read_output, render_search_output};
 use crate::runtime::Scope;
-use crate::types::{OutputFormat, ReadOptions, ReadRequest, SearchRequest};
+use crate::types::{ReadOptions, ReadRequest, SearchRequest};
 
-pub async fn run_read(
-    scope: &Scope,
-    url: &str,
-    reader_name: Option<&str>,
-    format: OutputFormat,
-) -> Result<String> {
+pub async fn run_read(scope: &Scope, url: &str, reader_name: Option<&str>) -> Result<String> {
     let parsed = Url::parse(url).with_context(|| format!("invalid URL: {url}"))?;
     let reader = scope.readers.pick(&parsed, reader_name)?;
     let request = ReadRequest {
@@ -18,7 +13,7 @@ pub async fn run_read(
         options: ReadOptions::default(),
     };
     let output = reader.read(request).await?;
-    Ok(render_read_output(&output, format))
+    Ok(render_read_output(&output))
 }
 
 pub async fn run_search(
@@ -26,7 +21,6 @@ pub async fn run_search(
     query: &str,
     provider_name: Option<&str>,
     limit: Option<usize>,
-    format: OutputFormat,
 ) -> Result<String> {
     let provider = scope.searches.pick(provider_name)?;
     let request = SearchRequest {
@@ -34,7 +28,7 @@ pub async fn run_search(
         limit,
     };
     let output = provider.search(request).await?;
-    Ok(render_search_output(&output, format))
+    Ok(render_search_output(&output))
 }
 
 #[cfg(test)]
@@ -67,56 +61,25 @@ mod tests {
 
         let scope = Scope::from_config(&Config::default()).unwrap();
         let url = format!("{}/page", server.uri());
-        let out = run_read(&scope, &url, None, OutputFormat::Markdown)
-            .await
-            .unwrap();
+        let out = run_read(&scope, &url, None).await.unwrap();
         assert!(out.starts_with("# Hi\n"), "got: {out}");
         assert!(out.contains(&format!("Source: <{url}>")));
         assert!(out.contains("# Hello"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn read_json_format_is_parseable() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/page"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                "<html><head><title>T</title></head><body><p>body</p></body></html>"
-                    .as_bytes()
-                    .to_vec(),
-                "text/html",
-            ))
-            .mount(&server)
-            .await;
-
-        let scope = Scope::from_config(&Config::default()).unwrap();
-        let url = format!("{}/page", server.uri());
-        let out = run_read(&scope, &url, None, OutputFormat::Json).await.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["url"], url);
-        assert_eq!(parsed["title"], "T");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn read_unknown_reader_override_errors() {
         let scope = Scope::from_config(&Config::default()).unwrap();
-        let err = run_read(
-            &scope,
-            "https://example.com",
-            Some("no-such-reader"),
-            OutputFormat::Markdown,
-        )
-        .await
-        .unwrap_err();
+        let err = run_read(&scope, "https://example.com", Some("no-such-reader"))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no-such-reader"), "got: {err}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn read_invalid_url_errors() {
         let scope = Scope::from_config(&Config::default()).unwrap();
-        let err = run_read(&scope, "not a url", None, OutputFormat::Markdown)
-            .await
-            .unwrap_err();
+        let err = run_read(&scope, "not a url", None).await.unwrap_err();
         assert!(err.to_string().contains("invalid URL"), "got: {err}");
     }
 
@@ -163,9 +126,7 @@ mod tests {
     async fn search_returns_markdown_for_ddg_response() {
         let server = MockServer::start().await;
         let scope = scope_with_ddg_at(&server).await;
-        let out = run_search(&scope, "rust", None, None, OutputFormat::Markdown)
-            .await
-            .unwrap();
+        let out = run_search(&scope, "rust", None, None).await.unwrap();
         assert!(out.starts_with("# Search results for `rust`\n"), "got: {out}");
         assert!(out.contains("1. [Alpha](https://a.example/)"));
         assert!(out.contains("2. [Beta](https://b.example/)"));
@@ -175,15 +136,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn search_unknown_provider_override_errors() {
         let scope = Scope::from_config(&Config::default()).unwrap();
-        let err = run_search(
-            &scope,
-            "rust",
-            Some("no-such-provider"),
-            None,
-            OutputFormat::Markdown,
-        )
-        .await
-        .unwrap_err();
+        let err = run_search(&scope, "rust", Some("no-such-provider"), None)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no-such-provider"), "got: {err}");
     }
 
@@ -191,24 +146,9 @@ mod tests {
     async fn search_limit_truncates_results() {
         let server = MockServer::start().await;
         let scope = scope_with_ddg_at(&server).await;
-        let out = run_search(&scope, "rust", None, Some(2), OutputFormat::Markdown)
-            .await
-            .unwrap();
+        let out = run_search(&scope, "rust", None, Some(2)).await.unwrap();
         assert!(out.contains("1. [Alpha]"));
         assert!(out.contains("2. [Beta]"));
         assert!(!out.contains("Gamma"), "expected truncation, got: {out}");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn search_json_format_is_parseable() {
-        let server = MockServer::start().await;
-        let scope = scope_with_ddg_at(&server).await;
-        let out = run_search(&scope, "rust", None, Some(1), OutputFormat::Json)
-            .await
-            .unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["query"], "rust");
-        assert_eq!(parsed["results"][0]["title"], "Alpha");
-        assert_eq!(parsed["results"][0]["url"], "https://a.example/");
     }
 }

@@ -27,10 +27,10 @@ async fn run() -> anyhow::Result<String> {
     let scope = Scope::from_config(&config)?;
     match cli.command {
         Command::Read { url, reader } => {
-            handler::run_read(&scope, &url, reader.as_deref(), cli.format).await
+            handler::run_read(&scope, &url, reader.as_deref()).await
         }
         Command::Search { query, provider, limit } => {
-            handler::run_search(&scope, &query, provider.as_deref(), limit, cli.format).await
+            handler::run_search(&scope, &query, provider.as_deref(), limit).await
         }
     }
 }

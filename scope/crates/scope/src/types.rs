@@ -42,16 +42,6 @@ pub struct SearchOutput {
     pub results: Vec<SearchResult>,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum OutputFormat {
-    #[default]
-    Markdown,
-    Json,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,14 +118,4 @@ mod tests {
         });
     }
 
-    #[test]
-    fn output_format_round_trip() {
-        round_trip(&OutputFormat::Markdown);
-        round_trip(&OutputFormat::Json);
-    }
-
-    #[test]
-    fn output_format_default_is_markdown() {
-        assert_eq!(OutputFormat::default(), OutputFormat::Markdown);
-    }
 }

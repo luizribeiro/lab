@@ -2,16 +2,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::types::OutputFormat;
-
 #[derive(Debug, Parser)]
 #[command(name = "scope", about = "Non-interactive CLI web browser for AI agents")]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
-
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Markdown)]
-    pub format: OutputFormat,
 
     #[command(subcommand)]
     pub command: Command,
@@ -76,18 +71,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_format_to_markdown() {
-        let cli = parse(&["scope", "search", "hello"]);
-        assert_eq!(cli.format, OutputFormat::Markdown);
-    }
-
-    #[test]
-    fn parses_explicit_json_format() {
-        let cli = parse(&["scope", "--format", "json", "search", "hello"]);
-        assert_eq!(cli.format, OutputFormat::Json);
-    }
-
-    #[test]
     fn parses_search_provider_and_limit() {
         let cli = parse(&["scope", "search", "--provider", "ddg", "--limit", "5", "hello"]);
         match cli.command {
@@ -110,5 +93,11 @@ mod tests {
             }
             _ => panic!("expected read"),
         }
+    }
+
+    #[test]
+    fn rejects_unknown_format_flag() {
+        let err = Cli::try_parse_from(["scope", "--format", "json", "search", "x"]);
+        assert!(err.is_err(), "--format should no longer be recognized");
     }
 }

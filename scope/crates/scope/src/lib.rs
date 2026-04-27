@@ -29,7 +29,7 @@ pub use runtime::Scope;
 pub use search::duckduckgo::DuckDuckGoSearchProvider;
 pub use search::{SearchProvider, SearchRegistry};
 pub use types::{
-    OutputFormat, ReadOptions, ReadOutput, ReadRequest, SearchOutput, SearchRequest, SearchResult,
+    ReadOptions, ReadOutput, ReadRequest, SearchOutput, SearchRequest, SearchResult,
 };
 
 pub mod protocol {
