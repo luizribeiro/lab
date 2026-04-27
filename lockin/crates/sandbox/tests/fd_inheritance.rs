@@ -196,6 +196,58 @@ fn non_inherited_fd_is_sealed_in_child() {
 }
 
 #[test]
+fn fd_opened_after_command_construction_is_sealed() {
+    // Regression test: seal_fds must close fds that didn't exist
+    // when builder.command() returned. A parent-side snapshot taken
+    // at command-construction time would miss this fd; the
+    // child-side cloexec sweep at exec time catches it.
+    let probe = probe_binary();
+    let builder = common::sandbox_builder();
+    let mut cmd = builder.command(&probe).expect("build sandbox");
+
+    let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+    write_end.write_all(b"L").expect("write marker");
+    drop(write_end);
+
+    // dup2 to a high fd so FD_CLOEXEC (set by std on pipe creation)
+    // is cleared. Without this, the fd would close at exec naturally
+    // and we wouldn't be testing seal_fds at all.
+    let original: OwnedFd = read_end.into();
+    let high_raw = 101;
+    assert_ne!(
+        unsafe { libc::dup2(original.as_raw_fd(), high_raw) },
+        -1,
+        "dup2 to fd {high_raw} failed"
+    );
+    drop(original);
+    let leak_fd = unsafe { OwnedFd::from_raw_fd(high_raw) };
+    let leak_raw = leak_fd.as_raw_fd();
+
+    cmd.arg("fd-read-byte")
+        .arg(leak_raw.to_string())
+        .arg("L")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit());
+
+    let output = cmd.output().expect("spawn probe");
+
+    assert!(
+        !output.status.success(),
+        "probe should have failed reading post-construction fd {leak_raw}, \
+         but exited successfully; seal_fds did not seal it"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_msg = format!("fcntl(F_GETFD) on fd {leak_raw} failed");
+    assert!(
+        stderr.contains(&expected_msg),
+        "expected EBADF error for fd {leak_raw} in stderr, got: {stderr}"
+    );
+
+    drop(leak_fd);
+}
+
+#[test]
 fn inherited_fd_survives_seal() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
     write_end.write_all(b"Q").expect("write marker");

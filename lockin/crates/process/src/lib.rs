@@ -10,38 +10,72 @@ use std::process::Command;
 /// Each method installs its own `pre_exec` hook. Hooks run in
 /// registration order, so call [`seal_fds`](CommandFdExt::seal_fds)
 /// **before** [`map_fd`](CommandFdExt::map_fd) /
-/// [`keep_fd`](CommandFdExt::keep_fd). The seal marks everything
-/// `FD_CLOEXEC`; subsequent map/keep hooks clear `FD_CLOEXEC` on the
-/// fds you want the child to keep.
+/// [`keep_fd`](CommandFdExt::keep_fd). The seal sweeps all fds `>= 3`
+/// to `FD_CLOEXEC` at exec time; subsequent map/keep hooks clear
+/// `FD_CLOEXEC` on the fds the child should keep.
 pub trait CommandFdExt {
     fn map_fd(&mut self, fd: OwnedFd, child_fd: RawFd) -> &mut Self;
     fn keep_fd(&mut self, fd: OwnedFd) -> &mut Self;
+
+    /// Registers a `pre_exec` hook that sweeps all fds `>= 3` to
+    /// `FD_CLOEXEC` at exec time, so any fd not whitelisted by a
+    /// later [`map_fd`](Self::map_fd) / [`keep_fd`](Self::keep_fd)
+    /// hook is closed by the kernel on `execve`. The sweep runs
+    /// child-side after `fork`, so fds opened in the parent between
+    /// this call and `spawn` are still covered.
     fn seal_fds(&mut self) -> &mut Self;
 }
 
-fn enumerate_open_fds() -> Vec<RawFd> {
-    let fd_dir = if cfg!(target_os = "linux") {
-        "/proc/self/fd"
-    } else {
-        "/dev/fd"
-    };
+/// Upper bound on the cloexec sweep range. `getrlimit(RLIMIT_NOFILE)`
+/// can return `RLIM_INFINITY` or extremely large values; iterating
+/// billions of fds inside `pre_exec` would stall the child.
+const MAX_FD_SWEEP: u64 = 65_536;
 
-    let entries = match std::fs::read_dir(fd_dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+fn parent_max_fd() -> RawFd {
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
     };
+    // SAFETY: getrlimit reads into a stack-local struct.
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
+    let lim = if rc == 0 { rlim.rlim_cur } else { 1024 };
+    std::cmp::min(lim, MAX_FD_SWEEP as libc::rlim_t) as RawFd
+}
 
-    entries
-        .filter_map(|entry| {
-            let name = entry.ok()?.file_name();
-            let fd: RawFd = name.to_str()?.parse().ok()?;
-            if fd >= 3 {
-                Some(fd)
-            } else {
-                None
-            }
-        })
-        .collect()
+/// async-signal-safe: only invokes `fcntl`. `EBADF` on holes in the
+/// fd table is harmless.
+unsafe fn fcntl_cloexec_sweep(max_fd: RawFd) {
+    let mut fd: RawFd = 3;
+    while fd <= max_fd {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        if flags != -1 {
+            libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
+        fd += 1;
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn cloexec_sweep(max_fd: RawFd) {
+    // close_range(2) with CLOSE_RANGE_CLOEXEC marks CLOEXEC across
+    // the whole range in a single syscall (Linux 5.11+). On older
+    // kernels (ENOSYS) or kernels that recognise the syscall but not
+    // the flag (EINVAL), fall back to a fcntl loop.
+    let rc = libc::syscall(
+        libc::SYS_close_range,
+        3 as libc::c_uint,
+        !0u32 as libc::c_uint,
+        libc::CLOSE_RANGE_CLOEXEC,
+    );
+    if rc == 0 {
+        return;
+    }
+    fcntl_cloexec_sweep(max_fd);
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe fn cloexec_sweep(max_fd: RawFd) {
+    fcntl_cloexec_sweep(max_fd);
 }
 
 impl CommandFdExt for Command {
@@ -82,15 +116,14 @@ impl CommandFdExt for Command {
     }
 
     fn seal_fds(&mut self) -> &mut Self {
-        let fds_to_seal = enumerate_open_fds();
+        let max_fd = parent_max_fd();
 
-        // SAFETY: fcntl with F_SETFD is async-signal-safe per POSIX.
-        // EBADF on fds closed between snapshot and fork is harmless.
+        // SAFETY: close_range and fcntl are async-signal-safe. The
+        // sweep runs child-side after fork, so fds opened in the
+        // parent between this call and spawn are still covered.
         unsafe {
             self.pre_exec(move || {
-                for &fd in &fds_to_seal {
-                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                }
+                cloexec_sweep(max_fd);
                 Ok(())
             });
         }
