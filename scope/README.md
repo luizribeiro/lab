@@ -9,8 +9,8 @@ of backend are pluggable via a small subprocess JSON protocol
 
 Built-ins:
 
-- a generic HTML reader that fetches any `http`/`https` URL and converts
-  the page to Markdown
+- a generic HTML reader that fetches any `http`/`https` URL or reads a
+  local `file://` HTML file and converts the page to Markdown
 - a DuckDuckGo search provider
 
 ## Install
