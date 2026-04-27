@@ -2,6 +2,7 @@ pub mod cli;
 pub mod config;
 pub mod read;
 pub mod render;
+pub mod route;
 pub mod search;
 pub mod types;
 

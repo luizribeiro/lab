@@ -3,11 +3,7 @@ use url::Url;
 
 use crate::types::{ReadOutput, ReadRequest};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RouteMatch {
-    pub priority: i32,
-    pub specificity: u32,
-}
+pub use crate::route::RouteMatch;
 
 #[async_trait]
 pub trait Reader: Send + Sync {
