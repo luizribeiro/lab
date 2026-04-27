@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::http::HttpClient;
+use crate::providers::{ProviderInfo, ProviderKind};
 use crate::read::external::ExternalReader;
 use crate::read::html::HtmlReader;
 use crate::read::ReaderRegistry;
@@ -45,6 +46,17 @@ impl Scope {
             searches,
             http,
         })
+    }
+
+    pub fn list_providers(&self, filter: Option<ProviderKind>) -> Vec<ProviderInfo> {
+        let mut all = Vec::new();
+        if filter != Some(ProviderKind::Search) {
+            all.extend(self.readers.list());
+        }
+        if filter != Some(ProviderKind::Read) {
+            all.extend(self.searches.list());
+        }
+        all
     }
 }
 

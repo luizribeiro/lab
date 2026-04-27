@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use crate::config::ExternalSearchConfig;
 use crate::plugin::protocol::{SearchRequest as PluginSearchRequest, SearchResponse, PROTOCOL_NAME};
 use crate::plugin::PluginRunner;
+use crate::providers::{ProviderInfo, ProviderKind, ProviderSource};
 use crate::types::{SearchOutput, SearchRequest, SearchResult};
 
 use super::SearchProvider;
@@ -44,6 +45,15 @@ impl ExternalSearchProvider {
 impl SearchProvider for ExternalSearchProvider {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn describe(&self) -> ProviderInfo {
+        ProviderInfo {
+            kind: ProviderKind::Search,
+            name: self.name.clone(),
+            source: ProviderSource::External,
+            summary: String::new(),
+        }
     }
 
     async fn search(&self, request: SearchRequest) -> Result<SearchOutput> {

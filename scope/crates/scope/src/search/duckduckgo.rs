@@ -6,6 +6,7 @@ use scraper::{Html, Selector};
 use url::{form_urlencoded, Url};
 
 use crate::http::HttpClient;
+use crate::providers::{ProviderInfo, ProviderKind, ProviderSource};
 use crate::types::{SearchOutput, SearchRequest, SearchResult};
 
 use super::SearchProvider;
@@ -35,6 +36,15 @@ impl DuckDuckGoSearchProvider {
 impl SearchProvider for DuckDuckGoSearchProvider {
     fn name(&self) -> &str {
         "duckduckgo"
+    }
+
+    fn describe(&self) -> ProviderInfo {
+        ProviderInfo {
+            kind: ProviderKind::Search,
+            name: "duckduckgo".into(),
+            source: ProviderSource::Builtin,
+            summary: "https://duckduckgo.com/".into(),
+        }
     }
 
     async fn search(&self, request: SearchRequest) -> Result<SearchOutput> {

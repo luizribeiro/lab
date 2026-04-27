@@ -4,6 +4,7 @@ use thiserror::Error;
 use url::Url;
 
 use super::Reader;
+use crate::providers::ProviderInfo;
 use crate::route::RouteMatch;
 
 #[derive(Debug, Error)]
@@ -33,6 +34,18 @@ impl ReaderRegistry {
 
     pub fn set_fallback(&mut self, reader: Arc<dyn Reader>) {
         self.fallback = Some(reader);
+    }
+
+    pub fn list(&self) -> Vec<ProviderInfo> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for r in self.readers.iter().chain(self.fallback.iter()) {
+            let info = r.describe();
+            if seen.insert(info.name.clone()) {
+                out.push(info);
+            }
+        }
+        out
     }
 
     pub fn pick(
@@ -87,6 +100,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::providers::{ProviderKind, ProviderSource};
     use crate::types::{ReadOutput, ReadRequest};
 
     struct FakeReader {
@@ -102,6 +116,15 @@ mod tests {
 
         fn matches(&self, _url: &Url) -> Option<RouteMatch> {
             self.match_for
+        }
+
+        fn describe(&self) -> ProviderInfo {
+            ProviderInfo {
+                kind: ProviderKind::Read,
+                name: self.name.into(),
+                source: ProviderSource::Builtin,
+                summary: String::new(),
+            }
         }
 
         async fn read(&self, request: ReadRequest) -> anyhow::Result<ReadOutput> {

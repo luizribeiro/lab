@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use url::Url;
 
+use crate::providers::ProviderInfo;
 use crate::types::{ReadOutput, ReadRequest};
 
 pub mod external;
@@ -14,12 +15,14 @@ pub use registry::{ReaderRegistry, RegistryError};
 pub trait Reader: Send + Sync {
     fn name(&self) -> &str;
     fn matches(&self, url: &Url) -> Option<RouteMatch>;
+    fn describe(&self) -> ProviderInfo;
     async fn read(&self, request: ReadRequest) -> anyhow::Result<ReadOutput>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{ProviderKind, ProviderSource};
 
     struct FakeReader;
 
@@ -31,6 +34,15 @@ mod tests {
 
         fn matches(&self, _url: &Url) -> Option<RouteMatch> {
             Some(RouteMatch { priority: 0, specificity: 0 })
+        }
+
+        fn describe(&self) -> ProviderInfo {
+            ProviderInfo {
+                kind: ProviderKind::Read,
+                name: "fake".into(),
+                source: ProviderSource::Builtin,
+                summary: String::new(),
+            }
         }
 
         async fn read(&self, request: ReadRequest) -> anyhow::Result<ReadOutput> {

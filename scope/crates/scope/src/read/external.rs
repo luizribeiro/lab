@@ -7,6 +7,7 @@ use url::Url;
 use crate::config::ExternalReaderConfig;
 use crate::plugin::protocol::{ReaderOptions, ReaderRequest, ReaderResponse, PROTOCOL_NAME};
 use crate::plugin::PluginRunner;
+use crate::providers::{ProviderInfo, ProviderKind, ProviderSource};
 use crate::route::{Route, RouteMatch};
 use crate::types::{ReadOutput, ReadRequest};
 
@@ -63,6 +64,22 @@ impl Reader for ExternalReader {
                 priority: m.priority + self.priority,
                 specificity: m.specificity,
             })
+    }
+
+    fn describe(&self) -> ProviderInfo {
+        let summary = self
+            .routes
+            .iter()
+            .map(|r| r.summary())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ");
+        ProviderInfo {
+            kind: ProviderKind::Read,
+            name: self.name.clone(),
+            source: ProviderSource::External,
+            summary,
+        }
     }
 
     async fn read(&self, request: ReadRequest) -> Result<ReadOutput> {

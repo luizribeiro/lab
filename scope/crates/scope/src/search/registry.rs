@@ -3,6 +3,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use super::SearchProvider;
+use crate::providers::ProviderInfo;
 
 #[derive(Debug, Error)]
 pub enum RegistryError {
@@ -29,6 +30,23 @@ impl SearchRegistry {
         self.providers.push(provider);
     }
 
+    pub fn default_name(&self) -> &str {
+        &self.default_name
+    }
+
+    pub fn list(&self) -> Vec<ProviderInfo> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for p in self.providers.iter().rev() {
+            let info = p.describe();
+            if seen.insert(info.name.clone()) {
+                out.push(info);
+            }
+        }
+        out.reverse();
+        out
+    }
+
     pub fn pick(
         &self,
         override_name: Option<&str>,
@@ -51,6 +69,7 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+    use crate::providers::{ProviderInfo, ProviderKind, ProviderSource};
     use crate::types::{SearchOutput, SearchRequest, SearchResult};
 
     struct FakeProvider {
@@ -62,6 +81,15 @@ mod tests {
     impl SearchProvider for FakeProvider {
         fn name(&self) -> &str {
             self.name
+        }
+
+        fn describe(&self) -> ProviderInfo {
+            ProviderInfo {
+                kind: ProviderKind::Search,
+                name: self.name.into(),
+                source: ProviderSource::Builtin,
+                summary: String::new(),
+            }
         }
 
         async fn search(&self, request: SearchRequest) -> anyhow::Result<SearchOutput> {

@@ -32,5 +32,6 @@ async fn run() -> anyhow::Result<String> {
         Command::Search { query, provider, limit } => {
             handler::run_search(&scope, &query, provider.as_deref(), limit).await
         }
+        Command::Providers { kind } => Ok(handler::run_providers(&scope, kind)),
     }
 }

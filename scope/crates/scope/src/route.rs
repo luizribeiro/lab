@@ -60,6 +60,23 @@ impl Route {
 
         Some(RouteMatch { priority: 0, specificity })
     }
+
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(s) = &self.scheme {
+            parts.push(format!("scheme={s}"));
+        }
+        if let Some(h) = &self.host {
+            parts.push(format!("host={h}"));
+        }
+        if let Some(s) = &self.host_suffix {
+            parts.push(format!("host_suffix={s}"));
+        }
+        if let Some(p) = &self.path_prefix {
+            parts.push(format!("path_prefix={p}"));
+        }
+        parts.join(" ")
+    }
 }
 
 #[cfg(test)]
@@ -153,5 +170,33 @@ mod tests {
     fn deny_unknown_fields_in_toml() {
         let bad = toml::from_str::<Route>("host = \"x\"\nbogus = \"y\"\n");
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn empty_route_has_empty_summary() {
+        assert_eq!(Route::default().summary(), "");
+    }
+
+    #[test]
+    fn summary_emits_each_field() {
+        let r = Route { scheme: Some("https".into()), ..Default::default() };
+        assert_eq!(r.summary(), "scheme=https");
+        let r = Route { host: Some("example.com".into()), ..Default::default() };
+        assert_eq!(r.summary(), "host=example.com");
+        let r = Route { host_suffix: Some("example.com".into()), ..Default::default() };
+        assert_eq!(r.summary(), "host_suffix=example.com");
+        let r = Route { path_prefix: Some("/api".into()), ..Default::default() };
+        assert_eq!(r.summary(), "path_prefix=/api");
+    }
+
+    #[test]
+    fn summary_combines_multiple_fields_in_order() {
+        let r = Route {
+            scheme: Some("https".into()),
+            host_suffix: Some("wikipedia.org".into()),
+            path_prefix: Some("/wiki/".into()),
+            ..Default::default()
+        };
+        assert_eq!(r.summary(), "scheme=https host_suffix=wikipedia.org path_prefix=/wiki/");
     }
 }

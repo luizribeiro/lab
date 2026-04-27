@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use url::Url;
 
-use crate::render::{render_read_output, render_search_output};
+use crate::providers::ProviderKind;
+use crate::render::{render_providers, render_read_output, render_search_output};
 use crate::runtime::Scope;
 use crate::types::{ReadOptions, ReadRequest, SearchRequest};
 
@@ -14,6 +15,10 @@ pub async fn run_read(scope: &Scope, url: &str, reader_name: Option<&str>) -> Re
     };
     let output = reader.read(request).await?;
     Ok(render_read_output(&output))
+}
+
+pub fn run_providers(scope: &Scope, kind: Option<ProviderKind>) -> String {
+    render_providers(&scope.list_providers(kind), scope.searches.default_name())
 }
 
 pub async fn run_search(
@@ -140,6 +145,61 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no-such-provider"), "got: {err}");
+    }
+
+    #[test]
+    fn providers_lists_builtins_and_marks_default() {
+        let scope = Scope::from_config(&Config::default()).unwrap();
+        let out = run_providers(&scope, None);
+        assert!(out.contains("read"), "got: {out}");
+        assert!(out.contains("html"));
+        assert!(out.contains("built-in"));
+        assert!(out.contains("search"));
+        assert!(out.contains("duckduckgo"));
+        assert!(out.contains("(default)"), "got: {out}");
+    }
+
+    #[test]
+    fn providers_filter_read_excludes_search() {
+        let scope = Scope::from_config(&Config::default()).unwrap();
+        let out = run_providers(&scope, Some(ProviderKind::Read));
+        assert!(out.contains("html"));
+        assert!(!out.contains("duckduckgo"), "got: {out}");
+    }
+
+    #[test]
+    fn providers_filter_search_excludes_read() {
+        let scope = Scope::from_config(&Config::default()).unwrap();
+        let out = run_providers(&scope, Some(ProviderKind::Search));
+        assert!(out.contains("duckduckgo"));
+        assert!(!out.contains(" html "), "got: {out}");
+    }
+
+    #[test]
+    fn providers_includes_external_with_route_summary() {
+        use crate::config::ExternalReaderConfig;
+        use crate::route::Route;
+
+        let config = Config {
+            readers: vec![ExternalReaderConfig {
+                name: "wiki".into(),
+                command: vec!["true".into()],
+                protocol: "scope-json-v1".into(),
+                priority: 100,
+                routes: vec![Route {
+                    host_suffix: Some("wikipedia.org".into()),
+                    path_prefix: Some("/wiki/".into()),
+                    ..Default::default()
+                }],
+            }],
+            ..Config::default()
+        };
+        let scope = Scope::from_config(&config).unwrap();
+        let out = run_providers(&scope, Some(ProviderKind::Read));
+        assert!(out.contains("wiki"), "got: {out}");
+        assert!(out.contains("external"));
+        assert!(out.contains("host_suffix=wikipedia.org"));
+        assert!(out.contains("path_prefix=/wiki/"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

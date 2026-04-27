@@ -1,3 +1,4 @@
+use crate::providers::{ProviderInfo, ProviderKind};
 use crate::types::{ReadOutput, SearchOutput};
 
 pub fn render_read_output(output: &ReadOutput) -> String {
@@ -5,6 +6,40 @@ pub fn render_read_output(output: &ReadOutput) -> String {
     let url = &output.url;
     let body = &output.markdown;
     format!("# {title}\n\nSource: <{url}>\n\n{body}\n")
+}
+
+pub fn render_providers(infos: &[ProviderInfo], default_search: &str) -> String {
+    if infos.is_empty() {
+        return String::new();
+    }
+    let kind_w = infos.iter().map(|i| i.kind.label().len()).max().unwrap_or(0);
+    let name_w = infos.iter().map(|i| i.name.len()).max().unwrap_or(0);
+    let source_w = infos.iter().map(|i| i.source.label().len()).max().unwrap_or(0);
+    let mut s = String::new();
+    for info in infos {
+        let summary = if info.kind == ProviderKind::Search && info.name == default_search {
+            if info.summary.is_empty() {
+                "(default)".to_string()
+            } else {
+                format!("{} (default)", info.summary)
+            }
+        } else {
+            info.summary.clone()
+        };
+        let line = format!(
+            "{:<kw$}  {:<nw$}  {:<sw$}  {}",
+            info.kind.label(),
+            info.name,
+            info.source.label(),
+            summary,
+            kw = kind_w,
+            nw = name_w,
+            sw = source_w,
+        );
+        s.push_str(line.trim_end());
+        s.push('\n');
+    }
+    s
 }
 
 pub fn render_search_output(output: &SearchOutput) -> String {
@@ -75,6 +110,57 @@ mod tests {
             render_search_output(&out),
             "# Search results for `rust`\n\n1. [Rust](https://rust-lang.org)\n   A language\n\n2. [Crates](https://crates.io)\n",
         );
+    }
+
+    fn provider(kind: ProviderKind, name: &str, source: crate::providers::ProviderSource, summary: &str) -> ProviderInfo {
+        ProviderInfo { kind, name: name.into(), source, summary: summary.into() }
+    }
+
+    #[test]
+    fn providers_renders_aligned_columns() {
+        use crate::providers::ProviderSource;
+        let infos = vec![
+            provider(ProviderKind::Read, "html", ProviderSource::Builtin, "fallback"),
+            provider(ProviderKind::Read, "wikipedia", ProviderSource::External, "host_suffix=wikipedia.org"),
+        ];
+        let s = render_providers(&infos, "duckduckgo");
+        assert_eq!(
+            s,
+            "read  html       built-in  fallback\nread  wikipedia  external  host_suffix=wikipedia.org\n",
+        );
+    }
+
+    #[test]
+    fn providers_marks_default_search() {
+        use crate::providers::ProviderSource;
+        let infos = vec![
+            provider(ProviderKind::Search, "duckduckgo", ProviderSource::Builtin, "https://duckduckgo.com/"),
+            provider(ProviderKind::Search, "wikipedia", ProviderSource::External, ""),
+        ];
+        let s = render_providers(&infos, "duckduckgo");
+        assert!(s.contains("https://duckduckgo.com/ (default)"), "got: {s}");
+        assert!(!s.contains("wikipedia external (default)"));
+    }
+
+    #[test]
+    fn providers_default_with_empty_summary_shows_default_only() {
+        use crate::providers::ProviderSource;
+        let infos = vec![provider(ProviderKind::Search, "ddg", ProviderSource::Builtin, "")];
+        let s = render_providers(&infos, "ddg");
+        assert_eq!(s, "search  ddg  built-in  (default)\n");
+    }
+
+    #[test]
+    fn providers_empty_summary_has_no_trailing_whitespace() {
+        use crate::providers::ProviderSource;
+        let infos = vec![provider(ProviderKind::Search, "x", ProviderSource::External, "")];
+        let s = render_providers(&infos, "ddg");
+        assert_eq!(s, "search  x  external\n");
+    }
+
+    #[test]
+    fn providers_empty_list_returns_empty() {
+        assert_eq!(render_providers(&[], "ddg"), "");
     }
 
     #[test]

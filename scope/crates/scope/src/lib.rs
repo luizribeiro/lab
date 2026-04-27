@@ -11,6 +11,7 @@ pub mod cli;
 pub mod config;
 pub mod handler;
 pub mod http;
+pub mod providers;
 pub mod read;
 pub mod render;
 pub mod route;
@@ -22,6 +23,7 @@ pub mod plugin;
 
 pub use config::{Config, ExternalReaderConfig, ExternalSearchConfig, HttpConfig};
 pub use plugin::PluginRunner;
+pub use providers::{ProviderInfo, ProviderKind, ProviderSource};
 pub use read::html::HtmlReader;
 pub use read::{Reader, ReaderRegistry, RouteMatch};
 pub use route::Route;

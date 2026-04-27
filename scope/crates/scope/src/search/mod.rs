@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::providers::ProviderInfo;
 use crate::types::{SearchOutput, SearchRequest};
 
 pub mod duckduckgo;
@@ -11,6 +12,7 @@ pub use registry::{RegistryError, SearchRegistry};
 #[async_trait]
 pub trait SearchProvider: Send + Sync {
     fn name(&self) -> &str;
+    fn describe(&self) -> ProviderInfo;
     async fn search(&self, request: SearchRequest) -> anyhow::Result<SearchOutput>;
 }
 
@@ -19,12 +21,23 @@ mod tests {
     use super::*;
     use crate::types::SearchResult;
 
+    use crate::providers::{ProviderKind, ProviderSource};
+
     struct FakeProvider;
 
     #[async_trait]
     impl SearchProvider for FakeProvider {
         fn name(&self) -> &str {
             "fake"
+        }
+
+        fn describe(&self) -> ProviderInfo {
+            ProviderInfo {
+                kind: ProviderKind::Search,
+                name: "fake".into(),
+                source: ProviderSource::Builtin,
+                summary: String::new(),
+            }
         }
 
         async fn search(&self, request: SearchRequest) -> anyhow::Result<SearchOutput> {

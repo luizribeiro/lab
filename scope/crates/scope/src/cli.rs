@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::providers::ProviderKind;
+
 #[derive(Debug, Parser)]
 #[command(name = "scope", about = "Non-interactive CLI web browser for AI agents")]
 pub struct Cli {
@@ -28,6 +30,10 @@ pub enum Command {
         provider: Option<String>,
 
         url: String,
+    },
+    Providers {
+        #[arg(value_enum)]
+        kind: Option<ProviderKind>,
     },
 }
 

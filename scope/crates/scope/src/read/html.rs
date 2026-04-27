@@ -7,6 +7,7 @@ use regex::Regex;
 use url::Url;
 
 use crate::http::HttpClient;
+use crate::providers::{ProviderInfo, ProviderKind, ProviderSource};
 use crate::route::RouteMatch;
 use crate::types::{ReadOutput, ReadRequest};
 
@@ -57,6 +58,15 @@ impl Reader for HtmlReader {
         match url.scheme() {
             "http" | "https" => Some(RouteMatch { priority: 0, specificity: 0 }),
             _ => None,
+        }
+    }
+
+    fn describe(&self) -> ProviderInfo {
+        ProviderInfo {
+            kind: ProviderKind::Read,
+            name: "html".into(),
+            source: ProviderSource::Builtin,
+            summary: "fallback for any http/https URL".into(),
         }
     }
 
