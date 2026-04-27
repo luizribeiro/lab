@@ -1,8 +1,9 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, UdpSocket};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -103,6 +104,27 @@ fn main() {
                 usage_and_exit();
             };
             can_connect(&host, &port)
+        }
+        "can-udp-send" => {
+            let Some(host) = args.next() else {
+                usage_and_exit();
+            };
+            let Some(port) = args.next() else {
+                usage_and_exit();
+            };
+            can_udp_send(&host, &port)
+        }
+        "can-unix-stream-connect" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_unix_stream_connect(Path::new(&path))
+        }
+        "can-unix-dgram-connect" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            can_unix_dgram_connect(Path::new(&path))
         }
         "print-env" => {
             let Some(name) = args.next() else {
@@ -272,6 +294,28 @@ fn can_connect(host: &str, port: &str) -> Result<(), String> {
         .parse()
         .map_err(|e: std::num::ParseIntError| e.to_string())?;
     TcpStream::connect((host, port)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn can_udp_send(host: &str, port: &str) -> Result<(), String> {
+    let port: u16 = port
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let sock = UdpSocket::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
+    sock.send_to(b"x", (host, port))
+        .map_err(|e| format!("sendto: {e}"))?;
+    Ok(())
+}
+
+fn can_unix_stream_connect(path: &Path) -> Result<(), String> {
+    UnixStream::connect(path).map_err(|e| format!("connect {}: {e}", path.display()))?;
+    Ok(())
+}
+
+fn can_unix_dgram_connect(path: &Path) -> Result<(), String> {
+    let sock = UnixDatagram::unbound().map_err(|e| format!("unbound: {e}"))?;
+    sock.connect(path)
+        .map_err(|e| format!("connect {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -607,6 +651,9 @@ actions:\n\
   can-chmod <path> <octal-mode>\n\
   can-exec <path> [args...]\n\
   can-connect <host> <port>\n\
+  can-udp-send <host> <port>\n\
+  can-unix-stream-connect <path>\n\
+  can-unix-dgram-connect <path>\n\
   print-env <var-name>\n\
   can-proxy-connect <host:port>  (reads HTTP_PROXY from env)\n\
   can-write-temp\n\
