@@ -2,6 +2,7 @@ name: fittings
 
 on:
   push:
+    branches: [main]
     paths:
       - "fittings/**"
       - "shared/**"

@@ -4,6 +4,7 @@ name: capsa
 
 on:
   push:
+    branches: [main]
     paths:
       - "capsa/**"
       - "lockin/**"

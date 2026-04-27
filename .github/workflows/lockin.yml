@@ -2,6 +2,7 @@ name: lockin
 
 on:
   push:
+    branches: [main]
     paths:
       - "lockin/**"
       - "outpost/**"

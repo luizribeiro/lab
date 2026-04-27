@@ -2,6 +2,7 @@ name: scope
 
 on:
   push:
+    branches: [main]
     paths:
       - "scope/**"
       - "shared/**"
