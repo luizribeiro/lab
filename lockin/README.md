@@ -24,3 +24,16 @@ same set of knobs.
 - **Explicit relaxation**: access is granted only through builder methods.
 - **No privileged runtime**: works as a regular user.
 - **Fail closed**: unsupported OS/backend/configuration returns errors.
+
+## Platform support
+
+The deny-all default is fully realized on **Linux** via `syd` plus
+landlock: nothing outside the structured allowlists is reachable.
+
+**macOS** support is best-effort. The Seatbelt backend imports
+Apple's `system.sb` baseline as the starting profile (see
+`crates/sandbox/src/darwin/policy.rs`); that baseline is a
+pragmatic, non-empty set of rules required for normal Mach / IPC /
+loader operation. macOS deny-all is therefore not byte-equivalent
+to Linux deny-all — treat the macOS backend as a dev-time
+convenience and Linux as the production target.

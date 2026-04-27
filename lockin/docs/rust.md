@@ -3,6 +3,12 @@
 `Sandbox::builder()` provides the same cross-platform API for use
 as a library.
 
+The `program` argument to `.command(...)` must be an absolute path
+or a relative path with a `/`. lockin does not perform `PATH`
+lookup: the sandbox's exec allowlist is derived from the resolved
+binary, so callers must hand in an explicit path (the same
+constraint the CLI enforces on `argv[0]`).
+
 ## Quick start
 
 ```rust
@@ -93,8 +99,11 @@ assert!(status.success());
 
 ## File descriptor policy
 
-Pass only the fds the child needs; all other fds `>= 3` are sealed
-at exec time (via [`lockin-process`](../crates/process)).
+Pass only the fds the child needs. Any fd `>= 3` not explicitly
+inherited via `inherit_fd` / `map_fd` / `keep_fd` is marked
+`FD_CLOEXEC` inside the child immediately before exec — including
+fds opened in the parent after `Sandbox::builder().command()`
+returns. Implemented by [`lockin-process`](../crates/process).
 
 ```rust
 use std::os::fd::AsRawFd;
@@ -135,11 +144,14 @@ assert!(status.success());
 
 ## Raw sandbox-exec rules (macOS)
 
-Escape hatch for darwin sandbox operations not expressible through
-the structured API — `iokit-open`, `mach-lookup`, `sysctl-read`, and
-the rest of the sandbox-exec S-expression surface. Rules are
-appended verbatim after the structured allows; they extend but
-cannot weaken the deny-default base. Ignored on non-darwin platforms.
+Trusted-policy escape hatch for darwin sandbox operations not
+expressible through the structured API — `iokit-open`,
+`mach-lookup`, `sysctl-read`, and the rest of the sandbox-exec
+S-expression surface. Rules are appended verbatim after the
+structured allows. Raw rules can broaden sandbox authority
+arbitrarily; use only with trusted, audited rules. The caller is
+responsible for the safety of every rule passed in. Ignored on
+non-darwin platforms.
 
 ```rust,no_run,ignore
 use std::path::Path;

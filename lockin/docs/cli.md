@@ -11,6 +11,27 @@ Config resolution: if `-c` is given, that file is used (error if
 missing). Otherwise `./lockin.toml` is used if it exists. If
 neither is found, a deny-all default policy applies.
 
+`<program>` (and `command[0]` from the TOML) must be an absolute
+path (`/usr/bin/python3`) or a relative path containing a `/`
+(`./script.py`). Bare names with no slash are rejected — lockin
+intentionally does not perform `PATH` lookup, because the resolved
+binary determines the sandbox's exec allowlist and silent `PATH`
+search would produce a misleading policy.
+
+## Backend requirements
+
+- **Linux**: requires the `syd` binary (sydbox-rs). lockin resolves
+  it via the explicit `--` flag in the API, the `LOCKIN_SYD_PATH`
+  environment variable, or `PATH`. For production use, pin via
+  `LOCKIN_SYD_PATH` or the Nix wrapper (`wrapWithLockin` sets
+  `LOCKIN_SYD_PATH` automatically); `PATH` lookup is a development
+  convenience only. The version pinned in this repo's Nix toolchain
+  is **sydbox 3.49.1**; that is the documented baseline this
+  release is tested against.
+- **macOS**: uses the system `sandbox-exec` (Seatbelt). No extra
+  dependency. macOS enforcement is best-effort — see the platform
+  support note in the [README](../README.md).
+
 ## Example
 
 ```toml
@@ -85,7 +106,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
-| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Escape hatch for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn (exit 125). |
+| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority — use only with trusted, audited rules; treat as a trusted-policy escape hatch. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn (exit 125). |
 
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.
