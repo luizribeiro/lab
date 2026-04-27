@@ -1,12 +1,8 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum OutputFormat {
-    Markdown,
-    Json,
-}
+use crate::types::OutputFormat;
 
 #[derive(Debug, Parser)]
 #[command(name = "scope", about = "Non-interactive CLI web browser for AI agents")]
