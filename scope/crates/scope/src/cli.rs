@@ -25,7 +25,7 @@ pub enum Command {
     },
     Read {
         #[arg(long)]
-        reader: Option<String>,
+        provider: Option<String>,
 
         url: String,
     },
@@ -56,9 +56,9 @@ mod tests {
     fn parses_read_url() {
         let cli = parse(&["scope", "read", "https://example.com"]);
         match cli.command {
-            Command::Read { url, reader } => {
+            Command::Read { url, provider } => {
                 assert_eq!(url, "https://example.com");
-                assert!(reader.is_none());
+                assert!(provider.is_none());
             }
             _ => panic!("expected read"),
         }
@@ -84,15 +84,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_read_reader_override() {
-        let cli = parse(&["scope", "read", "--reader", "html", "https://example.com"]);
+    fn parses_read_provider_override() {
+        let cli = parse(&["scope", "read", "--provider", "html", "https://example.com"]);
         match cli.command {
-            Command::Read { reader, url } => {
-                assert_eq!(reader.as_deref(), Some("html"));
+            Command::Read { provider, url } => {
+                assert_eq!(provider.as_deref(), Some("html"));
                 assert_eq!(url, "https://example.com");
             }
             _ => panic!("expected read"),
         }
+    }
+
+    #[test]
+    fn rejects_old_reader_flag() {
+        let err = Cli::try_parse_from(["scope", "read", "--reader", "html", "https://x"]);
+        assert!(err.is_err(), "--reader should no longer be recognized");
     }
 
     #[test]

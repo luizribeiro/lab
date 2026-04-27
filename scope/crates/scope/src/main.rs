@@ -26,8 +26,8 @@ async fn run() -> anyhow::Result<String> {
     let config = Config::load(cli.config.as_deref())?;
     let scope = Scope::from_config(&config)?;
     match cli.command {
-        Command::Read { url, reader } => {
-            handler::run_read(&scope, &url, reader.as_deref()).await
+        Command::Read { url, provider } => {
+            handler::run_read(&scope, &url, provider.as_deref()).await
         }
         Command::Search { query, provider, limit } => {
             handler::run_search(&scope, &query, provider.as_deref(), limit).await
