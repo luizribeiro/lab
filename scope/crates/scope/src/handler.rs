@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use url::Url;
 
-use crate::render::render_read_output;
+use crate::render::{render_read_output, render_search_output};
 use crate::runtime::Scope;
-use crate::types::{OutputFormat, ReadOptions, ReadRequest};
+use crate::types::{OutputFormat, ReadOptions, ReadRequest, SearchRequest};
 
 pub async fn run_read(
     scope: &Scope,
@@ -21,10 +21,33 @@ pub async fn run_read(
     Ok(render_read_output(&output, format))
 }
 
+pub async fn run_search(
+    scope: &Scope,
+    query: &str,
+    provider_name: Option<&str>,
+    limit: Option<usize>,
+    format: OutputFormat,
+) -> Result<String> {
+    let provider = scope.searches.pick(provider_name)?;
+    let request = SearchRequest {
+        query: query.to_string(),
+        limit,
+    };
+    let output = provider.search(request).await?;
+    Ok(render_search_output(&output, format))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::config::Config;
+    use crate::http::test_client;
+    use crate::read::ReaderRegistry;
+    use crate::search::duckduckgo::DuckDuckGoSearchProvider;
+    use crate::search::SearchRegistry;
+    use url::Url;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -95,5 +118,97 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("invalid URL"), "got: {err}");
+    }
+
+    const DDG_RESULT_HTML: &str = r#"
+        <div class="result">
+          <a class="result__a" href="https://a.example/">Alpha</a>
+          <a class="result__snippet">snippet a</a>
+        </div>
+        <div class="result">
+          <a class="result__a" href="https://b.example/">Beta</a>
+          <a class="result__snippet">snippet b</a>
+        </div>
+        <div class="result">
+          <a class="result__a" href="https://c.example/">Gamma</a>
+          <a class="result__snippet">snippet c</a>
+        </div>
+    "#;
+
+    async fn scope_with_ddg_at(server: &MockServer) -> Scope {
+        Mock::given(method("GET"))
+            .and(path("/html/"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                DDG_RESULT_HTML.as_bytes().to_vec(),
+                "text/html; charset=utf-8",
+            ))
+            .mount(server)
+            .await;
+
+        let http = test_client();
+        let endpoint = Url::parse(&format!("{}/html/", server.uri())).unwrap();
+        let mut searches = SearchRegistry::new("duckduckgo");
+        searches.register(Arc::new(DuckDuckGoSearchProvider::with_endpoint(
+            http.clone(),
+            endpoint,
+        )));
+        Scope {
+            readers: ReaderRegistry::new(),
+            searches,
+            http,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_returns_markdown_for_ddg_response() {
+        let server = MockServer::start().await;
+        let scope = scope_with_ddg_at(&server).await;
+        let out = run_search(&scope, "rust", None, None, OutputFormat::Markdown)
+            .await
+            .unwrap();
+        assert!(out.starts_with("# Search results for `rust`\n"), "got: {out}");
+        assert!(out.contains("1. [Alpha](https://a.example/)"));
+        assert!(out.contains("2. [Beta](https://b.example/)"));
+        assert!(out.contains("3. [Gamma](https://c.example/)"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_unknown_provider_override_errors() {
+        let scope = Scope::from_config(&Config::default()).unwrap();
+        let err = run_search(
+            &scope,
+            "rust",
+            Some("no-such-provider"),
+            None,
+            OutputFormat::Markdown,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("no-such-provider"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_limit_truncates_results() {
+        let server = MockServer::start().await;
+        let scope = scope_with_ddg_at(&server).await;
+        let out = run_search(&scope, "rust", None, Some(2), OutputFormat::Markdown)
+            .await
+            .unwrap();
+        assert!(out.contains("1. [Alpha]"));
+        assert!(out.contains("2. [Beta]"));
+        assert!(!out.contains("Gamma"), "expected truncation, got: {out}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn search_json_format_is_parseable() {
+        let server = MockServer::start().await;
+        let scope = scope_with_ddg_at(&server).await;
+        let out = run_search(&scope, "rust", None, Some(1), OutputFormat::Json)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["query"], "rust");
+        assert_eq!(parsed["results"][0]["title"], "Alpha");
+        assert_eq!(parsed["results"][0]["url"], "https://a.example/");
     }
 }

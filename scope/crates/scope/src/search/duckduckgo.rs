@@ -26,7 +26,7 @@ impl DuckDuckGoSearchProvider {
     }
 
     #[cfg(test)]
-    fn with_endpoint(http: Arc<HttpClient>, endpoint: Url) -> Self {
+    pub(crate) fn with_endpoint(http: Arc<HttpClient>, endpoint: Url) -> Self {
         Self { http, endpoint }
     }
 }

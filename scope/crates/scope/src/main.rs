@@ -29,6 +29,8 @@ async fn run() -> anyhow::Result<String> {
         Command::Read { url, reader } => {
             handler::run_read(&scope, &url, reader.as_deref(), cli.format).await
         }
-        Command::Search { .. } => anyhow::bail!("search command not yet wired"),
+        Command::Search { query, provider, limit } => {
+            handler::run_search(&scope, &query, provider.as_deref(), limit, cli.format).await
+        }
     }
 }
