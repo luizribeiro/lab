@@ -1,4 +1,4 @@
-//! Tokio-flavored [`SandboxCommand`] and [`SandboxChild`].
+//! Tokio-flavored [`SandboxedCommand`] and [`SandboxedChild`].
 //!
 //! Mirrors the sync API in the parent module but wraps
 //! [`tokio::process::Command`] and [`tokio::process::Child`] so
@@ -16,21 +16,21 @@ use crate::{is_dynamic_linker_blocked, Sandbox, SandboxBuilder, DYNAMIC_LINKER_E
 
 impl SandboxBuilder {
     /// Tokio equivalent of [`SandboxBuilder::command`](crate::SandboxBuilder::command).
-    pub fn tokio_command(self, program: &Path) -> Result<SandboxCommand> {
+    pub fn tokio_command(self, program: &Path) -> Result<SandboxedCommand> {
         let (command, sandbox) = self.build(program)?;
-        Ok(SandboxCommand {
+        Ok(SandboxedCommand {
             command: tokio::process::Command::from(command),
             sandbox,
         })
     }
 }
 
-pub struct SandboxCommand {
+pub struct SandboxedCommand {
     command: tokio::process::Command,
     sandbox: Sandbox,
 }
 
-impl SandboxCommand {
+impl SandboxedCommand {
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.command.arg(arg);
         self
@@ -118,11 +118,11 @@ impl SandboxCommand {
     }
 
     /// Spawns the sandboxed child, transferring sandbox ownership to
-    /// the returned [`SandboxChild`].
-    pub fn spawn(mut self) -> std::io::Result<SandboxChild> {
+    /// the returned [`SandboxedChild`].
+    pub fn spawn(mut self) -> std::io::Result<SandboxedChild> {
         self.strip_dynamic_linker_env();
         let child = self.command.spawn()?;
-        Ok(SandboxChild {
+        Ok(SandboxedChild {
             child,
             sandbox: self.sandbox,
         })
@@ -137,12 +137,12 @@ impl SandboxCommand {
     }
 }
 
-pub struct SandboxChild {
+pub struct SandboxedChild {
     child: tokio::process::Child,
     sandbox: Sandbox,
 }
 
-impl SandboxChild {
+impl SandboxedChild {
     pub async fn wait(&mut self) -> std::io::Result<ExitStatus> {
         self.child.wait().await
     }

@@ -57,7 +57,7 @@ impl Signals {
 /// where a caller could pass the raw pid and forget it isn't actually
 /// a pgid leader.
 pub async fn run(
-    child: lockin::SandboxChild,
+    child: lockin::SandboxedChild,
     pid: i32,
     mut signals: Signals,
 ) -> std::io::Result<ExitStatus> {

@@ -16,7 +16,7 @@ use std::process::{ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lockin::SandboxChild;
+use lockin::SandboxedChild;
 
 use common::probe_binary;
 
@@ -128,7 +128,7 @@ fn byte_traverses_two_concurrent_sandboxes_via_socketpair() {
     );
 }
 
-fn wait_within(child: &mut SandboxChild, timeout: Duration, label: &str) -> ExitStatus {
+fn wait_within(child: &mut SandboxedChild, timeout: Duration, label: &str) -> ExitStatus {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {

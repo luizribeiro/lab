@@ -154,7 +154,7 @@ impl ProxyLifecycle {
     /// `NO_PROXY` on the child command so every standard HTTP client
     /// (libcurl, Python requests, Go net/http) routes through the
     /// loopback proxy. No-op when not in proxy mode.
-    fn inject_env(&self, cmd: &mut lockin::SandboxCommand) {
+    fn inject_env(&self, cmd: &mut lockin::SandboxedCommand) {
         if let Some(handle) = &self.handle {
             let url = format!("http://127.0.0.1:{}", handle.listen_addr().port());
             cmd.env("HTTP_PROXY", &url)
@@ -171,7 +171,7 @@ impl ProxyLifecycle {
 
 // Non-UTF-8 env keys are skipped in pass matching and block filtering;
 // glob matching is byte-level ASCII.
-fn apply_env<I>(env: &config::EnvConfig, cmd: &mut lockin::SandboxCommand, parent_env: I)
+fn apply_env<I>(env: &config::EnvConfig, cmd: &mut lockin::SandboxedCommand, parent_env: I)
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
@@ -331,13 +331,13 @@ mod tests {
         );
     }
 
-    fn build_cmd() -> lockin::SandboxCommand {
+    fn build_cmd() -> lockin::SandboxedCommand {
         lockin::Sandbox::builder()
             .command(Path::new("/bin/echo"))
             .unwrap()
     }
 
-    fn removed_keys(cmd: &lockin::SandboxCommand) -> Vec<OsString> {
+    fn removed_keys(cmd: &lockin::SandboxedCommand) -> Vec<OsString> {
         cmd.as_command()
             .get_envs()
             .filter(|(_, v)| v.is_none())
@@ -351,7 +351,7 @@ mod tests {
             .collect()
     }
 
-    fn set_pairs(cmd: &lockin::SandboxCommand) -> Vec<(OsString, OsString)> {
+    fn set_pairs(cmd: &lockin::SandboxedCommand) -> Vec<(OsString, OsString)> {
         cmd.as_command()
             .get_envs()
             .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned())))

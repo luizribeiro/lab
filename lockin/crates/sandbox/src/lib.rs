@@ -20,10 +20,10 @@ mod linux;
 /// Environment variables that can alter the dynamic linker's behavior
 /// in a sandboxed child (preload arbitrary `.so`/`.dylib`s, redirect
 /// library lookup, etc.). The library strips these from every
-/// [`SandboxCommand`] regardless of how the caller tried to set
+/// [`SandboxedCommand`] regardless of how the caller tried to set
 /// them — explicit `env()`/`envs()` calls, inherited parent
 /// environment, or post-construction mutation via
-/// [`SandboxCommand::as_command_mut`].
+/// [`SandboxedCommand::as_command_mut`].
 pub(crate) const DYNAMIC_LINKER_ENV_BLOCKLIST: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
@@ -240,7 +240,7 @@ fn create_private_tmp() -> Result<tempfile::TempDir> {
 ///
 /// Configure the sandbox policy and any fds to inherit into the
 /// child, then call [`SandboxBuilder::command`] to get a
-/// [`SandboxCommand`] ready to spawn.
+/// [`SandboxedCommand`] ready to spawn.
 ///
 /// # Example
 ///
@@ -535,16 +535,16 @@ impl SandboxBuilder {
         raw
     }
 
-    /// Consumes the builder and produces a [`SandboxCommand`] ready
+    /// Consumes the builder and produces a [`SandboxedCommand`] ready
     /// to spawn `program`.
     ///
-    /// The returned `SandboxCommand` owns both the configured
+    /// The returned `SandboxedCommand` owns both the configured
     /// [`std::process::Command`] and the [`Sandbox`] (private tmp
     /// directory), so callers no longer need to hold a separate
     /// `_sandbox` binding to keep the tmp directory alive.
     ///
     /// Panics if `program` is not absolute.
-    pub fn command(self, program: &Path) -> Result<SandboxCommand> {
+    pub fn command(self, program: &Path) -> Result<SandboxedCommand> {
         assert!(
             program.is_absolute(),
             "command path must be absolute, got: {}",
@@ -552,7 +552,7 @@ impl SandboxBuilder {
         );
         assert_no_control_chars("command", program);
         let (command, sandbox) = self.build(program)?;
-        Ok(SandboxCommand { command, sandbox })
+        Ok(SandboxedCommand { command, sandbox })
     }
 
     fn build(self, program: &Path) -> Result<(Command, Sandbox)> {
@@ -589,7 +589,7 @@ impl Sandbox {
     ///
     /// Equivalent to [`SandboxBuilder::new`]. Configure policy and
     /// inherited fds on the returned builder, then call
-    /// [`SandboxBuilder::command`] to get a [`SandboxCommand`]
+    /// [`SandboxBuilder::command`] to get a [`SandboxedCommand`]
     /// ready to spawn.
     pub fn builder() -> SandboxBuilder {
         SandboxBuilder::new()
@@ -604,13 +604,13 @@ impl Sandbox {
 /// `_sandbox` binding.
 ///
 /// Methods mirror [`std::process::Command`]'s API. For anything not
-/// forwarded, use [`as_command_mut`](SandboxCommand::as_command_mut).
-pub struct SandboxCommand {
+/// forwarded, use [`as_command_mut`](SandboxedCommand::as_command_mut).
+pub struct SandboxedCommand {
     command: Command,
     sandbox: Sandbox,
 }
 
-impl SandboxCommand {
+impl SandboxedCommand {
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.command.arg(arg);
         self
@@ -698,11 +698,11 @@ impl SandboxCommand {
     }
 
     /// Spawns the sandboxed child, transferring sandbox ownership to
-    /// the returned [`SandboxChild`].
-    pub fn spawn(mut self) -> std::io::Result<SandboxChild> {
+    /// the returned [`SandboxedChild`].
+    pub fn spawn(mut self) -> std::io::Result<SandboxedChild> {
         self.strip_dynamic_linker_env();
         let child = self.command.spawn()?;
-        Ok(SandboxChild {
+        Ok(SandboxedChild {
             child,
             sandbox: self.sandbox,
         })
@@ -722,14 +722,14 @@ impl SandboxCommand {
 /// Wraps a [`std::process::Child`] together with the [`Sandbox`]
 /// whose private tmp directory must outlive the child. Dropping
 /// this value cleans up the tmp directory (but does **not**
-/// kill the child — call [`kill`](SandboxChild::kill) first if
+/// kill the child — call [`kill`](SandboxedChild::kill) first if
 /// needed).
-pub struct SandboxChild {
+pub struct SandboxedChild {
     child: Child,
     sandbox: Sandbox,
 }
 
-impl SandboxChild {
+impl SandboxedChild {
     pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
         self.child.wait()
     }

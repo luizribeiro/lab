@@ -10,13 +10,13 @@
 //!
 //! - `spawn_sandboxed` builds a sandboxed `tokio::process::Command`
 //!   (via lockin's `tokio_command` path) and spawns the child. The
-//!   returned `ChildHandle` owns the resulting `SandboxChild`, which
+//!   returned `ChildHandle` owns the resulting `SandboxedChild`, which
 //!   in turn owns both the tokio `Child` and the `Sandbox` tmpdir.
 //! - `kill_on_drop(true)` is set on every spawn so dropping the
 //!   handle without an explicit teardown still SIGKILLs the child;
 //!   tokio's orphan reaper keeps the zombie from lingering.
 //! - `wait_by_ref` / `try_wait_by_ref` / `kill` delegate to
-//!   `SandboxChild`. Exit status is cached on the first successful
+//!   `SandboxedChild`. Exit status is cached on the first successful
 //!   wait so subsequent calls remain cheap.
 
 use std::io;
