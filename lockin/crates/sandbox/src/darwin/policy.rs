@@ -50,13 +50,15 @@ pub(super) fn build_policy(
         policy.allow_subpath(&["file-map-executable"], dir);
     }
 
-    for path in &paths.read_write_paths {
+    for path in &paths.write_paths {
         policy.allow_literal(&["file-read*"], path);
         policy.allow_literal(&["file-write*"], path);
+        policy.allow_literal(&["file-map-executable"], path);
     }
-    for dir in &paths.read_write_dirs {
+    for dir in &paths.write_dirs {
         policy.allow_subpath(&["file-read*"], dir);
         policy.allow_subpath(&["file-write*"], dir);
+        policy.allow_subpath(&["file-map-executable"], dir);
     }
 
     for path in &paths.ioctl_paths {
@@ -117,7 +119,7 @@ mod tests {
         std::fs::create_dir_all(&private_tmp).expect("create private tmp");
 
         let mut spec = SandboxSpec::default();
-        spec.read_write_paths.push(rw_file.clone());
+        spec.write_paths.push(rw_file.clone());
         spec.ioctl_paths.push(ioctl_file.clone());
 
         let policy = build_policy(PathBuf::from("/bin/ls").as_path(), &spec, &private_tmp);
@@ -133,6 +135,47 @@ mod tests {
         assert!(
             rendered.contains(&ioctl_rule),
             "ioctl path missing ioctl rule: {ioctl_rule}"
+        );
+    }
+
+    #[test]
+    fn write_paths_grant_file_map_executable() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-write-mapexec-test-")
+            .tempdir()
+            .expect("create test base dir");
+
+        let write_file = base.path().join("rw.dat");
+        std::fs::write(&write_file, b"data").expect("create write file");
+
+        let write_dir = base.path().join("rw_dir");
+        std::fs::create_dir_all(&write_dir).expect("create write dir");
+
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let mut spec = SandboxSpec::default();
+        spec.write_paths.push(write_file.clone());
+        spec.write_dirs.push(write_dir.clone());
+
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+
+        let path_rule = format!(
+            "(allow file-map-executable (literal \"{}\"))",
+            write_file.display()
+        );
+        assert!(
+            rendered.contains(&path_rule),
+            "write path missing file-map-executable rule: {path_rule}\nrendered:\n{rendered}"
+        );
+
+        let dir_rule = format!(
+            "(allow file-map-executable (subpath \"{}\"))",
+            write_dir.display()
+        );
+        assert!(
+            rendered.contains(&dir_rule),
+            "write dir missing file-map-executable rule: {dir_rule}\nrendered:\n{rendered}"
         );
     }
 

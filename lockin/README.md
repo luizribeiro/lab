@@ -30,7 +30,7 @@ allow_hosts = ["api.example.com", "*.cdn.example.com"]
 
 [filesystem]
 read_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
-read_write_dirs = ["./output"]
+write_dirs = ["./output"]
 
 [env]
 pass = ["PATH", "HOME", "LANG", "LC_*"]
@@ -108,7 +108,7 @@ A program inside a default-policy lockin sandbox cannot:
   closes them at `execve`.
 
 A private `$TMPDIR` is created on the host filesystem, allowlisted
-for the child as `read_write` recursive, and exposed via the
+for the child as `write` recursive, and exposed via the
 `TMPDIR` env var. It is removed when the `Sandbox` value is
 dropped on normal exit; abnormal termination (SIGKILL of the
 parent, `abort`, `mem::forget`) may leave it behind.

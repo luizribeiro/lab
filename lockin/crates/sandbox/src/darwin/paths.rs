@@ -8,8 +8,8 @@ pub(super) struct PathSets {
     pub(super) executable_paths: Vec<PathBuf>,
     pub(super) read_paths: Vec<PathBuf>,
     pub(super) read_dirs: Vec<PathBuf>,
-    pub(super) read_write_paths: Vec<PathBuf>,
-    pub(super) read_write_dirs: Vec<PathBuf>,
+    pub(super) write_paths: Vec<PathBuf>,
+    pub(super) write_dirs: Vec<PathBuf>,
     pub(super) ioctl_paths: Vec<PathBuf>,
     pub(super) ioctl_dirs: Vec<PathBuf>,
     pub(super) traversal_paths: Vec<PathBuf>,
@@ -31,11 +31,11 @@ impl PathSets {
             paths.add_read_dir(dir);
         }
 
-        for path in &spec.read_write_paths {
-            paths.add_read_write(path);
+        for path in &spec.write_paths {
+            paths.add_write(path);
         }
-        for dir in &spec.read_write_dirs {
-            paths.add_read_write_dir(dir);
+        for dir in &spec.write_dirs {
+            paths.add_write_dir(dir);
         }
 
         for path in &spec.ioctl_paths {
@@ -56,7 +56,7 @@ impl PathSets {
             paths.add_ioctl(Path::new("/dev/tty"));
         }
 
-        paths.add_read_write_dir(private_tmp);
+        paths.add_write_dir(private_tmp);
 
         paths
     }
@@ -67,11 +67,11 @@ impl PathSets {
     fn add_read_dir(&mut self, path: &Path) {
         self.collect_into(path, |s| &mut s.read_dirs);
     }
-    fn add_read_write(&mut self, path: &Path) {
-        self.collect_into(path, |s| &mut s.read_write_paths);
+    fn add_write(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.write_paths);
     }
-    fn add_read_write_dir(&mut self, path: &Path) {
-        self.collect_into(path, |s| &mut s.read_write_dirs);
+    fn add_write_dir(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.write_dirs);
     }
     fn add_ioctl(&mut self, path: &Path) {
         self.collect_into(path, |s| &mut s.ioctl_paths);

@@ -49,8 +49,8 @@ pub enum NetworkConfigMode {
 pub struct FilesystemConfig {
     pub read_paths: Vec<PathBuf>,
     pub read_dirs: Vec<PathBuf>,
-    pub read_write_paths: Vec<PathBuf>,
-    pub read_write_dirs: Vec<PathBuf>,
+    pub write_paths: Vec<PathBuf>,
+    pub write_dirs: Vec<PathBuf>,
     pub ioctl_paths: Vec<PathBuf>,
     pub ioctl_dirs: Vec<PathBuf>,
     pub library_paths: Vec<PathBuf>,
@@ -153,11 +153,11 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
     for p in &config.filesystem.read_dirs {
         builder = builder.read_dir(resolve_path(p)?);
     }
-    for p in &config.filesystem.read_write_paths {
-        builder = builder.read_write_path(resolve_path(p)?);
+    for p in &config.filesystem.write_paths {
+        builder = builder.write_path(resolve_path(p)?);
     }
-    for p in &config.filesystem.read_write_dirs {
-        builder = builder.read_write_dir(resolve_path(p)?);
+    for p in &config.filesystem.write_dirs {
+        builder = builder.write_dir(resolve_path(p)?);
     }
     for p in &config.filesystem.ioctl_paths {
         builder = builder.ioctl_path(resolve_path(p)?);
@@ -262,8 +262,8 @@ mod tests {
             [filesystem]
             read_paths = ["/etc/hosts"]
             read_dirs = ["/usr/share"]
-            read_write_paths = ["/var/log/app.log"]
-            read_write_dirs = ["./data"]
+            write_paths = ["/var/log/app.log"]
+            write_dirs = ["./data"]
             ioctl_paths = ["/dev/net/tun"]
             ioctl_dirs = []
             library_paths = ["/usr/lib"]
@@ -305,8 +305,8 @@ mod tests {
                 filesystem: FilesystemConfig {
                     read_paths: vec![PathBuf::from("/etc/hosts")],
                     read_dirs: vec![PathBuf::from("/usr/share")],
-                    read_write_paths: vec![PathBuf::from("/var/log/app.log")],
-                    read_write_dirs: vec![PathBuf::from("./data")],
+                    write_paths: vec![PathBuf::from("/var/log/app.log")],
+                    write_dirs: vec![PathBuf::from("./data")],
                     ioctl_paths: vec![PathBuf::from("/dev/net/tun")],
                     ioctl_dirs: vec![],
                     library_paths: vec![PathBuf::from("/usr/lib")],

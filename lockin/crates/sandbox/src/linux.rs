@@ -178,13 +178,13 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    for path in &spec.read_write_paths {
+    for path in &spec.write_paths {
         for candidate in path_candidates(path) {
             push_with_ancestors(&mut read_paths, &candidate);
         }
     }
 
-    for dir in &spec.read_write_dirs {
+    for dir in &spec.write_dirs {
         for candidate in path_candidates(dir) {
             push_with_ancestors(&mut read_paths, &candidate);
             push_unique(&mut read_recursive_paths, candidate);
@@ -283,7 +283,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     rules.push("sandbox/write,create,truncate,delete:on".to_string());
 
     let mut write_dirs = vec![private_tmp.to_path_buf()];
-    write_dirs.extend(spec.read_write_dirs.iter().cloned());
+    write_dirs.extend(spec.write_dirs.iter().cloned());
 
     for dir in write_dirs {
         for candidate in path_candidates(&dir) {
@@ -305,7 +305,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     if spec.allow_kvm {
         write_paths.push(PathBuf::from("/dev/kvm"));
     }
-    write_paths.extend(spec.read_write_paths.iter().cloned());
+    write_paths.extend(spec.write_paths.iter().cloned());
 
     for path in write_paths {
         for candidate in path_candidates(&path) {

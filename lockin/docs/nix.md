@@ -88,7 +88,7 @@ lockin.lib.${system}.wrapWithLockin {
   policy = {
     sandbox.network.mode = "allow_all";
     filesystem.read_dirs = [ "/etc" ];
-    filesystem.read_write_dirs = [ "/var/lib/redis" ];
+    filesystem.write_dirs = [ "/var/lib/redis" ];
     limits.max_open_files = 4096;
     env.pass = [ "PATH" "HOME" ];
   };

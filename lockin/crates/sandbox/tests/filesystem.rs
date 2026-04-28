@@ -52,14 +52,14 @@ fn read_directory_grants_access_to_children() {
 // ── directory write scoping ──────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_write_to_children() {
+fn write_directory_grants_write_to_children() {
     let temp = TestDir::new("write-dir");
     let child_file = temp.join("writable.txt");
     std::fs::write(&child_file, b"seed").expect("seed child file");
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(dir),
+        common::sandbox_builder().write_dir(dir),
         &["can-write", &child_file.display().to_string()]
     ));
 }
@@ -104,13 +104,13 @@ fn read_directory_grants_readdir() {
 }
 
 #[test]
-fn read_write_directory_grants_readdir() {
+fn write_directory_grants_readdir() {
     let temp = TestDir::new("readdir-rw");
     std::fs::write(temp.join("a.txt"), b"a").expect("seed a");
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(dir.clone()),
+        common::sandbox_builder().write_dir(dir.clone()),
         &["can-readdir", &dir.display().to_string()]
     ));
 }
@@ -132,12 +132,12 @@ fn readdir_recurses_into_subdirectories() {
 // ── mkdir scoping ────────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_mkdir() {
+fn write_directory_grants_mkdir() {
     let temp = TestDir::new("mkdir-rw");
     let new_dir = temp.join("created");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-mkdir", &new_dir.display().to_string()]
     ));
     assert!(
@@ -160,13 +160,13 @@ fn read_directory_does_not_grant_mkdir() {
 // ── truncate scoping ─────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_truncate() {
+fn write_directory_grants_truncate() {
     let temp = TestDir::new("truncate-rw");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed contents").expect("seed file");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-truncate", &target.display().to_string()]
     ));
 }
@@ -198,13 +198,13 @@ fn truncate_is_denied_without_explicit_allowlist() {
 // ── utime scoping ────────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_utime() {
+fn write_directory_grants_utime() {
     let temp = TestDir::new("utime-rw");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-utime", &target.display().to_string()]
     ));
 }
@@ -236,13 +236,13 @@ fn utime_is_denied_without_explicit_allowlist() {
 // ── rmdir scoping ────────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_rmdir() {
+fn write_directory_grants_rmdir() {
     let temp = TestDir::new("rmdir-rw");
     let victim = temp.join("victim");
     std::fs::create_dir(&victim).expect("seed dir");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-rmdir", &victim.display().to_string()]
     ));
     assert!(!victim.exists(), "dir should have been removed");
@@ -276,14 +276,14 @@ fn rmdir_is_denied_without_explicit_allowlist() {
 // ── rename scoping ───────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_rename() {
+fn write_directory_grants_rename() {
     let temp = TestDir::new("rename-rw");
     let from = temp.join("from.txt");
     let to = temp.join("to.txt");
     std::fs::write(&from, b"seed").expect("seed file");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &[
             "can-rename",
             &from.display().to_string(),
@@ -333,13 +333,13 @@ fn rename_is_denied_without_explicit_allowlist() {
 // ── unlink scoping ───────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_unlink() {
+fn write_directory_grants_unlink() {
     let temp = TestDir::new("unlink-rw");
     let target = temp.join("victim.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-unlink", &target.display().to_string()]
     ));
     assert!(!target.exists(), "file should have been removed");
@@ -373,13 +373,13 @@ fn unlink_is_denied_without_explicit_allowlist() {
 // ── chmod scoping ────────────────────────────────────────────
 
 #[test]
-fn read_write_directory_grants_chmod() {
+fn write_directory_grants_chmod() {
     let temp = TestDir::new("chmod-rw");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_dir(temp.join("")),
+        common::sandbox_builder().write_dir(temp.join("")),
         &["can-chmod", &target.display().to_string(), "0o644"]
     ));
 }
@@ -461,11 +461,11 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
     std::fs::write(&denied, b"seed").expect("seed denied");
 
     assert!(run_probe(
-        common::sandbox_builder().read_write_path(allowed.clone()),
+        common::sandbox_builder().write_path(allowed.clone()),
         &["can-write", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        common::sandbox_builder().read_write_path(allowed),
+        common::sandbox_builder().write_path(allowed),
         &["can-write", &denied.display().to_string()]
     ));
 }
@@ -522,7 +522,7 @@ fn symlink_inside_read_dir_does_not_grant_outside_read() {
 }
 
 #[test]
-fn symlink_inside_read_write_dir_cannot_be_used_to_write_outside() {
+fn symlink_inside_write_dir_cannot_be_used_to_write_outside() {
     let temp = TestDir::new("symlink-rw-escape");
     let outside_dir = temp.join("outside_dir");
     let inside_dir = temp.join("inside_dir");
@@ -537,7 +537,7 @@ fn symlink_inside_read_write_dir_cannot_be_used_to_write_outside() {
 
     assert!(
         !run_probe(
-            common::sandbox_builder().read_write_dir(inside_dir),
+            common::sandbox_builder().write_dir(inside_dir),
             &["can-write", &link.display().to_string()]
         ),
         "writing through a symlink that points outside the allowlist must be denied"
@@ -551,7 +551,7 @@ fn symlink_inside_read_write_dir_cannot_be_used_to_write_outside() {
 }
 
 #[test]
-fn hardlink_inside_read_write_dir_to_outside_file_documents_behavior() {
+fn hardlink_inside_write_dir_to_outside_file_documents_behavior() {
     // Hardlinks share an inode, but path-based sandboxes (syd +
     // landlock on Linux, sandbox-exec on macOS) police *paths*, not
     // inodes. An inside-allowlist path that hardlinks to outside
@@ -575,7 +575,7 @@ fn hardlink_inside_read_write_dir_to_outside_file_documents_behavior() {
     // allowlist regardless of which inode it points at.
     assert!(
         run_probe(
-            common::sandbox_builder().read_write_dir(inside_dir.clone()),
+            common::sandbox_builder().write_dir(inside_dir.clone()),
             &["can-read", &link.display().to_string()]
         ),
         "reading the hardlink via its inside-allowlist path is expected to succeed \
@@ -587,7 +587,7 @@ fn hardlink_inside_read_write_dir_to_outside_file_documents_behavior() {
     // dir is not in the allowlist.
     assert!(
         !run_probe(
-            common::sandbox_builder().read_write_dir(inside_dir),
+            common::sandbox_builder().write_dir(inside_dir),
             &["can-read", &target.display().to_string()]
         ),
         "reading via the outside path must remain denied even though an inside \

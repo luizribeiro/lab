@@ -103,8 +103,8 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |
 | `filesystem.read_paths` | `[path, ...]` | Individual read-only file paths. |
 | `filesystem.read_dirs` | `[path, ...]` | Recursive read-only directories. |
-| `filesystem.read_write_paths` | `[path, ...]` | Individual read-write file paths. |
-| `filesystem.read_write_dirs` | `[path, ...]` | Recursive read-write directories. |
+| `filesystem.write_paths` | `[path, ...]` | Individual read-write file paths. |
+| `filesystem.write_dirs` | `[path, ...]` | Recursive read-write directories. |
 | `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
 | `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
 | `filesystem.library_paths` | `[path, ...]` | Dynamic linker library directories. On Linux, binaries inside these directories are also exec-able (required for the dynamic linker). |

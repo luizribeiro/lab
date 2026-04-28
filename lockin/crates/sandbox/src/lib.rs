@@ -78,8 +78,8 @@ pub(crate) struct SandboxSpec {
     pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_paths: Vec<PathBuf>,
     pub(crate) read_dirs: Vec<PathBuf>,
-    pub(crate) read_write_paths: Vec<PathBuf>,
-    pub(crate) read_write_dirs: Vec<PathBuf>,
+    pub(crate) write_paths: Vec<PathBuf>,
+    pub(crate) write_dirs: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
     pub(crate) ioctl_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
@@ -409,18 +409,18 @@ impl SandboxBuilder {
     }
 
     /// Adds a single file path that the child should be allowed to
-    /// read and write. Use [`read_write_dir`](Self::read_write_dir)
+    /// read and write. Use [`write_dir`](Self::write_dir)
     /// for directories that need recursive access.
     ///
     /// Panics if `path` is not absolute.
-    pub fn read_write_path(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn write_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
             path.is_absolute(),
-            "read_write_path must be absolute, got: {}",
+            "write_path must be absolute, got: {}",
             path.display()
         );
-        self.spec.read_write_paths.push(path);
+        self.spec.write_paths.push(path);
         self
     }
 
@@ -428,14 +428,14 @@ impl SandboxBuilder {
     /// read and write recursively.
     ///
     /// Panics if `path` is not absolute.
-    pub fn read_write_dir(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn write_dir(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
             path.is_absolute(),
-            "read_write_dir must be absolute, got: {}",
+            "write_dir must be absolute, got: {}",
             path.display()
         );
-        self.spec.read_write_dirs.push(path);
+        self.spec.write_dirs.push(path);
         self
     }
 
@@ -905,15 +905,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "read_write_path must be absolute")]
-    fn read_write_path_builder_rejects_relative() {
-        super::SandboxBuilder::new().read_write_path("tmp/out");
+    #[should_panic(expected = "write_path must be absolute")]
+    fn write_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().write_path("tmp/out");
     }
 
     #[test]
-    #[should_panic(expected = "read_write_dir must be absolute")]
-    fn read_write_dir_builder_rejects_relative() {
-        super::SandboxBuilder::new().read_write_dir("tmp");
+    #[should_panic(expected = "write_dir must be absolute")]
+    fn write_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().write_dir("tmp");
     }
 
     #[test]

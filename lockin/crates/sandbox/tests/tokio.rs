@@ -51,14 +51,14 @@ async fn write_scoped_to_explicit_rw_paths() {
 
     assert!(
         run_probe(
-            common::sandbox_builder().read_write_path(allowed.clone()),
+            common::sandbox_builder().write_path(allowed.clone()),
             &["can-write", &allowed.display().to_string()]
         )
         .await
     );
     assert!(
         !run_probe(
-            common::sandbox_builder().read_write_path(allowed),
+            common::sandbox_builder().write_path(allowed),
             &["can-write", &denied.display().to_string()]
         )
         .await
