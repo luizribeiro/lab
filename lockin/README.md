@@ -17,6 +17,50 @@ All three share the same policy model — the TOML schema, the Rust
 builder methods, and the Nix attrset are three surfaces over the
 same set of knobs.
 
+## Quick start
+
+Write a `lockin.toml` describing the policy:
+
+```toml
+command = ["/usr/bin/python3"]
+
+[sandbox.network]
+mode = "proxy"
+allow_hosts = ["api.example.com", "*.cdn.example.com"]
+
+[filesystem]
+read_only_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
+read_write_dirs = ["./output"]
+
+[env]
+pass = ["PATH", "HOME", "LANG", "LC_*"]
+
+[limits]
+max_cpu_time = 60
+```
+
+Then run your program through `lockin`:
+
+```sh
+lockin -- script.py --verbose
+```
+
+`lockin` resolves the config in this order: `-c <path>` if given,
+otherwise `./lockin.toml` if present, otherwise a deny-all default.
+
+```sh
+lockin -c /etc/lockin/python.toml -- script.py
+```
+
+The `command` field in TOML is the program lockin will exec; any
+arguments after `--` on the command line are appended. Both the
+TOML `command[0]` and any CLI program path must be absolute or
+contain a `/` — bare `PATH` lookup is intentionally not supported.
+
+See [docs/cli.md](docs/cli.md) for the full config reference,
+including network modes, environment handling, resource limits,
+and the macOS `raw_seatbelt_rules` escape hatch.
+
 ## Design principles
 
 - **Policy compiler, not enforcer**: translates your policy to native backend rules.
