@@ -81,14 +81,17 @@ arguments from the command line are appended to it.
 | `128 + N` | Child was killed by signal `N` (e.g. `137` = SIGKILL, `143` = SIGTERM). |
 | `125` | lockin itself failed (config parse, path resolution, sandbox setup). |
 
+A child process that exits with code `125` of its own is
+indistinguishable from a lockin-side `125` error.
+
 ## Config reference
 
 All fields are optional. Everything defaults to deny/false/empty.
 
 | Field | Type | Description |
 |---|---|---|
-| `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. |
-| `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy (default `"deny"`). `deny` blocks all sockets. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, injects `HTTP_PROXY`/`HTTPS_PROXY` into the child, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. |
+| `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. Must be non-empty if present (omit the field entirely to use CLI args alone). |
+| `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy (default `"deny"`). `deny` blocks IP networking (TCP/UDP, v4 and v6), inbound bind/listen, and AF_UNIX outbound to arbitrary paths; on macOS a small set of Apple system services required for normal program startup remains reachable, but programs cannot register new Mach names, look up arbitrary XPC services, write to `/cores`, or connect to the syslog Unix socket. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (and lowercase variants), clears `NO_PROXY`/`no_proxy`, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. |
 | `sandbox.network.allow_hosts` | `[string, ...]` | Host allowlist for `mode = "proxy"`. Exact hostnames (`"api.example.com"`) or wildcard patterns (`"*.cdn.example.com"`). Must be empty for `deny` / `allow_all` modes. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
@@ -109,7 +112,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
-| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn (exit 125). |
+| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
 
 The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
 paths) and adds each directory to `filesystem.library_paths`.

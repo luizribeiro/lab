@@ -101,9 +101,12 @@ assert!(status.success());
 
 Pass only the fds the child needs. Any fd `>= 3` not explicitly
 inherited via `inherit_fd` / `map_fd` / `keep_fd` is marked
-`FD_CLOEXEC` inside the child immediately before exec — including
-fds opened in the parent after `Sandbox::builder().command()`
-returns. Implemented by [`lockin-process`](../crates/process).
+`FD_CLOEXEC` inside the child immediately before exec, then closed
+by the kernel at `execve`. The sweep covers the full fd range on
+Linux ≥ 5.11 (single `close_range` syscall); on older Linux and on
+macOS it iterates fds in `[3, min(RLIMIT_NOFILE, 65536))`. Fds
+opened in the parent after `Sandbox::builder().command()` returns
+are still covered. Implemented by [`lockin-process`](../crates/process).
 
 ```rust
 use std::os::fd::AsRawFd;
@@ -177,7 +180,7 @@ let status = Sandbox::builder()
 ```
 
 Malformed rules cause `sandbox-exec` to reject the profile at spawn
-time, surfacing as a startup error (exit 125).
+time; the child exits with `sandbox-exec`'s failure status.
 
 ## Tokio support
 

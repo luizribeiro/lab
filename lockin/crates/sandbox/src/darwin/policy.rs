@@ -5,6 +5,12 @@ use crate::{NetworkMode, SandboxSpec};
 use super::paths::PathSets;
 use super::seatbelt::SeatbeltPolicy;
 
+/// Builds the Seatbelt policy in this emission order: `(deny default)`,
+/// then `(import "system.sb")`, then structured allows derived from
+/// `spec` (filesystem, network, tty, executable paths), then the
+/// unconditional baseline-hardening denies (syslog Unix socket,
+/// blanket `mach-register`, XPC service-name lookup, `/cores`
+/// writes), then any caller-provided raw rules.
 pub(super) fn build_policy(
     program: &Path,
     spec: &SandboxSpec,

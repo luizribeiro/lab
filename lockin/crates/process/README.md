@@ -18,7 +18,7 @@ use lockin_process::CommandFdExt;
 let (_parent, child) = UnixDatagram::pair()?;
 
 let mut cmd = Command::new("/bin/sh");
-cmd.seal_fds()               // close all fds >= 3 at exec
+cmd.seal_fds()               // mark fds >= 3 FD_CLOEXEC; kernel closes them at exec
    .keep_fd(child.into());   // except this one
 
 cmd.arg("-c").arg("true");
@@ -30,8 +30,11 @@ cmd.status()?;
 
 - **`keep_fd(fd)`** — keep fd at the same number in the child.
 - **`map_fd(fd, child_fd)`** — remap fd to `child_fd` in the child.
-- **`seal_fds()`** — close all fds `>= 3` not registered via
-  `keep_fd`/`map_fd`.
+- **`seal_fds()`** — mark fds `>= 3` `FD_CLOEXEC` so the kernel
+  closes them on `execve`, except those re-allowed by a later
+  `keep_fd`/`map_fd`. On Linux ≥ 5.11 the full range is covered in
+  one `close_range` syscall; on older Linux and on macOS the sweep
+  iterates `[3, min(RLIMIT_NOFILE, 65536))` via `fcntl`.
 
 Call `seal_fds()` first, then `keep_fd()`/`map_fd()` — hooks run
 in registration order.

@@ -19,9 +19,15 @@ mod linux;
 
 /// Network enforcement strategy for the sandboxed child.
 ///
-/// `Deny` is the default — no outbound or inbound sockets. `AllowAll`
-/// opens the network unconditionally (needed by capsa's VM runtime,
-/// which owns its own per-host policy inside the guest). `Proxy`
+/// `Deny` is the default. It denies IP networking (TCP/UDP, v4 and
+/// v6), inbound bind/listen, and AF_UNIX outbound to arbitrary
+/// paths. On macOS a small set of Apple system services required
+/// for normal program startup remains reachable; programs can use
+/// them but cannot register new Mach names, look up arbitrary XPC
+/// services, write to `/cores`, or connect to the syslog Unix
+/// socket. `AllowAll` removes all network restrictions; for
+/// workloads that manage their own networking and need full
+/// passthrough. Rare — most users want `Deny` or `Proxy`. `Proxy`
 /// allows outbound only to a loopback port, where lockin's caller
 /// has stood up an `outpost-proxy` instance enforcing a host
 /// allowlist via HTTP CONNECT — apps in the sandbox see their
@@ -247,9 +253,9 @@ impl SandboxBuilder {
         self.network(NetworkMode::Deny)
     }
 
-    /// Allows unrestricted inbound and outbound networking. Use when
-    /// the child runs its own policy-aware network runtime (e.g.
-    /// capsa's VM, which enforces per-host rules on the guest side).
+    /// Allows unrestricted inbound and outbound networking. For
+    /// workloads that manage their own networking and need full
+    /// passthrough; rare. Most users want `Deny` or `Proxy`.
     pub fn network_allow_all(self) -> Self {
         self.network(NetworkMode::AllowAll)
     }

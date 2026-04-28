@@ -38,7 +38,11 @@ backends. A program inside a default-policy lockin sandbox cannot:
 - inherit dynamic-linker variables (`LD_PRELOAD`,
   `DYLD_INSERT_LIBRARIES`, and siblings — always stripped),
 - inherit file descriptors `>= 3` that weren't explicitly passed
-  through `inherit_fd` / `map_fd` / `keep_fd`.
+  through `inherit_fd` / `map_fd` / `keep_fd` — fds in that range
+  are marked `FD_CLOEXEC` (on Linux ≥ 5.11 the full range in one
+  `close_range` syscall; on older Linux and on macOS, fds up to the
+  process's `RLIMIT_NOFILE` capped at 65 536) and the kernel closes
+  them at `execve`.
 
 A private `$TMPDIR` is mounted/exposed for the child and removed
 when the sandbox is dropped. `RLIMIT_*` and core-dump suppression

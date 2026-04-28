@@ -34,7 +34,7 @@ From the flake:
 ```
 
 `policy` is the same schema as the [CLI TOML config](cli.md#config-reference),
-written as a Nix attrset. `wrapWithLockin` fills in two things
+written as a Nix attrset. `wrapWithLockin` fills in the following
 automatically for each binary in `${package}/bin`:
 
 - `command = [ "/nix/store/.../bin/<name>" ]` — so the wrapper
@@ -44,9 +44,10 @@ automatically for each binary in `${package}/bin`:
   `/nix/store` directories. Your own `library_paths` entries are
   preserved and merged.
 - `filesystem.read_only_dirs` — the package's runtime closure
-  (computed via `pkgs.closureInfo`) is prepended so every store path
-  the binary can reach is readable, and nothing else from
-  `/nix/store` is. Controlled by `nixStoreAccess` (see below).
+  (computed via `pkgs.closureInfo`) is appended after the user's
+  entries so every store path the binary can reach is readable, and
+  nothing else from `/nix/store` is. Controlled by `nixStoreAccess`
+  (see below).
 - `darwin.raw_seatbelt_rules` — on darwin, a per-closure-path
   `(allow process-exec (subpath "…"))` rule is appended for each
   closure entry so the wrapped binary can re-exec helpers it ships.
@@ -72,8 +73,9 @@ configuration.
 ```nix
 lockin.lib.${system}.wrapWithLockin {
   package = pkgs.hello;
-  # No policy: network denied, no filesystem access beyond what
-  # the binary's own lib dirs need. A deny-all probe.
+  # No additional policy: network denied. The wrapper still grants
+  # read access to the package's runtime closure (the default
+  # `closure` mode) plus the library directories the binary needs.
 }
 ```
 

@@ -10,19 +10,24 @@ use std::process::Command;
 /// Each method installs its own `pre_exec` hook. Hooks run in
 /// registration order, so call [`seal_fds`](CommandFdExt::seal_fds)
 /// **before** [`map_fd`](CommandFdExt::map_fd) /
-/// [`keep_fd`](CommandFdExt::keep_fd). The seal sweeps all fds `>= 3`
-/// to `FD_CLOEXEC` at exec time; subsequent map/keep hooks clear
-/// `FD_CLOEXEC` on the fds the child should keep.
+/// [`keep_fd`](CommandFdExt::keep_fd). The seal marks fds `>= 3`
+/// `FD_CLOEXEC` at exec time (full range via `close_range` on
+/// Linux ≥ 5.11; otherwise iterating `[3, min(RLIMIT_NOFILE, 65536))`
+/// via `fcntl`); subsequent map/keep hooks clear `FD_CLOEXEC` on the
+/// fds the child should keep.
 pub trait CommandFdExt {
     fn map_fd(&mut self, fd: OwnedFd, child_fd: RawFd) -> &mut Self;
     fn keep_fd(&mut self, fd: OwnedFd) -> &mut Self;
 
-    /// Registers a `pre_exec` hook that sweeps all fds `>= 3` to
+    /// Registers a `pre_exec` hook that marks fds `>= 3`
     /// `FD_CLOEXEC` at exec time, so any fd not whitelisted by a
     /// later [`map_fd`](Self::map_fd) / [`keep_fd`](Self::keep_fd)
-    /// hook is closed by the kernel on `execve`. The sweep runs
-    /// child-side after `fork`, so fds opened in the parent between
-    /// this call and `spawn` are still covered.
+    /// hook is closed by the kernel on `execve`. The sweep covers
+    /// the full fd range on Linux ≥ 5.11 via `close_range`; on older
+    /// Linux and on macOS it iterates `[3, min(RLIMIT_NOFILE, 65536))`
+    /// via `fcntl`. The sweep runs child-side after `fork`, so fds
+    /// opened in the parent between this call and `spawn` are still
+    /// covered.
     fn seal_fds(&mut self) -> &mut Self;
 }
 
