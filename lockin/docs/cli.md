@@ -16,7 +16,12 @@ path (`/usr/bin/python3`) or a relative path containing a `/`
 (`./script.py`). Bare names with no slash are rejected — lockin
 intentionally does not perform `PATH` lookup, because the resolved
 binary determines the sandbox's exec allowlist and silent `PATH`
-search would produce a misleading policy.
+search would produce a misleading policy. The path itself is not
+otherwise normalized or authenticated: `..` segments and setuid bits
+on the resolved binary are not rejected by lockin (the kernel's
+`no-new-privs` on Linux and Seatbelt on macOS strip suid in the
+sandboxed-child path, but the policy author is responsible for the
+identity of the binary they name).
 
 ## Backend requirements
 
@@ -25,7 +30,10 @@ search would produce a misleading policy.
   environment variable, or `PATH`. For production use, pin via
   `LOCKIN_SYD_PATH` or the Nix wrapper (`wrapWithLockin` sets
   `LOCKIN_SYD_PATH` automatically); `PATH` lookup is a development
-  convenience only. The version pinned in this repo's Nix toolchain
+  convenience only. Pinning is a security requirement anywhere `PATH`
+  is not fully trusted: an attacker who controls any earlier `PATH`
+  directory can substitute the `syd` binary and silently disable the
+  sandbox. The version pinned in this repo's Nix toolchain
   is **sydbox 3.49.1**; that is the documented baseline this
   release is tested against.
 - **macOS**: uses the system `sandbox-exec` (Seatbelt). No extra
@@ -132,7 +140,7 @@ exposed.
 | Field | Type | Description |
 |---|---|---|
 | `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. Must be non-empty if present (omit the field entirely to use CLI args alone). |
-| `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy (default `"deny"`). `deny` blocks IP networking (TCP/UDP, v4 and v6), inbound bind/listen, and AF_UNIX outbound to arbitrary paths; on macOS a small set of Apple system services required for normal program startup remains reachable, but programs cannot register new Mach names, look up arbitrary XPC services, write to `/cores`, or connect to the syslog Unix socket. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (and lowercase variants), clears `NO_PROXY`/`no_proxy`, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. |
+| `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy (default `"deny"`). `deny` blocks IP networking (TCP/UDP, v4 and v6), inbound bind/listen, and AF_UNIX outbound to arbitrary paths; on macOS a small set of Apple system services required for normal program startup remains reachable, but programs cannot register new Mach names, look up arbitrary XPC services, write to `/cores`, or connect to the syslog Unix socket. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (and lowercase variants), clears `NO_PROXY`/`no_proxy`, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. The proxy only handles HTTPS via the `CONNECT` method; plain-HTTP forwarding is not implemented, so `http://` URLs through the proxy will fail. |
 | `sandbox.network.allow_hosts` | `[string, ...]` | Host allowlist for `mode = "proxy"`. Exact hostnames (`"api.example.com"`) or wildcard patterns (`"*.cdn.example.com"`). Must be empty for `deny` / `allow_all` modes. See [allow_hosts trust model](#allow_hosts-trust-model) for what allowing a host implies. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
@@ -144,7 +152,7 @@ exposed.
 | `filesystem.exec_paths` | `[path, ...]` | Binaries the child can `execve` / `posix_spawn`. Implies read. |
 | `filesystem.exec_dirs` | `[path, ...]` | Directories whose contents the child can exec recursively. Implies recursive read. |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
-| `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
+| `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes). On macOS the limit is inherited by `sandbox-exec` itself, which runs before the user program; values too tight to fit `sandbox-exec`'s own footprint will fail the spawn. |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
 | `limits.max_processes` | `int` | `RLIMIT_NPROC` |
 | `limits.disable_core_dumps` | `bool` | Set `RLIMIT_CORE` to 0. |
@@ -152,7 +160,7 @@ exposed.
 | `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
-| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.); process-exec is not one of them — use `filesystem.exec_paths` / `filesystem.exec_dirs` instead. macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
+| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Re-enabling `network-outbound` via raw rules also re-enables AF_UNIX outbound — the implicit `network-outbound` deny that the deny-by-default mode installs covers both IP and Unix-domain egress, so a raw `(allow network-outbound ...)` lifts it for both. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.); process-exec is not one of them — use `filesystem.exec_paths` / `filesystem.exec_dirs` instead. macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
 
 ## allow_hosts trust model
 

@@ -458,6 +458,14 @@ impl SandboxBuilder {
     }
 
     /// Sets `RLIMIT_AS` (max virtual address space in bytes) for the child.
+    ///
+    /// On macOS the limit is applied to the calling process before
+    /// `execve`-ing `sandbox-exec`, which then `exec`s the user program.
+    /// Because rlimits are inherited across `exec`, the cap applies to
+    /// `sandbox-exec`'s own address space first; values too tight to fit
+    /// `sandbox-exec` itself will cause the spawn to fail before the user
+    /// program ever runs. Size the limit for the larger of the two
+    /// processes, not just the user program.
     #[allow(clippy::unnecessary_cast)]
     pub fn max_address_space(mut self, bytes: u64) -> Self {
         self.spec.rlimits.push((libc::RLIMIT_AS as i32, bytes));
