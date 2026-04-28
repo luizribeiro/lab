@@ -99,6 +99,33 @@ fn no_command_exits_125() {
 }
 
 #[test]
+fn env_set_dynamic_linker_var_does_not_reach_child() {
+    let config = write_config(
+        r#"
+        [env]
+        inherit = true
+        set = { LD_PRELOAD = "/tmp/lockin-test-evil.so", DYLD_INSERT_LIBRARIES = "/tmp/lockin-test-evil.dylib" }
+        "#,
+    );
+    let probe = probe_binary();
+    for var in ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES"] {
+        let output = run_lockin(&[
+            "-c",
+            config.path().to_str().unwrap(),
+            "--",
+            probe.to_str().unwrap(),
+            "env-var-unset",
+            var,
+        ]);
+        assert!(
+            output.status.success(),
+            "{var} from [env].set must not reach child: stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn proxy_mode_injects_http_proxy_env_into_child() {
     let config = write_config(
         r#"

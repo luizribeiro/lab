@@ -162,6 +162,12 @@ fn main() {
             };
             print_env(&name)
         }
+        "env-var-unset" => {
+            let Some(name) = args.next() else {
+                usage_and_exit();
+            };
+            env_var_unset(&name)
+        }
         "can-proxy-connect" => {
             let Some(target) = args.next() else {
                 usage_and_exit();
@@ -423,6 +429,13 @@ fn print_env(name: &str) -> Result<(), String> {
     let value = std::env::var(name).map_err(|e| format!("env var `{name}`: {e}"))?;
     println!("{value}");
     Ok(())
+}
+
+fn env_var_unset(name: &str) -> Result<(), String> {
+    match std::env::var_os(name) {
+        Some(value) => Err(format!("env var `{name}` is set (len={})", value.len())),
+        None => Ok(()),
+    }
 }
 
 /// Reads `HTTP_PROXY` from env, opens a TCP connection to that
@@ -694,6 +707,7 @@ actions:\n\
   can-unix-stream-connect <path>\n\
   can-unix-dgram-connect <path>\n\
   print-env <var-name>\n\
+  env-var-unset <var-name>\n\
   can-proxy-connect <host:port>  (reads HTTP_PROXY from env)\n\
   can-write-temp\n\
   fd-read-byte <fd> <expected-byte> [<fd> <expected-byte>...]\n\

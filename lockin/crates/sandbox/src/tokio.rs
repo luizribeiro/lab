@@ -12,7 +12,7 @@ use std::process::{ExitStatus, Output, Stdio};
 
 use anyhow::Result;
 
-use crate::{Sandbox, SandboxBuilder};
+use crate::{is_dynamic_linker_blocked, Sandbox, SandboxBuilder, DYNAMIC_LINKER_ENV_BLOCKLIST};
 
 impl SandboxBuilder {
     /// Tokio equivalent of [`SandboxBuilder::command`](crate::SandboxBuilder::command).
@@ -41,18 +41,28 @@ impl SandboxCommand {
         self
     }
 
+    /// Sets a child env var. Keys in the dynamic-linker blocklist
+    /// (e.g. `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`) are silently
+    /// dropped — the sandbox guarantees they do not reach the child.
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
-        self.command.env(key, val);
+        let key = key.as_ref();
+        if !is_dynamic_linker_blocked(key) {
+            self.command.env(key, val);
+        }
         self
     }
 
+    /// Sets a batch of child env vars. Entries whose key is in the
+    /// dynamic-linker blocklist are silently dropped.
     pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.command.envs(vars);
+        for (k, v) in vars {
+            self.env(k, v);
+        }
         self
     }
 
@@ -92,16 +102,25 @@ impl SandboxCommand {
     }
 
     pub async fn status(&mut self) -> std::io::Result<ExitStatus> {
+        self.strip_dynamic_linker_env();
         self.command.status().await
     }
 
     pub async fn output(&mut self) -> std::io::Result<Output> {
+        self.strip_dynamic_linker_env();
         self.command.output().await
+    }
+
+    fn strip_dynamic_linker_env(&mut self) {
+        for key in DYNAMIC_LINKER_ENV_BLOCKLIST {
+            self.command.env_remove(key);
+        }
     }
 
     /// Spawns the sandboxed child, transferring sandbox ownership to
     /// the returned [`SandboxChild`].
     pub fn spawn(mut self) -> std::io::Result<SandboxChild> {
+        self.strip_dynamic_linker_env();
         let child = self.command.spawn()?;
         Ok(SandboxChild {
             child,

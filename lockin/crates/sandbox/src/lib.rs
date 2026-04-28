@@ -17,6 +17,29 @@ mod darwin;
 #[cfg(target_os = "linux")]
 mod linux;
 
+/// Environment variables that can alter the dynamic linker's behavior
+/// in a sandboxed child (preload arbitrary `.so`/`.dylib`s, redirect
+/// library lookup, etc.). The library strips these from every
+/// [`SandboxCommand`] regardless of how the caller tried to set
+/// them — explicit `env()`/`envs()` calls, inherited parent
+/// environment, or post-construction mutation via
+/// [`SandboxCommand::as_command_mut`].
+pub(crate) const DYNAMIC_LINKER_ENV_BLOCKLIST: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+];
+
+pub(crate) fn is_dynamic_linker_blocked(key: &OsStr) -> bool {
+    let bytes = key.as_encoded_bytes();
+    DYNAMIC_LINKER_ENV_BLOCKLIST
+        .iter()
+        .any(|blocked| bytes == blocked.as_bytes())
+}
+
 /// Network enforcement strategy for the sandboxed child.
 ///
 /// `Deny` is the default. It denies IP networking (TCP/UDP, v4 and
@@ -550,6 +573,10 @@ impl SandboxBuilder {
         #[cfg(not(target_os = "linux"))]
         configure_rlimits(&mut command, rlimits)?;
 
+        for key in DYNAMIC_LINKER_ENV_BLOCKLIST {
+            command.env_remove(key);
+        }
+
         Ok((command, sandbox))
     }
 }
@@ -597,18 +624,28 @@ impl SandboxCommand {
         self
     }
 
+    /// Sets a child env var. Keys in the dynamic-linker blocklist
+    /// (e.g. `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`) are silently
+    /// dropped — the sandbox guarantees they do not reach the child.
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
-        self.command.env(key, val);
+        let key = key.as_ref();
+        if !is_dynamic_linker_blocked(key) {
+            self.command.env(key, val);
+        }
         self
     }
 
+    /// Sets a batch of child env vars. Entries whose key is in the
+    /// dynamic-linker blocklist are silently dropped.
     pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.command.envs(vars);
+        for (k, v) in vars {
+            self.env(k, v);
+        }
         self
     }
 
@@ -617,6 +654,11 @@ impl SandboxCommand {
         self
     }
 
+    /// Clears the inherited parent environment. The dynamic-linker
+    /// blocklist is re-applied right before spawn, so callers cannot
+    /// reintroduce a blocked key after `env_clear` via the raw
+    /// [`std::process::Command`] handle from
+    /// [`as_command_mut`](Self::as_command_mut).
     pub fn env_clear(&mut self) -> &mut Self {
         self.command.env_clear();
         self
@@ -643,16 +685,25 @@ impl SandboxCommand {
     }
 
     pub fn status(&mut self) -> std::io::Result<ExitStatus> {
+        self.strip_dynamic_linker_env();
         self.command.status()
     }
 
     pub fn output(&mut self) -> std::io::Result<Output> {
+        self.strip_dynamic_linker_env();
         self.command.output()
+    }
+
+    fn strip_dynamic_linker_env(&mut self) {
+        for key in DYNAMIC_LINKER_ENV_BLOCKLIST {
+            self.command.env_remove(key);
+        }
     }
 
     /// Spawns the sandboxed child, transferring sandbox ownership to
     /// the returned [`SandboxChild`].
     pub fn spawn(mut self) -> std::io::Result<SandboxChild> {
+        self.strip_dynamic_linker_env();
         let child = self.command.spawn()?;
         Ok(SandboxChild {
             child,
