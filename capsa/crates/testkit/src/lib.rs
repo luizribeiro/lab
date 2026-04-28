@@ -3,7 +3,7 @@ pub use lockin_testkit::{spawn_drain, ChildGuard};
 /// Returns a [`lockin::SandboxBuilder`] with both `LOCKIN_*` and
 /// `CAPSA_*` environment variables applied.
 ///
-/// `LOCKIN_*` vars provide base library paths for any sandboxed
+/// `LOCKIN_*` vars provide base exec dirs for any sandboxed
 /// binary; `CAPSA_*` vars add capsa-specific paths (e.g. libkrun).
 pub fn sandbox_builder() -> lockin::SandboxBuilder {
     let mut builder = lockin_testkit::sandbox_builder();
@@ -13,7 +13,7 @@ pub fn sandbox_builder() -> lockin::SandboxBuilder {
     if let Some(val) = std::env::var_os("CAPSA_LIBRARY_DIRS") {
         for dir in std::env::split_paths(&val) {
             if !dir.as_os_str().is_empty() {
-                builder = builder.library_path(dir);
+                builder = builder.exec_dir(dir);
             }
         }
     }
