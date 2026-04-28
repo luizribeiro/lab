@@ -80,7 +80,12 @@ pub struct LimitsConfig {
     pub disable_core_dumps: bool,
 }
 
-pub fn load_config(path: &Path) -> Result<Config> {
+/// Loads the TOML config and returns it together with the absolute
+/// path of the directory containing the config file. Pass that
+/// directory to [`apply_config`] and [`resolve_command`] so relative
+/// paths in the TOML resolve against the config file's location
+/// rather than the caller's CWD.
+pub fn load_config(path: &Path) -> Result<(Config, PathBuf)> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read config file: {}", path.display()))?;
     let config: Config = toml::from_str(&contents)
@@ -88,7 +93,12 @@ pub fn load_config(path: &Path) -> Result<Config> {
     if matches!(&config.command, Some(v) if v.is_empty()) {
         anyhow::bail!("'command' must not be empty (omit it to use CLI args)");
     }
-    Ok(config)
+    let config_dir = std::path::absolute(path)
+        .with_context(|| format!("failed to resolve config path: {}", path.display()))?
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    Ok((config, config_dir))
 }
 
 /// How the child's network should be enforced, resolved from the TOML
@@ -135,29 +145,29 @@ fn ensure_no_allow_hosts(allow_hosts: &[String], mode: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
+pub fn apply_config(config: &Config, config_dir: Option<&Path>) -> Result<lockin::SandboxBuilder> {
     let mut builder = lockin::Sandbox::builder()
         .allow_kvm(config.sandbox.allow_kvm)
         .allow_interactive_tty(config.sandbox.allow_interactive_tty)
         .allow_non_pie_exec(config.sandbox.allow_non_pie_exec);
 
     for p in &config.filesystem.read_paths {
-        builder = builder.read_path(resolve_path(p)?);
+        builder = builder.read_path(resolve_path(p, config_dir)?);
     }
     for p in &config.filesystem.read_dirs {
-        builder = builder.read_dir(resolve_path(p)?);
+        builder = builder.read_dir(resolve_path(p, config_dir)?);
     }
     for p in &config.filesystem.write_paths {
-        builder = builder.write_path(resolve_path(p)?);
+        builder = builder.write_path(resolve_path(p, config_dir)?);
     }
     for p in &config.filesystem.write_dirs {
-        builder = builder.write_dir(resolve_path(p)?);
+        builder = builder.write_dir(resolve_path(p, config_dir)?);
     }
     for p in &config.filesystem.exec_paths {
-        builder = builder.exec_path(resolve_path(p)?);
+        builder = builder.exec_path(resolve_path(p, config_dir)?);
     }
     for p in &config.filesystem.exec_dirs {
-        builder = builder.exec_dir(resolve_path(p)?);
+        builder = builder.exec_dir(resolve_path(p, config_dir)?);
     }
 
     if let Some(n) = config.limits.max_open_files {
@@ -186,7 +196,9 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
 pub fn resolve_command(
     config: &Config,
     cli_args: &[std::ffi::OsString],
+    config_dir: Option<&Path>,
 ) -> Result<(PathBuf, Vec<std::ffi::OsString>)> {
+    let program_from_config = config.command.is_some();
     let mut argv: Vec<std::ffi::OsString> = config
         .command
         .as_ref()
@@ -205,18 +217,28 @@ pub fn resolve_command(
             name = program_path.display()
         );
     }
-    let program = resolve_path(program_path)?;
+    // CLI-supplied program paths stay CWD-relative — they're typed at
+    // a shell prompt, not loaded from the config file.
+    let program_base = if program_from_config {
+        config_dir
+    } else {
+        None
+    };
+    let program = resolve_path(program_path, program_base)?;
     let args = argv[1..].to_vec();
     Ok((program, args))
 }
 
-pub fn resolve_path(path: &Path) -> Result<PathBuf> {
+pub fn resolve_path(path: &Path, base: Option<&Path>) -> Result<PathBuf> {
     if path.is_absolute() {
-        Ok(path.to_path_buf())
-    } else {
-        std::path::absolute(path)
-            .with_context(|| format!("failed to resolve path: {}", path.display()))
+        return Ok(path.to_path_buf());
     }
+    let joined = match base {
+        Some(base) => base.join(path),
+        None => path.to_path_buf(),
+    };
+    std::path::absolute(&joined)
+        .with_context(|| format!("failed to resolve path: {}", joined.display()))
 }
 
 #[cfg(test)]
@@ -430,6 +452,15 @@ mod tests {
         assert!(err.to_string().contains("must not be empty"));
     }
 
+    #[test]
+    fn load_config_returns_parent_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lockin.toml");
+        std::fs::write(&path, "").unwrap();
+        let (_, dir) = load_config(&path).unwrap();
+        assert_eq!(dir, tmp.path());
+    }
+
     fn os(s: &str) -> std::ffi::OsString {
         s.into()
     }
@@ -440,7 +471,8 @@ mod tests {
             command: Some(vec!["/usr/bin/python3".into()]),
             ..Default::default()
         };
-        let (prog, args) = resolve_command(&config, &[os("script.py"), os("--flag")]).unwrap();
+        let (prog, args) =
+            resolve_command(&config, &[os("script.py"), os("--flag")], None).unwrap();
         assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
         assert_eq!(args, vec![os("script.py"), os("--flag")]);
     }
@@ -451,7 +483,7 @@ mod tests {
             command: Some(vec!["/usr/bin/python3".into(), "-u".into()]),
             ..Default::default()
         };
-        let (prog, args) = resolve_command(&config, &[os("script.py")]).unwrap();
+        let (prog, args) = resolve_command(&config, &[os("script.py")], None).unwrap();
         assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
         assert_eq!(args, vec![os("-u"), os("script.py")]);
     }
@@ -462,7 +494,7 @@ mod tests {
             command: Some(vec!["/usr/bin/python3".into(), "main.py".into()]),
             ..Default::default()
         };
-        let (prog, args) = resolve_command(&config, &[]).unwrap();
+        let (prog, args) = resolve_command(&config, &[], None).unwrap();
         assert_eq!(prog, PathBuf::from("/usr/bin/python3"));
         assert_eq!(args, vec![os("main.py")]);
     }
@@ -470,7 +502,8 @@ mod tests {
     #[test]
     fn resolve_cli_args_only() {
         let config = Config::default();
-        let (prog, args) = resolve_command(&config, &[os("/usr/bin/myapp"), os("--flag")]).unwrap();
+        let (prog, args) =
+            resolve_command(&config, &[os("/usr/bin/myapp"), os("--flag")], None).unwrap();
         assert_eq!(prog, PathBuf::from("/usr/bin/myapp"));
         assert_eq!(args, vec![os("--flag")]);
     }
@@ -478,7 +511,7 @@ mod tests {
     #[test]
     fn resolve_no_command_errors() {
         let config = Config::default();
-        let err = resolve_command(&config, &[]).unwrap_err();
+        let err = resolve_command(&config, &[], None).unwrap_err();
         assert!(err.to_string().contains("no command specified"));
     }
 
@@ -488,7 +521,7 @@ mod tests {
             command: Some(vec!["python3".into()]),
             ..Default::default()
         };
-        let err = resolve_command(&config, &[os("script.py")]).unwrap_err();
+        let err = resolve_command(&config, &[os("script.py")], None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("explicit executable path") && msg.contains("Bare PATH"),
@@ -499,21 +532,41 @@ mod tests {
     #[test]
     fn resolve_bare_command_from_cli_rejected() {
         let config = Config::default();
-        let err = resolve_command(&config, &[os("python3"), os("--help")]).unwrap_err();
+        let err = resolve_command(&config, &[os("python3"), os("--help")], None).unwrap_err();
         assert!(err.to_string().contains("explicit executable path"));
     }
 
     #[test]
     fn resolve_relative_path() {
         let config = Config::default();
-        let (prog, _) = resolve_command(&config, &[os("./myapp")]).unwrap();
+        let (prog, _) = resolve_command(&config, &[os("./myapp")], None).unwrap();
         assert!(prog.is_absolute());
+    }
+
+    #[test]
+    fn cli_program_path_resolves_against_cwd_not_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = Config::default();
+        let (prog, _) = resolve_command(&config, &[os("./myapp")], Some(tmp.path())).unwrap();
+        let expected = std::path::absolute("./myapp").unwrap();
+        assert_eq!(prog, expected);
+    }
+
+    #[test]
+    fn config_program_path_resolves_against_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = Config {
+            command: Some(vec!["./bin/tool".into()]),
+            ..Default::default()
+        };
+        let (prog, _) = resolve_command(&config, &[], Some(tmp.path())).unwrap();
+        assert_eq!(prog, tmp.path().join("bin/tool"));
     }
 
     #[test]
     fn apply_default_config_builds_sandbox() {
         let config = Config::default();
-        let builder = apply_config(&config).unwrap();
+        let builder = apply_config(&config, None).unwrap();
         let cmd = builder.command(Path::new("/bin/echo")).unwrap();
         let program = cmd.as_command().get_program().to_string_lossy().to_string();
         let expected = if cfg!(target_os = "macos") {
@@ -536,7 +589,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let builder = apply_config(&config).unwrap();
+        let builder = apply_config(&config, None).unwrap();
         let cmd = builder.command(Path::new("/bin/echo")).unwrap();
         if cfg!(target_os = "macos") {
             let args: Vec<String> = cmd
@@ -562,7 +615,85 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(apply_config(&config).is_ok());
+        assert!(apply_config(&config, None).is_ok());
+    }
+
+    #[test]
+    fn resolve_path_joins_relative_against_base() {
+        let base = Path::new("/etc/lockin");
+        let resolved = resolve_path(Path::new("./data"), Some(base)).unwrap();
+        assert_eq!(resolved, PathBuf::from("/etc/lockin/data"));
+    }
+
+    #[test]
+    fn resolve_path_absolute_passes_through_with_base() {
+        let base = Path::new("/etc/lockin");
+        let resolved = resolve_path(Path::new("/var/log/app.log"), Some(base)).unwrap();
+        assert_eq!(resolved, PathBuf::from("/var/log/app.log"));
+    }
+
+    #[test]
+    fn resolve_path_no_base_falls_back_to_cwd() {
+        let resolved = resolve_path(Path::new("./data"), None).unwrap();
+        assert_eq!(resolved, std::path::absolute("./data").unwrap());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn apply_config_threads_config_dir_through_every_filesystem_category() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = Config {
+            filesystem: FilesystemConfig {
+                read_paths: vec![PathBuf::from("./r-path")],
+                read_dirs: vec![PathBuf::from("./r-dir")],
+                write_paths: vec![PathBuf::from("./w-path")],
+                write_dirs: vec![PathBuf::from("./w-dir")],
+                exec_paths: vec![PathBuf::from("./e-path")],
+                exec_dirs: vec![PathBuf::from("./e-dir")],
+            },
+            ..Default::default()
+        };
+        let builder = apply_config(&config, Some(tmp.path())).unwrap();
+        let cmd = builder.command(Path::new("/bin/echo")).unwrap();
+        let joined: String = cmd
+            .as_command()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for leaf in ["r-path", "r-dir", "w-path", "w-dir", "e-path", "e-dir"] {
+            let expected = tmp.path().join(leaf);
+            assert!(
+                joined.contains(expected.to_str().unwrap()),
+                "{leaf} not resolved against config dir in: {joined}",
+            );
+        }
+    }
+
+    #[test]
+    fn load_config_relative_paths_resolve_against_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("lockin.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+            [filesystem]
+            read_dirs = ["./data"]
+            write_paths = ["/var/log/app.log"]
+            "#,
+        )
+        .unwrap();
+
+        let (config, dir) = load_config(&config_path).unwrap();
+        let resolved_read = resolve_path(&config.filesystem.read_dirs[0], Some(&dir)).unwrap();
+        let resolved_write = resolve_path(&config.filesystem.write_paths[0], Some(&dir)).unwrap();
+
+        assert_eq!(resolved_read, tmp.path().join("data"));
+        assert_eq!(resolved_write, PathBuf::from("/var/log/app.log"));
+        assert!(
+            !resolved_read.starts_with(std::env::current_dir().unwrap()),
+            "config-dir-relative path leaked CWD: {resolved_read:?}",
+        );
     }
 
     #[test]

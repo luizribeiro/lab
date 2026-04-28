@@ -109,6 +109,18 @@ platform. Process-level exec (`execve` / `posix_spawn`) remains gated
 separately — only `exec_paths` / `exec_dirs` grant it. Both grant
 recursive exec on Linux and macOS.
 
+## Path resolution
+
+Relative paths inside the TOML — every `filesystem.*` entry and a
+relative `command[0]` — resolve against the directory containing the
+config file, not the caller's CWD. So `read_dirs = ["./data"]` in
+`/etc/lockin/foo.toml` always means `/etc/lockin/data`, regardless of
+where `lockin` was invoked from. Absolute paths pass through unchanged.
+
+Relative program paths typed on the command line (the argument after
+`--`) keep their normal shell semantics and resolve against the
+caller's CWD.
+
 ## Config reference
 
 All fields are optional. Everything defaults to deny/false/empty.

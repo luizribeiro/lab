@@ -53,8 +53,8 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
-    let config = resolve_config(&cli.config)?;
-    let (program, args) = resolve_command(&config, &cli.command)?;
+    let (config, config_dir) = resolve_config(&cli.config)?;
+    let (program, args) = resolve_command(&config, &cli.command, config_dir.as_deref())?;
 
     // One runtime drives both outpost-proxy (when configured) and the
     // signal-forwarding supervisor (always).
@@ -67,7 +67,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(&config)?)?;
     let network_mode = proxy.sandbox_mode();
 
-    let mut cmd = apply_config(&config)?
+    let mut cmd = apply_config(&config, config_dir.as_deref())?
         .network(network_mode)
         .command(&program)?;
     cmd.args(&args);
@@ -231,17 +231,19 @@ fn child_exit_code(status: ExitStatus) -> u8 {
     EXIT_LOCKIN_ERROR
 }
 
-fn resolve_config(explicit: &Option<PathBuf>) -> anyhow::Result<config::Config> {
+fn resolve_config(explicit: &Option<PathBuf>) -> anyhow::Result<(config::Config, Option<PathBuf>)> {
     if let Some(path) = explicit {
-        return load_config(path);
+        let (config, dir) = load_config(path)?;
+        return Ok((config, Some(dir)));
     }
 
     let default_path = Path::new("lockin.toml");
     if default_path.exists() {
-        return load_config(default_path);
+        let (config, dir) = load_config(default_path)?;
+        return Ok((config, Some(dir)));
     }
 
-    Ok(config::Config::default())
+    Ok((config::Config::default(), None))
 }
 
 #[cfg(test)]
