@@ -681,10 +681,6 @@ impl SandboxCommand {
     pub fn as_command_mut(&mut self) -> &mut Command {
         &mut self.command
     }
-
-    pub fn into_parts(self) -> (Command, Sandbox) {
-        (self.command, self.sandbox)
-    }
 }
 
 /// A running sandboxed child process.

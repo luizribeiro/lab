@@ -135,10 +135,6 @@ impl SandboxCommand {
     pub fn as_command_mut(&mut self) -> &mut tokio::process::Command {
         &mut self.command
     }
-
-    pub fn into_parts(self) -> (tokio::process::Command, Sandbox) {
-        (self.command, self.sandbox)
-    }
 }
 
 pub struct SandboxChild {

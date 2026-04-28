@@ -15,10 +15,14 @@ fn command_accepts_network_allow_all() {
 
 #[test]
 fn private_tmp_lives_until_drop() {
-    let (_, sandbox) = common::sandbox_builder()
-        .command(Path::new("/usr/bin/env"))
+    let mut child = common::sandbox_builder()
+        .command(Path::new("/usr/bin/true"))
         .expect("build sandbox")
-        .into_parts();
+        .spawn()
+        .expect("spawn /usr/bin/true");
+    child.wait().expect("wait for child");
+    let (_child, sandbox) = child.into_parts();
+
     let tmp = sandbox.private_tmp().to_path_buf();
     assert!(tmp.is_dir(), "private tmp should exist while sandbox held");
 
