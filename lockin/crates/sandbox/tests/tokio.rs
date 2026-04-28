@@ -22,14 +22,14 @@ async fn read_allowlist_enforced() {
 
     assert!(
         run_probe(
-            common::sandbox_builder().read_only_path(allowed.clone()),
+            common::sandbox_builder().read_path(allowed.clone()),
             &["can-read", &allowed.display().to_string()]
         )
         .await
     );
     assert!(
         !run_probe(
-            common::sandbox_builder().read_only_path(allowed.clone()),
+            common::sandbox_builder().read_path(allowed.clone()),
             &["can-read", &sibling.display().to_string()]
         )
         .await

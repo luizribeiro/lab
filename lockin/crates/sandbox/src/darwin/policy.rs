@@ -41,11 +41,11 @@ pub(super) fn build_policy(
         policy.allow_literal(&["process-exec"], path);
     }
 
-    for path in &paths.read_only_paths {
+    for path in &paths.read_paths {
         policy.allow_literal(&["file-read*"], path);
         policy.allow_literal(&["file-map-executable"], path);
     }
-    for dir in &paths.read_only_dirs {
+    for dir in &paths.read_dirs {
         policy.allow_subpath(&["file-read*"], dir);
         policy.allow_subpath(&["file-map-executable"], dir);
     }

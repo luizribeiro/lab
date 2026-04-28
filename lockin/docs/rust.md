@@ -76,9 +76,9 @@ use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .library_paths_from_env()
-    .read_only_dir("/usr")
-    .read_only_dir("/etc")
-    .read_only_path("/dev/null")
+    .read_dir("/usr")
+    .read_dir("/etc")
+    .read_path("/dev/null")
     .command(Path::new("/usr/bin/env"))?
     .status()?;
 assert!(status.success());

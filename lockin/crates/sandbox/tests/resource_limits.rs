@@ -16,7 +16,7 @@ fn max_open_files_prevents_child_from_opening_beyond_limit() {
     // /dev/null is the target of open-many-fds; the sandbox must allow it.
     let mut cmd = common::sandbox_builder()
         .max_open_files(16)
-        .read_only_path("/dev/null")
+        .read_path("/dev/null")
         .command(&probe)
         .expect("build sandbox");
 
@@ -44,7 +44,7 @@ fn max_open_files_allows_child_within_limit() {
 
     let mut cmd = common::sandbox_builder()
         .max_open_files(64)
-        .read_only_path("/dev/null")
+        .read_path("/dev/null")
         .command(&probe)
         .expect("build sandbox");
 

@@ -29,7 +29,7 @@ mode = "proxy"
 allow_hosts = ["api.example.com", "*.cdn.example.com"]
 
 [filesystem]
-read_only_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
+read_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]
 read_write_dirs = ["./output"]
 
 [env]

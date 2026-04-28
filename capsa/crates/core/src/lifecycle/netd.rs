@@ -20,11 +20,11 @@ const READY_SIGNAL: u8 = b'R';
 pub(super) fn netd_sandbox_builder(binary_path: &Path) -> SandboxBuilder {
     let mut builder = lockin::Sandbox::builder()
         .network_allow_all()
-        .read_only_path(plan::canonical_or_unchanged(binary_path));
+        .read_path(plan::canonical_or_unchanged(binary_path));
     builder = child::apply_syd_path(builder);
     builder = child::apply_library_dirs(builder);
     for runtime_read_path in capsa_net::runtime_read_paths() {
-        builder = builder.read_only_path(PathBuf::from(*runtime_read_path));
+        builder = builder.read_path(PathBuf::from(*runtime_read_path));
     }
     builder
 }

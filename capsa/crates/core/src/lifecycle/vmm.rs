@@ -76,16 +76,16 @@ fn vmm_sandbox_builder(paths: &VmmPaths, vmm_exe: &Path) -> SandboxBuilder {
         .network_deny()
         .allow_kvm(true)
         .allow_interactive_tty(true)
-        .read_only_path(plan::canonical_or_unchanged(vmm_exe))
+        .read_path(plan::canonical_or_unchanged(vmm_exe))
         // libkrun reads this to enumerate capabilities before dropping
         // privileges for the guest.
-        .read_only_path(PathBuf::from("/proc/sys/kernel/cap_last_cap"))
-        .read_only_path(paths.kernel.clone());
+        .read_path(PathBuf::from("/proc/sys/kernel/cap_last_cap"))
+        .read_path(paths.kernel.clone());
     builder = child::apply_syd_path(builder);
     builder = child::apply_library_dirs(builder);
 
     if let Some(initramfs) = &paths.initramfs {
-        builder = builder.read_only_path(initramfs.clone());
+        builder = builder.read_path(initramfs.clone());
     }
 
     builder

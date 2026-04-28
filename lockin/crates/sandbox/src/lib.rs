@@ -76,8 +76,8 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_non_pie_exec: bool,
     pub(crate) syd_path: Option<PathBuf>,
     pub(crate) library_paths: Vec<PathBuf>,
-    pub(crate) read_only_paths: Vec<PathBuf>,
-    pub(crate) read_only_dirs: Vec<PathBuf>,
+    pub(crate) read_paths: Vec<PathBuf>,
+    pub(crate) read_dirs: Vec<PathBuf>,
     pub(crate) read_write_paths: Vec<PathBuf>,
     pub(crate) read_write_dirs: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
@@ -378,18 +378,18 @@ impl SandboxBuilder {
     }
 
     /// Adds a single file path that the child should be allowed to
-    /// read. Use [`read_only_dir`](Self::read_only_dir) for
+    /// read. Use [`read_dir`](Self::read_dir) for
     /// directories that need recursive access.
     ///
     /// Panics if `path` is not absolute.
-    pub fn read_only_path(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn read_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
             path.is_absolute(),
-            "read_only_path must be absolute, got: {}",
+            "read_path must be absolute, got: {}",
             path.display()
         );
-        self.spec.read_only_paths.push(path);
+        self.spec.read_paths.push(path);
         self
     }
 
@@ -397,14 +397,14 @@ impl SandboxBuilder {
     /// read recursively.
     ///
     /// Panics if `path` is not absolute.
-    pub fn read_only_dir(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn read_dir(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
             path.is_absolute(),
-            "read_only_dir must be absolute, got: {}",
+            "read_dir must be absolute, got: {}",
             path.display()
         );
-        self.spec.read_only_dirs.push(path);
+        self.spec.read_dirs.push(path);
         self
     }
 
@@ -893,15 +893,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "read_only_path must be absolute")]
-    fn read_only_path_builder_rejects_relative() {
-        super::SandboxBuilder::new().read_only_path("etc/passwd");
+    #[should_panic(expected = "read_path must be absolute")]
+    fn read_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_path("etc/passwd");
     }
 
     #[test]
-    #[should_panic(expected = "read_only_dir must be absolute")]
-    fn read_only_dir_builder_rejects_relative() {
-        super::SandboxBuilder::new().read_only_dir("etc");
+    #[should_panic(expected = "read_dir must be absolute")]
+    fn read_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_dir("etc");
     }
 
     #[test]

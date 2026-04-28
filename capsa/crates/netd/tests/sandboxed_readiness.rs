@@ -46,9 +46,9 @@ fn netd_signals_readiness_under_real_sandbox() {
     // test will fail before production silently falls back.
     let mut builder = sandbox_builder()
         .network_allow_all()
-        .read_only_path(netd_bin.clone());
+        .read_path(netd_bin.clone());
     for runtime_path in capsa_net::runtime_read_paths() {
-        builder = builder.read_only_path(PathBuf::from(*runtime_path));
+        builder = builder.read_path(PathBuf::from(*runtime_path));
     }
     let host_fd = builder.inherit_fd(host_owned);
     let ready_fd = builder.inherit_fd(ready_writer_owned);

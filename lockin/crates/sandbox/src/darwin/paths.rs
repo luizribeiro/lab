@@ -6,8 +6,8 @@ use crate::SandboxSpec;
 #[derive(Debug, Default)]
 pub(super) struct PathSets {
     pub(super) executable_paths: Vec<PathBuf>,
-    pub(super) read_only_paths: Vec<PathBuf>,
-    pub(super) read_only_dirs: Vec<PathBuf>,
+    pub(super) read_paths: Vec<PathBuf>,
+    pub(super) read_dirs: Vec<PathBuf>,
     pub(super) read_write_paths: Vec<PathBuf>,
     pub(super) read_write_dirs: Vec<PathBuf>,
     pub(super) ioctl_paths: Vec<PathBuf>,
@@ -22,13 +22,13 @@ impl PathSets {
         for candidate in path_candidates(program) {
             push_unique(&mut paths.executable_paths, candidate);
         }
-        paths.add_read_only(program);
+        paths.add_read(program);
 
-        for path in &spec.read_only_paths {
-            paths.add_read_only(path);
+        for path in &spec.read_paths {
+            paths.add_read(path);
         }
-        for dir in &spec.read_only_dirs {
-            paths.add_read_only_dir(dir);
+        for dir in &spec.read_dirs {
+            paths.add_read_dir(dir);
         }
 
         for path in &spec.read_write_paths {
@@ -46,7 +46,7 @@ impl PathSets {
         }
 
         for dir in &spec.library_paths {
-            paths.add_read_only_dir(dir);
+            paths.add_read_dir(dir);
         }
 
         if spec.allow_interactive_tty {
@@ -61,11 +61,11 @@ impl PathSets {
         paths
     }
 
-    fn add_read_only(&mut self, path: &Path) {
-        self.collect_into(path, |s| &mut s.read_only_paths);
+    fn add_read(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.read_paths);
     }
-    fn add_read_only_dir(&mut self, path: &Path) {
-        self.collect_into(path, |s| &mut s.read_only_dirs);
+    fn add_read_dir(&mut self, path: &Path) {
+        self.collect_into(path, |s| &mut s.read_dirs);
     }
     fn add_read_write(&mut self, path: &Path) {
         self.collect_into(path, |s| &mut s.read_write_paths);

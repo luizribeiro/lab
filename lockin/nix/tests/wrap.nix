@@ -14,7 +14,7 @@ let
   closureMode = readConfig (wrapWithLockin {
     package = pkgs.hello;
     policy = {
-      filesystem.read_only_dirs = [ "/etc" ];
+      filesystem.read_dirs = [ "/etc" ];
       darwin.raw_seatbelt_rules = [ ''(allow sysctl-read)'' ];
     };
   });
@@ -27,19 +27,19 @@ let
   noneMode = readConfig (wrapWithLockin {
     package = pkgs.hello;
     nixStoreAccess = "none";
-    policy.filesystem.read_only_dirs = [ "/etc" ];
+    policy.filesystem.read_dirs = [ "/etc" ];
   });
 
   helloClosurePath = builtins.unsafeDiscardStringContext "${pkgs.hello}";
 
   assertions = [
     {
-      name = "closure: read_only_dirs contains hello store path";
-      ok = lib.elem helloClosurePath closureMode.filesystem.read_only_dirs;
+      name = "closure: read_dirs contains hello store path";
+      ok = lib.elem helloClosurePath closureMode.filesystem.read_dirs;
     }
     {
-      name = "closure: read_only_dirs preserves user /etc entry";
-      ok = lib.elem "/etc" closureMode.filesystem.read_only_dirs;
+      name = "closure: read_dirs preserves user /etc entry";
+      ok = lib.elem "/etc" closureMode.filesystem.read_dirs;
     }
     {
       name = "closure: user darwin rule preserved (darwin only)";
@@ -56,8 +56,8 @@ let
       ok = pkgs.stdenv.isDarwin || !(closureMode ? darwin);
     }
     {
-      name = "full: read_only_dirs is exactly /nix/store";
-      ok = fullMode.filesystem.read_only_dirs == [ "/nix/store" ];
+      name = "full: read_dirs is exactly /nix/store";
+      ok = fullMode.filesystem.read_dirs == [ "/nix/store" ];
     }
     {
       name = "full: single seatbelt rule granting /nix/store (darwin only)";
@@ -65,8 +65,8 @@ let
         || fullMode.darwin.raw_seatbelt_rules == [ ''(allow process-exec (subpath "/nix/store"))'' ];
     }
     {
-      name = "none: read_only_dirs is exactly user entries";
-      ok = noneMode.filesystem.read_only_dirs == [ "/etc" ];
+      name = "none: read_dirs is exactly user entries";
+      ok = noneMode.filesystem.read_dirs == [ "/etc" ];
     }
     {
       name = "none: no darwin key emitted";

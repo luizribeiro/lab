@@ -28,13 +28,13 @@ let
     in
     lib.filter (s: s != "") (lib.splitString "\n" raw);
 
-  storeReadOnlyDirs =
+  storeReadDirs =
     if nixStoreAccess == "closure" then closurePaths
     else if nixStoreAccess == "full" then [ "/nix/store" ]
     else [ ];
 
-  userReadOnlyDirs = policy.filesystem.read_only_dirs or [ ];
-  mergedReadOnlyDirs = lib.unique (userReadOnlyDirs ++ storeReadOnlyDirs);
+  userReadDirs = policy.filesystem.read_dirs or [ ];
+  mergedReadDirs = lib.unique (userReadDirs ++ storeReadDirs);
 
   userDarwin = policy.darwin or { };
   userDarwinRules = userDarwin.raw_seatbelt_rules or [ ];
@@ -52,8 +52,8 @@ let
 
   filesystemOut = userFilesystem // {
     library_paths = mergedLibDirs;
-  } // lib.optionalAttrs (mergedReadOnlyDirs != [ ]) {
-    read_only_dirs = mergedReadOnlyDirs;
+  } // lib.optionalAttrs (mergedReadDirs != [ ]) {
+    read_dirs = mergedReadDirs;
   };
 
   darwinOut =

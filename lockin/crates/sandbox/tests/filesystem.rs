@@ -15,7 +15,7 @@ fn read_allowlist_grants_named_file() {
     std::fs::write(&allowed, b"ok").expect("write fixture");
 
     assert!(run_probe(
-        common::sandbox_builder().read_only_path(allowed.clone()),
+        common::sandbox_builder().read_path(allowed.clone()),
         &["can-read", &allowed.display().to_string()]
     ));
 }
@@ -29,7 +29,7 @@ fn read_allowlist_does_not_grant_siblings() {
     std::fs::write(&sibling, b"sibling").expect("write sibling");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_path(allowed),
+        common::sandbox_builder().read_path(allowed),
         &["can-read", &sibling.display().to_string()]
     ));
 }
@@ -37,14 +37,14 @@ fn read_allowlist_does_not_grant_siblings() {
 // ── directory read scoping ────────────────────────────────────
 
 #[test]
-fn read_only_directory_grants_access_to_children() {
+fn read_directory_grants_access_to_children() {
     let temp = TestDir::new("read-dir");
     let child_file = temp.join("nested.txt");
     std::fs::write(&child_file, b"nested content").expect("write nested file");
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_only_dir(dir),
+        common::sandbox_builder().read_dir(dir),
         &["can-read", &child_file.display().to_string()]
     ));
 }
@@ -67,38 +67,38 @@ fn read_write_directory_grants_write_to_children() {
 // ── read-only enforcement ────────────────────────────────────
 
 #[test]
-fn read_only_path_blocks_writes() {
+fn read_path_blocks_writes() {
     let temp = TestDir::new("ro-enforce");
     let target = temp.join("readonly.txt");
     std::fs::write(&target, b"seed").expect("seed target");
 
     assert!(
         run_probe(
-            common::sandbox_builder().read_only_path(target.clone()),
+            common::sandbox_builder().read_path(target.clone()),
             &["can-read", &target.display().to_string()]
         ),
-        "read should succeed on read_only_path"
+        "read should succeed on read_path"
     );
     assert!(
         !run_probe(
-            common::sandbox_builder().read_only_path(target.clone()),
+            common::sandbox_builder().read_path(target.clone()),
             &["can-write", &target.display().to_string()]
         ),
-        "write should fail on read_only_path"
+        "write should fail on read_path"
     );
 }
 
 // ── readdir scoping ──────────────────────────────────────────
 
 #[test]
-fn read_only_directory_grants_readdir() {
+fn read_directory_grants_readdir() {
     let temp = TestDir::new("readdir-ro");
     std::fs::write(temp.join("a.txt"), b"a").expect("seed a");
     std::fs::write(temp.join("b.txt"), b"b").expect("seed b");
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_only_dir(dir.clone()),
+        common::sandbox_builder().read_dir(dir.clone()),
         &["can-readdir", &dir.display().to_string()]
     ));
 }
@@ -124,7 +124,7 @@ fn readdir_recurses_into_subdirectories() {
 
     let dir = temp.join("");
     assert!(run_probe(
-        common::sandbox_builder().read_only_dir(dir),
+        common::sandbox_builder().read_dir(dir),
         &["can-readdir", &subdir.display().to_string()]
     ));
 }
@@ -147,12 +147,12 @@ fn read_write_directory_grants_mkdir() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_mkdir() {
+fn read_directory_does_not_grant_mkdir() {
     let temp = TestDir::new("mkdir-ro");
     let new_dir = temp.join("blocked");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-mkdir", &new_dir.display().to_string()]
     ));
 }
@@ -172,13 +172,13 @@ fn read_write_directory_grants_truncate() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_truncate() {
+fn read_directory_does_not_grant_truncate() {
     let temp = TestDir::new("truncate-ro");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-truncate", &target.display().to_string()]
     ));
 }
@@ -210,13 +210,13 @@ fn read_write_directory_grants_utime() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_utime() {
+fn read_directory_does_not_grant_utime() {
     let temp = TestDir::new("utime-ro");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-utime", &target.display().to_string()]
     ));
 }
@@ -249,13 +249,13 @@ fn read_write_directory_grants_rmdir() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_rmdir() {
+fn read_directory_does_not_grant_rmdir() {
     let temp = TestDir::new("rmdir-ro");
     let victim = temp.join("victim");
     std::fs::create_dir(&victim).expect("seed dir");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-rmdir", &victim.display().to_string()]
     ));
     assert!(victim.exists(), "dir should NOT have been removed");
@@ -297,14 +297,14 @@ fn read_write_directory_grants_rename() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_rename() {
+fn read_directory_does_not_grant_rename() {
     let temp = TestDir::new("rename-ro");
     let from = temp.join("from.txt");
     let to = temp.join("to.txt");
     std::fs::write(&from, b"seed").expect("seed file");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &[
             "can-rename",
             &from.display().to_string(),
@@ -346,13 +346,13 @@ fn read_write_directory_grants_unlink() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_unlink() {
+fn read_directory_does_not_grant_unlink() {
     let temp = TestDir::new("unlink-ro");
     let target = temp.join("victim.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-unlink", &target.display().to_string()]
     ));
     assert!(target.exists(), "file should NOT have been removed");
@@ -385,13 +385,13 @@ fn read_write_directory_grants_chmod() {
 }
 
 #[test]
-fn read_only_directory_does_not_grant_chmod() {
+fn read_directory_does_not_grant_chmod() {
     let temp = TestDir::new("chmod-ro");
     let target = temp.join("file.txt");
     std::fs::write(&target, b"seed").expect("seed file");
 
     assert!(!run_probe(
-        common::sandbox_builder().read_only_dir(temp.join("")),
+        common::sandbox_builder().read_dir(temp.join("")),
         &["can-chmod", &target.display().to_string(), "0o644"]
     ));
 }
@@ -441,11 +441,11 @@ fn stat_allowlist_does_not_grant_siblings() {
     std::fs::write(&sibling, b"sibling").expect("write sibling");
 
     assert!(run_probe(
-        common::sandbox_builder().read_only_path(allowed.clone()),
+        common::sandbox_builder().read_path(allowed.clone()),
         &["can-stat", &allowed.display().to_string()]
     ));
     assert!(!run_probe(
-        common::sandbox_builder().read_only_path(allowed),
+        common::sandbox_builder().read_path(allowed),
         &["can-stat", &sibling.display().to_string()]
     ));
 }
@@ -497,7 +497,7 @@ fn private_tmpdir_is_writable() {
 // semantics worth pinning in a test.
 
 #[test]
-fn symlink_inside_read_only_dir_does_not_grant_outside_read() {
+fn symlink_inside_read_dir_does_not_grant_outside_read() {
     let temp = TestDir::new("symlink-ro-escape");
     let secret_dir = temp.join("secret_dir");
     let inside_dir = temp.join("inside_dir");
@@ -514,7 +514,7 @@ fn symlink_inside_read_only_dir_does_not_grant_outside_read() {
     // a symlink resolving into it must not bypass enforcement.
     assert!(
         !run_probe(
-            common::sandbox_builder().read_only_dir(inside_dir),
+            common::sandbox_builder().read_dir(inside_dir),
             &["can-read", &link.display().to_string()]
         ),
         "reading through a symlink that points outside the allowlist must be denied"
