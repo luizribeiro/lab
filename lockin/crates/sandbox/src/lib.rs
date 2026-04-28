@@ -19,11 +19,10 @@ mod linux;
 
 /// Environment variables that can alter the dynamic linker's behavior
 /// in a sandboxed child (preload arbitrary `.so`/`.dylib`s, redirect
-/// library lookup, etc.). The library strips these from every
-/// [`SandboxedCommand`] regardless of how the caller tried to set
-/// them — explicit `env()`/`envs()` calls, inherited parent
-/// environment, or post-construction mutation via
-/// [`SandboxedCommand::as_command_mut`].
+/// library lookup, etc.). Every spawn from a [`SandboxedCommand`]
+/// strips these vars — explicit `env()`/`envs()` calls drop them at
+/// set time, and any value inherited from the parent environment is
+/// removed at spawn.
 pub(crate) const DYNAMIC_LINKER_ENV_BLOCKLIST: &[&str] = &[
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
@@ -603,8 +602,9 @@ impl Sandbox {
 /// long as this value does, so callers don't need a separate
 /// `_sandbox` binding.
 ///
-/// Methods mirror [`std::process::Command`]'s API. For anything not
-/// forwarded, use [`as_command_mut`](SandboxedCommand::as_command_mut).
+/// Methods mirror [`std::process::Command`]'s API. Mutation is only
+/// possible through `SandboxedCommand`'s own methods, so the
+/// dynamic-linker env strip cannot be bypassed.
 pub struct SandboxedCommand {
     command: Command,
     sandbox: Sandbox,
@@ -652,10 +652,7 @@ impl SandboxedCommand {
     }
 
     /// Clears the inherited parent environment. The dynamic-linker
-    /// blocklist is re-applied right before spawn, so callers cannot
-    /// reintroduce a blocked key after `env_clear` via the raw
-    /// [`std::process::Command`] handle from
-    /// [`as_command_mut`](Self::as_command_mut).
+    /// blocklist is re-applied right before spawn as defense in depth.
     pub fn env_clear(&mut self) -> &mut Self {
         self.command.env_clear();
         self
@@ -708,12 +705,33 @@ impl SandboxedCommand {
         })
     }
 
+    /// Read-only access to the underlying [`std::process::Command`]
+    /// for inspection (e.g. `get_envs`, `get_args`). Mutation is only
+    /// possible through `SandboxedCommand`'s own methods, which is what
+    /// preserves the dynamic-linker env strip.
     pub fn as_command(&self) -> &Command {
         &self.command
     }
 
-    pub fn as_command_mut(&mut self) -> &mut Command {
-        &mut self.command
+    /// Registers a closure to be run in the child after `fork` and
+    /// before `exec`.
+    ///
+    /// # Safety
+    ///
+    /// Same safety contract as
+    /// [`std::os::unix::process::CommandExt::pre_exec`]: the closure
+    /// must only call async-signal-safe operations, must not allocate,
+    /// and must not touch shared mutable state.
+    #[cfg(unix)]
+    pub unsafe fn pre_exec<F>(&mut self, f: F) -> &mut Self
+    where
+        F: FnMut() -> std::io::Result<()> + Send + Sync + 'static,
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            self.command.pre_exec(f);
+        }
+        self
     }
 }
 

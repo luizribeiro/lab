@@ -128,12 +128,32 @@ impl SandboxedCommand {
         })
     }
 
+    /// Read-only access to the underlying [`tokio::process::Command`]
+    /// for inspection. Mutation is only possible through
+    /// `SandboxedCommand`'s own methods, which is what preserves the
+    /// dynamic-linker env strip.
     pub fn as_command(&self) -> &tokio::process::Command {
         &self.command
     }
 
-    pub fn as_command_mut(&mut self) -> &mut tokio::process::Command {
-        &mut self.command
+    /// Registers a closure to be run in the child after `fork` and
+    /// before `exec`.
+    ///
+    /// # Safety
+    ///
+    /// Same safety contract as
+    /// [`std::os::unix::process::CommandExt::pre_exec`]: the closure
+    /// must only call async-signal-safe operations, must not allocate,
+    /// and must not touch shared mutable state.
+    #[cfg(unix)]
+    pub unsafe fn pre_exec<F>(&mut self, f: F) -> &mut Self
+    where
+        F: FnMut() -> std::io::Result<()> + Send + Sync + 'static,
+    {
+        unsafe {
+            self.command.pre_exec(f);
+        }
+        self
     }
 }
 

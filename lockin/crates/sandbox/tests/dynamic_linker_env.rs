@@ -78,19 +78,18 @@ fn dyld_library_path_via_envs_batch_does_not_reach_child() {
 }
 
 #[test]
-fn raw_command_mutation_after_construction_is_re_stripped_at_spawn() {
+fn env_mutation_after_construction_is_stripped_at_spawn() {
     let probe = probe_binary();
     let mut cmd = sandbox_builder()
         .command(&probe)
         .expect("build sandbox command");
-    cmd.as_command_mut()
-        .env("LD_AUDIT", "/tmp/lockin-test-evil.so");
+    cmd.env("LD_AUDIT", "/tmp/lockin-test-evil.so");
     let status = cmd
         .args(["env-var-unset", "LD_AUDIT"])
         .status()
         .expect("run probe");
     assert!(
         status.success(),
-        "LD_AUDIT injected via as_command_mut() must be stripped at spawn"
+        "LD_AUDIT set via SandboxedCommand::env must not reach the child"
     );
 }

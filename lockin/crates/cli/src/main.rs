@@ -3,7 +3,7 @@ mod glob;
 mod supervise;
 
 use std::ffi::OsString;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
 
@@ -74,7 +74,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     apply_env(&config.env, &mut cmd, std::env::vars_os());
     proxy.inject_env(&mut cmd);
 
-    place_child_in_own_pgroup(cmd.as_command_mut());
+    place_child_in_own_pgroup(&mut cmd);
 
     // Install signal handlers BEFORE forking the child so a signal
     // arriving in the spawn->supervise window can't kill lockin via
@@ -99,7 +99,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 /// That makes `killpg(pid, sig)` from the supervisor reach the
 /// wrapper and every grand-child it spawns, so signal forwarding on
 /// shutdown does not orphan the tree (issue #10).
-fn place_child_in_own_pgroup(cmd: &mut std::process::Command) {
+fn place_child_in_own_pgroup(cmd: &mut lockin::SandboxedCommand) {
     // SAFETY: setpgid is async-signal-safe per POSIX. The hook does
     // no allocation and touches no shared state.
     unsafe {
