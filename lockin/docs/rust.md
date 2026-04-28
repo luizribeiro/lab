@@ -44,20 +44,43 @@ let status = Sandbox::builder()
 
 ## Filesystem policy
 
-A private `$TMPDIR` is created for the child and removed when
-the sandbox is dropped.
+Each builder method grants one capability — `read`, `write`, `exec`,
+or `ioctl` — on the listed path or directory:
 
-```rust
+- `.read_path(p)` / `.read_dir(d)` — readable input.
+- `.write_path(p)` / `.write_dir(d)` — readable + writable.
+- `.exec_path(p)` / `.exec_dir(d)` — `execve` / `posix_spawn`-able,
+  plus implied read. `exec_dir` is recursive on both platforms.
+- `.ioctl_path(p)` / `.ioctl_dir(d)` — `ioctl`-able, plus implied
+  read.
+
+`write`, `exec`, and `ioctl` each imply `read` on the same path, so
+nothing needs to be added to `read_*` to mirror them. `read` does
+not imply `exec`: readable inputs are not automatically launchable
+as new processes. On macOS, `read` does grant `file-map-executable`
+so `dlopen` works for any readable shared library, matching the
+Linux baseline where `mmap(PROT_EXEC)` of a readable file is not
+sandbox-mediated.
+
+A private `$TMPDIR` is created for the child and removed when the
+sandbox is dropped.
+
+```rust,no_run
 use std::path::Path;
 use lockin::Sandbox;
 
 let status = Sandbox::builder()
     .read_dir("/usr")
-    .read_dir("/etc")
-    .read_path("/dev/null")
+    .read_path("/etc/ssl/cert.pem")
+    .write_dir("/tmp/output")
+    .write_path("/var/log/app.log")
+    .exec_path("/bin/sh")
+    .exec_dir("/nix/store/abc-glibc/lib")
+    .ioctl_path("/dev/null")
+    .ioctl_dir("/dev/dri")
     .command(Path::new("/usr/bin/env"))?
     .status()?;
-assert!(status.success());
+# let _ = status;
 # Ok::<(), anyhow::Error>(())
 ```
 

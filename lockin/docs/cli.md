@@ -89,6 +89,26 @@ arguments from the command line are appended to it.
 A child process that exits with code `125` of its own is
 indistinguishable from a lockin-side `125` error.
 
+## Filesystem capability model
+
+Every `filesystem.*` entry grants one capability — `read`, `write`,
+`exec`, or `ioctl` — on the listed path or directory. The capabilities
+are nested: `write`, `exec`, and `ioctl` each imply `read` on the same
+path or directory (so a `write_dir` does not also need to be listed in
+`read_dirs`). The reverse is not true: `read` does not imply `exec`,
+so readable inputs are not silently executable as new processes.
+
+On macOS, `read` additionally grants `file-map-executable` on the same
+path, so the child can `dlopen`/mmap shared libraries that live in any
+readable directory. This is required for cross-platform parity: on
+Linux, `mmap(PROT_EXEC)` of a readable file is not sandbox-mediated,
+so a writable directory there can already host code that gets mapped
+executable. The macOS rule mirrors that, and as a result a writable
+directory can host code that the child mmaps as executable on either
+platform. Process-level exec (`execve` / `posix_spawn`) remains gated
+separately — only `exec_paths` / `exec_dirs` grant it. Both grant
+recursive exec on Linux and macOS.
+
 ## Config reference
 
 All fields are optional. Everything defaults to deny/false/empty.
@@ -101,12 +121,14 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
 | `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |
-| `filesystem.read_paths` | `[path, ...]` | Individual read-only file paths. |
-| `filesystem.read_dirs` | `[path, ...]` | Recursive read-only directories. |
-| `filesystem.write_paths` | `[path, ...]` | Individual read-write file paths. |
-| `filesystem.write_dirs` | `[path, ...]` | Recursive read-write directories. |
-| `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
-| `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
+| `filesystem.read_paths` | `[path, ...]` | Files the child can read. |
+| `filesystem.read_dirs` | `[path, ...]` | Directories the child can read recursively. |
+| `filesystem.write_paths` | `[path, ...]` | Files the child can write. Implies read on the same path. |
+| `filesystem.write_dirs` | `[path, ...]` | Directories the child can write recursively. Implies recursive read. |
+| `filesystem.exec_paths` | `[path, ...]` | Binaries the child can `execve` / `posix_spawn`. Implies read. |
+| `filesystem.exec_dirs` | `[path, ...]` | Directories whose contents the child can exec recursively. Implies recursive read. |
+| `filesystem.ioctl_paths` | `[path, ...]` | Files the child can `ioctl`. Implies read. |
+| `filesystem.ioctl_dirs` | `[path, ...]` | Directories the child can `ioctl` recursively. Implies recursive read. |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
 | `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
@@ -116,7 +138,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `env.pass` | `[string, ...]` | Shell-glob patterns. Parent env keys matching any pattern are imported (only when `inherit = false`). |
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
-| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
+| `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.); process-exec is not one of them — use `filesystem.exec_paths` / `filesystem.exec_dirs` instead. macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
 
 ## Environment variables
 
