@@ -44,14 +44,12 @@ automatically for each binary in `${package}/bin`:
   `/nix/store` directories. Your own `library_paths` entries are
   preserved and merged. On Linux these auto-derived directories
   are recursively exec-able (required for the dynamic linker).
-- `filesystem.read_dirs` — the package's runtime closure
-  (computed via `pkgs.closureInfo`) is appended after the user's
-  entries so every store path the binary can reach is readable, and
-  nothing else from `/nix/store` is. Controlled by `nixStoreAccess`
+- `filesystem.exec_dirs` — the package's runtime closure
+  (computed via `pkgs.closureInfo`) is emitted as recursively
+  exec-able directories so the wrapped binary can re-exec helpers
+  it ships. `exec_dirs` implies read on the same paths, so nothing
+  needs to be added to `read_dirs`. Controlled by `nixStoreAccess`
   (see below).
-- `darwin.raw_seatbelt_rules` — on darwin, a per-closure-path
-  `(allow process-exec (subpath "…"))` rule is appended for each
-  closure entry so the wrapped binary can re-exec helpers it ships.
 
 On Linux the wrapper also sets `LOCKIN_SYD_PATH` to the `syd` from
 nixpkgs, so the sandbox backend is found without any ambient
@@ -67,7 +65,7 @@ configuration.
 | `libraryDirs` | string \| null | Override auto-derivation with a colon-separated list. `null` (default) auto-derives. |
 | `extraLibraryDirs` | list of paths | Appended to the auto-derived list. Useful when a binary loads plugins via `dlopen` that `ldd` won't see. |
 | `sydPath` | path \| null | Override the `syd` binary used on Linux. `null` uses `pkgs.sydbox`. |
-| `nixStoreAccess` | `"closure" \| "full" \| "none"` | How to grant `/nix/store` access. `"closure"` (default) scopes read + darwin exec to exactly `package`'s runtime closure. `"full"` grants all of `/nix/store` (useful for dev shells that exec arbitrary tools). `"none"` adds no store entries; caller controls them via `policy.filesystem.read_dirs` and `policy.darwin.raw_seatbelt_rules`. |
+| `nixStoreAccess` | `"closure" \| "full" \| "none"` | How to grant `/nix/store` access via `filesystem.exec_dirs`. `"closure"` (default) scopes exec (and implied read) to exactly `package`'s runtime closure. `"full"` grants all of `/nix/store` (useful for dev shells that exec arbitrary tools). `"none"` adds no store entries; caller controls them via `policy.filesystem.exec_dirs` (or `read_dirs`). |
 
 ## Example: deny-by-default
 

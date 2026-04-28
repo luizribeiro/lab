@@ -28,24 +28,18 @@ let
     in
     lib.filter (s: s != "") (lib.splitString "\n" raw);
 
-  storeReadDirs =
+  storeExecDirs =
     if nixStoreAccess == "closure" then closurePaths
     else if nixStoreAccess == "full" then [ "/nix/store" ]
     else [ ];
 
   userReadDirs = policy.filesystem.read_dirs or [ ];
-  mergedReadDirs = lib.unique (userReadDirs ++ storeReadDirs);
+  mergedReadDirs = lib.unique userReadDirs;
+
+  userExecDirs = policy.filesystem.exec_dirs or [ ];
+  mergedExecDirs = lib.unique (userExecDirs ++ storeExecDirs);
 
   userDarwin = policy.darwin or { };
-  userDarwinRules = userDarwin.raw_seatbelt_rules or [ ];
-  storeSeatbeltRules =
-    if !pkgs.stdenv.isDarwin then [ ]
-    else if nixStoreAccess == "closure" then
-      map (p: ''(allow process-exec (subpath "${p}"))'') closurePaths
-    else if nixStoreAccess == "full" then
-      [ ''(allow process-exec (subpath "/nix/store"))'' ]
-    else [ ];
-  mergedDarwinRules = userDarwinRules ++ storeSeatbeltRules;
 
   basePolicy = builtins.removeAttrs policy [ "filesystem" "darwin" ];
   userFilesystem = policy.filesystem or { };
@@ -54,13 +48,12 @@ let
     library_paths = mergedLibDirs;
   } // lib.optionalAttrs (mergedReadDirs != [ ]) {
     read_dirs = mergedReadDirs;
+  } // lib.optionalAttrs (mergedExecDirs != [ ]) {
+    exec_dirs = mergedExecDirs;
   };
 
   darwinOut =
-    if pkgs.stdenv.isDarwin then
-      userDarwin // lib.optionalAttrs (mergedDarwinRules != [ ]) {
-        raw_seatbelt_rules = mergedDarwinRules;
-      }
+    if pkgs.stdenv.isDarwin then userDarwin
     else { };
 
   mkConfig = binPath: basePolicy // {
