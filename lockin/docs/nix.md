@@ -39,17 +39,16 @@ automatically for each binary in `${package}/bin`:
 
 - `command = [ "/nix/store/.../bin/<name>" ]` — so the wrapper
   points at the real binary.
-- `filesystem.library_paths` — derived by running `ldd` (Linux) or
-  `otool -L` (Darwin) on the target binaries and collecting the
-  `/nix/store` directories. Your own `library_paths` entries are
-  preserved and merged. On Linux these auto-derived directories
-  are recursively exec-able (required for the dynamic linker).
 - `filesystem.exec_dirs` — the package's runtime closure
-  (computed via `pkgs.closureInfo`) is emitted as recursively
-  exec-able directories so the wrapped binary can re-exec helpers
-  it ships. `exec_dirs` implies read on the same paths, so nothing
-  needs to be added to `read_dirs`. Controlled by `nixStoreAccess`
-  (see below).
+  (computed via `pkgs.closureInfo`) plus the `/nix/store`
+  directories that `ldd` (Linux) or `otool -L` (Darwin) report
+  for the target binaries. These are emitted as recursively
+  exec-able directories so the wrapped binary can launch via the
+  dynamic linker and re-exec helpers it ships. `exec_dirs`
+  implies read on the same paths, so nothing needs to be added to
+  `read_dirs`. The closure portion is controlled by
+  `nixStoreAccess` (see below); the linker-derived portion is
+  always included.
 
 On Linux the wrapper also sets `LOCKIN_SYD_PATH` to the `syd` from
 nixpkgs, so the sandbox backend is found without any ambient
@@ -62,8 +61,6 @@ configuration.
 | `package` | derivation | The package whose `bin/*` will be wrapped. |
 | `policy` | attrset | Policy in the same shape as the TOML config. Optional; defaults to deny-all. |
 | `name` | string | Derivation name. Defaults to `"<pname>-lockin"`. |
-| `libraryDirs` | string \| null | Override auto-derivation with a colon-separated list. `null` (default) auto-derives. |
-| `extraLibraryDirs` | list of paths | Appended to the auto-derived list. Useful when a binary loads plugins via `dlopen` that `ldd` won't see. |
 | `sydPath` | path \| null | Override the `syd` binary used on Linux. `null` uses `pkgs.sydbox`. |
 | `nixStoreAccess` | `"closure" \| "full" \| "none"` | How to grant `/nix/store` access via `filesystem.exec_dirs`. `"closure"` (default) scopes exec (and implied read) to exactly `package`'s runtime closure. `"full"` grants all of `/nix/store` (useful for dev shells that exec arbitrary tools). `"none"` adds no store entries; caller controls them via `policy.filesystem.exec_dirs` (or `read_dirs`). |
 
@@ -74,7 +71,7 @@ lockin.lib.${system}.wrapWithLockin {
   package = pkgs.hello;
   # No additional policy: network denied. The wrapper still grants
   # read access to the package's runtime closure (the default
-  # `closure` mode) plus the library directories the binary needs.
+  # `closure` mode) plus the linker-derived directories the binary needs.
 }
 ```
 

@@ -55,7 +55,6 @@ pub struct FilesystemConfig {
     pub exec_dirs: Vec<PathBuf>,
     pub ioctl_paths: Vec<PathBuf>,
     pub ioctl_dirs: Vec<PathBuf>,
-    pub library_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -143,11 +142,6 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
         .allow_kvm(config.sandbox.allow_kvm)
         .allow_interactive_tty(config.sandbox.allow_interactive_tty)
         .allow_non_pie_exec(config.sandbox.allow_non_pie_exec);
-
-    builder = builder.library_paths_from_env();
-    for dir in &config.filesystem.library_paths {
-        builder = builder.library_path(resolve_path(dir)?);
-    }
 
     for p in &config.filesystem.read_paths {
         builder = builder.read_path(resolve_path(p)?);
@@ -276,7 +270,6 @@ mod tests {
             exec_dirs = ["/usr/local/bin"]
             ioctl_paths = ["/dev/net/tun"]
             ioctl_dirs = []
-            library_paths = ["/usr/lib"]
 
             [limits]
             max_open_files = 1024
@@ -321,7 +314,6 @@ mod tests {
                     exec_dirs: vec![PathBuf::from("/usr/local/bin")],
                     ioctl_paths: vec![PathBuf::from("/dev/net/tun")],
                     ioctl_dirs: vec![],
-                    library_paths: vec![PathBuf::from("/usr/lib")],
                 },
                 limits: LimitsConfig {
                     max_open_files: Some(1024),
@@ -424,12 +416,6 @@ mod tests {
     #[test]
     fn env_unknown_field_rejected() {
         let err = parse("[env]\ngarbage = 1").unwrap_err();
-        assert!(err.to_string().contains("unknown field"));
-    }
-
-    #[test]
-    fn library_paths_from_env_field_rejected() {
-        let err = parse("[filesystem]\nlibrary_paths_from_env = true").unwrap_err();
         assert!(err.to_string().contains("unknown field"));
     }
 

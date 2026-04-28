@@ -53,10 +53,6 @@ impl PathSets {
             paths.add_ioctl_dir(dir);
         }
 
-        for dir in &spec.library_paths {
-            paths.add_read_dir(dir);
-        }
-
         if spec.allow_interactive_tty {
             for tty in stdio_tty_paths("/dev/fd") {
                 paths.add_ioctl(&tty);

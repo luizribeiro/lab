@@ -3,8 +3,6 @@
 { package
 , policy ? { }
 , name ? "${package.pname or package.name}-lockin"
-, libraryDirs ? null
-, extraLibraryDirs ? [ ]
 , sydPath ? null
 , nixStoreAccess ? "closure"
 }:
@@ -12,14 +10,9 @@
 assert lib.assertOneOf "nixStoreAccess" nixStoreAccess [ "closure" "full" "none" ];
 
 let
-  autoDirs =
-    if libraryDirs != null then libraryDirs
-    else import ./lib-dirs.nix { inherit lib pkgs package; };
+  autoDirs = import ./lib-dirs.nix { inherit lib pkgs package; };
 
   autoDirsList = lib.filter (s: s != "") (lib.splitString ":" autoDirs);
-
-  userLibDirs = policy.filesystem.library_paths or [ ];
-  mergedLibDirs = lib.unique (userLibDirs ++ autoDirsList ++ extraLibraryDirs);
 
   closurePaths =
     let
@@ -37,16 +30,14 @@ let
   mergedReadDirs = lib.unique userReadDirs;
 
   userExecDirs = policy.filesystem.exec_dirs or [ ];
-  mergedExecDirs = lib.unique (userExecDirs ++ storeExecDirs);
+  mergedExecDirs = lib.unique (userExecDirs ++ storeExecDirs ++ autoDirsList);
 
   userDarwin = policy.darwin or { };
 
   basePolicy = builtins.removeAttrs policy [ "filesystem" "darwin" ];
   userFilesystem = policy.filesystem or { };
 
-  filesystemOut = userFilesystem // {
-    library_paths = mergedLibDirs;
-  } // lib.optionalAttrs (mergedReadDirs != [ ]) {
+  filesystemOut = userFilesystem // lib.optionalAttrs (mergedReadDirs != [ ]) {
     read_dirs = mergedReadDirs;
   } // lib.optionalAttrs (mergedExecDirs != [ ]) {
     exec_dirs = mergedExecDirs;

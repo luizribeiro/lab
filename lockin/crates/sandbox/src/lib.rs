@@ -75,7 +75,6 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_interactive_tty: bool,
     pub(crate) allow_non_pie_exec: bool,
     pub(crate) syd_path: Option<PathBuf>,
-    pub(crate) library_paths: Vec<PathBuf>,
     pub(crate) read_paths: Vec<PathBuf>,
     pub(crate) read_dirs: Vec<PathBuf>,
     pub(crate) write_paths: Vec<PathBuf>,
@@ -99,7 +98,6 @@ pub(crate) struct SandboxSpec {
 /// use lockin::Sandbox;
 ///
 /// let status = Sandbox::builder()
-///     .library_paths_from_env()
 ///     .command(Path::new("/usr/bin/env"))
 ///     .unwrap()
 ///     .status()
@@ -332,50 +330,6 @@ impl SandboxBuilder {
             path.display()
         );
         self.spec.syd_path = Some(path);
-        self
-    }
-
-    /// Adds a directory that the dynamic linker needs to load shared
-    /// libraries from. On Linux the sandbox grants recursive
-    /// read+exec; on macOS it grants recursive read.
-    ///
-    /// The Linux exec grant is required so `ld-linux*.so.*` inside
-    /// the directory can launch the configured command, and is
-    /// therefore recursive — every binary in this directory is
-    /// exec-able from inside the sandbox. macOS does not need this
-    /// exception (dyld is loaded by the kernel, not via `execve`).
-    ///
-    /// Panics if `path` is not absolute.
-    pub fn library_path(mut self, path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        assert!(
-            path.is_absolute(),
-            "library_path must be absolute, got: {}",
-            path.display()
-        );
-        self.spec.library_paths.push(path);
-        self
-    }
-
-    /// Reads `LOCKIN_LIBRARY_DIRS` from the environment and adds each
-    /// directory as a library path. The value is a `PATH`-style
-    /// colon-separated (or semicolon-separated on Windows) list of
-    /// absolute directory paths.
-    ///
-    /// This is the recommended way to configure library paths in
-    /// environments managed by Nix or similar tooling that sets
-    /// `LOCKIN_LIBRARY_DIRS` automatically.
-    ///
-    /// Each directory inherits [`library_path`](Self::library_path)
-    /// semantics; on Linux that includes recursive exec.
-    pub fn library_paths_from_env(mut self) -> Self {
-        if let Some(val) = std::env::var_os("LOCKIN_LIBRARY_DIRS") {
-            for dir in std::env::split_paths(&val) {
-                if !dir.as_os_str().is_empty() && dir.is_absolute() {
-                    self = self.library_path(dir);
-                }
-            }
-        }
         self
     }
 
@@ -855,15 +809,19 @@ pub(crate) fn configure_rlimits(command: &mut Command, rlimits: Vec<(i32, u64)>)
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsRawFd;
+    #[cfg(target_os = "linux")]
     use std::sync::Mutex;
 
+    #[cfg(target_os = "linux")]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[cfg(target_os = "linux")]
     struct EnvGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
     }
 
+    #[cfg(target_os = "linux")]
     impl EnvGuard {
         fn lock(vars: &[&'static str]) -> Self {
             let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -872,6 +830,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for (key, val) in &self.saved {
@@ -917,12 +876,6 @@ mod tests {
     #[should_panic(expected = "syd_path must be absolute")]
     fn syd_path_builder_rejects_relative() {
         super::SandboxBuilder::new().syd_path("bin/syd");
-    }
-
-    #[test]
-    #[should_panic(expected = "library_path must be absolute")]
-    fn library_path_builder_rejects_relative() {
-        super::SandboxBuilder::new().library_path("usr/lib");
     }
 
     #[test]
@@ -977,47 +930,6 @@ mod tests {
     #[should_panic(expected = "command path must be absolute")]
     fn command_builder_rejects_relative() {
         let _ = super::SandboxBuilder::new().command(std::path::Path::new("bin/echo"));
-    }
-
-    #[test]
-    fn library_paths_from_env_noop_when_unset() {
-        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
-        std::env::remove_var("LOCKIN_LIBRARY_DIRS");
-        let builder = super::SandboxBuilder::new().library_paths_from_env();
-        assert!(builder.spec.library_paths.is_empty());
-    }
-
-    #[test]
-    fn library_paths_from_env_parses_multiple_dirs() {
-        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
-        std::env::set_var("LOCKIN_LIBRARY_DIRS", "/usr/lib:/lib/x86_64-linux-gnu");
-        let builder = super::SandboxBuilder::new().library_paths_from_env();
-        assert_eq!(
-            builder.spec.library_paths,
-            vec![
-                std::path::PathBuf::from("/usr/lib"),
-                std::path::PathBuf::from("/lib/x86_64-linux-gnu"),
-            ]
-        );
-    }
-
-    #[test]
-    fn library_paths_from_env_drops_empty_components() {
-        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
-        std::env::set_var("LOCKIN_LIBRARY_DIRS", "/usr/lib::/lib");
-        let builder = super::SandboxBuilder::new().library_paths_from_env();
-        assert_eq!(builder.spec.library_paths.len(), 2);
-    }
-
-    #[test]
-    fn library_paths_from_env_drops_relative_paths() {
-        let _g = EnvGuard::lock(&["LOCKIN_LIBRARY_DIRS"]);
-        std::env::set_var("LOCKIN_LIBRARY_DIRS", "relative/lib:/usr/lib");
-        let builder = super::SandboxBuilder::new().library_paths_from_env();
-        assert_eq!(
-            builder.spec.library_paths,
-            vec![std::path::PathBuf::from("/usr/lib")]
-        );
     }
 
     #[cfg(target_os = "linux")]

@@ -3,10 +3,20 @@ use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Returns a [`lockin::SandboxBuilder`] with `LOCKIN_LIBRARY_DIRS`
-/// applied from the environment.
+/// Returns a [`lockin::SandboxBuilder`] with `LOCKIN_TEST_EXEC_DIRS`
+/// applied as recursive exec directories — the shared test harness
+/// needs runtime libraries (e.g. libiconv from `/nix/store`) reachable
+/// so dynamically-linked probes can launch under the sandbox.
 pub fn sandbox_builder() -> lockin::SandboxBuilder {
-    lockin::Sandbox::builder().library_paths_from_env()
+    let mut builder = lockin::Sandbox::builder();
+    if let Some(val) = std::env::var_os("LOCKIN_TEST_EXEC_DIRS") {
+        for dir in std::env::split_paths(&val) {
+            if !dir.as_os_str().is_empty() && dir.is_absolute() {
+                builder = builder.exec_dir(dir);
+            }
+        }
+    }
+    builder
 }
 
 /// RAII guard that SIGKILLs and reaps a spawned child on drop, so a

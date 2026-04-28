@@ -18,9 +18,34 @@ fn run_lockin(args: &[&str]) -> Output {
 }
 
 fn write_config(content: &str) -> tempfile::NamedTempFile {
+    assert!(
+        !content.contains("[filesystem]"),
+        "test write_config helper appends its own [filesystem] block; \
+         passing a [filesystem] section would create a duplicate-table TOML error"
+    );
     let tmp = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-    std::fs::write(tmp.path(), content).unwrap();
+    let suffix = test_exec_dirs_suffix();
+    std::fs::write(tmp.path(), format!("{content}\n{suffix}")).unwrap();
     tmp
+}
+
+fn test_exec_dirs_suffix() -> String {
+    let Some(val) = std::env::var_os("LOCKIN_TEST_EXEC_DIRS") else {
+        return String::new();
+    };
+    let dirs: Vec<String> = std::env::split_paths(&val)
+        .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+        .map(|p| toml_string_literal(&p.to_string_lossy()))
+        .collect();
+    if dirs.is_empty() {
+        return String::new();
+    }
+    format!("[filesystem]\nexec_dirs = [{}]\n", dirs.join(", "))
+}
+
+fn toml_string_literal(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 fn probe_binary() -> PathBuf {
@@ -492,9 +517,17 @@ fn sigterm_forwarded_to_child_then_lockin_exits_normally() {
     // Tight grace so the test's SIGKILL escalation (needed because
     // syd traps SIGTERM under ptrace) completes within seconds. The
     // production default is 30s — see DEFAULT_SHUTDOWN_GRACE.
+    let config = write_config("");
     let mut child = Command::new(lockin_binary())
         .env("LOCKIN_SHUTDOWN_GRACE_MS", "500")
-        .args(["--", probe.to_str().unwrap(), "pause", "30"])
+        .args([
+            "-c",
+            config.path().to_str().unwrap(),
+            "--",
+            probe.to_str().unwrap(),
+            "pause",
+            "30",
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()

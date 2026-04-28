@@ -85,10 +85,11 @@ A program inside a default-policy lockin sandbox cannot:
   Platform specifics);
 - exec any binary other than the one named in `.command(...)` —
   except, on Linux, binaries inside any directory passed to
-  `library_path` are recursively exec-able because the dynamic
-  linker (`ld-linux*.so.*`) lives there and must be launchable.
-  macOS does not have this exception (dyld is loaded by the
-  kernel, not via `execve`);
+  `exec_dir` (or `exec_dirs` in the TOML config) are recursively
+  exec-able. This is how dynamic-linker directories (which contain
+  `ld-linux*.so.*`) and other helper-binary directories are
+  granted. macOS treats `exec_dir` as recursive read only (dyld is
+  loaded by the kernel, not via `execve`);
 - when network mode is `deny` (the default): open IP sockets (TCP
   or UDP), bind/listen on a port, or connect AF_UNIX sockets to
   paths outside the allowlists. `proxy` mode permits TCP egress
@@ -125,10 +126,10 @@ plus Landlock. On top of the configured allowlists the backend
 reads a few paths the loader and runtime need: `/proc/self/maps`,
 `/etc/ld.so.cache`, `/etc/ld.so.preload`, the TTY paths backing
 stdio (resolved via `/proc/self/fd`), and the ancestor directories
-of the program path (stat-only). `library_path` directories are
-recursively read+exec so the dynamic linker can launch the
-configured command — every binary inside them is therefore
-exec-able from the sandbox. The `syd` binary itself is resolved
+of the program path (stat-only). `exec_dir` directories are
+recursively read+exec so the dynamic linker (and any other helper
+binary that lives there) can launch the configured command —
+every binary inside them is therefore exec-able from the sandbox. The `syd` binary itself is resolved
 via `.syd_path()`, `LOCKIN_SYD_PATH`, or `PATH`; lockin verifies
 the path is absolute but does not authenticate that it is in fact
 syd, so pin a known-good path in production (the Nix wrapper does
@@ -160,7 +161,7 @@ Beyond the Seatbelt baseline, lockin layers a hardening profile
 that denies: `mach-register` (the sandboxed program cannot publish
 new Mach names), XPC service-name lookups, connections to the
 syslog Unix socket, and writes under `/cores`. `process-exec` is
-granted only for the command path; `library_path` directories are
+granted only for the command path; `exec_dir` directories are
 mappable as code (`file-map-executable`) but not `execve()`-able.
 
 Because the macOS baseline grants broad sysctl-read and several

@@ -107,7 +107,6 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `filesystem.write_dirs` | `[path, ...]` | Recursive read-write directories. |
 | `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
 | `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
-| `filesystem.library_paths` | `[path, ...]` | Dynamic linker library directories. On Linux, binaries inside these directories are also exec-able (required for the dynamic linker). |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
 | `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |
@@ -118,9 +117,6 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
 | `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.). macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
-
-The CLI also reads `LOCKIN_LIBRARY_DIRS` (colon-separated absolute
-paths) and adds each directory to `filesystem.library_paths`.
 
 ## Environment variables
 

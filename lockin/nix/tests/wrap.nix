@@ -60,8 +60,8 @@ let
       ok = pkgs.stdenv.isDarwin || !(closureMode ? darwin);
     }
     {
-      name = "full: exec_dirs is exactly /nix/store";
-      ok = fullMode.filesystem.exec_dirs == [ "/nix/store" ];
+      name = "full: exec_dirs contains /nix/store";
+      ok = lib.elem "/nix/store" fullMode.filesystem.exec_dirs;
     }
     {
       name = "full: no read_dirs key (no user entries)";
@@ -76,8 +76,13 @@ let
       ok = noneMode.filesystem.read_dirs == [ "/etc" ];
     }
     {
-      name = "none: no exec_dirs key emitted";
-      ok = !(noneMode.filesystem ? exec_dirs);
+      name = "none: exec_dirs has no /nix/store closure entries";
+      ok =
+        let
+          dirs = noneMode.filesystem.exec_dirs or [ ];
+        in
+        !(lib.elem helloClosurePath dirs)
+        && !(lib.elem "/nix/store" dirs);
     }
     {
       name = "none: no darwin key emitted";

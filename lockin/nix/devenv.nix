@@ -5,13 +5,13 @@ let
     if pkgs.stdenv.isDarwin then pkgs.libiconv
     else pkgs.stdenv.cc.cc;
 
-  libraryDirs = import ../../shared/nix/runtime-lib-dirs.nix {
+  testExecDirs = import ../../shared/nix/runtime-lib-dirs.nix {
     inherit lib pkgs seedPkg;
   };
 in
 {
   env = {
-    LOCKIN_LIBRARY_DIRS = libraryDirs;
+    LOCKIN_TEST_EXEC_DIRS = testExecDirs;
   } // lib.optionalAttrs pkgs.stdenv.isLinux {
     LOCKIN_SYD_PATH = "${pkgs.sydbox}/bin/syd";
   };
