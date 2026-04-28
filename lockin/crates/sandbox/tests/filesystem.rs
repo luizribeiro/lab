@@ -470,6 +470,68 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
     ));
 }
 
+// ── exec scoping ─────────────────────────────────────────────
+
+fn pick_system_true() -> &'static str {
+    ["/usr/bin/true", "/bin/true"]
+        .iter()
+        .copied()
+        .find(|p| std::path::Path::new(p).exists())
+        .expect("expected /usr/bin/true or /bin/true on host")
+}
+
+#[test]
+fn exec_path_allows_executing_the_named_binary() {
+    let target = pick_system_true();
+    assert!(run_probe(
+        common::sandbox_builder().exec_path(target),
+        &["can-exec", target]
+    ));
+}
+
+#[test]
+fn exec_path_grants_read_too() {
+    let target = pick_system_true();
+    assert!(
+        run_probe(
+            common::sandbox_builder().exec_path(target),
+            &["can-read", target]
+        ),
+        "exec_path should imply read access on the same path"
+    );
+}
+
+#[test]
+fn exec_dir_allows_executing_anything_in_the_tree() {
+    let target = pick_system_true();
+    let parent = std::path::Path::new(target)
+        .parent()
+        .expect("system binary has a parent dir")
+        .to_path_buf();
+
+    assert!(run_probe(
+        common::sandbox_builder().exec_dir(parent),
+        &["can-exec", target]
+    ));
+}
+
+#[test]
+fn read_dir_does_not_allow_exec() {
+    let target = pick_system_true();
+    let parent = std::path::Path::new(target)
+        .parent()
+        .expect("system binary has a parent dir")
+        .to_path_buf();
+
+    assert!(
+        !run_probe(
+            common::sandbox_builder().read_dir(parent),
+            &["can-exec", target]
+        ),
+        "read_dir must not grant exec — that's the whole point of a separate exec capability"
+    );
+}
+
 // ── tmp scoping ──────────────────────────────────────────────
 
 #[test]

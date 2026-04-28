@@ -212,6 +212,21 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
+    for path in &spec.exec_paths {
+        for candidate in path_candidates(path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+            push_unique(&mut exec_paths, candidate);
+        }
+    }
+
+    for dir in &spec.exec_dirs {
+        for candidate in path_candidates(dir) {
+            push_with_ancestors(&mut read_paths, &candidate);
+            push_unique(&mut read_recursive_paths, candidate.clone());
+            push_unique(&mut exec_recursive_paths, candidate);
+        }
+    }
+
     for path in [
         PathBuf::from("/proc/self/maps"),
         PathBuf::from("/etc/ld.so.cache"),

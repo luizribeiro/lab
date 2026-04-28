@@ -80,6 +80,8 @@ pub(crate) struct SandboxSpec {
     pub(crate) read_dirs: Vec<PathBuf>,
     pub(crate) write_paths: Vec<PathBuf>,
     pub(crate) write_dirs: Vec<PathBuf>,
+    pub(crate) exec_paths: Vec<PathBuf>,
+    pub(crate) exec_dirs: Vec<PathBuf>,
     pub(crate) ioctl_paths: Vec<PathBuf>,
     pub(crate) ioctl_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
@@ -436,6 +438,37 @@ impl SandboxBuilder {
             path.display()
         );
         self.spec.write_dirs.push(path);
+        self
+    }
+
+    /// Adds a single file path that the child should be allowed to
+    /// execute. Implies read access on the same path.
+    ///
+    /// Panics if `path` is not absolute.
+    pub fn exec_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "exec_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.exec_paths.push(path);
+        self
+    }
+
+    /// Adds a directory whose contents the child should be allowed to
+    /// execute recursively. Implies recursive read access on the same
+    /// directory.
+    ///
+    /// Panics if `path` is not absolute.
+    pub fn exec_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "exec_dir must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.exec_dirs.push(path);
         self
     }
 
@@ -914,6 +947,18 @@ mod tests {
     #[should_panic(expected = "write_dir must be absolute")]
     fn write_dir_builder_rejects_relative() {
         super::SandboxBuilder::new().write_dir("tmp");
+    }
+
+    #[test]
+    #[should_panic(expected = "exec_path must be absolute")]
+    fn exec_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().exec_path("bin/true");
+    }
+
+    #[test]
+    #[should_panic(expected = "exec_dir must be absolute")]
+    fn exec_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().exec_dir("bin");
     }
 
     #[test]

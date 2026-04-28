@@ -40,6 +40,13 @@ pub(super) fn build_policy(
     for path in &paths.executable_paths {
         policy.allow_literal(&["process-exec"], path);
     }
+    for dir in &paths.executable_dirs {
+        policy.allow_subpath(&["process-exec"], dir);
+    }
+    // posix_spawn needs process-fork; system.sb denies it by default.
+    if !spec.exec_paths.is_empty() || !spec.exec_dirs.is_empty() {
+        policy.allow(&["process-fork"]);
+    }
 
     for path in &paths.read_paths {
         policy.allow_literal(&["file-read*"], path);
