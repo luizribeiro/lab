@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use outpost::{NetworkPolicy, PolicyAction};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 /// Maximum bytes allowed in the request head before the client's
 /// `\r\n\r\n` delimiter. Well above any realistic CONNECT + Host
 /// header combination.
-const MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
+pub const MAX_REQUEST_HEAD_BYTES: usize = 8 * 1024;
 
 /// Upper bound on how long we wait for the client to finish sending
 /// its request head. Bounds slow-loris from a misbehaving sandboxed
@@ -163,29 +163,38 @@ async fn handle_connection(mut stream: TcpStream, policy: Arc<NetworkPolicy>) ->
 
 async fn read_request_head(stream: &mut TcpStream) -> io::Result<String> {
     let (read, _write) = stream.split();
-    let mut reader = BufReader::new(read);
-    let mut head = String::new();
+    let mut reader = BufReader::with_capacity(MAX_REQUEST_HEAD_BYTES, read);
+    let mut head = Vec::with_capacity(MAX_REQUEST_HEAD_BYTES);
     loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
+        let remaining = MAX_REQUEST_HEAD_BYTES.saturating_sub(head.len());
+        if remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request head exceeded maximum size",
+            ));
+        }
+        let mut line = Vec::with_capacity(256);
+        let n = (&mut reader)
+            .take(remaining as u64)
+            .read_until(b'\n', &mut line)
+            .await?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "client closed before request head completed",
             ));
         }
-        if head.len() + line.len() > MAX_REQUEST_HEAD_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request head exceeded maximum size",
-            ));
-        }
-        if line == "\r\n" || line == "\n" {
+        if line == b"\r\n" || line == b"\n" {
             break;
         }
-        head.push_str(&line);
+        head.extend_from_slice(&line);
     }
-    Ok(head)
+    String::from_utf8(head).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "request head is not valid UTF-8",
+        )
+    })
 }
 
 fn parse_connect_authority(head: &str) -> Option<String> {

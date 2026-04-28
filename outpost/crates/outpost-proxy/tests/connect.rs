@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use outpost::NetworkPolicy;
+use outpost_proxy::MAX_REQUEST_HEAD_BYTES;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -135,6 +136,70 @@ async fn connect_allow_returns_502_when_upstream_refuses() {
     let mut client = TcpStream::connect(handle.listen_addr()).await.unwrap();
     let (code, _) = send_connect(&mut client, &format!("127.0.0.1:{closed_port}")).await;
     assert_eq!(code, 502);
+}
+
+/// M4: a sandboxed child that streams bytes to the proxy without ever
+/// sending a newline must not be able to grow the proxy's request-head
+/// buffer without bound. The bounded read must reject the connection
+/// strictly before `REQUEST_HEAD_TIMEOUT` (250ms in cfg(test)) — otherwise
+/// the rejection is coming from the timeout, not the size cap, and the
+/// underlying DoS would still be reachable in production where the
+/// timeout is 10s and many GB of memory could be buffered first.
+#[tokio::test]
+async fn request_head_overflow_streams_no_newline() {
+    let handle = outpost_proxy::start(NetworkPolicy::allow_all())
+        .await
+        .unwrap();
+
+    let mut client = TcpStream::connect(handle.listen_addr()).await.unwrap();
+
+    let payload = vec![b'A'; MAX_REQUEST_HEAD_BYTES + 1];
+    let start = Instant::now();
+
+    let _ = client.write_all(&payload).await;
+    let _ = client.flush().await;
+
+    let mut sink = Vec::new();
+    let drained = tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut sink)).await;
+    assert!(
+        drained.is_ok(),
+        "proxy did not close connection within 2s; possible unbounded buffering"
+    );
+
+    assert!(
+        start.elapsed() < Duration::from_millis(200),
+        "proxy took {:?} to reject overflow; expected <200ms (head timeout is 250ms — \
+         a slower rejection means the timeout fired, not the size cap)",
+        start.elapsed()
+    );
+}
+
+fn max_size_non_connect_request() -> Vec<u8> {
+    let prefix = b"GET / HTTP/1.1\r\nX-Pad: ";
+    let suffix = b"\r\n\r\n";
+    let pad_len = MAX_REQUEST_HEAD_BYTES - prefix.len() - suffix.len();
+    let mut req = Vec::with_capacity(MAX_REQUEST_HEAD_BYTES);
+    req.extend_from_slice(prefix);
+    req.extend(std::iter::repeat(b'a').take(pad_len));
+    req.extend_from_slice(suffix);
+    req
+}
+
+#[tokio::test]
+async fn request_head_just_under_limit_parses_cleanly() {
+    let handle = outpost_proxy::start(NetworkPolicy::allow_all())
+        .await
+        .unwrap();
+
+    let mut client = TcpStream::connect(handle.listen_addr()).await.unwrap();
+    let req = max_size_non_connect_request();
+    assert_eq!(req.len(), MAX_REQUEST_HEAD_BYTES);
+
+    client.write_all(&req).await.unwrap();
+    client.flush().await.unwrap();
+
+    let (code, _) = read_status(&mut client).await;
+    assert_eq!(code, 405, "expected non-CONNECT method to yield 405");
 }
 
 #[tokio::test]
