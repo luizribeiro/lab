@@ -291,6 +291,8 @@ impl SandboxBuilder {
     /// (Linux only; ignored on other platforms).
     ///
     /// If not set, the library checks `LOCKIN_SYD_PATH` then `PATH`.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn syd_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
@@ -305,6 +307,8 @@ impl SandboxBuilder {
     /// Adds a directory that the dynamic linker needs to load shared
     /// libraries from. On Linux the sandbox grants recursive read+exec;
     /// on macOS it grants recursive read.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn library_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         assert!(
@@ -338,45 +342,93 @@ impl SandboxBuilder {
     /// Adds a single file path that the child should be allowed to
     /// read. Use [`read_only_dir`](Self::read_only_dir) for
     /// directories that need recursive access.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn read_only_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.read_only_paths.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "read_only_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.read_only_paths.push(path);
         self
     }
 
     /// Adds a directory whose contents the child should be allowed to
     /// read recursively.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn read_only_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.read_only_dirs.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "read_only_dir must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.read_only_dirs.push(path);
         self
     }
 
     /// Adds a single file path that the child should be allowed to
     /// read and write. Use [`read_write_dir`](Self::read_write_dir)
     /// for directories that need recursive access.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn read_write_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.read_write_paths.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "read_write_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.read_write_paths.push(path);
         self
     }
 
     /// Adds a directory whose contents the child should be allowed to
     /// read and write recursively.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn read_write_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.read_write_dirs.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "read_write_dir must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.read_write_dirs.push(path);
         self
     }
 
     /// Adds a single file path that the child should be allowed to
     /// perform ioctl operations on. Use
     /// [`ioctl_dir`](Self::ioctl_dir) for directories.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn ioctl_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.ioctl_paths.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "ioctl_path must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.ioctl_paths.push(path);
         self
     }
 
     /// Adds a directory whose contents the child should be allowed to
     /// perform ioctl operations on recursively.
+    ///
+    /// Panics if `path` is not absolute.
     pub fn ioctl_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        self.spec.ioctl_dirs.push(path.into());
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "ioctl_dir must be absolute, got: {}",
+            path.display()
+        );
+        self.spec.ioctl_dirs.push(path);
         self
     }
 
@@ -465,7 +517,14 @@ impl SandboxBuilder {
     /// [`std::process::Command`] and the [`Sandbox`] (private tmp
     /// directory), so callers no longer need to hold a separate
     /// `_sandbox` binding to keep the tmp directory alive.
+    ///
+    /// Panics if `program` is not absolute.
     pub fn command(self, program: &Path) -> Result<SandboxCommand> {
+        assert!(
+            program.is_absolute(),
+            "command path must be absolute, got: {}",
+            program.display()
+        );
         let (command, sandbox) = self.build(program)?;
         Ok(SandboxCommand { command, sandbox })
     }
@@ -765,6 +824,48 @@ mod tests {
     #[should_panic(expected = "library_path must be absolute")]
     fn library_path_builder_rejects_relative() {
         super::SandboxBuilder::new().library_path("usr/lib");
+    }
+
+    #[test]
+    #[should_panic(expected = "read_only_path must be absolute")]
+    fn read_only_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_only_path("etc/passwd");
+    }
+
+    #[test]
+    #[should_panic(expected = "read_only_dir must be absolute")]
+    fn read_only_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_only_dir("etc");
+    }
+
+    #[test]
+    #[should_panic(expected = "read_write_path must be absolute")]
+    fn read_write_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_write_path("tmp/out");
+    }
+
+    #[test]
+    #[should_panic(expected = "read_write_dir must be absolute")]
+    fn read_write_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().read_write_dir("tmp");
+    }
+
+    #[test]
+    #[should_panic(expected = "ioctl_path must be absolute")]
+    fn ioctl_path_builder_rejects_relative() {
+        super::SandboxBuilder::new().ioctl_path("dev/tty");
+    }
+
+    #[test]
+    #[should_panic(expected = "ioctl_dir must be absolute")]
+    fn ioctl_dir_builder_rejects_relative() {
+        super::SandboxBuilder::new().ioctl_dir("dev");
+    }
+
+    #[test]
+    #[should_panic(expected = "command path must be absolute")]
+    fn command_builder_rejects_relative() {
+        let _ = super::SandboxBuilder::new().command(std::path::Path::new("bin/echo"));
     }
 
     #[test]
