@@ -12,7 +12,6 @@ pub(super) struct PathSets {
     pub(super) write_paths: Vec<PathBuf>,
     pub(super) write_dirs: Vec<PathBuf>,
     pub(super) ioctl_paths: Vec<PathBuf>,
-    pub(super) ioctl_dirs: Vec<PathBuf>,
     pub(super) traversal_paths: Vec<PathBuf>,
 }
 
@@ -44,13 +43,6 @@ impl PathSets {
         }
         for dir in &spec.exec_dirs {
             paths.add_exec_dir(dir);
-        }
-
-        for path in &spec.ioctl_paths {
-            paths.add_ioctl(path);
-        }
-        for dir in &spec.ioctl_dirs {
-            paths.add_ioctl_dir(dir);
         }
 
         if spec.allow_interactive_tty {
@@ -87,9 +79,6 @@ impl PathSets {
     }
     fn add_ioctl(&mut self, path: &Path) {
         self.collect_into(path, |s| &mut s.ioctl_paths);
-    }
-    fn add_ioctl_dir(&mut self, path: &Path) {
-        self.collect_into(path, |s| &mut s.ioctl_dirs);
     }
 
     fn collect_into(&mut self, path: &Path, target: fn(&mut Self) -> &mut Vec<PathBuf>) {

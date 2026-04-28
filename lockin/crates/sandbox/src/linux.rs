@@ -191,19 +191,6 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    for path in &spec.ioctl_paths {
-        for candidate in path_candidates(path) {
-            push_with_ancestors(&mut read_paths, &candidate);
-        }
-    }
-
-    for dir in &spec.ioctl_dirs {
-        for candidate in path_candidates(dir) {
-            push_with_ancestors(&mut read_paths, &candidate);
-            push_unique(&mut read_recursive_paths, candidate);
-        }
-    }
-
     for path in &spec.exec_paths {
         for candidate in path_candidates(path) {
             push_with_ancestors(&mut read_paths, &candidate);
@@ -267,23 +254,9 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         add_lock_allow_rule(&mut rules, "allow/lock/exec", &path);
     }
 
-    let mut lock_ioctl_paths = Vec::new();
     if spec.allow_kvm {
-        lock_ioctl_paths.push(PathBuf::from("/dev/kvm"));
-    }
-    lock_ioctl_paths.extend(spec.ioctl_paths.iter().cloned());
-
-    for path in lock_ioctl_paths {
-        for candidate in path_candidates(&path) {
+        for candidate in path_candidates(Path::new("/dev/kvm")) {
             add_lock_allow_rule(&mut rules, "allow/lock/ioctl", &candidate);
-        }
-    }
-
-    for dir in &spec.ioctl_dirs {
-        for candidate in path_candidates(dir) {
-            add_lock_allow_rule(&mut rules, "allow/lock/ioctl", &candidate);
-            let escaped = escape_syd_path(&candidate);
-            rules.push(format!("allow/lock/ioctl+{escaped}/***"));
         }
     }
 

@@ -53,8 +53,6 @@ pub struct FilesystemConfig {
     pub write_dirs: Vec<PathBuf>,
     pub exec_paths: Vec<PathBuf>,
     pub exec_dirs: Vec<PathBuf>,
-    pub ioctl_paths: Vec<PathBuf>,
-    pub ioctl_dirs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -161,12 +159,6 @@ pub fn apply_config(config: &Config) -> Result<lockin::SandboxBuilder> {
     for p in &config.filesystem.exec_dirs {
         builder = builder.exec_dir(resolve_path(p)?);
     }
-    for p in &config.filesystem.ioctl_paths {
-        builder = builder.ioctl_path(resolve_path(p)?);
-    }
-    for p in &config.filesystem.ioctl_dirs {
-        builder = builder.ioctl_dir(resolve_path(p)?);
-    }
 
     if let Some(n) = config.limits.max_open_files {
         builder = builder.max_open_files(n);
@@ -268,8 +260,6 @@ mod tests {
             write_dirs = ["./data"]
             exec_paths = ["/usr/bin/git"]
             exec_dirs = ["/usr/local/bin"]
-            ioctl_paths = ["/dev/net/tun"]
-            ioctl_dirs = []
 
             [limits]
             max_open_files = 1024
@@ -312,8 +302,6 @@ mod tests {
                     write_dirs: vec![PathBuf::from("./data")],
                     exec_paths: vec![PathBuf::from("/usr/bin/git")],
                     exec_dirs: vec![PathBuf::from("/usr/local/bin")],
-                    ioctl_paths: vec![PathBuf::from("/dev/net/tun")],
-                    ioctl_dirs: vec![],
                 },
                 limits: LimitsConfig {
                     max_open_files: Some(1024),

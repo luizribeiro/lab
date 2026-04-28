@@ -44,17 +44,15 @@ let status = Sandbox::builder()
 
 ## Filesystem policy
 
-Each builder method grants one capability — `read`, `write`, `exec`,
-or `ioctl` — on the listed path or directory:
+Each builder method grants one capability — `read`, `write`, or
+`exec` — on the listed path or directory:
 
 - `.read_path(p)` / `.read_dir(d)` — readable input.
 - `.write_path(p)` / `.write_dir(d)` — readable + writable.
 - `.exec_path(p)` / `.exec_dir(d)` — `execve` / `posix_spawn`-able,
   plus implied read. `exec_dir` is recursive on both platforms.
-- `.ioctl_path(p)` / `.ioctl_dir(d)` — `ioctl`-able, plus implied
-  read.
 
-`write`, `exec`, and `ioctl` each imply `read` on the same path, so
+`write` and `exec` each imply `read` on the same path, so
 nothing needs to be added to `read_*` to mirror them. `read` does
 not imply `exec`: readable inputs are not automatically launchable
 as new processes. On macOS, `read` does grant `file-map-executable`
@@ -76,8 +74,6 @@ let status = Sandbox::builder()
     .write_path("/var/log/app.log")
     .exec_path("/bin/sh")
     .exec_dir("/nix/store/abc-glibc/lib")
-    .ioctl_path("/dev/null")
-    .ioctl_dir("/dev/dri")
     .command(Path::new("/usr/bin/env"))?
     .status()?;
 # let _ = status;

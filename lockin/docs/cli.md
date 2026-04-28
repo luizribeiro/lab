@@ -92,8 +92,8 @@ indistinguishable from a lockin-side `125` error.
 ## Filesystem capability model
 
 Every `filesystem.*` entry grants one capability — `read`, `write`,
-`exec`, or `ioctl` — on the listed path or directory. The capabilities
-are nested: `write`, `exec`, and `ioctl` each imply `read` on the same
+or `exec` — on the listed path or directory. The capabilities
+are nested: `write` and `exec` each imply `read` on the same
 path or directory (so a `write_dir` does not also need to be listed in
 `read_dirs`). The reverse is not true: `read` does not imply `exec`,
 so readable inputs are not silently executable as new processes.
@@ -113,6 +113,10 @@ recursive exec on Linux and macOS.
 
 All fields are optional. Everything defaults to deny/false/empty.
 
+`ioctl` access is currently controlled by `sandbox.allow_kvm` and
+`sandbox.allow_interactive_tty`; finer-grained ioctl policy is not
+exposed.
+
 | Field | Type | Description |
 |---|---|---|
 | `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. Must be non-empty if present (omit the field entirely to use CLI args alone). |
@@ -127,8 +131,6 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `filesystem.write_dirs` | `[path, ...]` | Directories the child can write recursively. Implies recursive read. |
 | `filesystem.exec_paths` | `[path, ...]` | Binaries the child can `execve` / `posix_spawn`. Implies read. |
 | `filesystem.exec_dirs` | `[path, ...]` | Directories whose contents the child can exec recursively. Implies recursive read. |
-| `filesystem.ioctl_paths` | `[path, ...]` | Files the child can `ioctl`. Implies read. |
-| `filesystem.ioctl_dirs` | `[path, ...]` | Directories the child can `ioctl` recursively. Implies recursive read. |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
 | `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |

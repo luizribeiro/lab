@@ -81,8 +81,6 @@ pub(crate) struct SandboxSpec {
     pub(crate) write_dirs: Vec<PathBuf>,
     pub(crate) exec_paths: Vec<PathBuf>,
     pub(crate) exec_dirs: Vec<PathBuf>,
-    pub(crate) ioctl_paths: Vec<PathBuf>,
-    pub(crate) ioctl_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
     pub(crate) raw_seatbelt_rules: Vec<String>,
 }
@@ -423,37 +421,6 @@ impl SandboxBuilder {
             path.display()
         );
         self.spec.exec_dirs.push(path);
-        self
-    }
-
-    /// Adds a single file path that the child should be allowed to
-    /// perform ioctl operations on. Use
-    /// [`ioctl_dir`](Self::ioctl_dir) for directories.
-    ///
-    /// Panics if `path` is not absolute.
-    pub fn ioctl_path(mut self, path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        assert!(
-            path.is_absolute(),
-            "ioctl_path must be absolute, got: {}",
-            path.display()
-        );
-        self.spec.ioctl_paths.push(path);
-        self
-    }
-
-    /// Adds a directory whose contents the child should be allowed to
-    /// perform ioctl operations on recursively.
-    ///
-    /// Panics if `path` is not absolute.
-    pub fn ioctl_dir(mut self, path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        assert!(
-            path.is_absolute(),
-            "ioctl_dir must be absolute, got: {}",
-            path.display()
-        );
-        self.spec.ioctl_dirs.push(path);
         self
     }
 
@@ -912,18 +879,6 @@ mod tests {
     #[should_panic(expected = "exec_dir must be absolute")]
     fn exec_dir_builder_rejects_relative() {
         super::SandboxBuilder::new().exec_dir("bin");
-    }
-
-    #[test]
-    #[should_panic(expected = "ioctl_path must be absolute")]
-    fn ioctl_path_builder_rejects_relative() {
-        super::SandboxBuilder::new().ioctl_path("dev/tty");
-    }
-
-    #[test]
-    #[should_panic(expected = "ioctl_dir must be absolute")]
-    fn ioctl_dir_builder_rejects_relative() {
-        super::SandboxBuilder::new().ioctl_dir("dev");
     }
 
     #[test]

@@ -72,10 +72,6 @@ pub(super) fn build_policy(
         policy.allow_literal(&["file-read*"], path);
         policy.allow_literal(&["file-ioctl"], path);
     }
-    for dir in &paths.ioctl_dirs {
-        policy.allow_subpath(&["file-read*"], dir);
-        policy.allow_subpath(&["file-ioctl"], dir);
-    }
 
     match spec.network {
         NetworkMode::AllowAll => {
@@ -103,47 +99,11 @@ pub(super) fn build_policy(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use crate::{NetworkMode, SandboxSpec};
 
     use super::build_policy;
-
-    #[test]
-    fn ioctl_is_only_granted_for_ioctl_paths() {
-        let base = tempfile::Builder::new()
-            .prefix("lockin-policy-test-")
-            .tempdir()
-            .expect("create test base dir");
-
-        let rw_file = base.path().join("rw.dat");
-        std::fs::write(&rw_file, b"data").expect("create rw file");
-
-        let ioctl_file = base.path().join("ioctl.dev");
-        std::fs::write(&ioctl_file, b"dev").expect("create ioctl file");
-
-        let private_tmp = base.path().join("tmp");
-        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
-
-        let mut spec = SandboxSpec::default();
-        spec.write_paths.push(rw_file.clone());
-        spec.ioctl_paths.push(ioctl_file.clone());
-
-        let policy = build_policy(PathBuf::from("/bin/ls").as_path(), &spec, &private_tmp);
-        let rendered: String = policy.into();
-
-        let rw_ioctl_rule = format!("(allow file-ioctl (literal \"{}\"))", rw_file.display());
-        assert!(
-            !rendered.contains(&rw_ioctl_rule),
-            "rw path unexpectedly granted ioctl: {rw_ioctl_rule}"
-        );
-
-        let ioctl_rule = format!("(allow file-ioctl (literal \"{}\"))", ioctl_file.display());
-        assert!(
-            rendered.contains(&ioctl_rule),
-            "ioctl path missing ioctl rule: {ioctl_rule}"
-        );
-    }
 
     #[test]
     fn write_paths_grant_file_map_executable() {
