@@ -29,11 +29,16 @@ search would produce a misleading policy.
   is **sydbox 3.49.1**; that is the documented baseline this
   release is tested against.
 - **macOS**: uses the system `sandbox-exec` (Seatbelt). No extra
-  dependencies. Apple-shipped system paths (frameworks, `/usr/lib`,
-  `/usr/share`, timezone data, the standard device nodes, and the
-  `passwd`/`services`/`protocols` lookup files) remain readable so
-  dynamically linked programs can start. User data, application
-  data, and arbitrary system state are denied unless allowlisted.
+  dependencies. The full set of paths and Mach services that the
+  Seatbelt baseline (`system.sb`) leaves reachable on top of your
+  allowlists — system frameworks, `/usr/lib`, `/usr/share`,
+  timezone data, several `/private/etc` lookup files, a few
+  `/private/var/db` reads, broad `sysctl-read`, read+write on
+  `/dev/null`/`/dev/zero`/`/dev/fd`, plus a fixed set of Apple
+  Mach services — is enumerated in the [top-level README's
+  Platform specifics](../README.md#platform-specifics). Most user
+  data, application data, and arbitrary system state are denied
+  unless allowlisted.
 
 ## Example
 
