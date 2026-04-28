@@ -33,6 +33,24 @@ pub(crate) const DYNAMIC_LINKER_ENV_BLOCKLIST: &[&str] = &[
     "DYLD_FRAMEWORK_PATH",
 ];
 
+/// Panics if `path` contains any ASCII control byte (0x00..=0x1F or
+/// 0x7F). Such bytes are valid in unix paths but would be embedded
+/// literally into Seatbelt `(literal "...")` strings or syd path
+/// rules, where a `\n` could split a single rule into two and turn a
+/// `(deny ...)` into a no-op or a stray `(allow ...)`. We refuse them
+/// at the API boundary so every backend rule emitter sees clean
+/// input.
+fn assert_no_control_chars(method: &str, path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.iter().any(|b| *b < 0x20 || *b == 0x7F) {
+        panic!(
+            "{method} must not contain control characters, got: {:?}",
+            path
+        );
+    }
+}
+
 pub(crate) fn is_dynamic_linker_blocked(key: &OsStr) -> bool {
     let bytes = key.as_encoded_bytes();
     DYNAMIC_LINKER_ENV_BLOCKLIST
@@ -327,6 +345,7 @@ impl SandboxBuilder {
             "syd_path must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("syd_path", &path);
         self.spec.syd_path = Some(path);
         self
     }
@@ -343,6 +362,7 @@ impl SandboxBuilder {
             "read_path must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("read_path", &path);
         self.spec.read_paths.push(path);
         self
     }
@@ -358,6 +378,7 @@ impl SandboxBuilder {
             "read_dir must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("read_dir", &path);
         self.spec.read_dirs.push(path);
         self
     }
@@ -374,6 +395,7 @@ impl SandboxBuilder {
             "write_path must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("write_path", &path);
         self.spec.write_paths.push(path);
         self
     }
@@ -389,6 +411,7 @@ impl SandboxBuilder {
             "write_dir must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("write_dir", &path);
         self.spec.write_dirs.push(path);
         self
     }
@@ -404,6 +427,7 @@ impl SandboxBuilder {
             "exec_path must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("exec_path", &path);
         self.spec.exec_paths.push(path);
         self
     }
@@ -420,6 +444,7 @@ impl SandboxBuilder {
             "exec_dir must be absolute, got: {}",
             path.display()
         );
+        assert_no_control_chars("exec_dir", &path);
         self.spec.exec_dirs.push(path);
         self
     }
@@ -525,6 +550,7 @@ impl SandboxBuilder {
             "command path must be absolute, got: {}",
             program.display()
         );
+        assert_no_control_chars("command", program);
         let (command, sandbox) = self.build(program)?;
         Ok(SandboxCommand { command, sandbox })
     }
@@ -889,6 +915,63 @@ mod tests {
     #[should_panic(expected = "command path must be absolute")]
     fn command_builder_rejects_relative() {
         let _ = super::SandboxBuilder::new().command(std::path::Path::new("bin/echo"));
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn read_path_builder_rejects_newline() {
+        super::SandboxBuilder::new().read_path("/tmp/foo\nbar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn read_dir_builder_rejects_carriage_return() {
+        super::SandboxBuilder::new().read_dir("/tmp/foo\rbar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn write_path_builder_rejects_nul() {
+        super::SandboxBuilder::new().write_path("/tmp/foo\0bar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn write_dir_builder_rejects_tab() {
+        super::SandboxBuilder::new().write_dir("/tmp/foo\tbar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn exec_path_builder_rejects_del() {
+        super::SandboxBuilder::new().exec_path("/tmp/foo\x7fbar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn exec_dir_builder_rejects_newline() {
+        super::SandboxBuilder::new().exec_dir("/tmp/foo\nbar");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn syd_path_builder_rejects_newline() {
+        super::SandboxBuilder::new().syd_path("/usr/bin/syd\nrogue");
+    }
+
+    #[test]
+    #[should_panic(expected = "control characters")]
+    fn command_builder_rejects_newline() {
+        let _ = super::SandboxBuilder::new().command(std::path::Path::new("/bin/echo\n(allow)"));
+    }
+
+    #[test]
+    fn read_path_accepts_paths_with_spaces_parens_and_unicode() {
+        let builder = super::SandboxBuilder::new()
+            .read_path("/tmp/with space")
+            .read_path("/tmp/with (parens)")
+            .read_path("/tmp/café");
+        assert_eq!(builder.spec.read_paths.len(), 3);
     }
 
     #[cfg(target_os = "linux")]
