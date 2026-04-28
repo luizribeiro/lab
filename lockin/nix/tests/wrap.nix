@@ -33,18 +33,41 @@ let
 
   helloClosurePath = builtins.unsafeDiscardStringContext "${pkgs.hello}";
 
+  autoDirsRaw = import ../lib-dirs.nix { inherit lib pkgs; package = pkgs.hello; };
+  autoDirsList = lib.filter (s: s != "") (lib.splitString ":" autoDirsRaw);
+
   assertions = [
     {
       name = "closure: exec_dirs contains hello store path";
       ok = lib.elem helloClosurePath closureMode.filesystem.exec_dirs;
     }
     {
-      name = "closure: read_dirs preserves user /etc entry";
-      ok = closureMode.filesystem.read_dirs == [ "/etc" ];
+      name = "closure: read_dirs contains user /etc entry";
+      ok = lib.elem "/etc" closureMode.filesystem.read_dirs;
     }
     {
       name = "closure: store path not duplicated into read_dirs";
       ok = !(lib.elem helloClosurePath closureMode.filesystem.read_dirs);
+    }
+    {
+      name = "darwin: auto-derived linker dirs route to read_dirs";
+      ok = !pkgs.stdenv.isDarwin
+        || lib.all (d: lib.elem d closureMode.filesystem.read_dirs) autoDirsList;
+    }
+    {
+      name = "darwin: auto-derived linker dirs do not appear in exec_dirs";
+      ok = !pkgs.stdenv.isDarwin
+        || lib.all (d: !(lib.elem d closureMode.filesystem.exec_dirs)) autoDirsList;
+    }
+    {
+      name = "linux: auto-derived linker dirs remain in exec_dirs";
+      ok = pkgs.stdenv.isDarwin
+        || lib.all (d: lib.elem d closureMode.filesystem.exec_dirs) autoDirsList;
+    }
+    {
+      name = "linux: auto-derived linker dirs do not appear in read_dirs";
+      ok = pkgs.stdenv.isDarwin
+        || lib.all (d: !(lib.elem d closureMode.filesystem.read_dirs)) autoDirsList;
     }
     {
       name = "closure: exec_dirs preserves user entry";
@@ -64,16 +87,35 @@ let
       ok = lib.elem "/nix/store" fullMode.filesystem.exec_dirs;
     }
     {
-      name = "full: no read_dirs key (no user entries)";
-      ok = !(fullMode.filesystem ? read_dirs);
+      name = "full: no read_dirs key on linux (no user entries, autos are exec)";
+      ok = pkgs.stdenv.isDarwin || !(fullMode.filesystem ? read_dirs);
+    }
+    {
+      name = "full: read_dirs contains auto linker dirs on darwin";
+      ok = !pkgs.stdenv.isDarwin
+        || lib.all (d: lib.elem d (fullMode.filesystem.read_dirs or [ ])) autoDirsList;
     }
     {
       name = "full: no darwin key emitted";
       ok = !(fullMode ? darwin);
     }
     {
-      name = "none: read_dirs is exactly user entries";
-      ok = noneMode.filesystem.read_dirs == [ "/etc" ];
+      name = "none: read_dirs contains user entries";
+      ok = lib.elem "/etc" noneMode.filesystem.read_dirs;
+    }
+    {
+      name = "none: read_dirs is exactly user entries (linux)";
+      ok = pkgs.stdenv.isDarwin || noneMode.filesystem.read_dirs == [ "/etc" ];
+    }
+    {
+      name = "none: read_dirs contains auto linker dirs on darwin";
+      ok = !pkgs.stdenv.isDarwin
+        || lib.all (d: lib.elem d noneMode.filesystem.read_dirs) autoDirsList;
+    }
+    {
+      name = "none: auto linker dirs absent from exec_dirs on darwin";
+      ok = !pkgs.stdenv.isDarwin
+        || lib.all (d: !(lib.elem d (noneMode.filesystem.exec_dirs or [ ]))) autoDirsList;
     }
     {
       name = "none: exec_dirs has no /nix/store closure entries";

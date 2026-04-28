@@ -26,11 +26,18 @@ let
     else if nixStoreAccess == "full" then [ "/nix/store" ]
     else [ ];
 
+  # On macOS, read_dirs is sufficient for dyld to map .dylibs (file-map-executable
+  # is granted via read). On Linux, the kernel needs allow/exec on ld-linux-*.so.*,
+  # which lives inside these dirs, so they remain in exec_dirs there (matching the
+  # prior library_paths behaviour).
+  autoReadDirs = lib.optionals pkgs.stdenv.isDarwin autoDirsList;
+  autoExecDirs = lib.optionals (!pkgs.stdenv.isDarwin) autoDirsList;
+
   userReadDirs = policy.filesystem.read_dirs or [ ];
-  mergedReadDirs = lib.unique userReadDirs;
+  mergedReadDirs = lib.unique (userReadDirs ++ autoReadDirs);
 
   userExecDirs = policy.filesystem.exec_dirs or [ ];
-  mergedExecDirs = lib.unique (userExecDirs ++ storeExecDirs ++ autoDirsList);
+  mergedExecDirs = lib.unique (userExecDirs ++ storeExecDirs ++ autoExecDirs);
 
   userDarwin = policy.darwin or { };
 
