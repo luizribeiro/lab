@@ -198,6 +198,38 @@ impl NetworkPolicy {
         self
     }
 
+    /// Build a policy from a list of allowed hostnames.
+    ///
+    /// Accepts exact hostnames (`api.example.com`), subdomain wildcards
+    /// (`*.example.com`), and the global wildcard (`*`), which yields an
+    /// [`Self::allow_all`] policy.
+    ///
+    /// # Trust model
+    ///
+    /// `allow_hosts` is a *hostname* allowlist, not an *address*
+    /// allowlist. The policy admits a connection when its target
+    /// hostname matches a listed pattern; the address it resolves to is
+    /// not constrained.
+    ///
+    /// - DNS resolution happens per request, so the set of reachable
+    ///   IPs can shift between requests if records change (DNS
+    ///   rebinding). Allowing a domain implicitly trusts whoever
+    ///   controls its authoritative DNS.
+    /// - Hostnames that resolve to loopback (`127.0.0.0/8`, `::1`),
+    ///   RFC1918 private ranges, link-local (`169.254.0.0/16`,
+    ///   `fe80::/10`), or cloud-metadata addresses (e.g.
+    ///   `169.254.169.254`) give the sandboxed program reach into the
+    ///   host network. That is sometimes intentional (a sandboxed tool
+    ///   talking to a local dev server, or scoped corp-internal
+    ///   access); the deny-by-default mode does not grant it, so be
+    ///   sure it is what you want.
+    /// - Wildcards like `*.example.com` extend trust to everyone who
+    ///   controls subdomains of the parent. Avoid wildcards on domains
+    ///   you do not own or fully control.
+    ///
+    /// The caller owns the allowlist's attack surface — outpost
+    /// enforces the listed patterns literally and does not filter
+    /// resolved addresses after the fact.
     pub fn from_allowed_hosts<'a>(
         hosts: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, DomainPatternParseError> {

@@ -27,6 +27,7 @@ command = ["/usr/bin/python3"]
 [sandbox.network]
 mode = "proxy"
 allow_hosts = ["api.example.com", "*.cdn.example.com"]
+# See docs/cli.md#allow_hosts-trust-model for what allowing a host grants.
 
 [filesystem]
 read_dirs = ["/usr/lib/python3.11", "/etc/ssl/certs"]

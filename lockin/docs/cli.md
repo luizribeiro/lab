@@ -133,7 +133,7 @@ exposed.
 |---|---|---|
 | `command` | `[string, ...]` | Base command (argv prefix). CLI args are appended. Must be non-empty if present (omit the field entirely to use CLI args alone). |
 | `sandbox.network.mode` | `"deny"` \| `"allow_all"` \| `"proxy"` | Network enforcement strategy (default `"deny"`). `deny` blocks IP networking (TCP/UDP, v4 and v6), inbound bind/listen, and AF_UNIX outbound to arbitrary paths; on macOS a small set of Apple system services required for normal program startup remains reachable, but programs cannot register new Mach names, look up arbitrary XPC services, write to `/cores`, or connect to the syslog Unix socket. `allow_all` removes all restrictions. `proxy` spawns an HTTP CONNECT proxy on loopback, sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (and lowercase variants), clears `NO_PROXY`/`no_proxy`, and restricts OS-level outbound to the proxy port only — traffic that bypasses the proxy env fails closed. |
-| `sandbox.network.allow_hosts` | `[string, ...]` | Host allowlist for `mode = "proxy"`. Exact hostnames (`"api.example.com"`) or wildcard patterns (`"*.cdn.example.com"`). Must be empty for `deny` / `allow_all` modes. |
+| `sandbox.network.allow_hosts` | `[string, ...]` | Host allowlist for `mode = "proxy"`. Exact hostnames (`"api.example.com"`) or wildcard patterns (`"*.cdn.example.com"`). Must be empty for `deny` / `allow_all` modes. See [allow_hosts trust model](#allow_hosts-trust-model) for what allowing a host implies. |
 | `sandbox.allow_kvm` | `bool` | Allow `/dev/kvm` access. Linux only; ignored on macOS. |
 | `sandbox.allow_interactive_tty` | `bool` | Allow controlling terminal access. |
 | `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |
@@ -153,6 +153,44 @@ exposed.
 | `env.set` | `{ key = "value", ... }` | Hardcoded env values. Applied after `pass`; overrides on collision. |
 | `env.block` | `[string, ...]` | Shell-glob patterns (`*`, `?`, `[...]`, case-sensitive). Matching env keys are always stripped, even from `set`. |
 | `darwin.raw_seatbelt_rules` | `[string, ...]` | Raw sandbox-exec S-expression rules appended verbatim to the generated profile. Raw rules can broaden sandbox authority, including invoking named bundles (`system-graphics`, `system-network`) defined by the macOS system profile but not enabled by default — a single `(system-network)` token unlocks routing-socket egress, mDNS, and the network-extension service surface. Treat as a trusted-policy escape hatch; the caller owns the safety of every rule. Intended for darwin operations not expressible structurally (`iokit-open`, `mach-lookup`, `sysctl-read`, etc.); process-exec is not one of them — use `filesystem.exec_paths` / `filesystem.exec_dirs` instead. macOS only; ignored on Linux. Malformed rules cause `sandbox-exec` to reject the profile at spawn; the child exits with `sandbox-exec`'s failure status. |
+
+## allow_hosts trust model
+
+`allow_hosts` is a *hostname* allowlist, not an *address* allowlist.
+The proxy resolves each connection's target hostname at request time
+and admits the connection if the hostname matches an allowlist entry.
+Whatever IP that name resolves to — now or in the future — becomes
+reachable through the proxy.
+
+A few consequences worth understanding before writing an entry:
+
+- **DNS controls the address set.** Resolution happens per-request, so
+  the set of reachable IPs can shift between requests if the
+  authoritative records change (DNS rebinding). Allowing a domain
+  implicitly trusts whoever controls that domain's authoritative DNS.
+- **Names that resolve to host-local or internal addresses give the
+  sandboxed program reach into the host network.** This includes
+  loopback (`127.0.0.0/8`, `::1`), private RFC1918 ranges
+  (`10/8`, `172.16/12`, `192.168/16`), link-local (`169.254.0.0/16`,
+  `fe80::/10`), and cloud metadata endpoints such as
+  `169.254.169.254`. That is sometimes intentional — sandboxing a
+  tool that talks to a local dev server, or scoped corp-internal
+  access — but it is reach the deny-by-default mode does not grant,
+  so be sure that's what you want.
+- **Wildcards extend trust to every subdomain controller.** A pattern
+  like `*.example.com` admits whatever `anything.example.com`
+  resolves to, for any subdomain anyone with control of
+  `example.com`'s zone chooses to publish. Avoid wildcards on domains
+  you do not own or fully control.
+- **The policy author owns the allowlist's attack surface.** lockin
+  enforces the contract literally — once a host is named, the proxy
+  admits connections to it. lockin does not second-guess intent by
+  filtering address classes after resolution; that would silently
+  break the legitimate uses above.
+
+If the program only needs a fixed set of public APIs, prefer listing
+exact hostnames over wildcards, and avoid entries that resolve into
+the host's private network unless that reach is the point.
 
 ## Environment variables
 
