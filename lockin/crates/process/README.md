@@ -33,8 +33,12 @@ cmd.status()?;
 - **`seal_fds()`** — mark fds `>= 3` `FD_CLOEXEC` so the kernel
   closes them on `execve`, except those re-allowed by a later
   `keep_fd`/`map_fd`. On Linux ≥ 5.11 the full range is covered in
-  one `close_range` syscall; on older Linux and on macOS the sweep
-  iterates `[3, min(RLIMIT_NOFILE, 65536))` via `fcntl`.
+  one child-side `close_range` syscall; on older Linux it falls
+  back to a `fcntl` loop over `[3, min(RLIMIT_NOFILE, 65536)]`. On
+  macOS, the parent enumerates currently-open fds at registration
+  time via `proc_pidinfo(PROC_PIDLISTFDS)` and marks each one
+  precisely (no numeric cap), and a defensive child-side `fcntl`
+  sweep covers the residual race window up to fd 65,536.
 
 Call `seal_fds()` first, then `keep_fd()`/`map_fd()` — hooks run
 in registration order.

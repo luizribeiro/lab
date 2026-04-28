@@ -11,23 +11,32 @@ use std::process::Command;
 /// registration order, so call [`seal_fds`](CommandFdExt::seal_fds)
 /// **before** [`map_fd`](CommandFdExt::map_fd) /
 /// [`keep_fd`](CommandFdExt::keep_fd). The seal marks fds `>= 3`
-/// `FD_CLOEXEC` at exec time (full range via `close_range` on
-/// Linux ≥ 5.11; otherwise iterating `[3, min(RLIMIT_NOFILE, 65536))`
-/// via `fcntl`); subsequent map/keep hooks clear `FD_CLOEXEC` on the
-/// fds the child should keep.
+/// `FD_CLOEXEC` at exec time; subsequent map/keep hooks clear
+/// `FD_CLOEXEC` on the fds the child should keep.
 pub trait CommandFdExt {
     fn map_fd(&mut self, fd: OwnedFd, child_fd: RawFd) -> &mut Self;
     fn keep_fd(&mut self, fd: OwnedFd) -> &mut Self;
 
-    /// Registers a `pre_exec` hook that marks fds `>= 3`
-    /// `FD_CLOEXEC` at exec time, so any fd not whitelisted by a
+    /// Marks fds `>= 3` `FD_CLOEXEC` so any fd not whitelisted by a
     /// later [`map_fd`](Self::map_fd) / [`keep_fd`](Self::keep_fd)
-    /// hook is closed by the kernel on `execve`. The sweep covers
-    /// the full fd range on Linux ≥ 5.11 via `close_range`; on older
-    /// Linux and on macOS it iterates `[3, min(RLIMIT_NOFILE, 65536))`
-    /// via `fcntl`. The sweep runs child-side after `fork`, so fds
-    /// opened in the parent between this call and `spawn` are still
-    /// covered.
+    /// hook is closed by the kernel on `execve`.
+    ///
+    /// On Linux, sealing happens entirely child-side via a
+    /// `pre_exec` hook: `close_range(3, !0u32, CLOSE_RANGE_CLOEXEC)`
+    /// on Linux ≥ 5.11 walks the kernel's fd table directly with no
+    /// number-based bound, falling back to a `fcntl` loop over
+    /// `[3, min(RLIMIT_NOFILE, 65536)]` on older kernels.
+    ///
+    /// On macOS, this method enumerates the parent's currently open
+    /// fds via `proc_pidinfo(PROC_PIDLISTFDS)` *immediately* (at
+    /// registration time, in the parent) and marks each one
+    /// `FD_CLOEXEC` precisely — so fds above any numeric cap are
+    /// covered. A defensive child-side `fcntl` sweep over
+    /// `[3, min(RLIMIT_NOFILE, 65536)]` also runs at exec time to
+    /// catch fds opened by other parent threads in the gap between
+    /// this call and `spawn`. Fds above 65,536 opened in that gap
+    /// are not covered; for that residual case, call `seal_fds()`
+    /// as late as possible before `spawn()`.
     fn seal_fds(&mut self) -> &mut Self;
 }
 
@@ -83,6 +92,69 @@ unsafe fn cloexec_sweep(max_fd: RawFd) {
     fcntl_cloexec_sweep(max_fd);
 }
 
+/// Enumerates the calling process's open fds via `proc_pidinfo` and
+/// marks every fd `>= 3` `FD_CLOEXEC`. Runs in the parent (not
+/// async-signal-safe), so it can safely allocate.
+///
+/// Tolerates per-fd errors (a closed/raced fd reports `EBADF`, which
+/// is harmless — the goal is best-effort precision in the parent;
+/// the child-side defensive sweep handles fds that appear after
+/// enumeration).
+#[cfg(target_os = "macos")]
+fn mark_all_open_fds_cloexec_macos() {
+    use std::mem::MaybeUninit;
+
+    let pid = unsafe { libc::getpid() };
+
+    let needed_bytes =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    if needed_bytes <= 0 {
+        return;
+    }
+
+    let slot_size = std::mem::size_of::<libc::proc_fdinfo>() as i32;
+    debug_assert!(slot_size > 0);
+
+    // Over-allocate to absorb fds opened between sizing and the
+    // populating call.
+    let capacity = (needed_bytes / slot_size) + 64;
+    let buf_bytes = capacity.saturating_mul(slot_size);
+    let mut buf: Vec<MaybeUninit<libc::proc_fdinfo>> = Vec::with_capacity(capacity as usize);
+
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf_bytes,
+        )
+    };
+    if written <= 0 {
+        return;
+    }
+
+    let populated = (written / slot_size) as usize;
+    // SAFETY: proc_pidinfo wrote `populated * slot_size` bytes of
+    // proc_fdinfo into our buffer; reading those entries is sound.
+    let entries: &[libc::proc_fdinfo] =
+        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const libc::proc_fdinfo, populated) };
+
+    for entry in entries {
+        let fd = entry.proc_fd;
+        if fd < 3 {
+            continue;
+        }
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            continue;
+        }
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+        }
+    }
+}
+
 impl CommandFdExt for Command {
     fn map_fd(&mut self, fd: OwnedFd, child_fd: RawFd) -> &mut Self {
         assert!(child_fd >= 3, "map_fd: child_fd {child_fd} must be >= 3");
@@ -121,6 +193,13 @@ impl CommandFdExt for Command {
     }
 
     fn seal_fds(&mut self) -> &mut Self {
+        // On macOS, mark currently-open fds CLOEXEC right now in the
+        // parent via precise enumeration. The child-side fcntl sweep
+        // below covers the residual race window for fds opened
+        // between this call and `spawn` up to fd 65,536.
+        #[cfg(target_os = "macos")]
+        mark_all_open_fds_cloexec_macos();
+
         let max_fd = parent_max_fd();
 
         // SAFETY: close_range and fcntl are async-signal-safe. The

@@ -248,6 +248,79 @@ fn fd_opened_after_command_construction_is_sealed() {
 }
 
 #[test]
+fn high_numbered_fd_above_cap_is_sealed_in_child() {
+    // Regression test for the macOS MAX_FD_SWEEP cap (65,536).
+    // Pre-fix, fds above the cap were never marked CLOEXEC because
+    // the child-side fcntl sweep stopped at 65,536 and there was no
+    // parent-side enumeration. Tries to open an fd at number 70,000
+    // and asserts the sandboxed child cannot read it.
+    //
+    // Self-skips (with a printed reason) if the test environment's
+    // RLIMIT_NOFILE hard limit doesn't allow raising the soft limit
+    // that high.
+    let needed: libc::rlim_t = 70_001;
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+        eprintln!("skipping high_numbered_fd_above_cap_is_sealed_in_child: getrlimit failed");
+        return;
+    }
+    if rlim.rlim_max < needed {
+        eprintln!(
+            "skipping high_numbered_fd_above_cap_is_sealed_in_child: \
+             RLIMIT_NOFILE hard limit is {} < {needed}",
+            rlim.rlim_max
+        );
+        return;
+    }
+    rlim.rlim_cur = needed;
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) } != 0 {
+        eprintln!("skipping high_numbered_fd_above_cap_is_sealed_in_child: setrlimit failed");
+        return;
+    }
+
+    let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+    write_end.write_all(b"X").expect("write marker");
+    drop(write_end);
+
+    let original: OwnedFd = read_end.into();
+    let high_raw: i32 = 70_000;
+    assert_ne!(
+        unsafe { libc::dup2(original.as_raw_fd(), high_raw) },
+        -1,
+        "dup2 to fd {high_raw} failed"
+    );
+    drop(original);
+    let leak_fd = unsafe { OwnedFd::from_raw_fd(high_raw) };
+
+    let probe = probe_binary();
+    let builder = common::sandbox_builder();
+    let mut cmd = builder.command(&probe).expect("build sandbox");
+    cmd.arg("fd-read-byte")
+        .arg(high_raw.to_string())
+        .arg("X")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit());
+
+    let output = cmd.output().expect("spawn probe");
+    assert!(
+        !output.status.success(),
+        "probe read from fd {high_raw} successfully — the cap bug is back"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_msg = format!("fcntl(F_GETFD) on fd {high_raw} failed");
+    assert!(
+        stderr.contains(&expected_msg),
+        "expected EBADF error for fd {high_raw} in stderr, got: {stderr}"
+    );
+
+    drop(leak_fd);
+}
+
+#[test]
 fn inherited_fd_survives_seal() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
     write_end.write_all(b"Q").expect("write marker");
