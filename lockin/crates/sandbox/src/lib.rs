@@ -334,8 +334,14 @@ impl SandboxBuilder {
     }
 
     /// Adds a directory that the dynamic linker needs to load shared
-    /// libraries from. On Linux the sandbox grants recursive read+exec;
-    /// on macOS it grants recursive read.
+    /// libraries from. On Linux the sandbox grants recursive
+    /// read+exec; on macOS it grants recursive read.
+    ///
+    /// The Linux exec grant is required so `ld-linux*.so.*` inside
+    /// the directory can launch the configured command, and is
+    /// therefore recursive — every binary in this directory is
+    /// exec-able from inside the sandbox. macOS does not need this
+    /// exception (dyld is loaded by the kernel, not via `execve`).
     ///
     /// Panics if `path` is not absolute.
     pub fn library_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -357,6 +363,9 @@ impl SandboxBuilder {
     /// This is the recommended way to configure library paths in
     /// environments managed by Nix or similar tooling that sets
     /// `LOCKIN_LIBRARY_DIRS` automatically.
+    ///
+    /// Each directory inherits [`library_path`](Self::library_path)
+    /// semantics; on Linux that includes recursive exec.
     pub fn library_paths_from_env(mut self) -> Self {
         if let Some(val) = std::env::var_os("LOCKIN_LIBRARY_DIRS") {
             for dir in std::env::split_paths(&val) {

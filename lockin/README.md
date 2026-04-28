@@ -31,7 +31,13 @@ The same builder methods produce the same enforcement on both
 backends. A program inside a default-policy lockin sandbox cannot:
 
 - read or write files outside the configured allowlists,
-- exec any binary other than the one named in `.command(...)`,
+- exec any binary other than the one named in `.command(...)` —
+  except, on Linux, binaries inside any directory passed to
+  `library_path`, which are recursively exec-able because the
+  dynamic linker (`ld-linux*.so.*`) lives there and must be
+  launchable for dynamically linked programs to start. macOS does
+  not have this exception (dyld is loaded by the kernel, not via
+  `execve`),
 - open IP sockets (TCP or UDP) when network mode is `deny`,
 - connect AF_UNIX sockets to paths outside the allowlists,
 - bind or listen on a network port,
@@ -52,6 +58,8 @@ apply identically on both backends.
 
 **Linux** uses [`syd`](https://git.sr.ht/~alip/syd) (sydbox-rs) plus
 Landlock. Nothing outside the structured allowlists is reachable.
+`library_path` directories are recursively exec-able so the
+dynamic linker can launch the configured command.
 
 **macOS** uses the system `sandbox-exec` (Seatbelt). Apple-shipped
 read-only system paths — system frameworks under `/System` and
@@ -64,4 +72,6 @@ center, OpenDirectory libinfo, and a few peers) remains reachable
 over Mach for the same reason. User data, application data, and
 arbitrary system state are denied unless allowlisted. Egress to the
 syslog Unix socket, `mach-register`, the XPC service-name lookup
-namespace, and writes under `/cores` are denied.
+namespace, and writes under `/cores` are denied. `process-exec` is
+granted only for the command path; `library_path` directories are
+mappable as code (`file-map-executable`) but not `execve()`-able.

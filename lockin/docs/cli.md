@@ -102,7 +102,7 @@ All fields are optional. Everything defaults to deny/false/empty.
 | `filesystem.read_write_dirs` | `[path, ...]` | Recursive read-write directories. |
 | `filesystem.ioctl_paths` | `[path, ...]` | ioctl-allowed file paths. |
 | `filesystem.ioctl_dirs` | `[path, ...]` | ioctl-allowed directories. |
-| `filesystem.library_paths` | `[path, ...]` | Dynamic linker library directories. |
+| `filesystem.library_paths` | `[path, ...]` | Dynamic linker library directories. On Linux, binaries inside these directories are also exec-able (required for the dynamic linker). |
 | `limits.max_open_files` | `int` | `RLIMIT_NOFILE` |
 | `limits.max_address_space` | `int` | `RLIMIT_AS` (bytes) |
 | `limits.max_cpu_time` | `int` | `RLIMIT_CPU` (seconds) |

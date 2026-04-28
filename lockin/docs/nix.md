@@ -42,7 +42,8 @@ automatically for each binary in `${package}/bin`:
 - `filesystem.library_paths` — derived by running `ldd` (Linux) or
   `otool -L` (Darwin) on the target binaries and collecting the
   `/nix/store` directories. Your own `library_paths` entries are
-  preserved and merged.
+  preserved and merged. On Linux these auto-derived directories
+  are recursively exec-able (required for the dynamic linker).
 - `filesystem.read_only_dirs` — the package's runtime closure
   (computed via `pkgs.closureInfo`) is appended after the user's
   entries so every store path the binary can reach is readable, and

@@ -49,7 +49,10 @@ let status = Sandbox::builder()
 
 Dynamically linked binaries need their library directories
 allowlisted. Use `.library_path()` to grant read (and on Linux,
-exec) access:
+recursive exec) access. The Linux exec grant is required so the
+dynamic linker (`ld-linux*.so.*`) inside the directory can launch
+the configured command; it also makes every other binary in that
+directory exec-able. macOS does not have this exception.
 
 ```rust,no_run,ignore
 use std::path::Path;
