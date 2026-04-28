@@ -2,7 +2,15 @@
 name = "lockin-cli"
 version = "0.1.0"
 edition = "2021"
+description = "Build and run a child process inside an OS sandbox (Linux: syd, macOS: sandbox-exec)."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/lockin"
 publish = false
+
+[package.metadata.dist]
+dist = true
+formula = "lockin"
 
 [[bin]]
 name = "lockin"

@@ -1,5 +1,5 @@
 [workspace]
-members = ["cargo:scope/", "cargo:tempo/"]
+members = ["cargo:lockin/", "cargo:scope/", "cargo:tempo/"]
 
 # Config for 'dist'
 [dist]

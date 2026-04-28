@@ -3,6 +3,9 @@ name = "lockin"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.dist]
+dist = false
+
 [features]
 default = []
 tokio = ["dep:tokio"]
