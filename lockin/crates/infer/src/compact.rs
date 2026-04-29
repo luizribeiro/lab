@@ -13,9 +13,14 @@
 //!    backends synthesize traversal/read coverage from explicit leaf entries
 //!    (see `sandbox/src/linux.rs` and `sandbox/src/darwin/paths.rs`).
 //!
-//! Note: `FsOp::Stat` is promoted to a read. Real metadata-only support
-//! would require a separate schema field; until then this is a deliberate
-//! conservative overgrant, surfaced in the generated TOML's header.
+//! Note: Read and Stat events whose path is a strict ancestor of any
+//! material event (ReadDir/Write/Create/Delete/Exec or another concrete
+//! Read leaf) are dropped — the enforcement layer's traversal synthesis
+//! already covers ancestor reads/stats from explicit leaf entries.
+//! Bare `/` is dropped from `read_paths` unconditionally. Real
+//! metadata-only support would require a separate schema field; until
+//! then promoted Stat entries are a deliberate conservative overgrant,
+//! surfaced in the generated TOML's header.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -60,17 +65,29 @@ const SYSTEM_READ_PREFIXES: &[&str] = &[
 /// Convert events to a compacted policy.
 pub fn compact(events: &[InferEvent]) -> InferredPolicy {
     let mut policy = InferredPolicy::default();
+    let mut stat_observations: Vec<PathBuf> = Vec::new();
+    let mut read_observations: Vec<PathBuf> = Vec::new();
+    let mut material_paths: BTreeSet<PathBuf> = BTreeSet::new();
 
     for event in events {
         match event {
             InferEvent::Fs { op, path } => match op {
-                FsOp::Read | FsOp::ReadDir | FsOp::Stat => {
+                FsOp::Read => {
+                    read_observations.push(path.clone());
+                }
+                FsOp::ReadDir => {
+                    material_paths.insert(path.clone());
                     add_read(path.clone(), &mut policy);
                 }
+                FsOp::Stat => {
+                    stat_observations.push(path.clone());
+                }
                 FsOp::Write => {
+                    material_paths.insert(path.clone());
                     policy.write_paths.insert(path.clone());
                 }
                 FsOp::Create => {
+                    material_paths.insert(path.clone());
                     policy.write_paths.insert(path.clone());
                     if let Some(parent) = path.parent() {
                         if !parent.as_os_str().is_empty() {
@@ -79,6 +96,7 @@ pub fn compact(events: &[InferEvent]) -> InferredPolicy {
                     }
                 }
                 FsOp::Delete => {
+                    material_paths.insert(path.clone());
                     if let Some(parent) = path.parent() {
                         if !parent.as_os_str().is_empty() {
                             policy.write_dirs.insert(parent.to_path_buf());
@@ -87,16 +105,45 @@ pub fn compact(events: &[InferEvent]) -> InferredPolicy {
                 }
             },
             InferEvent::Exec { path } => {
+                material_paths.insert(path.clone());
                 policy.exec_paths.insert(path.clone());
             }
             InferEvent::Unsupported { .. } => {}
         }
     }
 
+    for read_path in &read_observations {
+        if material_paths
+            .iter()
+            .any(|m| is_strict_ancestor(read_path, m))
+        {
+            continue;
+        }
+        material_paths.insert(read_path.clone());
+        add_read(read_path.clone(), &mut policy);
+    }
+
+    for stat_path in stat_observations {
+        if material_paths
+            .iter()
+            .any(|m| is_strict_ancestor(&stat_path, m))
+        {
+            continue;
+        }
+        add_read(stat_path, &mut policy);
+    }
+
     policy
 }
 
+fn is_strict_ancestor(parent: &Path, child: &Path) -> bool {
+    child.starts_with(parent) && child != parent
+}
+
 fn add_read(path: PathBuf, policy: &mut InferredPolicy) {
+    if path == Path::new("/") {
+        return;
+    }
     if policy.read_dirs.iter().any(|d| path.starts_with(d)) {
         return;
     }
@@ -333,5 +380,50 @@ mod tests {
             "writes never collapse to dir-level grants from system prefixes: {:?}",
             policy.write_dirs,
         );
+    }
+
+    #[test]
+    fn stat_dropped_when_descendant_is_material() {
+        let policy = compact(&[
+            fs(FsOp::Stat, "/foo"),
+            fs(FsOp::Stat, "/foo/bar"),
+            fs(FsOp::Read, "/foo/bar/file.txt"),
+        ]);
+        assert_eq!(policy.read_paths.len(), 1);
+        assert!(policy.read_paths.contains(Path::new("/foo/bar/file.txt")));
+    }
+
+    #[test]
+    fn stat_kept_when_no_descendant() {
+        let policy = compact(&[fs(FsOp::Stat, "/foo")]);
+        assert_eq!(policy.read_paths.len(), 1);
+        assert!(policy.read_paths.contains(Path::new("/foo")));
+    }
+
+    #[test]
+    fn bare_root_dropped() {
+        let policy = compact(&[fs(FsOp::Stat, "/")]);
+        assert!(
+            !policy.read_paths.contains(Path::new("/")),
+            "bare root stat must be dropped: {:?}",
+            policy.read_paths,
+        );
+    }
+
+    #[test]
+    fn stat_under_system_prefix_does_not_break_collapse() {
+        let policy = compact(&[
+            fs(FsOp::Stat, "/usr/lib"),
+            fs(FsOp::Read, "/usr/lib/libfoo.so"),
+        ]);
+        assert!(policy.read_dirs.contains(Path::new("/usr/lib")));
+        assert!(!policy.read_paths.contains(Path::new("/usr/lib")));
+    }
+
+    #[test]
+    fn stat_only_event_for_dead_end_dir_promoted() {
+        let policy = compact(&[fs(FsOp::Stat, "/var/lib/empty-dir")]);
+        assert_eq!(policy.read_paths.len(), 1);
+        assert!(policy.read_paths.contains(Path::new("/var/lib/empty-dir")));
     }
 }

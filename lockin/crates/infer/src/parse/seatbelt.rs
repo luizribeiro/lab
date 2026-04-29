@@ -105,7 +105,8 @@ fn classify(op: &str, remainder: &str, first_line: &str) -> SeatbeltParseOutcome
     };
 
     match op {
-        "file-read-data" | "file-read-metadata" => path_op(FsOp::Read),
+        "file-read-data" => path_op(FsOp::Read),
+        "file-read-metadata" => path_op(FsOp::Stat),
         "file-readdir" => path_op(FsOp::ReadDir),
         "file-write-data"
         | "file-write-mount"
@@ -171,13 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn file_read_metadata_promotes_to_read() {
+    fn file_read_metadata_maps_to_stat() {
         assert!(matches!(
             parse_message(
                 &msg("Sandbox: bash(1) allow file-read-metadata /etc/hosts"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs { op: FsOp::Read, .. })
+            SeatbeltParseOutcome::Event(InferEvent::Fs { op: FsOp::Stat, .. })
         ));
     }
 
