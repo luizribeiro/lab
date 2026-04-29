@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,7 +16,7 @@ pub struct Config {
     pub darwin: DarwinConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxConfig {
     pub allow_kvm: bool,
@@ -46,7 +46,7 @@ pub enum NetworkConfigMode {
     Proxy,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct FilesystemConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -63,7 +63,7 @@ pub struct FilesystemConfig {
     pub exec_dirs: Vec<PathBuf>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvConfig {
     pub inherit: bool,
@@ -75,14 +75,14 @@ pub struct EnvConfig {
     pub set: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct DarwinConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub raw_seatbelt_rules: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]

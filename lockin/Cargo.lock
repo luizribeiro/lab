@@ -278,7 +278,9 @@ name = "lockin-infer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "lockin-config",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
