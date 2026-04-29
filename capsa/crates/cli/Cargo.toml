@@ -8,10 +8,18 @@ default-run = "capsa"
 name = "capsa"
 path = "src/main.rs"
 
+[[bin]]
+name = "capsa-fg-tty-probe"
+path = "src/bin/fg_tty_probe.rs"
+test = false
+doc = false
+
 [dependencies]
 anyhow = "1.0"
 capsa = { path = "../capsa" }
 clap = { version = "4.5", features = ["derive"] }
+libc = "0.2"
+lockin = { path = "../../../lockin/crates/sandbox" }
 tokio = { version = "1.45", features = ["macros", "rt"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

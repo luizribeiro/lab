@@ -9,3 +9,4 @@ pkg-config = "0.3"
 [dependencies]
 anyhow = "1.0"
 capsa-spec = { path = "../spec" }
+lockin = { path = "../../../lockin/crates/sandbox" }

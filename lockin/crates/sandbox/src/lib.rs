@@ -9,6 +9,8 @@ use lockin_process::CommandFdExt;
 
 mod paths;
 
+pub mod fg_tty;
+
 #[cfg(feature = "tokio")]
 pub mod tokio;
 

@@ -10,6 +10,16 @@ pub fn start_vm(spec: &VmmLaunchSpec) -> Result<()> {
 
     libkrun::init_logging()?;
 
+    // libkrun's `configure_host_tty_console` calls `tcsetattr` to put
+    // the host tty in raw mode. That fails with EPERM unless we're
+    // the foreground pgrp of the controlling tty. We're spawned by
+    // capsa-cli through `sandbox-exec`, which lands us in a process
+    // group that is NOT the controlling tty's foreground pgrp by the
+    // time libkrun runs — claim it now and hold the guard until VM
+    // exit so the user's shell gets the foreground back when we go.
+    let _fg_tty = lockin::fg_tty::claim_foreground_tty()
+        .map_err(|err| anyhow::anyhow!("failed to claim foreground tty: {err}"))?;
+
     let vm = libkrun::KrunVm::new()?
         .configure(spec.vcpus, spec.memory_mib)?
         .configure_host_tty_console()?;

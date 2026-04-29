@@ -11,13 +11,14 @@
 //!
 //! Available with the `tokio` feature.
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::process::ExitStatus;
 use std::time::Duration;
 
 use anyhow::Context;
 use tokio::signal::unix::{signal, Signal, SignalKind};
 
+use crate::fg_tty::{ignore_signal, open_controlling_tty, restore_signal};
 use crate::{SandboxedChild, SandboxedCommand};
 
 /// Default grace period before escalating from SIGTERM/SIGINT to
@@ -193,33 +194,5 @@ fn place_child_in_own_pgroup(cmd: &mut SandboxedCommand) {
             }
             Ok(())
         });
-    }
-}
-
-fn open_controlling_tty() -> Option<OwnedFd> {
-    let fd = unsafe { libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
-    if fd < 0 {
-        None
-    } else {
-        Some(unsafe { OwnedFd::from_raw_fd(fd) })
-    }
-}
-
-fn ignore_signal(sig: libc::c_int) -> std::io::Result<libc::sigaction> {
-    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
-    let mut new: libc::sigaction = unsafe { std::mem::zeroed() };
-    new.sa_sigaction = libc::SIG_IGN;
-    if unsafe { libc::sigaction(sig, &new, &mut old) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(old)
-}
-
-fn restore_signal(sig: libc::c_int, prev: &libc::sigaction) {
-    if unsafe { libc::sigaction(sig, prev, std::ptr::null_mut()) } != 0 {
-        eprintln!(
-            "lockin: failed to restore signal {sig} disposition: {}",
-            std::io::Error::last_os_error()
-        );
     }
 }
