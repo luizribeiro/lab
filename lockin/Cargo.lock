@@ -278,6 +278,7 @@ name = "lockin-infer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "libc",
  "lockin-config",
  "serde_json",
  "tempfile",

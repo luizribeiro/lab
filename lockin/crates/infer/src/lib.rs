@@ -6,6 +6,7 @@
 //! macOS seatbelt) and the `lockin infer` CLI integration live in
 //! later modules and commits.
 
+pub mod backend;
 pub mod compact;
 pub mod emit;
 pub mod event;
