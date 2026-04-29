@@ -7,5 +7,7 @@
 //! later modules and commits.
 
 pub mod event;
+pub mod path;
 
 pub use event::{DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
+pub use path::canonicalize_observed;
