@@ -10,7 +10,7 @@
 mod common;
 
 use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 use std::process::{ExitStatus, Stdio};
 use std::thread;
@@ -390,15 +390,23 @@ fn unmapped_unrelated_fd_is_still_sealed_when_inherit_fd_as_used() {
 #[test]
 fn mapped_fd_does_not_collide_with_existing_inherit_fd() {
     // inherit_fd (keeps original number) and inherit_fd_as (maps to 3)
-    // should both work in the same builder.
-    let kept = pipe_with_byte(b'K');
+    // should both work in the same builder. Relocate the kept fd to
+    // a number >= 10 so it cannot accidentally land on the target fd
+    // when the test runs in an environment with no extra fds open
+    // (clean CI runners allocate pipes starting at fd 3).
+    let kept_initial = pipe_with_byte(b'K');
     let mapped = pipe_with_byte(b'P');
-    let kept_raw = kept.as_raw_fd();
-    let target_fd = 3;
-    assert_ne!(
-        kept_raw, target_fd,
-        "test setup: kept fd happened to equal target fd"
+    let kept_initial_raw = kept_initial.into_raw_fd();
+    let kept_high = unsafe { libc::fcntl(kept_initial_raw, libc::F_DUPFD_CLOEXEC, 10) };
+    assert!(
+        kept_high >= 10,
+        "F_DUPFD_CLOEXEC failed: rc={kept_high}, errno={}",
+        std::io::Error::last_os_error()
     );
+    unsafe { libc::close(kept_initial_raw) };
+    let kept = unsafe { OwnedFd::from_raw_fd(kept_high) };
+    let kept_raw = kept_high;
+    let target_fd = 3;
 
     let probe = probe_binary();
     let mut builder = common::sandbox_builder();
