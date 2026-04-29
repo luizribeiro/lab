@@ -322,9 +322,11 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
+ "lockin",
  "lockin-config",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
  "uuid",
 ]

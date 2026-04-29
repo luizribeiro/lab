@@ -38,10 +38,14 @@ pub(crate) fn build_sandbox_command(
 
 fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<String> {
     if matches!(spec.observation, ObservationMode::AllowAllWithRunId(_)) {
+        // No `allow/fs+ext`: empirically, syd's filesystem-extension
+        // allow short-circuits the warn classifier for writes on ext
+        // (the audit record arrives with an empty `cap` field, which
+        // the parse layer can't map). Warn mode allows everything by
+        // construction, so the rule isn't load-bearing here.
         return vec![
             format!("sandbox/{OBSERVATION_CATEGORIES}:on"),
             format!("default/{OBSERVATION_CATEGORIES}:warn"),
-            "allow/fs+ext".to_string(),
         ];
     }
 
@@ -623,7 +627,6 @@ mod tests {
         assert!(rules
             .iter()
             .any(|r| r == &format!("default/{OBSERVATION_CATEGORIES}:warn")));
-        assert!(rules.iter().any(|r| r == "allow/fs+ext"));
         // User spec rules are intentionally NOT emitted: allow-everything
         // overrides them and we're observing what the program would want.
         assert!(

@@ -1,22 +1,24 @@
-//! Linux observation backend backed by `syd -x` (trace mode).
+//! Linux observation backend backed by `syd`'s warn-mode logging.
+//!
+//! Built on top of [`lockin::SandboxBuilder`] with
+//! [`ObservationMode::AllowAllWithRunId`]: the renderer emits the
+//! correct `sandbox/...:on` + `default/...:warn` rules and the
+//! `SYD_LOG=notice` / `SYD_LOG_FD=3` / `SYD_NO_SYSLOG=1` env vars,
+//! so this backend just wires the audit pipe to fd 3 and drains
+//! events.
 
 use std::io::{BufRead, BufReader};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::os::fd::{FromRawFd, OwnedFd};
 
 use anyhow::{anyhow, Context, Result};
 
+use lockin::{ObservationMode, SandboxBuilder};
+
 use crate::backend::{BackendReport, InferBackend, InferRequest};
-use crate::event::InferDiagnostic;
+use crate::event::{InferDiagnostic, InferEvent};
 use crate::parse::syd::{parse_line, SydParseOutcome};
 
 const SYD_LOG_FD: i32 = 3;
-// `fs` is required so the dynamic loader's `openat` syscalls aren't
-// blocked by syd's default fs policy; we also set `default/fs:warn` so
-// they surface as audit records (filtered downstream — see parse::syd
-// classifier, which folds `fs` into Skip to avoid duplicate events).
-const CATEGORIES: &str = "fs,read,stat,readdir,write,create,truncate,delete,exec";
 
 /// Linux observation backend.
 pub struct LinuxBackend;
@@ -27,83 +29,48 @@ impl InferBackend for LinuxBackend {
     }
 }
 
-/// Run a program under `syd -x` and collect events.
-///
-/// Resolves `syd` from the `LOCKIN_SYD_PATH` environment variable.
-/// Returns an error if syd can't be found, can't be spawned, or fails to
-/// launch the child.
+/// Runs `request.program` under syd in observe-everything mode and
+/// collects audit events. Resolves `syd` via `LOCKIN_SYD_PATH` then
+/// `PATH` (handled inside [`SandboxBuilder::command`]).
 pub fn run(request: &InferRequest) -> Result<BackendReport> {
-    let syd_path = std::env::var_os("LOCKIN_SYD_PATH")
-        .ok_or_else(|| anyhow!("LOCKIN_SYD_PATH is not set; cannot locate syd binary"))?;
+    let run_id = format!("lockin-run-{}", uuid::Uuid::new_v4());
 
     let (read_fd, write_fd) = make_pipe().context("failed to create syd log pipe")?;
-    let write_raw = write_fd.as_raw_fd();
 
-    let mut cmd = Command::new(&syd_path);
-    cmd.arg("-m")
-        .arg(format!("sandbox/{CATEGORIES}:on"))
-        .arg("-m")
-        .arg(format!("default/{CATEGORIES}:warn"))
-        .env("SYD_LOG", "notice")
-        .env("SYD_LOG_FD", SYD_LOG_FD.to_string())
-        .env("SYD_NO_SYSLOG", "1")
-        .stdin(Stdio::null());
+    let builder = SandboxBuilder::new()
+        .observation(ObservationMode::AllowAllWithRunId(run_id))
+        .inherit_fd_as(write_fd, SYD_LOG_FD);
 
+    let mut cmd = builder
+        .command(&request.program)
+        .context("building infer sandbox command")?;
+    cmd.args(&request.args);
     if let Some(dir) = &request.current_dir {
         cmd.current_dir(dir);
     }
     for (k, v) in &request.env {
         cmd.env(k, v);
     }
-    cmd.arg("--").arg(&request.program).args(&request.args);
+    cmd.stdin(std::process::Stdio::null());
 
-    // SAFETY: the closure runs after fork, before exec. dup2 + close are
-    // async-signal-safe; we touch no Rust state that other threads share.
-    unsafe {
-        cmd.pre_exec(move || {
-            if libc::dup2(write_raw, SYD_LOG_FD) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .context("building tokio runtime for infer supervision")?;
 
-    let child = cmd
-        .spawn()
-        .with_context(|| format!("failed to spawn syd at {:?}", syd_path))?;
-    let mut guard = ChildGuard(Some(child));
+    // Drain in a background thread so the syd→fd3 pipe doesn't fill
+    // and block a long-running child. The drain blocks on read until
+    // the parent's write end is dropped (inside `supervise_command`,
+    // when it consumes the SandboxedCommand) AND the child closes
+    // its fd 3 (on exit).
+    let drain = std::thread::spawn(move || drain_events(read_fd));
 
-    // Close our copy of the write end so EOF on the read end signals
-    // child exit.
-    drop(write_fd);
+    let status = lockin::supervise::supervise_command(cmd, runtime.handle())?;
 
-    let mut events = Vec::new();
-    let mut diagnostics = Vec::new();
-    {
-        let reader = BufReader::new(std::fs::File::from(read_fd));
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(e) => {
-                    diagnostics.push(InferDiagnostic {
-                        level: crate::event::DiagnosticLevel::Warn,
-                        message: format!("syd: log read error: {e}"),
-                    });
-                    break;
-                }
-            };
-            match parse_line(&line) {
-                SydParseOutcome::Event(ev) => events.push(ev),
-                SydParseOutcome::Skip => {}
-                SydParseOutcome::Unsupported(d) | SydParseOutcome::Malformed(d) => {
-                    diagnostics.push(d);
-                }
-            }
-        }
-    }
-
-    let mut child = guard.0.take().expect("child still owned by guard");
-    let status = child.wait().context("wait on syd child failed")?;
+    let (events, diagnostics) = drain
+        .join()
+        .map_err(|_| anyhow!("infer drain thread panicked"))?;
 
     Ok(BackendReport {
         status,
@@ -125,13 +92,28 @@ fn make_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((read, write))
 }
 
-struct ChildGuard(Option<Child>);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        if let Some(mut c) = self.0.take() {
-            let _ = c.kill();
-            let _ = c.wait();
+fn drain_events(read_fd: OwnedFd) -> (Vec<InferEvent>, Vec<InferDiagnostic>) {
+    let mut events = Vec::new();
+    let mut diagnostics = Vec::new();
+    let reader = BufReader::new(std::fs::File::from(read_fd));
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                diagnostics.push(InferDiagnostic {
+                    level: crate::event::DiagnosticLevel::Warn,
+                    message: format!("syd: log read error: {e}"),
+                });
+                break;
+            }
+        };
+        match parse_line(&line) {
+            SydParseOutcome::Event(ev) => events.push(ev),
+            SydParseOutcome::Skip => {}
+            SydParseOutcome::Unsupported(d) | SydParseOutcome::Malformed(d) => {
+                diagnostics.push(d);
+            }
         }
     }
+    (events, diagnostics)
 }
