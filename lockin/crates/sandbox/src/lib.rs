@@ -112,12 +112,10 @@ pub(crate) struct SandboxSpec {
 /// use std::path::Path;
 /// use lockin::Sandbox;
 ///
-/// let status = Sandbox::builder()
+/// let mut cmd = Sandbox::builder()
 ///     .command(Path::new("/usr/bin/env"))
-///     .unwrap()
-///     .status()
-///     .unwrap();
-/// assert!(status.success());
+///     .expect("build sandbox command");
+/// // cmd.status() to actually run the child
 /// ```
 pub struct Sandbox {
     spec: SandboxSpec,

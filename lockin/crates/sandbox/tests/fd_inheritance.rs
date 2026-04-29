@@ -247,6 +247,7 @@ fn fd_opened_after_command_construction_is_sealed() {
     drop(leak_fd);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn high_numbered_fd_above_cap_is_sealed_in_child() {
     // Regression test for the macOS MAX_FD_SWEEP cap (65,536).
@@ -258,6 +259,13 @@ fn high_numbered_fd_above_cap_is_sealed_in_child() {
     // Self-skips (with a printed reason) if the test environment's
     // RLIMIT_NOFILE hard limit doesn't allow raising the soft limit
     // that high.
+    //
+    // On macOS, kern.maxfilesperproc prevents dup2 to fd numbers above
+    // ~24K regardless of RLIMIT_NOFILE; the equivalent regression
+    // scenario can't be constructed in the test environment, so this
+    // test is Linux-only. The macOS code path (proc_pidinfo
+    // enumeration) is exercised by the other fd_inheritance tests at
+    // lower fd numbers.
     let needed: libc::rlim_t = 70_001;
     let mut rlim = libc::rlimit {
         rlim_cur: 0,
