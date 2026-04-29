@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use uuid::Uuid;
 
-use crate::backend::{BackendReport, InferRequest};
+use crate::backend::{BackendReport, InferBackend, InferRequest};
 use crate::parse::seatbelt::{parse_message, SeatbeltParseOutcome};
 
 const LOG_BIN: &str = "/usr/bin/log";
@@ -35,6 +35,15 @@ const LOG_STREAM_WARMUP: Duration = Duration::from_millis(250);
 /// Time to wait after the target exits to drain trailing events from
 /// `log stream` before we kill it.
 const LOG_STREAM_GRACE: Duration = Duration::from_millis(500);
+
+/// Darwin observation backend.
+pub struct DarwinBackend;
+
+impl InferBackend for DarwinBackend {
+    fn run(&self, request: &InferRequest) -> Result<BackendReport> {
+        run(request)
+    }
+}
 
 /// Run a program under `sandbox-exec` and collect events from `log
 /// stream` filtered by a per-run UUID.

@@ -27,6 +27,13 @@ pub struct BackendReport {
     pub diagnostics: Vec<InferDiagnostic>,
 }
 
+/// A platform observation backend. Implementations spawn the target program
+/// under a tracer/sandbox that allows every access while logging it, then
+/// return the collected events plus the child's exit status.
+pub trait InferBackend {
+    fn run(&self, request: &InferRequest) -> anyhow::Result<BackendReport>;
+}
+
 #[cfg(target_os = "linux")]
 pub mod linux;
 

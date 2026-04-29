@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::backend::{BackendReport, InferRequest};
+use crate::backend::{BackendReport, InferBackend, InferRequest};
 use crate::event::InferDiagnostic;
 use crate::parse::syd::{parse_line, SydParseOutcome};
 
@@ -17,6 +17,15 @@ const SYD_LOG_FD: i32 = 3;
 // they surface as audit records (filtered downstream — see parse::syd
 // classifier, which folds `fs` into Skip to avoid duplicate events).
 const CATEGORIES: &str = "fs,read,stat,readdir,write,create,truncate,delete,exec";
+
+/// Linux observation backend.
+pub struct LinuxBackend;
+
+impl InferBackend for LinuxBackend {
+    fn run(&self, request: &InferRequest) -> Result<BackendReport> {
+        run(request)
+    }
+}
 
 /// Run a program under `syd -x` and collect events.
 ///
