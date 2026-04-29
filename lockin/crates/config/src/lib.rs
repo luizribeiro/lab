@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     pub sandbox: SandboxConfig,
     pub filesystem: FilesystemConfig,
@@ -15,7 +16,7 @@ pub struct Config {
     pub darwin: DarwinConfig,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxConfig {
     pub allow_kvm: bool,
@@ -24,7 +25,7 @@ pub struct SandboxConfig {
     pub network: NetworkConfig,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
     pub mode: NetworkConfigMode,
@@ -32,10 +33,11 @@ pub struct NetworkConfig {
     /// otherwise. Entries are host-pattern strings
     /// (`"api.example.com"`, `"*.cdn.example.com"`) as parsed by
     /// `outpost::DomainPattern`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allow_hosts: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkConfigMode {
     #[default]
@@ -44,38 +46,52 @@ pub enum NetworkConfigMode {
     Proxy,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FilesystemConfig {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub read_dirs: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub write_paths: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub write_dirs: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exec_paths: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exec_dirs: Vec<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvConfig {
     pub inherit: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pass: Vec<String>,
-    pub set: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub block: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub set: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DarwinConfig {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub raw_seatbelt_rules: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_open_files: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_address_space: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_cpu_time: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_processes: Option<u64>,
     pub disable_core_dumps: bool,
 }
@@ -782,6 +798,63 @@ mod tests {
                 "expected inconsistent-config error for mode {mode:?}, got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn config_round_trips_through_toml() {
+        let original = Config {
+            command: Some(vec!["/usr/bin/python3".into(), "-u".into()]),
+            sandbox: SandboxConfig {
+                allow_kvm: false,
+                allow_interactive_tty: true,
+                allow_non_pie_exec: false,
+                network: NetworkConfig {
+                    mode: NetworkConfigMode::Proxy,
+                    allow_hosts: vec!["api.example.com".into(), "*.cdn.example.com".into()],
+                },
+            },
+            filesystem: FilesystemConfig {
+                read_paths: vec![PathBuf::from("/etc/hosts")],
+                write_dirs: vec![PathBuf::from("./data")],
+                ..Default::default()
+            },
+            limits: LimitsConfig {
+                max_open_files: Some(1024),
+                disable_core_dumps: true,
+                ..Default::default()
+            },
+            env: EnvConfig {
+                inherit: false,
+                pass: vec!["PATH".into()],
+                set: BTreeMap::from([("LANG".into(), "C.UTF-8".into())]),
+                block: vec!["AWS_*".into()],
+            },
+            darwin: DarwinConfig {
+                raw_seatbelt_rules: vec!["(allow default)".into()],
+            },
+        };
+
+        let serialized = toml::to_string(&original).expect("serialize");
+        let deserialized: Config = toml::from_str(&serialized)
+            .unwrap_or_else(|e| panic!("failed to round-trip: {e}\n---\n{serialized}"));
+        assert_eq!(deserialized, original, "round-trip mismatch:\n{serialized}");
+    }
+
+    #[test]
+    fn default_config_serializes_without_optional_fields() {
+        let toml_str = toml::to_string(&Config::default()).unwrap();
+        assert!(
+            !toml_str.contains("command"),
+            "default emits command: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("allow_hosts"),
+            "default emits allow_hosts: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("max_open_files"),
+            "default emits max_open_files: {toml_str}"
+        );
     }
 
     #[test]
