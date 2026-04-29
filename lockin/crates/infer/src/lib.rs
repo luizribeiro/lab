@@ -6,8 +6,10 @@
 //! macOS seatbelt) and the `lockin infer` CLI integration live in
 //! later modules and commits.
 
+pub mod compact;
 pub mod event;
 pub mod path;
 
+pub use compact::{compact, InferredPolicy};
 pub use event::{DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
 pub use path::canonicalize_observed;
