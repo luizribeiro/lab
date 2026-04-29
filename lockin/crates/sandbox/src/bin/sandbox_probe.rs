@@ -26,12 +26,6 @@ fn main() {
             };
             can_write(Path::new(&path))
         }
-        "can-create-file" => {
-            let Some(path) = args.next() else {
-                usage_and_exit();
-            };
-            can_create_file(Path::new(&path))
-        }
         "can-stat" => {
             let Some(path) = args.next() else {
                 usage_and_exit();
@@ -256,17 +250,6 @@ fn can_write(path: &Path) -> Result<(), String> {
         .open(path)
         .map_err(|e| e.to_string())?;
     file.write_all(b"lockin-probe\n")
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn can_create_file(path: &Path) -> Result<(), String> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(b"lockin-probe-create\n")
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -708,7 +691,6 @@ fn usage_and_exit() -> ! {
 actions:\n\
   can-read <path>\n\
   can-write <path>\n\
-  can-create-file <path>\n\
   can-stat <path>\n\
   can-readdir <path>\n\
   can-mkdir <path>\n\

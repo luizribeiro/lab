@@ -147,7 +147,7 @@ exposed.
 | `sandbox.allow_non_pie_exec` | `bool` | Permit exec of non-PIE binaries. Needed for compiler toolchains built without `-fPIE` (notably `gcc`/`rustc` on Nix). Linux only; ignored on macOS. |
 | `filesystem.read_paths` | `[path, ...]` | Files the child can read. |
 | `filesystem.read_dirs` | `[path, ...]` | Directories the child can read recursively. |
-| `filesystem.write_paths` | `[path, ...]` | Files the child can write. Implies read on the same path. |
+| `filesystem.write_paths` | `[path, ...]` | Existing files the child can write to and truncate. Implies read on the same path. Does **not** grant create or delete — Landlock only exposes those rights on directory rules, so use `filesystem.write_dirs` on the parent for create/delete authority. |
 | `filesystem.write_dirs` | `[path, ...]` | Directories the child can write recursively. Implies recursive read. |
 | `filesystem.exec_paths` | `[path, ...]` | Binaries the child can `execve` / `posix_spawn`. Implies read. |
 | `filesystem.exec_dirs` | `[path, ...]` | Directories whose contents the child can exec recursively. Implies recursive read. |

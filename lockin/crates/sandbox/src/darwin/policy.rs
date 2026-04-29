@@ -59,7 +59,7 @@ pub(super) fn build_policy(
 
     for path in &paths.write_paths {
         policy.allow_literal(&["file-read*"], path);
-        policy.allow_literal(&["file-write*"], path);
+        policy.allow_literal(&["file-write-data"], path);
         policy.allow_literal(&["file-map-executable"], path);
     }
     for dir in &paths.write_dirs {

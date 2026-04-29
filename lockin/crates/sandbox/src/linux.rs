@@ -290,13 +290,8 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     for path in write_paths {
         for candidate in path_candidates(&path) {
             add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
-            // Write targets may not exist at policy install time, so emit
-            // Landlock rules unconditionally (skip add_lock_allow_rule's
-            // existence guard). Mirror write_dirs' file-level capability
-            // set so create / truncate / unlink all clear Landlock.
-            add_allow_rule(&mut rules, "allow/lock/write,create", &candidate);
-            add_allow_rule(&mut rules, "allow/lock/truncate", &candidate);
-            add_allow_rule(&mut rules, "allow/lock/delete", &candidate);
+            add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
+            add_lock_allow_rule(&mut rules, "allow/lock/truncate", &candidate);
         }
     }
 

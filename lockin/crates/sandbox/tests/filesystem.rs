@@ -471,27 +471,6 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
 }
 
 #[test]
-fn write_path_can_create_new_file() {
-    let temp = TestDir::new("write-path-create");
-    // Canonicalize the parent so the policy lists the resolved path.
-    // On macOS, tempdirs live under `/var/...` which resolves to
-    // `/private/var/...`; for a path that does not yet exist, the
-    // sandbox layer can only canonicalize an existing component.
-    let parent = std::fs::canonicalize(temp.join("")).expect("canonicalize tempdir");
-    let target = parent.join("new.log");
-    assert!(!target.exists(), "precondition: target must not exist");
-
-    assert!(run_probe(
-        common::sandbox_builder().write_path(target.clone()),
-        &["can-create-file", &target.display().to_string()]
-    ));
-    assert!(
-        target.exists(),
-        "probe reported success but file was not created on disk"
-    );
-}
-
-#[test]
 fn write_path_can_truncate_existing() {
     let temp = TestDir::new("write-path-truncate");
     let target = temp.join("existing.txt");
@@ -506,19 +485,6 @@ fn write_path_can_truncate_existing() {
         contents.is_empty(),
         "probe reported success but file was not truncated on disk: {contents:?}"
     );
-}
-
-#[test]
-fn write_path_can_unlink() {
-    let temp = TestDir::new("write-path-unlink");
-    let target = temp.join("victim.txt");
-    std::fs::write(&target, b"seed").expect("seed file");
-
-    assert!(run_probe(
-        common::sandbox_builder().write_path(target.clone()),
-        &["can-unlink", &target.display().to_string()]
-    ));
-    assert!(!target.exists(), "file should have been removed");
 }
 
 // ── exec scoping ─────────────────────────────────────────────
