@@ -274,6 +274,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lockin-infer"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "lockin-process"
 version = "0.2.0"
 dependencies = [

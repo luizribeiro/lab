@@ -2,6 +2,7 @@
 members = [
   "crates/cli",
   "crates/config",
+  "crates/infer",
   "crates/sandbox",
   "crates/process",
   "crates/testkit",
