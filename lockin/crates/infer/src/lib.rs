@@ -9,6 +9,7 @@
 pub mod compact;
 pub mod emit;
 pub mod event;
+pub mod parse;
 pub mod path;
 
 pub use compact::{compact, InferredPolicy};

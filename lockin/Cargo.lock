@@ -279,6 +279,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "lockin-config",
+ "serde_json",
  "tempfile",
  "toml",
 ]
