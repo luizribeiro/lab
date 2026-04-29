@@ -105,10 +105,20 @@ A program inside a default-policy lockin sandbox cannot:
   the parent process's environment);
 - inherit file descriptors `>= 3` that weren't explicitly passed
   through `inherit_fd` / `map_fd` / `keep_fd` — fds in that range
-  are marked `FD_CLOEXEC` (on Linux ≥ 5.11 the full range in one
-  `close_range` syscall; on older Linux and on macOS, fds up to
-  the process's `RLIMIT_NOFILE` capped at 65 536) and the kernel
-  closes them at `execve`.
+  are marked `FD_CLOEXEC` so the kernel closes them at `execve`.
+  On Linux ≥ 5.11 a single `close_range(3, !0u32, CLOSE_RANGE_CLOEXEC)`
+  walks the kernel's fd table directly (no number-based bound),
+  with an `fcntl` fallback on older kernels. On macOS the parent
+  enumerates the actual fd table via
+  `proc_pidinfo(getpid(), PROC_PIDLISTFDS)` and marks every
+  currently-open fd `>= 3` `FD_CLOEXEC` before `fork` — also no
+  number-based cap. On both platforms, a child-side `fcntl` sweep
+  up to 65 536 (`MAX_FD_SWEEP`) runs as a defensive
+  belt-and-suspenders for the small race window between parent-side
+  preparation and `execve`; on Linux it doubles as the pre-5.11
+  fallback, and on macOS it is strictly defensive. To minimize the
+  race window, construct the sandbox builder and spawn as close
+  together as possible.
 
 A private `$TMPDIR` is created on the host filesystem, allowlisted
 for the child as `write` recursive, and exposed via the

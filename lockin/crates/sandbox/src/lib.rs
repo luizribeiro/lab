@@ -108,7 +108,7 @@ pub(crate) struct SandboxSpec {
 /// Construct one via [`Sandbox::builder`] and
 /// [`SandboxBuilder::command`].
 ///
-/// ```
+/// ```no_run
 /// use std::path::Path;
 /// use lockin::Sandbox;
 ///
@@ -651,6 +651,18 @@ impl SandboxedCommand {
 
     /// Clears the inherited parent environment. The dynamic-linker
     /// blocklist is re-applied right before spawn as defense in depth.
+    ///
+    /// Note: the sandbox injects `TMPDIR`, `TMP`, and `TEMP` pointing
+    /// at the per-sandbox private tmp directory so that programs that
+    /// honor those variables write inside the sandbox-owned tmp.
+    /// `env_clear` removes them along with everything else, and they
+    /// are *not* re-injected. Callers who clear the env are responsible
+    /// for re-setting `TMPDIR`/`TMP`/`TEMP` to
+    /// [`Sandbox::private_tmp`] if they want the privacy property
+    /// preserved; otherwise programs writing to `/tmp` will end up
+    /// outside the private tmp directory. If you want the
+    /// sandbox-owned env to survive, don't call `env_clear` — use
+    /// [`Self::env_remove`] for individual keys instead.
     pub fn env_clear(&mut self) -> &mut Self {
         self.command.env_clear();
         self

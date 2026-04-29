@@ -98,12 +98,31 @@ assert!(status.success());
 
 Pass only the fds the child needs. Any fd `>= 3` not explicitly
 inherited via `inherit_fd` / `map_fd` / `keep_fd` is marked
-`FD_CLOEXEC` inside the child immediately before exec, then closed
-by the kernel at `execve`. The sweep covers the full fd range on
-Linux ≥ 5.11 (single `close_range` syscall); on older Linux and on
-macOS it iterates fds in `[3, min(RLIMIT_NOFILE, 65536))`. Fds
-opened in the parent after `Sandbox::builder().command()` returns
-are still covered. Implemented by [`lockin-process`](../crates/process).
+`FD_CLOEXEC` so the kernel closes it at `execve`. Implemented by
+[`lockin-process`](../crates/process)'s `seal_fds`.
+
+On **Linux ≥ 5.11** a single
+`close_range(3, !0u32, CLOSE_RANGE_CLOEXEC)` walks the kernel's fd
+table directly — no number-based bound. Older kernels fall back to
+the `fcntl` sweep below.
+
+On **macOS** the parent enumerates the actual fd table via
+`proc_pidinfo(getpid(), PROC_PIDLISTFDS)` (see
+`mark_all_open_fds_cloexec_macos`) and marks every currently-open
+fd `>= 3` `FD_CLOEXEC` before `fork`. Precise, with no number-based
+cap.
+
+On **both platforms** a child-side `fcntl` sweep
+(`cloexec_sweep`) up to `MAX_FD_SWEEP = 65_536` runs as a
+defensive belt-and-suspenders for the small race window between
+parent-side preparation and `execve` — fds opened in the parent
+after the prep phase are still covered up to the bound. On Linux
+this doubles as the pre-5.11 fallback; on macOS it is strictly
+defensive.
+
+To minimize the race window where new high-numbered fds could be
+opened in the parent after sealing, construct the sandbox builder
+and spawn as close together as possible.
 
 ```rust
 use std::os::fd::AsRawFd;
