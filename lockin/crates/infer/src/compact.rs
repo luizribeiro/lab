@@ -9,9 +9,9 @@
 //! 2. Collapse reads under known immutable system prefixes (e.g. `/usr/lib`,
 //!    `/nix/store`) into a single `read_dirs` entry. Avoids hundreds of
 //!    dynamic-linker library entries in generated configs.
-//! 3. Apply capability implications so the policy is self-sufficient: an
-//!    exec target must be readable, and the parent of a written file must
-//!    be at least readable for name resolution.
+//! 3. No capability implication is performed here — both lockin enforcement
+//!    backends synthesize traversal/read coverage from explicit leaf entries
+//!    (see `sandbox/src/linux.rs` and `sandbox/src/darwin/paths.rs`).
 //!
 //! Note: `FsOp::Stat` is promoted to a read. Real metadata-only support
 //! would require a separate schema field; until then this is a deliberate
@@ -90,23 +90,6 @@ pub fn compact(events: &[InferEvent]) -> InferredPolicy {
                 policy.exec_paths.insert(path.clone());
             }
             InferEvent::Unsupported { .. } => {}
-        }
-    }
-
-    // Capability implications. Snapshot exec/write before mutating reads
-    // so iteration is stable.
-    let execs: Vec<PathBuf> = policy.exec_paths.iter().cloned().collect();
-    for exec in execs {
-        add_read(exec, &mut policy);
-    }
-
-    let write_files: Vec<PathBuf> = policy.write_paths.iter().cloned().collect();
-    for file in write_files {
-        if let Some(parent) = file.parent() {
-            if parent.as_os_str().is_empty() {
-                continue;
-            }
-            add_read(parent.to_path_buf(), &mut policy);
         }
     }
 
@@ -214,43 +197,65 @@ mod tests {
     }
 
     #[test]
-    fn exec_outside_system_prefix_implies_file_read() {
+    fn exec_implication_does_not_pollute_read_paths() {
         let policy = compact(&[exec("/usr/bin/ls")]);
         assert!(policy.exec_paths.contains(Path::new("/usr/bin/ls")));
-        assert!(policy.read_paths.contains(Path::new("/usr/bin/ls")));
+        assert!(
+            policy.read_paths.is_empty(),
+            "exec must not imply read_paths entry: {:?}",
+            policy.read_paths,
+        );
         assert!(policy.read_dirs.is_empty());
     }
 
     #[test]
-    fn exec_under_nix_store_implies_dir_read_only() {
+    fn exec_under_nix_store_does_not_add_read_paths() {
         let policy = compact(&[exec("/nix/store/abc/bin/foo")]);
         assert!(policy
             .exec_paths
             .contains(Path::new("/nix/store/abc/bin/foo")));
-        assert!(policy.read_dirs.contains(Path::new("/nix/store")));
         assert!(
-            !policy
-                .read_paths
-                .contains(Path::new("/nix/store/abc/bin/foo")),
-            "exec covered by read_dirs should not also appear in read_paths: {:?}",
+            policy.read_paths.is_empty(),
+            "exec alone must not populate read_paths: {:?}",
+            policy.read_paths,
+        );
+        assert!(
+            policy.read_dirs.is_empty(),
+            "exec alone must not populate read_dirs: {:?}",
+            policy.read_dirs,
+        );
+    }
+
+    #[test]
+    fn write_does_not_add_parent_to_read_paths() {
+        let policy = compact(&[fs(FsOp::Write, "/home/u/proj/out.txt")]);
+        assert!(policy
+            .write_paths
+            .contains(Path::new("/home/u/proj/out.txt")));
+        assert!(
+            policy.write_dirs.is_empty(),
+            "Write op alone must not add parent to write_dirs: {:?}",
+            policy.write_dirs,
+        );
+        assert!(
+            policy.read_paths.is_empty(),
+            "Write op alone must not add parent to read_paths: {:?}",
             policy.read_paths,
         );
     }
 
     #[test]
-    fn write_implies_parent_read_for_name_resolution() {
-        let policy = compact(&[fs(FsOp::Write, "/home/u/proj/out.txt")]);
+    fn write_under_system_prefix_does_not_collapse_parent_into_read_dirs() {
+        let policy = compact(&[fs(FsOp::Write, "/usr/share/data/foo.bin")]);
         assert!(policy
             .write_paths
-            .contains(Path::new("/home/u/proj/out.txt")));
-        assert!(policy.read_paths.contains(Path::new("/home/u/proj")));
-    }
-
-    #[test]
-    fn write_under_system_prefix_implication_collapses_parent_to_read_dirs() {
-        let policy = compact(&[fs(FsOp::Write, "/usr/share/data/foo.bin")]);
-        assert!(policy.read_dirs.contains(Path::new("/usr/share")));
-        assert!(!policy.read_paths.contains(Path::new("/usr/share/data")));
+            .contains(Path::new("/usr/share/data/foo.bin")));
+        assert!(
+            policy.read_dirs.is_empty(),
+            "Write op alone must not populate read_dirs: {:?}",
+            policy.read_dirs,
+        );
+        assert!(policy.read_paths.is_empty());
     }
 
     #[test]
