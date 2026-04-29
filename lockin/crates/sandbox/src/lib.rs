@@ -83,6 +83,28 @@ pub enum NetworkMode {
     },
 }
 
+/// Observation behavior for the sandbox.
+///
+/// Most callers want `None` (run mode: enforcement only, no event
+/// reporting). The other variants instruct the renderer to also emit
+/// rules/env that cause the kernel-side sandbox to write a tagged
+/// stream of access events to fd 3, which a caller is expected to
+/// drain (see `inherit_fd_as` in a later commit). The per-run UUID is
+/// embedded into the tag so concurrent runs don't cross-contaminate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ObservationMode {
+    /// No event reporting. Default.
+    #[default]
+    None,
+    /// Allow every access; emit a report for each one tagged with the
+    /// given RUN_ID. Used by `lockin infer` (v0.3.1+).
+    AllowAllWithRunId(String),
+    /// Deny by default; emit a report for each denial tagged with the
+    /// given RUN_ID. Allow rules from the spec still apply. Used by
+    /// `lockin trace` (v0.3.2+).
+    DenyTraceWithRunId(String),
+}
+
 /// Internal representation of sandbox policy. Not part of the public
 /// API; use [`SandboxBuilder`] to configure a sandbox.
 #[derive(Debug, Clone, Default)]
@@ -100,6 +122,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) exec_dirs: Vec<PathBuf>,
     pub(crate) rlimits: Vec<(i32, u64)>,
     pub(crate) raw_seatbelt_rules: Vec<String>,
+    pub(crate) observation: ObservationMode,
 }
 
 /// A prepared sandbox environment: holds the private tmp directory and
@@ -271,6 +294,13 @@ impl SandboxBuilder {
             spec: SandboxSpec::default(),
             fds: Vec::new(),
         }
+    }
+
+    /// Configures the observation mode (default: [`ObservationMode::None`]).
+    /// See [`ObservationMode`] for the variants.
+    pub fn observation(mut self, mode: ObservationMode) -> Self {
+        self.spec.observation = mode;
+        self
     }
 
     /// Sets the network enforcement mode directly. Prefer the

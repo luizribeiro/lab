@@ -2,7 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
-use crate::{NetworkMode, SandboxSpec};
+use crate::{NetworkMode, ObservationMode, SandboxSpec};
+
+/// syd categories observed/enforced uniformly across both observation modes.
+/// Distinct from run-mode's split-emission style (write toggled off→on around
+/// path allows): observation modes need a single on/deny pair so events are
+/// reported for the same set of operations.
+const OBSERVATION_CATEGORIES: &str = "fs,read,stat,readdir,write,create,truncate,delete,exec";
 
 /// Builds a `Command` that runs `program` under `syd` with rules derived from
 /// `spec`. `syd` must be an absolute path supplied by the caller.
@@ -19,31 +25,55 @@ pub(crate) fn build_sandbox_command(
     command
         .env("TMPDIR", private_tmp)
         .env("TMP", private_tmp)
-        .env("TEMP", private_tmp)
-        .arg("--")
-        .arg(program);
+        .env("TEMP", private_tmp);
+    if !matches!(spec.observation, ObservationMode::None) {
+        command
+            .env("SYD_LOG", "notice")
+            .env("SYD_LOG_FD", "3")
+            .env("SYD_NO_SYSLOG", "1");
+    }
+    command.arg("--").arg(program);
     command
 }
 
 fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<String> {
-    // Keep policy focused on path-based controls plus fs/ioctl allowlists.
-    let mut rules = vec![
-        "sandbox/read,stat:on".to_string(),
-        "sandbox/exec:on".to_string(),
-        "sandbox/fs:on".to_string(),
-        "sandbox/ioctl:on".to_string(),
-        "sandbox/write,create,truncate,delete:off".to_string(),
-        "default/read:deny".to_string(),
-        "default/stat:deny".to_string(),
-        "default/exec:deny".to_string(),
-        "default/write:deny".to_string(),
-        "default/create:deny".to_string(),
-        "default/truncate:deny".to_string(),
-        "default/delete:deny".to_string(),
-        "default/ioctl:deny".to_string(),
-        "trace/deny_dotdot:on".to_string(),
-        "trace/force_cloexec:on".to_string(),
-    ];
+    if matches!(spec.observation, ObservationMode::AllowAllWithRunId(_)) {
+        return vec![
+            format!("sandbox/{OBSERVATION_CATEGORIES}:on"),
+            format!("default/{OBSERVATION_CATEGORIES}:warn"),
+            "allow/fs+ext".to_string(),
+        ];
+    }
+
+    let trace = matches!(spec.observation, ObservationMode::DenyTraceWithRunId(_));
+
+    let mut rules = if trace {
+        vec![
+            format!("sandbox/{OBSERVATION_CATEGORIES}:on"),
+            "sandbox/ioctl:on".to_string(),
+            "default/ioctl:deny".to_string(),
+            "trace/deny_dotdot:on".to_string(),
+            "trace/force_cloexec:on".to_string(),
+        ]
+    } else {
+        vec![
+            "sandbox/read,stat:on".to_string(),
+            "sandbox/exec:on".to_string(),
+            "sandbox/fs:on".to_string(),
+            "sandbox/ioctl:on".to_string(),
+            "sandbox/write,create,truncate,delete:off".to_string(),
+            "default/read:deny".to_string(),
+            "default/stat:deny".to_string(),
+            "default/exec:deny".to_string(),
+            "default/write:deny".to_string(),
+            "default/create:deny".to_string(),
+            "default/truncate:deny".to_string(),
+            "default/delete:deny".to_string(),
+            "default/ioctl:deny".to_string(),
+            "trace/deny_dotdot:on".to_string(),
+            "trace/force_cloexec:on".to_string(),
+        ]
+    };
 
     if spec.allow_non_pie_exec {
         rules.push("trace/allow_unsafe_exec_nopie:1".to_string());
@@ -260,7 +290,12 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         }
     }
 
-    rules.push("sandbox/write,create,truncate,delete:on".to_string());
+    if !trace {
+        // In trace mode the unified `sandbox/<cats>:on` at the head
+        // already covers write categories; this toggle is a run-mode
+        // mechanism for layering write allows after the read pass.
+        rules.push("sandbox/write,create,truncate,delete:on".to_string());
+    }
 
     let mut write_dirs = vec![private_tmp.to_path_buf()];
     write_dirs.extend(spec.write_dirs.iter().cloned());
@@ -299,6 +334,10 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         if let Some(name) = rlimit_syd_name(resource) {
             rules.push(format!("rlimit/{name}:{value}"));
         }
+    }
+
+    if trace {
+        rules.push(format!("default/{OBSERVATION_CATEGORIES}:deny"));
     }
 
     rules
@@ -532,6 +571,161 @@ mod tests {
             !without.iter().any(|r| r.starts_with("allow/lock/bind")),
             "default spec should not emit Landlock bind rules"
         );
+    }
+
+    #[test]
+    fn none_observation_does_not_emit_observation_env_or_rules() {
+        let rules = rules_for(&SandboxSpec::default());
+        assert!(
+            !rules.iter().any(|r| r.contains(":warn")),
+            "run-mode rules should not contain `warn` actions, got: {rules:?}"
+        );
+        assert!(
+            !rules
+                .iter()
+                .any(|r| r == &format!("default/{OBSERVATION_CATEGORIES}:deny")),
+            "run-mode rules should not contain unified observation deny, got: {rules:?}"
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cmd = build_sandbox_command(
+            &SandboxSpec::default(),
+            tmp.path(),
+            Path::new("/usr/bin/syd"),
+            Path::new("/bin/sh"),
+        );
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(
+            !envs
+                .iter()
+                .any(|(k, _)| k == &std::ffi::OsStr::new("SYD_LOG_FD")),
+            "run-mode command must not set SYD_LOG_FD"
+        );
+        assert!(
+            !envs
+                .iter()
+                .any(|(k, _)| k == &std::ffi::OsStr::new("SYD_LOG")),
+            "run-mode command must not set SYD_LOG"
+        );
+    }
+
+    #[test]
+    fn allow_all_with_run_id_emits_categories_warn_and_log_env() {
+        let spec = SandboxSpec {
+            observation: ObservationMode::AllowAllWithRunId("rid-abc".into()),
+            read_paths: vec![PathBuf::from("/etc/hostname")],
+            ..SandboxSpec::default()
+        };
+        let rules = rules_for(&spec);
+        assert!(rules
+            .iter()
+            .any(|r| r == &format!("sandbox/{OBSERVATION_CATEGORIES}:on")));
+        assert!(rules
+            .iter()
+            .any(|r| r == &format!("default/{OBSERVATION_CATEGORIES}:warn")));
+        assert!(rules.iter().any(|r| r == "allow/fs+ext"));
+        // User spec rules are intentionally NOT emitted: allow-everything
+        // overrides them and we're observing what the program would want.
+        assert!(
+            !rules.iter().any(|r| r.contains("/etc/hostname")),
+            "AllowAllWithRunId must drop user spec path rules, got: {rules:?}"
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cmd = build_sandbox_command(
+            &spec,
+            tmp.path(),
+            Path::new("/usr/bin/syd"),
+            Path::new("/bin/sh"),
+        );
+        let env_pairs: Vec<(String, String)> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert!(env_pairs
+            .iter()
+            .any(|(k, v)| k == "SYD_LOG" && v == "notice"));
+        assert!(env_pairs.iter().any(|(k, v)| k == "SYD_LOG_FD" && v == "3"));
+        assert!(env_pairs
+            .iter()
+            .any(|(k, v)| k == "SYD_NO_SYSLOG" && v == "1"));
+    }
+
+    #[test]
+    fn deny_trace_with_run_id_emits_categories_deny_and_log_env() {
+        let read = PathBuf::from("/etc/hostname");
+        let spec = SandboxSpec {
+            observation: ObservationMode::DenyTraceWithRunId("rid-xyz".into()),
+            read_paths: vec![read.clone()],
+            ..SandboxSpec::default()
+        };
+        let rules = rules_for(&spec);
+        assert!(rules
+            .iter()
+            .any(|r| r == &format!("sandbox/{OBSERVATION_CATEGORIES}:on")));
+        assert!(rules.iter().any(|r| r == "allow/fs+ext"));
+        assert!(rules
+            .iter()
+            .any(|r| r == &format!("default/{OBSERVATION_CATEGORIES}:deny")));
+        assert!(
+            rules
+                .iter()
+                .any(|r| r.contains("/etc/hostname") && r.starts_with("allow/read,stat")),
+            "user-spec read_paths must still produce allow rules, got: {rules:?}"
+        );
+        assert!(
+            !rules
+                .iter()
+                .any(|r| r == "sandbox/write,create,truncate,delete:on"),
+            "trace mode should not emit the run-mode write toggle, got: {rules:?}"
+        );
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cmd = build_sandbox_command(
+            &spec,
+            tmp.path(),
+            Path::new("/usr/bin/syd"),
+            Path::new("/bin/sh"),
+        );
+        let env_pairs: Vec<(String, String)> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect();
+        assert!(env_pairs.iter().any(|(k, v)| k == "SYD_LOG_FD" && v == "3"));
+        assert!(env_pairs
+            .iter()
+            .any(|(k, v)| k == "SYD_LOG" && v == "notice"));
+    }
+
+    #[test]
+    fn observation_mode_does_not_break_existing_run_mode_rendering() {
+        // Share one tempdir between the two renders so the private-tmp
+        // path bytes match — otherwise the path-allow rules differ.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let none_rules = syd_rules(
+            Path::new("/bin/sh"),
+            &SandboxSpec {
+                observation: ObservationMode::None,
+                ..SandboxSpec::default()
+            },
+            tmp.path(),
+        );
+        let default_rules = syd_rules(Path::new("/bin/sh"), &SandboxSpec::default(), tmp.path());
+        assert_eq!(none_rules, default_rules);
     }
 
     #[test]

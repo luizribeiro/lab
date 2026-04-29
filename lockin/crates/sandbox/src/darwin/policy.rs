@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::{NetworkMode, SandboxSpec};
+use crate::{NetworkMode, ObservationMode, SandboxSpec};
 
 use super::paths::PathSets;
 use super::seatbelt::SeatbeltPolicy;
@@ -19,6 +19,10 @@ pub(super) fn build_policy(
     let paths = PathSets::from_inputs(program, spec, private_tmp);
 
     let mut policy = SeatbeltPolicy::default();
+    if matches!(spec.observation, ObservationMode::DenyTraceWithRunId(_)) {
+        policy
+            .set_default_clause(r#"(deny default (with report) (with message (param "RUN_ID")))"#);
+    }
     policy.import_system();
 
     for path in &paths.traversal_paths {
@@ -89,7 +93,7 @@ pub(super) fn build_policy(
 mod tests {
     use std::path::Path;
 
-    use crate::{NetworkMode, SandboxSpec};
+    use crate::{NetworkMode, ObservationMode, SandboxSpec};
 
     use super::build_policy;
 
@@ -323,6 +327,101 @@ mod tests {
             user_idx > baseline_deny_idx,
             "user raw rules must follow baseline denies so callers can re-allow surgically:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn none_observation_renders_existing_profile_unchanged() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-obs-none-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let rendered: String =
+            build_policy(Path::new("/bin/ls"), &SandboxSpec::default(), &private_tmp).into();
+        assert!(
+            rendered.starts_with("(version 1)\n(deny default)\n"),
+            "default observation must keep `(deny default)` unchanged, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("RUN_ID"),
+            "default observation must not reference RUN_ID, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn allow_all_with_run_id_renders_allow_default_with_report_message() {
+        // The AllowAll profile is rendered by `build_sandbox_command`,
+        // not `build_policy`, but we exercise the full command shape here.
+        let base = tempfile::Builder::new()
+            .prefix("lockin-obs-allowall-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let spec = SandboxSpec {
+            observation: ObservationMode::AllowAllWithRunId("rid-aaa".into()),
+            ..SandboxSpec::default()
+        };
+        let cmd = super::super::build_sandbox_command(&spec, &private_tmp, Path::new("/bin/ls"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let profile = args
+            .iter()
+            .position(|a| a == "-p")
+            .and_then(|i| args.get(i + 1))
+            .expect("profile arg follows -p");
+        assert!(
+            profile.contains(r#"(allow default (with report) (with message (param "RUN_ID")))"#),
+            "AllowAll profile missing tagged allow-default, got:\n{profile}"
+        );
+        assert!(
+            !profile.contains("(deny default)"),
+            "AllowAll profile must not contain (deny default), got:\n{profile}"
+        );
+        let d_idx = args.iter().position(|a| a == "-D").expect("-D arg present");
+        assert_eq!(args[d_idx + 1], "RUN_ID=rid-aaa");
+    }
+
+    #[test]
+    fn deny_trace_with_run_id_renders_deny_default_with_report_message() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-obs-deny-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let read_file = base.path().join("readable.dat");
+        std::fs::write(&read_file, b"x").expect("write read file");
+
+        let spec = SandboxSpec {
+            observation: ObservationMode::DenyTraceWithRunId("rid-ddd".into()),
+            read_paths: vec![read_file.clone()],
+            ..SandboxSpec::default()
+        };
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+        assert!(
+            rendered.contains(r#"(deny default (with report) (with message (param "RUN_ID")))"#),
+            "DenyTrace must replace catch-all with tagged deny, got:\n{rendered}"
+        );
+        let read_rule = format!("(allow file-read* (literal \"{}\"))", read_file.display());
+        assert!(
+            rendered.contains(&read_rule),
+            "DenyTrace must still emit user spec read rules, got:\n{rendered}"
+        );
+
+        let cmd = super::super::build_sandbox_command(&spec, &private_tmp, Path::new("/bin/ls"));
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let d_idx = args.iter().position(|a| a == "-D").expect("-D arg present");
+        assert_eq!(args[d_idx + 1], "RUN_ID=rid-ddd");
     }
 
     #[test]

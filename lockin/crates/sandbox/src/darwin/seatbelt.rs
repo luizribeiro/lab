@@ -68,9 +68,16 @@ pub(super) struct SeatbeltPolicy {
     imports: Vec<String>,
     rules: Vec<SeatbeltRule>,
     raw_rules: Vec<String>,
+    default_clause: Option<String>,
 }
 
 impl SeatbeltPolicy {
+    /// Overrides the leading `(deny default)` clause. The provided
+    /// string is emitted verbatim as the catch-all rule.
+    pub(super) fn set_default_clause(&mut self, clause: impl Into<String>) {
+        self.default_clause = Some(clause.into());
+    }
+
     pub(super) fn import_system(&mut self) {
         let profile = "system.sb".to_string();
         if !self.imports.iter().any(|existing| existing == &profile) {
@@ -101,7 +108,15 @@ impl From<SeatbeltPolicy> for String {
     fn from(policy: SeatbeltPolicy) -> Self {
         let mut out = String::new();
         out.push_str("(version 1)\n");
-        out.push_str("(deny default)\n");
+        match policy.default_clause {
+            Some(clause) => {
+                out.push_str(&clause);
+                if !clause.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            None => out.push_str("(deny default)\n"),
+        }
 
         for import in policy.imports {
             out.push_str("(import \"");
