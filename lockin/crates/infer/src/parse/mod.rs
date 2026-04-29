@@ -5,4 +5,5 @@
 //! that format into our cross-platform event model. They are pure
 //! functions — testable without spawning the backend.
 
+pub mod seatbelt;
 pub mod syd;
