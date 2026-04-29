@@ -21,6 +21,7 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
 lockin = { path = "../sandbox" }
+lockin-config = { path = "../config" }
 outpost = { path = "../../../outpost/crates/outpost" }
 outpost-proxy = { path = "../../../outpost/crates/outpost-proxy" }
 serde = { version = "1", features = ["derive"] }

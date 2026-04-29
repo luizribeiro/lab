@@ -1,0 +1,22 @@
+[package]
+name = "lockin-config"
+version = "0.2.0"
+edition = "2021"
+description = "Config schema and loader for lockin."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/lockin"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+anyhow = "1.0"
+lockin = { path = "../sandbox" }
+outpost = { path = "../../../outpost/crates/outpost" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.13"

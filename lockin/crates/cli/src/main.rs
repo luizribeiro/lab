@@ -1,6 +1,7 @@
-mod config;
 mod glob;
 mod supervise;
+
+use lockin_config as config;
 
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;

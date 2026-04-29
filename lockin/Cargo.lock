@@ -252,11 +252,24 @@ dependencies = [
  "clap",
  "libc",
  "lockin",
+ "lockin-config",
  "outpost",
  "outpost-proxy",
  "serde",
  "tempfile",
  "tokio",
+ "toml",
+]
+
+[[package]]
+name = "lockin-config"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "lockin",
+ "outpost",
+ "serde",
+ "tempfile",
  "toml",
 ]
 
