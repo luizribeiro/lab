@@ -234,7 +234,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "lockin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -262,14 +262,14 @@ dependencies = [
 
 [[package]]
 name = "lockin-process"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "lockin-testkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "lockin",
