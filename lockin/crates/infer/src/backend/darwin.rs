@@ -2,10 +2,11 @@
 //!
 //! We launch `log stream --predicate 'eventMessage CONTAINS <RUN_ID>'`
 //! BEFORE the target process so its events are captured from the start,
-//! then run the target under `sandbox-exec` with a profile that allows
-//! every access while emitting a Seatbelt report tagged with the
-//! per-run UUID. After the target exits we drain any trailing events
-//! during a short grace window, then kill the log streamer.
+//! then run the target via [`lockin::SandboxBuilder`] in
+//! [`ObservationMode::AllowAllWithRunId`], which renders a Seatbelt
+//! profile that allows every access while emitting a report tagged
+//! with the per-run UUID. After the target exits we drain any trailing
+//! events during a short grace window, then kill the log streamer.
 //!
 //! A background thread continuously reads `log stream` stdout into a
 //! shared Vec<String>; the foreground keeps the pipe drained so log
@@ -18,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use lockin::{ObservationMode, SandboxBuilder};
 use uuid::Uuid;
 
 use crate::backend::{BackendReport, InferBackend, InferRequest};
@@ -25,8 +27,6 @@ use crate::parse::seatbelt::{parse_message, SeatbeltParseOutcome};
 
 const LOG_BIN: &str = "/usr/bin/log";
 const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
-const SEATBELT_PROFILE: &str =
-    r#"(version 1) (allow default (with report) (with message (param "RUN_ID")))"#;
 
 /// Time to let `log stream` warm up before launching the target. There's
 /// no clean ready-marker; this is empirically enough but is the source
@@ -85,29 +85,26 @@ pub fn run(request: &InferRequest) -> Result<BackendReport> {
 
     thread::sleep(LOG_STREAM_WARMUP);
 
-    let mut target = Command::new(SANDBOX_EXEC_BIN);
-    target
-        .arg("-D")
-        .arg(format!("RUN_ID={run_id}"))
-        .arg("-p")
-        .arg(SEATBELT_PROFILE)
-        .arg(&request.program)
-        .args(&request.args);
-
+    let builder =
+        SandboxBuilder::new().observation(ObservationMode::AllowAllWithRunId(run_id.clone()));
+    let mut cmd = builder
+        .command(&request.program)
+        .context("building infer sandbox command")?;
+    cmd.args(&request.args);
     if let Some(dir) = &request.current_dir {
-        target.current_dir(dir);
+        cmd.current_dir(dir);
     }
     for (k, v) in &request.env {
-        target.env(k, v);
+        cmd.env(k, v);
     }
 
-    let target_child = target
-        .spawn()
-        .context("failed to spawn sandbox-exec target")?;
-    let mut target_guard = ChildGuard(Some(target_child));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .context("building tokio runtime for infer supervision")?;
 
-    let mut child = target_guard.0.take().expect("child still owned by guard");
-    let status = child.wait().context("wait on sandbox-exec child failed")?;
+    let status = lockin::supervise::supervise_command(cmd, runtime.handle())?;
 
     thread::sleep(LOG_STREAM_GRACE);
 
