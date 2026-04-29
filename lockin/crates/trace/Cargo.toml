@@ -1,6 +1,6 @@
 [package]
 name = "lockin-trace"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Runtime denial-tracing for lockin (run a program under enforcement and report what got denied)."
 license = "MIT"

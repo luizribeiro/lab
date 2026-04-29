@@ -1,6 +1,6 @@
 [package]
 name = "lockin-infer"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Policy inference for lockin (observe a program, generate a starter lockin.toml)."
 license = "MIT"
