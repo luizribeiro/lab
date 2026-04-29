@@ -227,6 +227,48 @@ fn main() {
             });
             open_many_fds(count)
         }
+        "infer-noop" => Ok(()),
+        "infer-read" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            infer_read(Path::new(&path))
+        }
+        "infer-write" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            infer_write(Path::new(&path))
+        }
+        "infer-exec" => {
+            let Some(path) = args.next() else {
+                usage_and_exit();
+            };
+            let rest: Vec<String> = args.collect();
+            let code = infer_exec(Path::new(&path), &rest);
+            std::process::exit(code);
+        }
+        "infer-roundtrip" => {
+            let Some(read_path) = args.next() else {
+                usage_and_exit();
+            };
+            let Some(write_path) = args.next() else {
+                usage_and_exit();
+            };
+            let Some(exec_path) = args.next() else {
+                usage_and_exit();
+            };
+            if let Err(e) = infer_read(Path::new(&read_path)) {
+                eprintln!("infer-roundtrip read: {e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = infer_write(Path::new(&write_path)) {
+                eprintln!("infer-roundtrip write: {e}");
+                std::process::exit(1);
+            }
+            let code = infer_exec(Path::new(&exec_path), &[]);
+            std::process::exit(code);
+        }
         "pause" => {
             let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(60);
             std::thread::sleep(std::time::Duration::from_secs(secs));
@@ -339,6 +381,36 @@ fn can_exec(path: &Path, args: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("command exited with status {status}"))
+    }
+}
+
+fn infer_read(path: &Path) -> Result<(), String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("infer-read: {e}"))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("infer-read: {e}"))?;
+    Ok(())
+}
+
+fn infer_write(path: &Path) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|e| format!("infer-write: {e}"))?;
+    file.write_all(b"infer-fixture\n")
+        .map_err(|e| format!("infer-write: {e}"))?;
+    Ok(())
+}
+
+fn infer_exec(path: &Path, args: &[String]) -> i32 {
+    match Command::new(path).args(args).status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("infer-exec: {e}");
+            1
+        }
     }
 }
 
@@ -733,6 +805,11 @@ actions:\n\
   check-rlimit <resource-name> <expected-value>\n\
   open-many-fds <count>\n\
   pause [seconds]\n\
+  infer-noop\n\
+  infer-read <path>\n\
+  infer-write <path>\n\
+  infer-exec <path> [args...]\n\
+  infer-roundtrip <read-path> <write-path> <exec-path>\n\
   check-no-new-privs\n\
   check-has-cap <cap-number>\n\
   check-has-effective-cap <cap-number>\n\
