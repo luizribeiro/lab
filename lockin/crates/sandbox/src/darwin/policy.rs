@@ -20,8 +20,13 @@ pub(super) fn build_policy(
 
     let mut policy = SeatbeltPolicy::default();
     if matches!(spec.observation, ObservationMode::DenyTraceWithRunId(_)) {
-        policy
-            .set_default_clause(r#"(deny default (with report) (with message (param "RUN_ID")))"#);
+        // Apple's sandbox-exec rejects `(with report)` on deny actions
+        // ("report modifier does not apply to deny action"); the kernel
+        // auto-reports denials, so the modifier would be redundant
+        // anyway. `(with message ...)` IS accepted on deny — verified
+        // empirically — and tags the resulting Sandbox: log line with
+        // our per-run UUID so the trace runner can filter by RUN_ID.
+        policy.set_default_clause(r#"(deny default (with message (param "RUN_ID")))"#);
     }
     policy.import_system();
 
@@ -406,8 +411,12 @@ mod tests {
         };
         let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
         assert!(
-            rendered.contains(r#"(deny default (with report) (with message (param "RUN_ID")))"#),
-            "DenyTrace must replace catch-all with tagged deny, got:\n{rendered}"
+            rendered.contains(r#"(deny default (with message (param "RUN_ID")))"#),
+            "DenyTrace must tag catch-all deny with RUN_ID message, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("(with report)"),
+            "DenyTrace deny rule must not use (with report) — sandbox-exec rejects it on deny actions, got:\n{rendered}"
         );
         let read_rule = format!("(allow file-read* (literal \"{}\"))", read_file.display());
         assert!(

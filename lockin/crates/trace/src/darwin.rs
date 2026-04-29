@@ -1,34 +1,144 @@
-//! Darwin trace backend — **stub**.
+//! Darwin trace backend: `sandbox-exec` with the user's policy applied
+//! as enforcement allows + a `(deny default (with message (param
+//! "RUN_ID")))` catch-all that tags every kernel deny line with the
+//! per-run UUID.
 //!
-//! Apple's `sandbox-exec` rejects the `(with report)` modifier on
-//! `deny` actions ("report modifier does not apply to deny action"),
-//! and a plain `(deny default)` denial is silent — no userland log
-//! event is emitted for it. Kernel-side `Sandbox.kext` *does* publish
-//! deny messages via `log stream` ("Sandbox: <proc>(<pid>) deny(N)
-//! <op> <path>"), but they are not RUN_ID-tagged, so capturing them
-//! requires filtering by the child's PID — a different shape from the
-//! Linux side and from `lockin infer`'s existing per-RUN_ID drain.
+//! Mirrors `crates/infer/src/backend/darwin.rs`'s structure — start
+//! `log stream` with a RUN_ID predicate, warmup, run target via
+//! `SandboxBuilder + supervise_command`, drain trailing events, parse.
+//! Returns all parsed events; the runner filters to
+//! `AccessAction::Deny`.
 //!
-//! The right fix is a separate parser path for kernel sandbox lines
-//! plus a way for `supervise_command` to expose the spawned child's
-//! PID. Both are scope-creep for this commit; deferring to a follow-up.
-//! Until then, `lockin trace` returns a clear unsupported error on
-//! macOS so callers get a useful message rather than silent
-//! mis-behavior.
+//! Apple's `sandbox-exec` does not accept `(with report)` on deny
+//! actions, but `(with message ...)` is accepted, and the kernel
+//! auto-publishes deny lines to `log stream` regardless — so the
+//! tagged denial messages reach our predicate-filtered stream the
+//! same way infer's allow-with-report messages do.
 
-use std::process::ExitStatus;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
+use lockin::ObservationMode;
+use lockin_infer::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
 use lockin_infer::{AccessEvent, InferDiagnostic};
+use uuid::Uuid;
 
 use crate::runner::TraceRequest;
 
+const LOG_BIN: &str = "/usr/bin/log";
+const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
+
+const LOG_STREAM_WARMUP: Duration = Duration::from_millis(250);
+const LOG_STREAM_GRACE: Duration = Duration::from_millis(500);
+
 pub(crate) fn run(
-    _request: &TraceRequest,
+    request: &TraceRequest,
 ) -> Result<(ExitStatus, Vec<AccessEvent>, Vec<InferDiagnostic>)> {
-    anyhow::bail!(
-        "lockin trace is not yet supported on macOS: Apple's sandbox-exec rejects \
-         `(with report)` on deny actions, and `(deny default)` is silent. \
-         Tracking follow-up; use Linux for trace today."
-    )
+    if !std::path::Path::new(LOG_BIN).exists() {
+        return Err(anyhow!("{LOG_BIN} not found; not a macOS host?"));
+    }
+    if !std::path::Path::new(SANDBOX_EXEC_BIN).exists() {
+        return Err(anyhow!("{SANDBOX_EXEC_BIN} not found; not a macOS host?"));
+    }
+
+    let run_id = format!("lockin-run-{}", Uuid::new_v4());
+
+    let mut log_child = Command::new(LOG_BIN)
+        .arg("stream")
+        .arg("--style")
+        .arg("ndjson")
+        .arg("--predicate")
+        .arg(format!("eventMessage CONTAINS \"{run_id}\""))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{LOG_BIN} stream`"))?;
+    let log_stdout = log_child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("log stream stdout missing"))?;
+    let mut log_guard = ChildGuard(Some(log_child));
+
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let lines_for_thread = Arc::clone(&lines);
+    let reader_thread = thread::spawn(move || {
+        let reader = BufReader::new(log_stdout);
+        for line in reader.lines().map_while(std::io::Result::ok) {
+            lines_for_thread.lock().unwrap().push(line);
+        }
+    });
+
+    thread::sleep(LOG_STREAM_WARMUP);
+
+    let mut builder = lockin_config::apply_config(&request.config, request.config_dir.as_deref())
+        .context("applying user lockin.toml policy")?;
+    builder = builder.observation(ObservationMode::DenyTraceWithRunId(run_id.clone()));
+
+    let mut cmd = builder
+        .command(&request.program)
+        .context("building trace sandbox command")?;
+    cmd.args(&request.args);
+    if let Some(dir) = &request.current_dir {
+        cmd.current_dir(dir);
+    }
+    for (k, v) in &request.env {
+        cmd.env(k, v);
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .context("building tokio runtime for trace supervision")?;
+
+    let status = lockin::supervise::supervise_command(cmd, runtime.handle())?;
+
+    thread::sleep(LOG_STREAM_GRACE);
+
+    if let Some(mut c) = log_guard.0.take() {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    let _ = reader_thread.join();
+
+    let raw_lines = std::mem::take(&mut *lines.lock().unwrap());
+    let mut events = Vec::new();
+    let mut diagnostics = Vec::new();
+    for line in raw_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let Some(message) = value.get("eventMessage").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        match parse_access_message(message, &run_id) {
+            SeatbeltParseOutcome::Event(ae) => events.push(ae),
+            SeatbeltParseOutcome::Skip => {}
+            SeatbeltParseOutcome::Unsupported(d) | SeatbeltParseOutcome::Malformed(d) => {
+                diagnostics.push(d);
+            }
+        }
+    }
+
+    Ok((status, events, diagnostics))
+}
+
+struct ChildGuard(Option<Child>);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.0.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
 }

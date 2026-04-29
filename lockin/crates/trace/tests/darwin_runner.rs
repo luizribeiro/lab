@@ -36,6 +36,16 @@ fn base_config() -> Config {
             }
         }
     }
+    // On Nix-on-macOS dev hosts, the probe's runtime libraries (libiconv,
+    // etc.) live under `/nix/store` and dyld resolves them at exec time;
+    // without read access there the probe can't even load. system.sb
+    // covers the standard `/usr/lib` deps already, so this is the only
+    // env-specific addition.
+    let nix_store = PathBuf::from("/nix/store");
+    if nix_store.exists() {
+        config.filesystem.read_dirs.push(nix_store.clone());
+        config.filesystem.exec_dirs.push(nix_store);
+    }
     config
 }
 
@@ -55,19 +65,7 @@ fn run_or_skip(req: TraceRequest) -> Option<TraceReport> {
         eprintln!("skipping: /usr/bin/log or /usr/bin/sandbox-exec missing");
         return None;
     }
-    match trace(req, TraceOptions::default()) {
-        Ok(r) => Some(r),
-        // Darwin trace is intentionally a stub right now (see
-        // `crates/trace/src/darwin.rs`). Treat that error as "skip"
-        // so the test suite passes on macOS while the feature is
-        // Linux-only. When Darwin trace lands, this branch can be
-        // removed.
-        Err(e) if e.to_string().contains("not yet supported on macOS") => {
-            eprintln!("skipping darwin trace test: {e}");
-            None
-        }
-        Err(e) => panic!("trace run failed: {e:#}"),
-    }
+    Some(trace(req, TraceOptions::default()).expect("trace run"))
 }
 
 fn ends_with(path: &Path, name: &str) -> bool {

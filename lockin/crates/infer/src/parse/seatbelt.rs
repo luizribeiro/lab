@@ -72,7 +72,15 @@ pub fn parse_access_message(message: &str, expected_run_id: &str) -> SeatbeltPar
         return malformed(format!("missing action/operation: {first}"));
     }
 
-    let action = match action_tok {
+    // Seatbelt emits the action token as a bare word for user-space
+    // `with report` allow/deny events, but kernel-side `Sandbox.kext`
+    // tags its auto-published deny lines with a count suffix —
+    // `deny(1)`, `deny(2)`, ... — so strip any `(N)` before matching.
+    let action_base = action_tok
+        .split_once('(')
+        .map(|(b, _)| b)
+        .unwrap_or(action_tok);
+    let action = match action_base {
         "allow" => AccessAction::Allow,
         "deny" => AccessAction::Deny,
         // Seatbelt has no formal "warn" mode; surface anything else as
@@ -347,6 +355,17 @@ mod tests {
     fn seatbelt_deny_classifies_as_deny() {
         let outcome = parse_access_message(
             &msg("Sandbox: probe(123) deny file-read-data /etc/secret"),
+            RUN_ID,
+        );
+        assert_eq!(outcome, fs(AccessAction::Deny, FsOp::Read, "/etc/secret"));
+    }
+
+    #[test]
+    fn seatbelt_deny_with_count_suffix_classifies_as_deny() {
+        // Kernel-emitted Sandbox lines (from `(deny default)` matches,
+        // not user-space `with report`) include a `deny(N)` count.
+        let outcome = parse_access_message(
+            &msg("Sandbox: probe(123) deny(1) file-read-data /etc/secret"),
             RUN_ID,
         );
         assert_eq!(outcome, fs(AccessAction::Deny, FsOp::Read, "/etc/secret"));
