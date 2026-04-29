@@ -328,6 +328,98 @@ fn high_numbered_fd_above_cap_is_sealed_in_child() {
     drop(leak_fd);
 }
 
+// ── inherit_fd_as: explicit child fd number ──────────────────
+
+#[test]
+fn mapped_fd_appears_at_requested_child_fd() {
+    let owned = pipe_with_byte(b'M');
+    let target_fd = 3;
+
+    let probe = probe_binary();
+    let builder = common::sandbox_builder().inherit_fd_as(owned, target_fd);
+    let mut cmd = builder.command(&probe).expect("build sandbox");
+    cmd.arg("fd-read-byte")
+        .arg(target_fd.to_string())
+        .arg("M")
+        .stderr(Stdio::inherit())
+        .stdout(Stdio::inherit());
+
+    let status = cmd.status().expect("spawn probe");
+    assert!(
+        status.success(),
+        "child should read 'M' from mapped fd {target_fd}, got {status:?}"
+    );
+}
+
+#[test]
+fn unmapped_unrelated_fd_is_still_sealed_when_inherit_fd_as_used() {
+    // inherit_fd_as on one fd must not leak some unrelated high fd.
+    let mapped = pipe_with_byte(b'A');
+
+    let (read_end, mut write_end) = std::io::pipe().expect("create pipe");
+    write_end.write_all(b"Z").expect("write marker");
+    drop(write_end);
+    let original: OwnedFd = read_end.into();
+    let leak_raw = 102;
+    assert_ne!(
+        unsafe { libc::dup2(original.as_raw_fd(), leak_raw) },
+        -1,
+        "dup2 to fd {leak_raw} failed"
+    );
+    drop(original);
+    let leak_fd = unsafe { OwnedFd::from_raw_fd(leak_raw) };
+
+    let probe = probe_binary();
+    let builder = common::sandbox_builder().inherit_fd_as(mapped, 3);
+    let mut cmd = builder.command(&probe).expect("build sandbox");
+    cmd.arg("fd-read-byte")
+        .arg(leak_raw.to_string())
+        .arg("Z")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit());
+
+    let output = cmd.output().expect("spawn probe");
+    assert!(
+        !output.status.success(),
+        "leaked fd {leak_raw} should be sealed even when inherit_fd_as is used"
+    );
+
+    drop(leak_fd);
+}
+
+#[test]
+fn mapped_fd_does_not_collide_with_existing_inherit_fd() {
+    // inherit_fd (keeps original number) and inherit_fd_as (maps to 3)
+    // should both work in the same builder.
+    let kept = pipe_with_byte(b'K');
+    let mapped = pipe_with_byte(b'P');
+    let kept_raw = kept.as_raw_fd();
+    let target_fd = 3;
+    assert_ne!(
+        kept_raw, target_fd,
+        "test setup: kept fd happened to equal target fd"
+    );
+
+    let probe = probe_binary();
+    let mut builder = common::sandbox_builder();
+    builder.inherit_fd(kept);
+    let builder = builder.inherit_fd_as(mapped, target_fd);
+    let mut cmd = builder.command(&probe).expect("build sandbox");
+    cmd.arg("fd-read-byte")
+        .arg(kept_raw.to_string())
+        .arg("K")
+        .arg(target_fd.to_string())
+        .arg("P")
+        .stderr(Stdio::inherit())
+        .stdout(Stdio::inherit());
+
+    let status = cmd.status().expect("spawn probe");
+    assert!(
+        status.success(),
+        "both fds should arrive: kept at {kept_raw}, mapped at {target_fd}; got {status:?}"
+    );
+}
+
 #[test]
 fn inherited_fd_survives_seal() {
     let (read_end, mut write_end) = std::io::pipe().expect("create pipe");

@@ -562,6 +562,24 @@ impl SandboxBuilder {
         raw
     }
 
+    /// Inherit `fd` into the child mapped to a specific `child_fd`
+    /// number (e.g. 3 for `SYD_LOG_FD`). The default
+    /// [`inherit_fd`](Self::inherit_fd) keeps the fd at its original
+    /// number; this method is for callers that need the fd at a
+    /// fixed number in the child (typically observation backends
+    /// that hard-code an env-var-named fd number).
+    ///
+    /// Panics if `child_fd < 3` (fds 0/1/2 are reserved for
+    /// stdin/stdout/stderr and `map_fd` rejects them).
+    pub fn inherit_fd_as(mut self, fd: std::os::fd::OwnedFd, child_fd: std::os::fd::RawFd) -> Self {
+        assert!(
+            child_fd >= 3,
+            "inherit_fd_as: child_fd {child_fd} must be >= 3"
+        );
+        self.fds.push((fd, child_fd));
+        self
+    }
+
     /// Consumes the builder and produces a [`SandboxedCommand`] ready
     /// to spawn `program`.
     ///
@@ -590,8 +608,8 @@ impl SandboxBuilder {
         let mut command = sandbox.build_command(program);
 
         command.seal_fds();
-        for (fd, _raw) in self.fds {
-            command.keep_fd(fd);
+        for (fd, target) in self.fds {
+            command.map_fd(fd, target);
         }
 
         #[cfg(not(target_os = "linux"))]
