@@ -295,6 +295,7 @@ dependencies = [
  "libc",
  "lockin",
  "lockin-config",
+ "lockin-infer",
  "outpost",
  "outpost-proxy",
  "serde",

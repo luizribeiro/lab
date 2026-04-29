@@ -258,6 +258,11 @@ fn main() {
             let Some(exec_path) = args.next() else {
                 usage_and_exit();
             };
+            // Pass through any remaining args as the exec leg's argv.
+            // Lets callers point exec_path back at this probe with
+            // `infer-noop` so the round-trip ends in a clean exit 0,
+            // independent of host multicall binaries (NixOS coreutils).
+            let exec_args: Vec<String> = args.collect();
             if let Err(e) = infer_read(Path::new(&read_path)) {
                 eprintln!("infer-roundtrip read: {e}");
                 std::process::exit(1);
@@ -266,7 +271,7 @@ fn main() {
                 eprintln!("infer-roundtrip write: {e}");
                 std::process::exit(1);
             }
-            let code = infer_exec(Path::new(&exec_path), &[]);
+            let code = infer_exec(Path::new(&exec_path), &exec_args);
             std::process::exit(code);
         }
         "pause" => {

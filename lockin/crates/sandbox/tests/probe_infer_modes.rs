@@ -118,35 +118,26 @@ fn infer_roundtrip_runs_all_three_phases_and_writes_file() {
 }
 
 #[test]
-fn infer_roundtrip_propagates_exec_exit_code_zero_with_noop() {
+fn infer_roundtrip_propagates_exec_exit_code_zero_with_self_noop() {
     let probe = common::probe_binary();
     let dir = tempfile::tempdir().unwrap();
     let read_target = dir.path().join("in.txt");
     let write_target = dir.path().join("out.txt");
     fs::write(&read_target, b"x").unwrap();
 
-    // Wrap exec target in a tiny shim by using infer-exec'd probe with
-    // infer-noop — but infer-roundtrip's exec leg passes no args, so we
-    // need a binary that exits 0 with no args. The probe with no args
-    // exits 2. Workaround: use a path that the test environment is
-    // guaranteed to provide as exit-0 — `/usr/bin/env` with no args
-    // prints the environment and exits 0.
-    let env_bin = std::path::PathBuf::from("/usr/bin/env");
-    if !env_bin.exists() {
-        eprintln!("skipping: /usr/bin/env not present");
-        return;
-    }
-
+    // Use the probe itself as exec target with `infer-noop` so the leg
+    // exits 0 deterministically, independent of host coreutils.
     let status = Command::new(&probe)
         .arg("infer-roundtrip")
         .arg(&read_target)
         .arg(&write_target)
-        .arg(&env_bin)
+        .arg(&probe)
+        .arg("infer-noop")
         .status()
         .unwrap();
     assert!(
         status.success(),
-        "expected exit 0 from /usr/bin/env: {status}"
+        "expected exit 0 from probe infer-noop: {status}"
     );
     assert_eq!(fs::read(&write_target).unwrap(), b"infer-fixture\n");
 }

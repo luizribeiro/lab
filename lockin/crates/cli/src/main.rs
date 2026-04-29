@@ -42,7 +42,46 @@ struct Cli {
     command: Vec<OsString>,
 }
 
+#[derive(Parser, Debug)]
+#[command(
+    name = "lockin infer",
+    about = "Run a program under observation and emit a starter lockin.toml",
+    trailing_var_arg = true
+)]
+struct InferCli {
+    /// Path to write the inferred lockin.toml.
+    #[arg(short = 'o', long = "output")]
+    output: PathBuf,
+
+    /// Optional seed config; observed entries are merged into it.
+    #[arg(short = 'c', long = "config")]
+    config: Option<PathBuf>,
+
+    /// The program to observe and its arguments.
+    #[arg(required = true)]
+    command: Vec<OsString>,
+}
+
+/// Returns true if the given argv is intended for the `infer`
+/// subcommand. Pulled out for test coverage.
+fn is_infer_invocation(argv: &[OsString]) -> bool {
+    argv.get(1).map(|s| s == "infer").unwrap_or(false)
+}
+
 fn main() -> ExitCode {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if is_infer_invocation(&argv) {
+        let infer_argv: Vec<OsString> = std::iter::once(argv[0].clone())
+            .chain(argv.into_iter().skip(2))
+            .collect();
+        match InferCli::try_parse_from(&infer_argv) {
+            Ok(cli) => return run_infer(cli),
+            Err(e) => {
+                let _ = e.print();
+                return ExitCode::from(EXIT_LOCKIN_ERROR);
+            }
+        }
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
@@ -51,6 +90,66 @@ fn main() -> ExitCode {
             ExitCode::from(EXIT_LOCKIN_ERROR)
         }
     }
+}
+
+fn run_infer(cli: InferCli) -> ExitCode {
+    match do_infer(cli) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("lockin infer: {e:#}");
+            ExitCode::from(EXIT_LOCKIN_ERROR)
+        }
+    }
+}
+
+fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
+    let mut command = cli.command;
+    if command.first().map(|s| s == "--").unwrap_or(false) {
+        command.remove(0);
+    }
+    if command.is_empty() {
+        anyhow::bail!("missing program; usage: lockin infer -o OUT [-c SEED] -- program args...");
+    }
+
+    let seed = match &cli.config {
+        Some(path) => {
+            let (cfg, _dir) = load_config(path)?;
+            Some(cfg)
+        }
+        None => None,
+    };
+
+    let program = PathBuf::from(&command[0]);
+    let args: Vec<OsString> = command[1..].to_vec();
+
+    let request = lockin_infer::InferRequest {
+        program,
+        args,
+        current_dir: None,
+        env: vec![],
+    };
+    let options = lockin_infer::InferOptions {
+        seed,
+        output: Some(cli.output),
+    };
+
+    let report = lockin_infer::infer(request, options)?;
+
+    for d in &report.diagnostics {
+        match d.level {
+            lockin_infer::DiagnosticLevel::Error => {
+                eprintln!("lockin infer: error: {}", d.message)
+            }
+            lockin_infer::DiagnosticLevel::Warn => {
+                eprintln!("lockin infer: warning: {}", d.message)
+            }
+            lockin_infer::DiagnosticLevel::Info => {
+                eprintln!("lockin infer: {}", d.message)
+            }
+        }
+    }
+
+    Ok(ExitCode::from(child_exit_code(report.status)))
 }
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
@@ -570,5 +669,112 @@ mod tests {
         let cli = parse(&["lockin"]).unwrap();
         assert!(cli.config.is_none());
         assert!(cli.command.is_empty());
+    }
+
+    fn parse_infer(args: &[&str]) -> Result<InferCli, clap::Error> {
+        InferCli::try_parse_from(args)
+    }
+
+    fn argv(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn infer_dispatches_when_first_arg_is_infer() {
+        assert!(is_infer_invocation(&argv(&[
+            "lockin", "infer", "-o", "out.toml"
+        ])));
+        assert!(is_infer_invocation(&argv(&[
+            "lockin",
+            "infer",
+            "--",
+            "/bin/echo"
+        ])));
+    }
+
+    #[test]
+    fn infer_dispatch_skips_when_dash_dash_first() {
+        // `lockin -- infer` runs a program literally named `infer`.
+        assert!(!is_infer_invocation(&argv(&[
+            "lockin", "--", "infer", "args"
+        ])));
+    }
+
+    #[test]
+    fn infer_dispatch_skips_for_run_mode_invocations() {
+        assert!(!is_infer_invocation(&argv(&["lockin", "/bin/echo", "hi"])));
+        assert!(!is_infer_invocation(&argv(&[
+            "lockin",
+            "-c",
+            "cfg.toml",
+            "--",
+            "/bin/echo",
+            "hi"
+        ])));
+        assert!(!is_infer_invocation(&argv(&["lockin"])));
+    }
+
+    #[test]
+    fn infer_parse_required_output_and_command() {
+        let cli =
+            parse_infer(&["lockin infer", "-o", "out.toml", "--", "/bin/echo", "hi"]).unwrap();
+        assert_eq!(cli.output, PathBuf::from("out.toml"));
+        assert_eq!(cli.config, None);
+        // clap with trailing_var_arg keeps "--" out, but the leading "--"
+        // is sometimes preserved depending on parser version. do_infer
+        // strips a leading "--" defensively, so accept either form.
+        let cmd: Vec<&OsString> = cli.command.iter().collect();
+        assert!(
+            cmd == vec![&OsString::from("/bin/echo"), &OsString::from("hi")]
+                || cmd
+                    == vec![
+                        &OsString::from("--"),
+                        &OsString::from("/bin/echo"),
+                        &OsString::from("hi"),
+                    ],
+            "unexpected command parse: {:?}",
+            cli.command
+        );
+    }
+
+    #[test]
+    fn infer_parse_seed_and_command() {
+        let cli = parse_infer(&[
+            "lockin infer",
+            "-o",
+            "out.toml",
+            "-c",
+            "seed.toml",
+            "--",
+            "./prog",
+            "arg1",
+            "arg2",
+        ])
+        .unwrap();
+        assert_eq!(cli.output, PathBuf::from("out.toml"));
+        assert_eq!(cli.config, Some(PathBuf::from("seed.toml")));
+        assert!(cli.command.iter().any(|s| s == "./prog"));
+        assert!(cli.command.iter().any(|s| s == "arg1"));
+        assert!(cli.command.iter().any(|s| s == "arg2"));
+    }
+
+    #[test]
+    fn infer_parse_no_args_errors() {
+        assert!(parse_infer(&["lockin infer"]).is_err());
+    }
+
+    #[test]
+    fn infer_parse_missing_output_errors() {
+        assert!(parse_infer(&["lockin infer", "--", "/bin/echo"]).is_err());
+    }
+
+    #[test]
+    fn run_mode_with_double_dash_keeps_program_named_infer() {
+        // Validates the dispatch *and* parse: argv `lockin -- infer args`
+        // is run mode, and command becomes ["infer", "args"].
+        let argv: Vec<OsString> = argv(&["lockin", "--", "infer", "args"]);
+        assert!(!is_infer_invocation(&argv));
+        let cli = parse(&["lockin", "--", "infer", "args"]).unwrap();
+        assert_eq!(cli.command, vec!["infer", "args"]);
     }
 }
