@@ -15,8 +15,8 @@ use anyhow::{anyhow, Context, Result};
 use lockin::{ObservationMode, SandboxBuilder};
 
 use crate::backend::{BackendReport, InferBackend, InferRequest};
-use crate::event::{InferDiagnostic, InferEvent};
-use crate::parse::syd::{parse_line, SydParseOutcome};
+use crate::event::{AccessAction, InferDiagnostic, InferEvent};
+use crate::parse::syd::{parse_access_line, SydParseOutcome};
 
 const SYD_LOG_FD: i32 = 3;
 
@@ -107,8 +107,17 @@ fn drain_events(read_fd: OwnedFd) -> (Vec<InferEvent>, Vec<InferDiagnostic>) {
                 break;
             }
         };
-        match parse_line(&line) {
-            SydParseOutcome::Event(ev) => events.push(ev),
+        match parse_access_line(&line) {
+            // Inference filters to warn|deny. Allow records (which the
+            // current AllowAllWithRunId backend doesn't actually emit
+            // — it uses warn — but a future renderer might) are not
+            // policy-relevant to this code path.
+            SydParseOutcome::Event(ae)
+                if matches!(ae.action, AccessAction::Warn | AccessAction::Deny) =>
+            {
+                events.push(ae.event);
+            }
+            SydParseOutcome::Event(_) => {}
             SydParseOutcome::Skip => {}
             SydParseOutcome::Unsupported(d) | SydParseOutcome::Malformed(d) => {
                 diagnostics.push(d);

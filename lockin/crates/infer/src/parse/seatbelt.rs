@@ -2,13 +2,15 @@
 
 use std::path::PathBuf;
 
-use crate::event::{DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
+use crate::event::{AccessAction, AccessEvent, DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
 
 /// Outcome of parsing one Seatbelt eventMessage string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SeatbeltParseOutcome {
-    /// Successfully classified as an inference event tagged with our RUN_ID.
-    Event(InferEvent),
+    /// Successfully classified as an inference event tagged with our
+    /// RUN_ID and the sandbox's decision (allow/deny). Callers filter
+    /// by action.
+    Event(AccessEvent),
     /// Recognized as a Seatbelt report but not relevant (different RUN_ID,
     /// duplicate-compression line, allow process-fork without a path,
     /// etc.). Skip silently.
@@ -26,7 +28,7 @@ const BACKEND: &str = "seatbelt";
 /// the caller embedded into the sandbox profile via
 /// `(with message (param "RUN_ID"))`.
 /// Messages tagged with a different (or missing) RUN_ID return `Skip`.
-pub fn parse_message(message: &str, expected_run_id: &str) -> SeatbeltParseOutcome {
+pub fn parse_access_message(message: &str, expected_run_id: &str) -> SeatbeltParseOutcome {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return SeatbeltParseOutcome::Skip;
@@ -62,15 +64,23 @@ pub fn parse_message(message: &str, expected_run_id: &str) -> SeatbeltParseOutco
     };
 
     let mut tokens = after_proc.splitn(3, char::is_whitespace);
-    let action = tokens.next().unwrap_or("");
+    let action_tok = tokens.next().unwrap_or("");
     let operation = tokens.next().unwrap_or("");
     let remainder = tokens.next().unwrap_or("").trim();
 
-    if action.is_empty() || operation.is_empty() {
+    if action_tok.is_empty() || operation.is_empty() {
         return malformed(format!("missing action/operation: {first}"));
     }
 
-    classify(operation, remainder, first)
+    let action = match action_tok {
+        "allow" => AccessAction::Allow,
+        "deny" => AccessAction::Deny,
+        // Seatbelt has no formal "warn" mode; surface anything else as
+        // Warn defensively rather than dropping the event.
+        _ => AccessAction::Warn,
+    };
+
+    classify(action, operation, remainder, first)
 }
 
 fn is_duplicate_report(s: &str) -> bool {
@@ -93,14 +103,22 @@ fn parse_process(s: &str) -> Option<(&str, &str)> {
     Some((name, after))
 }
 
-fn classify(op: &str, remainder: &str, first_line: &str) -> SeatbeltParseOutcome {
+fn classify(
+    action: AccessAction,
+    op: &str,
+    remainder: &str,
+    first_line: &str,
+) -> SeatbeltParseOutcome {
     let path_op = |fs_op: FsOp| -> SeatbeltParseOutcome {
         if remainder.is_empty() {
             return malformed(format!("{op}: missing path in {first_line}"));
         }
-        SeatbeltParseOutcome::Event(InferEvent::Fs {
-            op: fs_op,
-            path: PathBuf::from(remainder),
+        SeatbeltParseOutcome::Event(AccessEvent {
+            action,
+            event: InferEvent::Fs {
+                op: fs_op,
+                path: PathBuf::from(remainder),
+            },
         })
     };
 
@@ -123,8 +141,11 @@ fn classify(op: &str, remainder: &str, first_line: &str) -> SeatbeltParseOutcome
             if remainder.is_empty() {
                 return malformed(format!("{op}: missing path in {first_line}"));
             }
-            SeatbeltParseOutcome::Event(InferEvent::Exec {
-                path: PathBuf::from(remainder),
+            SeatbeltParseOutcome::Event(AccessEvent {
+                action,
+                event: InferEvent::Exec {
+                    path: PathBuf::from(remainder),
+                },
             })
         }
         "process-fork" => SeatbeltParseOutcome::Skip,
@@ -157,37 +178,54 @@ mod tests {
         PathBuf::from(s)
     }
 
+    fn fs(action: AccessAction, op: FsOp, path: &str) -> SeatbeltParseOutcome {
+        SeatbeltParseOutcome::Event(AccessEvent {
+            action,
+            event: InferEvent::Fs { op, path: p(path) },
+        })
+    }
+
+    fn exec(action: AccessAction, path: &str) -> SeatbeltParseOutcome {
+        SeatbeltParseOutcome::Event(AccessEvent {
+            action,
+            event: InferEvent::Exec { path: p(path) },
+        })
+    }
+
     #[test]
     fn file_read_data_maps_to_read() {
         assert_eq!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: coreutils(3053) allow file-read-data /private/etc/hosts"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::Read,
-                path: p("/private/etc/hosts"),
-            })
+            fs(AccessAction::Allow, FsOp::Read, "/private/etc/hosts")
         );
     }
 
     #[test]
     fn file_read_metadata_maps_to_stat() {
         assert!(matches!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: bash(1) allow file-read-metadata /etc/hosts"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs { op: FsOp::Stat, .. })
+            SeatbeltParseOutcome::Event(AccessEvent {
+                event: InferEvent::Fs { op: FsOp::Stat, .. },
+                ..
+            })
         ));
     }
 
     #[test]
     fn file_readdir_maps_to_readdir() {
         assert!(matches!(
-            parse_message(&msg("Sandbox: ls(1) allow file-readdir /etc"), RUN_ID),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::ReadDir,
+            parse_access_message(&msg("Sandbox: ls(1) allow file-readdir /etc"), RUN_ID),
+            SeatbeltParseOutcome::Event(AccessEvent {
+                event: InferEvent::Fs {
+                    op: FsOp::ReadDir,
+                    ..
+                },
                 ..
             })
         ));
@@ -196,26 +234,30 @@ mod tests {
     #[test]
     fn file_write_create_maps_to_create() {
         assert_eq!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: bash(3052) allow file-write-create /private/tmp/lockin-audit-q2-file3"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::Create,
-                path: p("/private/tmp/lockin-audit-q2-file3"),
-            })
+            fs(
+                AccessAction::Allow,
+                FsOp::Create,
+                "/private/tmp/lockin-audit-q2-file3"
+            )
         );
     }
 
     #[test]
     fn file_write_data_maps_to_write() {
         assert!(matches!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: bash(1) allow file-write-data /tmp/out"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::Write,
+            SeatbeltParseOutcome::Event(AccessEvent {
+                event: InferEvent::Fs {
+                    op: FsOp::Write,
+                    ..
+                },
                 ..
             })
         ));
@@ -236,9 +278,12 @@ mod tests {
             let msg = msg(&format!("Sandbox: bash(1) allow {op} /tmp/x"));
             assert!(
                 matches!(
-                    parse_message(&msg, RUN_ID),
-                    SeatbeltParseOutcome::Event(InferEvent::Fs {
-                        op: FsOp::Write,
+                    parse_access_message(&msg, RUN_ID),
+                    SeatbeltParseOutcome::Event(AccessEvent {
+                        event: InferEvent::Fs {
+                            op: FsOp::Write,
+                            ..
+                        },
                         ..
                     })
                 ),
@@ -250,12 +295,15 @@ mod tests {
     #[test]
     fn file_write_unlink_maps_to_delete() {
         assert!(matches!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: bash(1) allow file-write-unlink /tmp/old"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::Delete,
+            SeatbeltParseOutcome::Event(AccessEvent {
+                event: InferEvent::Fs {
+                    op: FsOp::Delete,
+                    ..
+                },
                 ..
             })
         ));
@@ -264,36 +312,57 @@ mod tests {
     #[test]
     fn process_exec_star_maps_to_exec() {
         assert_eq!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: sandbox-exec(3052) allow process-exec* /bin/sh"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Exec { path: p("/bin/sh") })
+            exec(AccessAction::Allow, "/bin/sh")
         );
     }
 
     #[test]
     fn process_exec_interpreter_maps_to_exec() {
         assert!(matches!(
-            parse_message(
+            parse_access_message(
                 &msg("Sandbox: sh(1) allow process-exec-interpreter /usr/bin/perl"),
                 RUN_ID
             ),
-            SeatbeltParseOutcome::Event(InferEvent::Exec { .. })
+            SeatbeltParseOutcome::Event(AccessEvent {
+                event: InferEvent::Exec { .. },
+                ..
+            })
         ));
+    }
+
+    #[test]
+    fn seatbelt_allow_classifies_as_allow() {
+        let outcome = parse_access_message(
+            &msg("Sandbox: bash(1) allow file-read-data /etc/hosts"),
+            RUN_ID,
+        );
+        assert_eq!(outcome, fs(AccessAction::Allow, FsOp::Read, "/etc/hosts"));
+    }
+
+    #[test]
+    fn seatbelt_deny_classifies_as_deny() {
+        let outcome = parse_access_message(
+            &msg("Sandbox: probe(123) deny file-read-data /etc/secret"),
+            RUN_ID,
+        );
+        assert_eq!(outcome, fs(AccessAction::Deny, FsOp::Read, "/etc/secret"));
     }
 
     #[test]
     fn process_fork_is_skip() {
         assert_eq!(
-            parse_message(&msg("Sandbox: bash(3052) allow process-fork"), RUN_ID),
+            parse_access_message(&msg("Sandbox: bash(3052) allow process-fork"), RUN_ID),
             SeatbeltParseOutcome::Skip
         );
     }
 
     #[test]
     fn mach_lookup_is_unsupported() {
-        let outcome = parse_message(
+        let outcome = parse_access_message(
             &msg("Sandbox: bash(1) allow mach-lookup com.apple.foo"),
             RUN_ID,
         );
@@ -305,7 +374,7 @@ mod tests {
 
     #[test]
     fn sysctl_read_is_unsupported() {
-        let outcome = parse_message(
+        let outcome = parse_access_message(
             &msg("Sandbox: bash(2901) allow sysctl-read kern.bootargs"),
             RUN_ID,
         );
@@ -317,7 +386,7 @@ mod tests {
 
     #[test]
     fn network_outbound_is_unsupported() {
-        let outcome = parse_message(
+        let outcome = parse_access_message(
             &msg("Sandbox: bash(1) allow network-outbound remote:*:443"),
             RUN_ID,
         );
@@ -329,7 +398,7 @@ mod tests {
 
     #[test]
     fn file_ioctl_is_unsupported() {
-        let outcome = parse_message(
+        let outcome = parse_access_message(
             &msg(
                 "Sandbox: bash(3052) allow file-ioctl path:/dev/dtracehelper ioctl-command:(_IO \"h\" 4)",
             ),
@@ -341,38 +410,53 @@ mod tests {
     #[test]
     fn different_run_id_is_skip() {
         let other = "Sandbox: bash(1) allow file-read-data /etc/hosts\nlockin-run-OTHER-RUN-ID";
-        assert_eq!(parse_message(other, RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(
+            parse_access_message(other, RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
     }
 
     #[test]
     fn missing_run_id_line_is_skip() {
         let only = "Sandbox: bash(1) allow file-read-data /etc/hosts";
-        assert_eq!(parse_message(only, RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(
+            parse_access_message(only, RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
     }
 
     #[test]
     fn duplicate_report_line_is_skip() {
         let dup = "1 duplicate report for Sandbox: bash(2901) allow file-read-data /bin/bash";
-        assert_eq!(parse_message(dup, RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(
+            parse_access_message(dup, RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
     }
 
     #[test]
     fn double_digit_duplicate_report_line_is_skip() {
         let dup = "37 duplicate report for Sandbox: bash(2901) allow file-read-data /bin/bash";
-        assert_eq!(parse_message(dup, RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(
+            parse_access_message(dup, RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
     }
 
     #[test]
     fn empty_message_is_skip() {
-        assert_eq!(parse_message("", RUN_ID), SeatbeltParseOutcome::Skip);
-        assert_eq!(parse_message("   \n\n", RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(parse_access_message("", RUN_ID), SeatbeltParseOutcome::Skip);
+        assert_eq!(
+            parse_access_message("   \n\n", RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
     }
 
     #[test]
     fn missing_sandbox_prefix_is_malformed() {
         let m = format!("notasandboxline\n{RUN_ID}");
         assert!(matches!(
-            parse_message(&m, RUN_ID),
+            parse_access_message(&m, RUN_ID),
             SeatbeltParseOutcome::Malformed(_)
         ));
     }
@@ -381,7 +465,7 @@ mod tests {
     fn missing_pid_parens_is_malformed() {
         let m = format!("Sandbox: bash allow file-read-data /etc/hosts\n{RUN_ID}");
         assert!(matches!(
-            parse_message(&m, RUN_ID),
+            parse_access_message(&m, RUN_ID),
             SeatbeltParseOutcome::Malformed(_)
         ));
     }
@@ -390,7 +474,7 @@ mod tests {
     fn nonnumeric_pid_is_malformed() {
         let m = format!("Sandbox: bash(notanumber) allow file-read-data /etc/hosts\n{RUN_ID}");
         assert!(matches!(
-            parse_message(&m, RUN_ID),
+            parse_access_message(&m, RUN_ID),
             SeatbeltParseOutcome::Malformed(_)
         ));
     }
@@ -399,7 +483,7 @@ mod tests {
     fn empty_path_on_file_read_data_is_malformed() {
         let m = format!("Sandbox: bash(1) allow file-read-data\n{RUN_ID}");
         assert!(matches!(
-            parse_message(&m, RUN_ID),
+            parse_access_message(&m, RUN_ID),
             SeatbeltParseOutcome::Malformed(_)
         ));
     }
@@ -409,23 +493,19 @@ mod tests {
         let cases: &[(&str, SeatbeltParseOutcome)] = &[
             (
                 "Sandbox: bash(3052) allow file-write-create /private/tmp/lockin-audit-q2-file3",
-                SeatbeltParseOutcome::Event(InferEvent::Fs {
-                    op: FsOp::Create,
-                    path: PathBuf::from("/private/tmp/lockin-audit-q2-file3"),
-                }),
+                fs(
+                    AccessAction::Allow,
+                    FsOp::Create,
+                    "/private/tmp/lockin-audit-q2-file3",
+                ),
             ),
             (
                 "Sandbox: coreutils(3053) allow file-read-data /private/etc/hosts",
-                SeatbeltParseOutcome::Event(InferEvent::Fs {
-                    op: FsOp::Read,
-                    path: PathBuf::from("/private/etc/hosts"),
-                }),
+                fs(AccessAction::Allow, FsOp::Read, "/private/etc/hosts"),
             ),
             (
                 "Sandbox: sandbox-exec(3052) allow process-exec* /bin/sh",
-                SeatbeltParseOutcome::Event(InferEvent::Exec {
-                    path: PathBuf::from("/bin/sh"),
-                }),
+                exec(AccessAction::Allow, "/bin/sh"),
             ),
             (
                 "Sandbox: bash(3052) allow process-fork",
@@ -435,7 +515,7 @@ mod tests {
 
         for (first, expected) in cases {
             let m = msg(first);
-            assert_eq!(&parse_message(&m, RUN_ID), expected, "case: {first}");
+            assert_eq!(&parse_access_message(&m, RUN_ID), expected, "case: {first}");
         }
 
         let unsupported_cases = [
@@ -446,7 +526,7 @@ mod tests {
             let m = msg(first);
             assert!(
                 matches!(
-                    parse_message(&m, RUN_ID),
+                    parse_access_message(&m, RUN_ID),
                     SeatbeltParseOutcome::Unsupported(_)
                 ),
                 "case: {first}"
@@ -455,27 +535,11 @@ mod tests {
     }
 
     #[test]
-    fn deny_action_still_classifies() {
-        // We don't filter by action; under our profile it's always "allow",
-        // but a "deny" should still classify rather than crash.
-        assert!(matches!(
-            parse_message(
-                &msg("Sandbox: bash(1) deny file-read-data /etc/secret"),
-                RUN_ID
-            ),
-            SeatbeltParseOutcome::Event(InferEvent::Fs { op: FsOp::Read, .. })
-        ));
-    }
-
-    #[test]
     fn extra_whitespace_in_path_is_trimmed() {
         let m = msg("Sandbox: bash(1) allow file-read-data    /etc/hosts   ");
         assert_eq!(
-            parse_message(&m, RUN_ID),
-            SeatbeltParseOutcome::Event(InferEvent::Fs {
-                op: FsOp::Read,
-                path: p("/etc/hosts"),
-            })
+            parse_access_message(&m, RUN_ID),
+            fs(AccessAction::Allow, FsOp::Read, "/etc/hosts")
         );
     }
 }

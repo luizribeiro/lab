@@ -37,6 +37,27 @@ pub enum FsOp {
     Delete,
 }
 
+/// What the sandbox decided about an observed access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessAction {
+    /// Sandbox permitted the access. Emitted in
+    /// `ObservationMode::AllowAllWithRunId` mode (current `lockin infer`).
+    Allow,
+    /// Sandbox would have denied but allowed (dry-run / warn). Emitted
+    /// when default rules are set to `:warn`.
+    Warn,
+    /// Sandbox denied the access. Emitted when default rules are set to
+    /// `:deny` (used by `lockin trace`).
+    Deny,
+}
+
+/// An observed access decorated with the sandbox's decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessEvent {
+    pub action: AccessAction,
+    pub event: InferEvent,
+}
+
 /// A diagnostic surfaced by inference (informational, warning, or error).
 /// Used to propagate things like "saw an unsupported sandbox operation"
 /// up to the CLI without crashing the run.

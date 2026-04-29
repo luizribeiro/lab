@@ -23,7 +23,7 @@ use lockin::{ObservationMode, SandboxBuilder};
 use uuid::Uuid;
 
 use crate::backend::{BackendReport, InferBackend, InferRequest};
-use crate::parse::seatbelt::{parse_message, SeatbeltParseOutcome};
+use crate::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
 
 const LOG_BIN: &str = "/usr/bin/log";
 const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
@@ -129,8 +129,13 @@ pub fn run(request: &InferRequest) -> Result<BackendReport> {
         let Some(message) = value.get("eventMessage").and_then(|v| v.as_str()) else {
             continue;
         };
-        match parse_message(message, &run_id) {
-            SeatbeltParseOutcome::Event(ev) => events.push(ev),
+        match parse_access_message(message, &run_id) {
+            // Darwin's `AllowAllWithRunId` profile (`(allow default
+            // (with report))`) emits action="allow" for every observed
+            // access — the report trigger IS the signal. Pass all
+            // actions through; trace mode (v0.3.2+) filters to Deny at
+            // its own call site.
+            SeatbeltParseOutcome::Event(ae) => events.push(ae.event),
             SeatbeltParseOutcome::Skip => {}
             SeatbeltParseOutcome::Unsupported(d) | SeatbeltParseOutcome::Malformed(d) => {
                 diagnostics.push(d);

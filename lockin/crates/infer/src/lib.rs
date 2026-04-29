@@ -17,6 +17,6 @@ pub mod path;
 pub use backend::{BackendReport, InferBackend, InferRequest};
 pub use compact::{compact, InferredPolicy};
 pub use emit::{merge_into_config, render_toml, HEADER_COMMENT};
-pub use event::{DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
+pub use event::{AccessAction, AccessEvent, DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
 pub use observe::{infer, infer_with_backend, InferOptions, InferReport};
 pub use path::canonicalize_observed;
