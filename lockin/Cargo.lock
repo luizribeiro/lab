@@ -296,6 +296,7 @@ dependencies = [
  "lockin",
  "lockin-config",
  "lockin-infer",
+ "lockin-trace",
  "outpost",
  "outpost-proxy",
  "serde",

@@ -23,6 +23,7 @@ libc = "0.2"
 lockin = { path = "../sandbox", features = ["tokio"] }
 lockin-config = { path = "../config" }
 lockin-infer = { path = "../infer" }
+lockin-trace = { path = "../trace" }
 outpost = { path = "../../../outpost/crates/outpost" }
 outpost-proxy = { path = "../../../outpost/crates/outpost-proxy" }
 serde = { version = "1", features = ["derive"] }

@@ -64,10 +64,37 @@ struct InferCli {
     command: Vec<OsString>,
 }
 
+#[derive(Parser, Debug)]
+#[command(
+    name = "lockin trace",
+    about = "Run a program under your lockin.toml policy and record what got denied",
+    trailing_var_arg = true
+)]
+struct TraceCli {
+    /// Path to write the denial log. Default `./lockin-denials.log`.
+    #[arg(short = 'o', long = "output", default_value = "lockin-denials.log")]
+    output: PathBuf,
+
+    /// lockin.toml to enforce. If omitted, uses the same resolution as
+    /// run mode (./lockin.toml if present, else deny-all default).
+    #[arg(short = 'c', long = "config")]
+    config: Option<PathBuf>,
+
+    /// The program to trace and its arguments.
+    #[arg(required = true)]
+    command: Vec<OsString>,
+}
+
 /// Returns true if the given argv is intended for the `infer`
 /// subcommand. Pulled out for test coverage.
 fn is_infer_invocation(argv: &[OsString]) -> bool {
     argv.get(1).map(|s| s == "infer").unwrap_or(false)
+}
+
+/// Returns true if the given argv is intended for the `trace`
+/// subcommand. Pulled out for test coverage.
+fn is_trace_invocation(argv: &[OsString]) -> bool {
+    argv.get(1).map(|s| s == "trace").unwrap_or(false)
 }
 
 fn main() -> ExitCode {
@@ -78,6 +105,18 @@ fn main() -> ExitCode {
             .collect();
         match InferCli::try_parse_from(&infer_argv) {
             Ok(cli) => return run_infer(cli),
+            Err(e) => {
+                let _ = e.print();
+                return ExitCode::from(EXIT_LOCKIN_ERROR);
+            }
+        }
+    }
+    if is_trace_invocation(&argv) {
+        let trace_argv: Vec<OsString> = std::iter::once(argv[0].clone())
+            .chain(argv.into_iter().skip(2))
+            .collect();
+        match TraceCli::try_parse_from(&trace_argv) {
+            Ok(cli) => return run_trace(cli),
             Err(e) => {
                 let _ = e.print();
                 return ExitCode::from(EXIT_LOCKIN_ERROR);
@@ -151,6 +190,64 @@ fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
             }
         }
     }
+
+    Ok(ExitCode::from(child_exit_code(report.status)))
+}
+
+fn run_trace(cli: TraceCli) -> ExitCode {
+    match do_trace(cli) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("lockin trace: {e:#}");
+            ExitCode::from(EXIT_LOCKIN_ERROR)
+        }
+    }
+}
+
+fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
+    let mut command = cli.command;
+    if command.first().map(|s| s == "--").unwrap_or(false) {
+        command.remove(0);
+    }
+    if command.is_empty() {
+        anyhow::bail!(
+            "missing program; usage: lockin trace [-o OUT] [-c CONFIG] -- program args..."
+        );
+    }
+
+    let (config, config_dir) = resolve_config(&cli.config)?;
+
+    let program = resolve_executable(command[0].as_os_str(), None)
+        .with_context(|| format!("resolving program {:?}", command[0]))?;
+    let args: Vec<OsString> = command[1..].to_vec();
+
+    eprintln!(
+        "lockin trace: recording denials to {}",
+        cli.output.display()
+    );
+
+    let request = lockin_trace::TraceRequest {
+        program,
+        args,
+        current_dir: None,
+        env: vec![],
+        config,
+        config_dir,
+    };
+    let options = lockin_trace::TraceOptions {
+        output: Some(cli.output.clone()),
+    };
+
+    let report = lockin_trace::trace(request, options)?;
+
+    for d in &report.diagnostics {
+        eprintln!("lockin trace: {}", d.message);
+    }
+    eprintln!(
+        "lockin trace: {} denial(s) recorded in {}",
+        report.denials.len(),
+        cli.output.display()
+    );
 
     Ok(ExitCode::from(child_exit_code(report.status)))
 }
@@ -748,5 +845,89 @@ mod tests {
         assert!(!is_infer_invocation(&argv));
         let cli = parse(&["lockin", "--", "infer", "args"]).unwrap();
         assert_eq!(cli.command, vec!["infer", "args"]);
+    }
+
+    fn parse_trace(args: &[&str]) -> Result<TraceCli, clap::Error> {
+        TraceCli::try_parse_from(args)
+    }
+
+    #[test]
+    fn trace_dispatches_when_first_arg_is_trace() {
+        assert!(is_trace_invocation(&argv(&[
+            "lockin",
+            "trace",
+            "-o",
+            "denials.log"
+        ])));
+        assert!(is_trace_invocation(&argv(&[
+            "lockin",
+            "trace",
+            "--",
+            "/bin/echo"
+        ])));
+    }
+
+    #[test]
+    fn trace_dispatch_skips_when_dash_dash_first() {
+        // `lockin -- trace` runs a program literally named `trace`.
+        assert!(!is_trace_invocation(&argv(&[
+            "lockin", "--", "trace", "args"
+        ])));
+    }
+
+    #[test]
+    fn trace_dispatch_skips_for_run_mode_invocations() {
+        assert!(!is_trace_invocation(&argv(&["lockin", "/bin/echo", "hi"])));
+        assert!(!is_trace_invocation(&argv(&["lockin"])));
+        // `lockin infer ...` must dispatch as infer, not trace.
+        assert!(!is_trace_invocation(&argv(&[
+            "lockin", "infer", "-o", "x.toml"
+        ])));
+    }
+
+    #[test]
+    fn lockin_trace_with_program_and_args_parses() {
+        let cli = parse_trace(&["lockin trace", "-o", "out.log", "--", "/bin/echo", "hi"]).unwrap();
+        assert_eq!(cli.output, PathBuf::from("out.log"));
+        assert_eq!(cli.config, None);
+        let cmd: Vec<&OsString> = cli.command.iter().collect();
+        assert!(
+            cmd == vec![&OsString::from("/bin/echo"), &OsString::from("hi")]
+                || cmd
+                    == vec![
+                        &OsString::from("--"),
+                        &OsString::from("/bin/echo"),
+                        &OsString::from("hi"),
+                    ],
+            "unexpected command parse: {:?}",
+            cli.command
+        );
+    }
+
+    #[test]
+    fn lockin_trace_with_config_and_default_output() {
+        let cli = parse_trace(&["lockin trace", "-c", "lockin.toml", "--", "./prog"]).unwrap();
+        assert_eq!(cli.output, PathBuf::from("lockin-denials.log"));
+        assert_eq!(cli.config, Some(PathBuf::from("lockin.toml")));
+        assert!(cli.command.iter().any(|s| s == "./prog"));
+    }
+
+    #[test]
+    fn lockin_trace_no_command_errors() {
+        assert!(parse_trace(&["lockin trace"]).is_err());
+    }
+
+    #[test]
+    fn lockin_trace_no_output_uses_default() {
+        let cli = parse_trace(&["lockin trace", "--", "/bin/echo"]).unwrap();
+        assert_eq!(cli.output, PathBuf::from("lockin-denials.log"));
+    }
+
+    #[test]
+    fn run_mode_with_double_dash_keeps_program_named_trace() {
+        let argv: Vec<OsString> = argv(&["lockin", "--", "trace", "args"]);
+        assert!(!is_trace_invocation(&argv));
+        let cli = parse(&["lockin", "--", "trace", "args"]).unwrap();
+        assert_eq!(cli.command, vec!["trace", "args"]);
     }
 }
