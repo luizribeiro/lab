@@ -12,7 +12,10 @@ use std::process::{ExitCode, ExitStatus};
 use anyhow::Context;
 use clap::Parser;
 
-use config::{apply_config, load_config, resolve_command, resolve_network_plan, NetworkPlan};
+use config::{
+    apply_config, load_config, resolve_command, resolve_executable, resolve_network_plan,
+    NetworkPlan,
+};
 
 const EXIT_LOCKIN_ERROR: u8 = 125;
 
@@ -120,7 +123,8 @@ fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
         None => None,
     };
 
-    let program = PathBuf::from(&command[0]);
+    let program = resolve_executable(command[0].as_os_str(), None)
+        .with_context(|| format!("resolving program {:?}", command[0]))?;
     let args: Vec<OsString> = command[1..].to_vec();
 
     let request = lockin_infer::InferRequest {

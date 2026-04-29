@@ -245,6 +245,62 @@ pub fn resolve_command(
     Ok((program, args))
 }
 
+/// Resolves a CLI-supplied program name to an absolute executable path.
+///
+/// Three forms:
+/// - Already absolute → returned as-is.
+/// - Contains a path separator (e.g. `./script`, `subdir/prog`) →
+///   joined onto `current_dir` (or `std::env::current_dir()` if `None`)
+///   and absolutized.
+/// - Bare name (`echo`, `git`) → walks `PATH` for the first executable
+///   regular file with the matching name.
+///
+/// Returns an error (never panics) if the bare-name lookup finds
+/// nothing, so callers feeding the result into something that asserts
+/// absoluteness (e.g. `SandboxBuilder::command`) can surface a clean
+/// error to the user instead of crashing.
+///
+/// Distinct from [`resolve_command`], which intentionally rejects bare
+/// PATH lookups for the run path (the seed config or CLI must name an
+/// explicit path). `infer` mode has no seed config to back-fill the
+/// program from, so bare names are accepted here and resolved via PATH.
+pub fn resolve_executable(name: &std::ffi::OsStr, current_dir: Option<&Path>) -> Result<PathBuf> {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    // Distinguishes `./foo` / `subdir/foo` (multi-component) from a bare `foo`.
+    if path.components().count() > 1 {
+        let base = match current_dir {
+            Some(d) => d.to_path_buf(),
+            None => std::env::current_dir().context("failed to read current working directory")?,
+        };
+        return std::path::absolute(base.join(path))
+            .with_context(|| format!("failed to resolve relative program path: {name:?}"));
+    }
+
+    let path_var = std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH is not set"))?;
+    for dir in std::env::split_paths(&path_var) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        let candidate = dir.join(path);
+        if is_executable_file(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!("executable not found in PATH: {}", path.display())
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match path.metadata() {
+        Ok(m) => m.is_file() && m.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    }
+}
+
 pub fn resolve_path(path: &Path, base: Option<&Path>) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -577,6 +633,92 @@ mod tests {
         };
         let (prog, _) = resolve_command(&config, &[], Some(tmp.path())).unwrap();
         assert_eq!(prog, tmp.path().join("bin/tool"));
+    }
+
+    mod resolve_executable_tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        // env::set_var mutates global state; serialize PATH-touching tests.
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        struct PathGuard {
+            _lock: std::sync::MutexGuard<'static, ()>,
+            saved: Option<std::ffi::OsString>,
+        }
+
+        impl PathGuard {
+            fn set(value: &Path) -> Self {
+                let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                let saved = std::env::var_os("PATH");
+                std::env::set_var("PATH", value);
+                Self { _lock: lock, saved }
+            }
+        }
+
+        impl Drop for PathGuard {
+            fn drop(&mut self) {
+                match &self.saved {
+                    Some(v) => std::env::set_var("PATH", v),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+
+        fn create_executable(path: &Path) {
+            std::fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        #[test]
+        fn infer_resolves_bare_command_via_path() {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("widget");
+            create_executable(&bin);
+            let _g = PathGuard::set(dir.path());
+
+            let resolved = resolve_executable(std::ffi::OsStr::new("widget"), None).unwrap();
+            assert_eq!(resolved, bin);
+        }
+
+        #[test]
+        fn infer_resolves_relative_path_against_cwd() {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("script");
+            create_executable(&bin);
+
+            let resolved =
+                resolve_executable(std::ffi::OsStr::new("./script"), Some(dir.path())).unwrap();
+            assert!(resolved.is_absolute());
+            assert!(
+                resolved.ends_with("script"),
+                "expected resolved to end with 'script', got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn infer_passes_through_absolute_path() {
+            let resolved = resolve_executable(std::ffi::OsStr::new("/bin/echo"), None).unwrap();
+            assert_eq!(resolved, PathBuf::from("/bin/echo"));
+        }
+
+        #[test]
+        fn infer_errors_on_missing_command() {
+            let dir = tempfile::tempdir().unwrap();
+            // PATH points at an empty dir — no `nonesuch` anywhere.
+            let _g = PathGuard::set(dir.path());
+
+            let err = resolve_executable(
+                std::ffi::OsStr::new("definitely-not-a-real-binary-xyz"),
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("not found in PATH"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
