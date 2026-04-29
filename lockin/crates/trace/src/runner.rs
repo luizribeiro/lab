@@ -31,10 +31,14 @@ pub struct TraceRequest {
     pub config_dir: Option<PathBuf>,
 }
 
-/// Knobs for the trace run. Currently no fields; reserved for the
-/// commit-3 output-path argument and future extensions.
+/// Knobs for the trace run.
 #[derive(Debug, Clone, Default)]
-pub struct TraceOptions {}
+pub struct TraceOptions {
+    /// Where to write the human-readable denial log. If `None`, no
+    /// file is written — callers can still inspect
+    /// [`TraceReport::denials`] directly.
+    pub output: Option<PathBuf>,
+}
 
 /// Result of one `trace()` run.
 #[derive(Debug)]
@@ -50,8 +54,6 @@ pub struct TraceReport {
 /// Run `request.program` under [`lockin::ObservationMode::DenyTraceWithRunId`]
 /// and return the canonicalized denial events.
 pub fn trace(request: TraceRequest, options: TraceOptions) -> Result<TraceReport> {
-    let _ = options;
-
     let (status, raw_events, mut diagnostics) = run_platform(&request)?;
 
     let mut denials = Vec::new();
@@ -65,11 +67,17 @@ pub fn trace(request: TraceRequest, options: TraceOptions) -> Result<TraceReport
         }
     }
 
-    Ok(TraceReport {
+    let report = TraceReport {
         status,
         denials,
         diagnostics,
-    })
+    };
+
+    if let Some(path) = &options.output {
+        crate::output::write_denial_log(&report, path)?;
+    }
+
+    Ok(report)
 }
 
 #[cfg(target_os = "linux")]
