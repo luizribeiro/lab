@@ -20,7 +20,7 @@ path = "src/main.rs"
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
-lockin = { path = "../sandbox" }
+lockin = { path = "../sandbox", features = ["tokio"] }
 lockin-config = { path = "../config" }
 lockin-infer = { path = "../infer" }
 outpost = { path = "../../../outpost/crates/outpost" }

@@ -15,7 +15,7 @@ anyhow = "1.0"
 lockin-process = { path = "../process" }
 libc = "0.2"
 tempfile = "3.13"
-tokio = { version = "1", features = ["process"], optional = true }
+tokio = { version = "1", features = ["process", "rt", "signal", "sync", "time"], optional = true }
 
 [dev-dependencies]
 lockin-testkit = { path = "../testkit" }

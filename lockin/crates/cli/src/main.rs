@@ -1,10 +1,8 @@
 mod glob;
-mod supervise;
 
 use lockin_config as config;
 
 use std::ffi::OsString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, ExitStatus};
@@ -179,103 +177,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     apply_env(&config.env, &mut cmd, std::env::vars_os());
     proxy.inject_env(&mut cmd);
 
-    place_child_in_own_pgroup(&mut cmd);
-
-    // None for non-interactive runs (CI, cron, redirected stdin);
-    // skips the whole pgrp dance.
-    let tty_fd = open_controlling_tty();
-
-    // Without SIG_IGN, the kernel suspends *us* on the restoring
-    // tcsetpgrp below — by then we've handed fg ownership away.
-    let saved_sigttou = ignore_signal(libc::SIGTTOU)?;
-    let saved_sigttin = ignore_signal(libc::SIGTTIN)?;
-
-    // Install signal handlers BEFORE forking the child so a signal
-    // arriving in the spawn->supervise window can't kill lockin via
-    // SIG_DFL and orphan the freshly-forked tree (issue #10). The
-    // handlers reset to SIG_DFL across exec, so the child sees a
-    // normal signal disposition.
-    let status = runtime
-        .block_on(async {
-            let signals = supervise::Signals::install()?;
-            let child = cmd.spawn()?;
-            let pid = child.id() as i32;
-            // pre_exec calls setpgid in the child, but the parent
-            // races to call tcsetpgrp. setpgid is idempotent — call
-            // it from the parent too so the pgrp definitely exists
-            // by the time we tcsetpgrp. Errors are expected (EACCES
-            // if the child already exec'd; ESRCH if it exited) and
-            // safe to ignore.
-            unsafe { libc::setpgid(pid, pid) };
-            if let Some(fd) = tty_fd.as_ref() {
-                if unsafe { libc::tcsetpgrp(fd.as_raw_fd(), pid) } == -1 {
-                    eprintln!(
-                        "lockin: tcsetpgrp(child) failed: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
-            let result = supervise::run(child, pid, signals).await;
-            if let Some(fd) = tty_fd.as_ref() {
-                let our_pgrp = unsafe { libc::getpgrp() };
-                unsafe { libc::tcsetpgrp(fd.as_raw_fd(), our_pgrp) };
-            }
-            result
-        })
-        .context("supervising sandbox child")?;
-
-    restore_signal(libc::SIGTTOU, &saved_sigttou);
-    restore_signal(libc::SIGTTIN, &saved_sigttin);
+    let status = lockin::supervise::supervise_command(cmd, runtime.handle())?;
 
     drop(proxy);
     drop(runtime);
     Ok(ExitCode::from(child_exit_code(status)))
-}
-
-fn open_controlling_tty() -> Option<OwnedFd> {
-    let fd = unsafe { libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
-    if fd < 0 {
-        None
-    } else {
-        Some(unsafe { OwnedFd::from_raw_fd(fd) })
-    }
-}
-
-fn ignore_signal(sig: libc::c_int) -> std::io::Result<libc::sigaction> {
-    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
-    let mut new: libc::sigaction = unsafe { std::mem::zeroed() };
-    new.sa_sigaction = libc::SIG_IGN;
-    if unsafe { libc::sigaction(sig, &new, &mut old) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(old)
-}
-
-fn restore_signal(sig: libc::c_int, prev: &libc::sigaction) {
-    if unsafe { libc::sigaction(sig, prev, std::ptr::null_mut()) } != 0 {
-        eprintln!(
-            "lockin: failed to restore signal {sig} disposition: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-}
-
-/// Adds a `pre_exec` hook that puts the sandbox wrapper (syd /
-/// sandbox-exec) into a fresh process group equal to its own PID.
-/// That makes `killpg(pid, sig)` from the supervisor reach the
-/// wrapper and every grand-child it spawns, so signal forwarding on
-/// shutdown does not orphan the tree (issue #10).
-fn place_child_in_own_pgroup(cmd: &mut lockin::SandboxedCommand) {
-    // SAFETY: setpgid is async-signal-safe per POSIX. The hook does
-    // no allocation and touches no shared state.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setpgid(0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
 }
 
 /// Holds the `outpost-proxy` handle for proxy-mode runs, plus the

@@ -12,6 +12,9 @@ mod paths;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
+#[cfg(feature = "tokio")]
+pub mod supervise;
+
 #[cfg(target_os = "macos")]
 mod darwin;
 #[cfg(target_os = "linux")]
