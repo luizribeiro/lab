@@ -487,6 +487,31 @@ fn write_path_can_truncate_existing() {
     );
 }
 
+#[test]
+fn write_path_does_not_grant_unlink() {
+    let temp = TestDir::new("write-path-no-unlink");
+    let target = temp.join("victim.txt");
+    std::fs::write(&target, b"seed").expect("seed file");
+
+    assert!(!run_probe(
+        common::sandbox_builder().write_path(target.clone()),
+        &["can-unlink", &target.display().to_string()]
+    ));
+    assert!(target.exists(), "file should NOT have been removed");
+}
+
+#[test]
+fn write_path_does_not_grant_create() {
+    let temp = TestDir::new("write-path-no-create");
+    let target = temp.join("new.log");
+
+    assert!(!run_probe(
+        common::sandbox_builder().write_path(target.clone()),
+        &["can-create-file", &target.display().to_string()]
+    ));
+    assert!(!target.exists(), "file should NOT have been created");
+}
+
 // ── exec scoping ─────────────────────────────────────────────
 
 fn pick_system_true() -> &'static str {

@@ -289,7 +289,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
 
     for path in write_paths {
         for candidate in path_candidates(&path) {
-            add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+            add_allow_rule(&mut rules, "allow/write,truncate", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
             add_lock_allow_rule(&mut rules, "allow/lock/truncate", &candidate);
         }
