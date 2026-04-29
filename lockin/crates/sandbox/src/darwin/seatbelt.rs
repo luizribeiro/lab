@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 enum SeatbeltFilter {
     Literal(PathBuf),
     Subpath(PathBuf),
-    Regex(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -35,13 +34,6 @@ impl SeatbeltRule {
         }
     }
 
-    fn allow_regex(operations: &[&'static str], pattern: &'static str) -> Self {
-        Self {
-            operations: operations.to_vec(),
-            filter: Some(SeatbeltFilter::Regex(pattern)),
-        }
-    }
-
     fn render(&self) -> String {
         let mut out = String::from("(allow");
 
@@ -61,11 +53,6 @@ impl SeatbeltRule {
                 SeatbeltFilter::Subpath(path) => {
                     out.push_str("(subpath \"");
                     out.push_str(&escape_sb_string(path));
-                    out.push_str("\")");
-                }
-                SeatbeltFilter::Regex(pattern) => {
-                    out.push_str("(regex \"");
-                    out.push_str(pattern);
                     out.push_str("\")");
                 }
             }
@@ -103,11 +90,6 @@ impl SeatbeltPolicy {
     pub(super) fn allow_subpath(&mut self, operations: &[&'static str], path: &Path) {
         self.rules
             .push(SeatbeltRule::allow_subpath(operations, path));
-    }
-
-    pub(super) fn allow_regex(&mut self, operations: &[&'static str], pattern: &'static str) {
-        self.rules
-            .push(SeatbeltRule::allow_regex(operations, pattern));
     }
 
     pub(super) fn append_raw(&mut self, rule: impl Into<String>) {

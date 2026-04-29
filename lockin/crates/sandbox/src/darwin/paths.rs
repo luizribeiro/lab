@@ -47,8 +47,12 @@ impl PathSets {
 
         if spec.allow_interactive_tty {
             for tty in stdio_tty_paths("/dev/fd") {
+                paths.add_read(&tty);
+                paths.add_write(&tty);
                 paths.add_ioctl(&tty);
             }
+            paths.add_read(Path::new("/dev/tty"));
+            paths.add_write(Path::new("/dev/tty"));
             paths.add_ioctl(Path::new("/dev/tty"));
         }
 

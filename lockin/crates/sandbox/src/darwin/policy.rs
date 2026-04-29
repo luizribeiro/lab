@@ -7,7 +7,7 @@ use super::seatbelt::SeatbeltPolicy;
 
 /// Builds the Seatbelt policy in this emission order: `(deny default)`,
 /// then `(import "system.sb")`, then structured allows derived from
-/// `spec` (filesystem, network, tty, executable paths), then the
+/// `spec` (filesystem, network, executable paths), then the
 /// unconditional baseline-hardening denies (syslog Unix socket,
 /// blanket `mach-register`, XPC service-name lookup, `/cores`
 /// writes), then any caller-provided raw rules.
@@ -20,18 +20,6 @@ pub(super) fn build_policy(
 
     let mut policy = SeatbeltPolicy::default();
     policy.import_system();
-
-    if spec.allow_interactive_tty {
-        policy.allow(&["pseudo-tty"]);
-        policy.allow_literal(
-            &["file-read*", "file-write*", "file-ioctl"],
-            Path::new("/dev/tty"),
-        );
-        policy.allow_regex(
-            &["file-read*", "file-write*", "file-ioctl"],
-            "^/dev/ttys[0-9]*",
-        );
-    }
 
     for path in &paths.traversal_paths {
         policy.allow_literal(&["file-read-metadata"], path);
@@ -367,12 +355,24 @@ mod tests {
         };
         let with_tty: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
         assert!(
-            with_tty.contains("pseudo-tty"),
-            "allow_interactive_tty=true should grant pseudo-tty, got:\n{with_tty}"
+            !with_tty.contains("pseudo-tty"),
+            "allow_interactive_tty=true must not grant blanket pseudo-tty allocation, got:\n{with_tty}"
         );
         assert!(
-            with_tty.contains("/dev/tty"),
-            "allow_interactive_tty=true should reference /dev/tty, got:\n{with_tty}"
+            !with_tty.contains("^/dev/ttys"),
+            "allow_interactive_tty=true must not grant peer ttys via regex, got:\n{with_tty}"
+        );
+        assert!(
+            with_tty.contains(r#"(allow file-read* (literal "/dev/tty"))"#),
+            "allow_interactive_tty=true should grant read on /dev/tty, got:\n{with_tty}"
+        );
+        assert!(
+            with_tty.contains(r#"(allow file-write-data (literal "/dev/tty"))"#),
+            "allow_interactive_tty=true should grant write on /dev/tty, got:\n{with_tty}"
+        );
+        assert!(
+            with_tty.contains(r#"(allow file-ioctl (literal "/dev/tty"))"#),
+            "allow_interactive_tty=true should grant ioctl on /dev/tty, got:\n{with_tty}"
         );
     }
 }

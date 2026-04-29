@@ -574,6 +574,16 @@ fn read_dir_does_not_allow_exec() {
     );
 }
 
+// ── interactive tty scoping ──────────────────────────────────
+
+#[test]
+fn interactive_tty_does_not_grant_other_devices() {
+    assert!(!run_probe(
+        common::sandbox_builder().allow_interactive_tty(true),
+        &["can-read", "/dev/console"]
+    ));
+}
+
 // ── tmp scoping ──────────────────────────────────────────────
 
 #[test]
