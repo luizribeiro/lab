@@ -1,0 +1,27 @@
+[package]
+name = "lockin-trace"
+version = "0.3.1"
+edition = "2021"
+description = "Runtime denial-tracing for lockin (run a program under enforcement and report what got denied)."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/lockin"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+anyhow = "1"
+lockin = { path = "../sandbox", features = ["tokio"] }
+lockin-config = { path = "../config" }
+lockin-infer = { path = "../infer" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

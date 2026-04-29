@@ -6,6 +6,7 @@ members = [
   "crates/sandbox",
   "crates/process",
   "crates/testkit",
+  "crates/trace",
 ]
 resolver = "2"
 

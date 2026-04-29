@@ -347,6 +347,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lockin-trace"
+version = "0.3.1"
+dependencies = [
+ "anyhow",
+ "libc",
+ "lockin",
+ "lockin-config",
+ "lockin-infer",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
