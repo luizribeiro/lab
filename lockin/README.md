@@ -62,6 +62,58 @@ See [docs/cli.md](docs/cli.md) for the full config reference,
 including network modes, environment handling, resource limits,
 and the macOS `raw_seatbelt_rules` escape hatch.
 
+## Generating a config with `lockin infer`
+
+Hand-writing a `lockin.toml` from scratch means guessing every path
+the program touches. `lockin infer` runs the program with everything
+allowed, observes filesystem and exec activity, and writes a starter
+config:
+
+```sh
+lockin infer -o lockin.toml -- ./my-program arg1 arg2
+lockin -c lockin.toml -- ./my-program arg1 arg2
+```
+
+The first command observes; the second enforces using what was
+observed. The generated TOML is a **starter** — review it before
+deploying.
+
+What `infer` populates:
+
+- `[filesystem].read_paths` / `read_dirs` for paths the program read
+  or stat'd
+- `[filesystem].write_paths` / `write_dirs` for paths it wrote,
+  created, or deleted
+- `[filesystem].exec_paths` for binaries it execed
+
+What `infer` never populates (configure these by hand):
+
+- `[sandbox.network]` — observed `connect()` calls give IPs, but the
+  schema is hostname-based; no automatic translation
+- `[env]` — there is no syscall to observe a program reading
+  environment variables
+- macOS Mach lookups, sysctl reads, ioctl, and any other operation
+  outside the lockin schema — these surface as warnings on stderr
+  during inference but never become policy
+
+To keep the output reviewable, paths under known immutable system
+trees collapse to a single `read_dirs` entry: `/usr/lib`, `/usr/lib64`,
+`/lib`, `/lib64`, `/usr/share`, `/nix/store`, `/etc/ssl`,
+`/etc/ca-certificates` on Linux; `/System`, `/usr/lib`, `/usr/share`,
+`/Library/Apple` on macOS.
+
+A single `infer` run only captures paths the program touched on that
+run. Feature flags, error paths, and lazy plugin loading produce
+events only when exercised. To broaden coverage, re-run with the
+previous output as a seed:
+
+```sh
+lockin infer -o lockin.toml -c lockin.toml -- ./my-program --different-args
+```
+
+Each run unions its observations into the seed, so successive runs
+accumulate.
+
 ## Design principles
 
 - **Policy compiler, not enforcer**: translates your policy to native backend rules.

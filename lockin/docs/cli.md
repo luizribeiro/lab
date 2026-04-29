@@ -71,6 +71,78 @@ lockin -- script.py --verbose
 lockin -c sandbox.toml -- myapp --flag
 ```
 
+## Inference (`lockin infer`)
+
+`lockin infer` runs a program under observation and writes a starter
+`lockin.toml` whose `[filesystem]` section reflects what the program
+actually touched.
+
+```sh
+lockin infer -o OUT [-c SEED] -- PROGRAM ARGS...
+```
+
+Flags:
+
+- `-o, --output PATH` — required. Where to write the generated TOML.
+  Overwritten if it already exists.
+- `-c, --config PATH` — optional seed config. Existing fields pass
+  through untouched; observed `[filesystem]` entries are unioned with
+  the seed's. Use this to broaden coverage across multiple runs.
+- `--` — separates lockin's flags from the program. Anything after
+  is the program plus its arguments, exactly like run-mode.
+
+What is auto-generated:
+
+- `[filesystem].read_paths` and `read_dirs` for files the program
+  opened, stat'd, or read directories on
+- `[filesystem].write_paths` and `write_dirs` for files it wrote,
+  created, or deleted
+- `[filesystem].exec_paths` for binaries it execed
+
+What is **not** auto-generated:
+
+- `[sandbox.network]` — schema is hostname-based; observation gives
+  IPs. Configure manually.
+- `[env]` — `getenv` is a libc call, not a syscall. Configure manually.
+- macOS `mach-lookup`, `sysctl-read`, `file-ioctl`, network operations
+  — surface as warnings on stderr during inference; never become
+  policy.
+
+Conservative behavior worth noting:
+
+- `stat` (metadata-only) is promoted to a read entry. The lockin
+  schema has no metadata-only grant; if you want a tighter policy,
+  trim those by hand.
+- Paths under known immutable system trees collapse to a single
+  `read_dirs` entry: `/usr/lib`, `/usr/lib64`, `/lib`, `/lib64`,
+  `/usr/share`, `/nix/store`, `/etc/ssl`, `/etc/ca-certificates` on
+  Linux; `/System`, `/usr/lib`, `/usr/share`, `/Library/Apple` on
+  macOS.
+- A single run only sees paths exercised in that run. Feature flags,
+  error paths, and lazy plugin loading require additional runs (or
+  hand-edits) to be covered.
+
+Backward compatibility:
+
+- Existing run-mode (`lockin [-c CFG] -- program args`) is unchanged.
+- `infer` is reserved as the first positional token only. If your
+  program is literally named `infer`, invoke as `lockin -- infer args`
+  or `lockin ./infer args`; both bypass the subcommand dispatch.
+
+Exit codes mirror run-mode: the observed program's exit code on
+success, 125 on a lockin error.
+
+Platform notes:
+
+- **Linux** uses `syd` in audit mode. Inference reads structured
+  JSONL events from an inherited file descriptor.
+- **macOS** uses `sandbox-exec` with a `(allow default (with report)
+  (with message (param "RUN_ID")))` profile and tails `log stream`
+  filtered by the per-run UUID.
+
+Inference is supported on both Linux and macOS. The result is a
+starter, not a production policy — review before deploying.
+
 ## Shebang support
 
 The CLI supports Linux-portable shebangs via the `-c` short flag
