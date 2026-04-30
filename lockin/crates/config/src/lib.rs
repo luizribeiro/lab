@@ -242,8 +242,16 @@ fn ensure_no_allow_hosts(allow_hosts: &[String], mode: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn apply_config(config: &Config, config_dir: Option<&Path>) -> Result<lockin::SandboxBuilder> {
-    let mut builder = lockin::Sandbox::builder()
+/// Apply the user's `lockin.toml` policy onto an existing builder. Use
+/// this when the caller has already configured non-policy aspects of
+/// the builder (observation mode, fd inheritance) and just needs the
+/// user policy layered on top.
+pub fn apply_config_to_builder(
+    builder: lockin::SandboxBuilder,
+    config: &Config,
+    config_dir: Option<&Path>,
+) -> Result<lockin::SandboxBuilder> {
+    let mut builder = builder
         .allow_kvm(config.sandbox.allow_kvm)
         .allow_interactive_tty(config.sandbox.allow_interactive_tty)
         .allow_non_pie_exec(config.sandbox.allow_non_pie_exec);
@@ -288,6 +296,55 @@ pub fn apply_config(config: &Config, config_dir: Option<&Path>) -> Result<lockin
     }
 
     Ok(builder)
+}
+
+/// Apply the user's `lockin.toml` policy to a fresh builder. Equivalent
+/// to `apply_config_to_builder(lockin::Sandbox::builder(), config, config_dir)`.
+pub fn apply_config(config: &Config, config_dir: Option<&Path>) -> Result<lockin::SandboxBuilder> {
+    apply_config_to_builder(lockin::Sandbox::builder(), config, config_dir)
+}
+
+pub struct EnforcedCommandSpec<'a> {
+    /// The builder to apply policy onto. Callers running under
+    /// observation pass a builder that already has observation/fd setup;
+    /// run-mode callers pass `lockin::Sandbox::builder()`.
+    pub builder: lockin::SandboxBuilder,
+    pub config: &'a Config,
+    pub config_dir: Option<&'a Path>,
+    pub program: &'a Path,
+    pub args: &'a [OsString],
+    pub current_dir: Option<&'a Path>,
+    pub network: lockin::NetworkMode,
+    /// The parent's environment, typically `std::env::vars_os().collect()`.
+    /// Used by `apply_env` to resolve inherit/pass/block.
+    pub parent_env: Vec<(OsString, OsString)>,
+    /// Env applied after the user's `[env]` policy. Used by the CLI to
+    /// inject HTTP_PROXY/HTTPS_PROXY/etc. for proxy-mode runs. Passed
+    /// through verbatim — not blocklist-filtered by lockin-config.
+    pub extra_env: Vec<(OsString, OsString)>,
+}
+
+/// Builds a sandboxed command by applying the canonical enforced-run pipeline:
+/// user policy onto the supplied builder, resolved network mode, command
+/// construction, argv/current-dir, `[env]` policy, then `extra_env` overrides.
+pub fn build_enforced_command(spec: EnforcedCommandSpec<'_>) -> Result<lockin::SandboxedCommand> {
+    let builder =
+        apply_config_to_builder(spec.builder, spec.config, spec.config_dir)?.network(spec.network);
+
+    let mut cmd = builder.command(spec.program)?;
+
+    cmd.args(spec.args);
+    if let Some(dir) = spec.current_dir {
+        cmd.current_dir(dir);
+    }
+
+    apply_env(&spec.config.env, &mut cmd, spec.parent_env);
+
+    for (k, v) in spec.extra_env {
+        cmd.env(k, v);
+    }
+
+    Ok(cmd)
 }
 
 pub fn resolve_command(
@@ -816,6 +873,179 @@ mod tests {
         assert!(
             program.contains(expected),
             "expected {expected} in program, got: {program}"
+        );
+    }
+
+    fn command_args(cmd: &lockin::SandboxedCommand) -> Vec<String> {
+        cmd.as_command()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn normalized_command_args(cmd: &lockin::SandboxedCommand) -> Vec<String> {
+        let private_tmp = cmd
+            .as_command()
+            .get_envs()
+            .find_map(|(k, v)| {
+                (k == "TMPDIR")
+                    .then(|| v.map(|v| v.to_string_lossy().into_owned()))
+                    .flatten()
+            })
+            .expect("sandbox command should set TMPDIR");
+        command_args(cmd)
+            .into_iter()
+            .map(|arg| arg.replace(&private_tmp, "$LOCKIN_TMP"))
+            .collect()
+    }
+
+    fn env_value(cmd: &lockin::SandboxedCommand, name: &str) -> Option<OsString> {
+        cmd.as_command()
+            .get_envs()
+            .find_map(|(k, v)| (k == name).then(|| v.map(|v| v.to_owned())).flatten())
+    }
+
+    fn enforced_command(
+        config: &Config,
+        args: &[OsString],
+        current_dir: Option<&Path>,
+        network: lockin::NetworkMode,
+        parent_env: Vec<(OsString, OsString)>,
+        extra_env: Vec<(OsString, OsString)>,
+    ) -> lockin::SandboxedCommand {
+        build_enforced_command(EnforcedCommandSpec {
+            builder: lockin::Sandbox::builder(),
+            config,
+            config_dir: None,
+            program: Path::new("/bin/echo"),
+            args,
+            current_dir,
+            network,
+            parent_env,
+            extra_env,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn apply_config_to_builder_is_composable() {
+        let config = Config {
+            filesystem: FilesystemConfig {
+                read_paths: vec![PathBuf::from("/etc/hosts")],
+                read_dirs: vec![PathBuf::from("/usr/share")],
+                ..Default::default()
+            },
+            limits: LimitsConfig {
+                max_open_files: Some(64),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let wrapper_cmd = apply_config(&config, None)
+            .unwrap()
+            .command(Path::new("/bin/echo"))
+            .unwrap();
+        let composable_cmd = apply_config_to_builder(lockin::Sandbox::builder(), &config, None)
+            .unwrap()
+            .command(Path::new("/bin/echo"))
+            .unwrap();
+
+        assert_eq!(
+            normalized_command_args(&wrapper_cmd),
+            normalized_command_args(&composable_cmd)
+        );
+    }
+
+    #[test]
+    fn build_enforced_command_applies_args() {
+        let config = Config::default();
+        let args = vec![os("a"), os("b")];
+        let cmd = enforced_command(
+            &config,
+            &args,
+            None,
+            lockin::NetworkMode::Deny,
+            vec![],
+            vec![],
+        );
+        let rendered = command_args(&cmd);
+        assert!(rendered.ends_with(&["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn build_enforced_command_applies_current_dir() {
+        let config = Config::default();
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = enforced_command(
+            &config,
+            &[],
+            Some(dir.path()),
+            lockin::NetworkMode::Deny,
+            vec![],
+            vec![],
+        );
+        assert_eq!(cmd.as_command().get_current_dir(), Some(dir.path()));
+    }
+
+    #[test]
+    fn build_enforced_command_applies_env_policy() {
+        let config = Config {
+            env: EnvConfig {
+                inherit: false,
+                pass: vec!["FOO".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cmd = enforced_command(
+            &config,
+            &[],
+            None,
+            lockin::NetworkMode::Deny,
+            vec![(os("FOO"), os("1")), (os("BAR"), os("2"))],
+            vec![],
+        );
+        assert_eq!(env_value(&cmd, "FOO"), Some(os("1")));
+        assert_eq!(env_value(&cmd, "BAR"), None);
+    }
+
+    #[test]
+    fn build_enforced_command_applies_extra_env_after_env_policy() {
+        let config = Config::default();
+        let cmd = enforced_command(
+            &config,
+            &[],
+            None,
+            lockin::NetworkMode::Deny,
+            vec![],
+            vec![(os("HTTP_PROXY"), os("http://x"))],
+        );
+        assert_eq!(env_value(&cmd, "HTTP_PROXY"), Some(os("http://x")));
+    }
+
+    #[test]
+    fn build_enforced_command_applies_network() {
+        let config = Config::default();
+        let deny = enforced_command(
+            &config,
+            &[],
+            None,
+            lockin::NetworkMode::Deny,
+            vec![],
+            vec![],
+        );
+        let allow = enforced_command(
+            &config,
+            &[],
+            None,
+            lockin::NetworkMode::AllowAll,
+            vec![],
+            vec![],
+        );
+        assert_ne!(
+            normalized_command_args(&deny),
+            normalized_command_args(&allow)
         );
     }
 
