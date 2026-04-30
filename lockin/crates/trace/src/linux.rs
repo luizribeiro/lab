@@ -32,6 +32,7 @@ pub(crate) fn run(
         .context("applying user lockin.toml policy")?;
     builder = builder
         .observation(ObservationMode::DenyTraceWithRunId(run_id))
+        .network(request.network)
         .inherit_fd_as(write_fd, SYD_LOG_FD);
 
     let mut cmd = builder
@@ -41,6 +42,7 @@ pub(crate) fn run(
     if let Some(dir) = &request.current_dir {
         cmd.current_dir(dir);
     }
+    lockin_config::apply_env(&request.config.env, &mut cmd, std::env::vars_os());
     for (k, v) in &request.env {
         cmd.env(k, v);
     }

@@ -207,13 +207,26 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
         cli.output.display()
     );
 
+    // Trace mode mirrors run mode's network/env story: a Proxy plan
+    // needs the outpost-proxy daemon spinning before the sandbox starts,
+    // and the resolved NetworkMode + proxy env are threaded onto the
+    // TraceRequest so the runner's builder reflects the user's policy
+    // verbatim.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?;
+    let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(&config)?)?;
+
     let request = lockin_trace::TraceRequest {
         program,
         args,
         current_dir: None,
-        env: vec![],
+        env: proxy.env_pairs(),
         config,
         config_dir,
+        network: proxy.sandbox_mode(),
     };
     let options = lockin_trace::TraceOptions {
         output: Some(cli.output.clone()),
@@ -230,6 +243,8 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
         cli.output.display()
     );
 
+    drop(proxy);
+    drop(runtime);
     Ok(ExitCode::from(child_exit_code(report.status)))
 }
 
@@ -305,17 +320,32 @@ impl ProxyLifecycle {
     /// (libcurl, Python requests, Go net/http) routes through the
     /// loopback proxy. No-op when not in proxy mode.
     fn inject_env(&self, cmd: &mut lockin::SandboxedCommand) {
-        if let Some(handle) = &self.handle {
-            let url = format!("http://127.0.0.1:{}", handle.listen_addr().port());
-            cmd.env("HTTP_PROXY", &url)
-                .env("HTTPS_PROXY", &url)
-                .env("http_proxy", &url)
-                .env("https_proxy", &url)
-                .env("ALL_PROXY", &url)
-                .env("all_proxy", &url)
-                .env("NO_PROXY", "")
-                .env("no_proxy", "");
+        for (k, v) in self.env_pairs() {
+            cmd.env(k, v);
         }
+    }
+
+    /// Same env contract as `inject_env`, but as an owned key/value
+    /// vector so callers that don't yet have a `SandboxedCommand` (the
+    /// trace runner builds it inside its own crate) can pass it in.
+    fn env_pairs(&self) -> Vec<(OsString, OsString)> {
+        let Some(handle) = &self.handle else {
+            return Vec::new();
+        };
+        let url = format!("http://127.0.0.1:{}", handle.listen_addr().port());
+        [
+            ("HTTP_PROXY", url.as_str()),
+            ("HTTPS_PROXY", url.as_str()),
+            ("http_proxy", url.as_str()),
+            ("https_proxy", url.as_str()),
+            ("ALL_PROXY", url.as_str()),
+            ("all_proxy", url.as_str()),
+            ("NO_PROXY", ""),
+            ("no_proxy", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect()
     }
 }
 

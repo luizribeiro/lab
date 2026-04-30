@@ -57,6 +57,7 @@ fn request(program: &Path, args: &[&str], config: Config) -> TraceRequest {
         env: Vec::new(),
         config,
         config_dir: None,
+        network: lockin::NetworkMode::Deny,
     }
 }
 

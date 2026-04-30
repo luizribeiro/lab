@@ -19,7 +19,10 @@ pub struct TraceRequest {
     pub program: PathBuf,
     pub args: Vec<OsString>,
     pub current_dir: Option<PathBuf>,
-    /// Extra env vars to set on the child (in addition to inherited env).
+    /// Extra env vars to set on the child *after* `[env]` policy is
+    /// applied. The CLI uses this to inject `HTTP_PROXY` etc. when
+    /// `[sandbox.network] mode = "proxy"` — passed through verbatim,
+    /// not blocklist-filtered.
     pub env: Vec<(OsString, OsString)>,
     /// The user's `lockin.toml` policy. Applied verbatim as enforcement —
     /// allow rules render normally, only the catch-all deny gets the
@@ -29,6 +32,11 @@ pub struct TraceRequest {
     /// the directory containing `lockin.toml`). Mirrors
     /// [`lockin_config::apply_config`]'s `config_dir` parameter.
     pub config_dir: Option<PathBuf>,
+    /// Network enforcement mode. The trace runner threads this onto the
+    /// builder verbatim — the CLI is responsible for resolving the
+    /// `[sandbox.network]` policy and (for `Proxy`) starting the
+    /// outpost-proxy and injecting `HTTP_PROXY` etc. via [`Self::env`].
+    pub network: lockin::NetworkMode,
 }
 
 /// Knobs for the trace run.
