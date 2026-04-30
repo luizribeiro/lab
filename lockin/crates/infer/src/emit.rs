@@ -40,7 +40,15 @@ pub const HEADER_COMMENT: &str = "\
 /// - Output is deterministic: `BTreeSet` ordering from compaction carries
 ///   through into TOML arrays.
 pub fn render_toml(policy: &InferredPolicy, seed: Option<&Config>) -> Result<String> {
-    let config = merge_into_config(policy, seed);
+    render_toml_with_read_dirs(policy, seed, &[])
+}
+
+pub(crate) fn render_toml_with_read_dirs(
+    policy: &InferredPolicy,
+    seed: Option<&Config>,
+    extra_read_dirs: &[PathBuf],
+) -> Result<String> {
+    let config = merge_into_config_with_read_dirs(policy, seed, extra_read_dirs);
     let body = toml::to_string(&config)?;
     let mut out = String::with_capacity(HEADER_COMMENT.len() + body.len() + 1);
     out.push_str(HEADER_COMMENT);
@@ -52,10 +60,21 @@ pub fn render_toml(policy: &InferredPolicy, seed: Option<&Config>) -> Result<Str
 /// Build the final `Config` value (without serializing). Useful for tests
 /// and callers that want to inspect the merged structure before writing.
 pub fn merge_into_config(policy: &InferredPolicy, seed: Option<&Config>) -> Config {
+    merge_into_config_with_read_dirs(policy, seed, &[])
+}
+
+pub(crate) fn merge_into_config_with_read_dirs(
+    policy: &InferredPolicy,
+    seed: Option<&Config>,
+    extra_read_dirs: &[PathBuf],
+) -> Config {
     let mut config: Config = seed.cloned().unwrap_or_default();
     let fs = &mut config.filesystem;
     union_into(&mut fs.read_paths, &policy.read_paths);
     union_into(&mut fs.read_dirs, &policy.read_dirs);
+    for dir in extra_read_dirs {
+        push_read_dir_if_uncovered(&mut fs.read_dirs, dir);
+    }
     union_into(&mut fs.write_paths, &policy.write_paths);
     union_into(&mut fs.write_dirs, &policy.write_dirs);
     union_into(&mut fs.exec_paths, &policy.exec_paths);
@@ -70,6 +89,17 @@ fn union_into(target: &mut Vec<PathBuf>, source: &BTreeSet<PathBuf>) {
     }
     target.sort();
     target.dedup();
+}
+
+fn push_read_dir_if_uncovered(read_dirs: &mut Vec<PathBuf>, dir: &PathBuf) {
+    if read_dirs.iter().any(|existing| dir.starts_with(existing)) {
+        return;
+    }
+    if !read_dirs.contains(dir) {
+        read_dirs.push(dir.clone());
+    }
+    read_dirs.sort();
+    read_dirs.dedup();
 }
 
 #[cfg(test)]

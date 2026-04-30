@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use lockin_config::Config;
 
 use crate::compact::{compact, InferredPolicy};
-use crate::emit::{merge_into_config, render_toml};
-use lockin_observe::{canonicalize_event, InferDiagnostic, InferEvent};
+use crate::emit::{merge_into_config_with_read_dirs, render_toml_with_read_dirs};
+use lockin_observe::{canonicalize_event, canonicalize_observed, InferDiagnostic, InferEvent};
 
 /// Request describing the command to observe for inference.
 #[derive(Debug, Clone)]
@@ -98,7 +98,11 @@ fn run_observation(req: &InferRequest) -> Result<BackendReport> {
     })
 }
 
-fn finish_infer(report: BackendReport, options: InferOptions) -> Result<InferReport> {
+fn finish_infer(
+    report: BackendReport,
+    options: InferOptions,
+    observed_cwd: Option<PathBuf>,
+) -> Result<InferReport> {
     let BackendReport {
         status,
         events,
@@ -117,10 +121,11 @@ fn finish_infer(report: BackendReport, options: InferOptions) -> Result<InferRep
         .collect();
 
     let policy = compact(&events);
-    let config = merge_into_config(&policy, options.seed.as_ref());
+    let extra_read_dirs = observed_cwd.into_iter().collect::<Vec<_>>();
+    let config = merge_into_config_with_read_dirs(&policy, options.seed.as_ref(), &extra_read_dirs);
 
     if let Some(path) = &options.output {
-        let body = render_toml(&policy, options.seed.as_ref())
+        let body = render_toml_with_read_dirs(&policy, options.seed.as_ref(), &extra_read_dirs)
             .context("rendering inferred lockin.toml")?;
         fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
     }
@@ -137,7 +142,17 @@ fn finish_infer(report: BackendReport, options: InferOptions) -> Result<InferRep
 /// Cross-platform default inference entrypoint.
 pub fn infer(request: InferRequest, options: InferOptions) -> Result<InferReport> {
     let report = run_observation(&request)?;
-    finish_infer(report, options)
+    let observed_cwd = observed_cwd(&request)?;
+    finish_infer(report, options, Some(observed_cwd))
+}
+
+fn observed_cwd(request: &InferRequest) -> Result<PathBuf> {
+    let cwd = match &request.current_dir {
+        Some(dir) => dir.clone(),
+        None => std::env::current_dir().context("reading current directory for inferred config")?,
+    };
+    canonicalize_observed(&cwd)
+        .with_context(|| format!("canonicalizing observed cwd {}", cwd.display()))
 }
 
 #[cfg(test)]
@@ -149,7 +164,15 @@ mod tests {
     use std::process::ExitStatus;
 
     fn infer_from_report(report: BackendReport, options: InferOptions) -> InferReport {
-        finish_infer(report, options).unwrap()
+        finish_infer(report, options, None).unwrap()
+    }
+
+    fn infer_from_request(
+        report: BackendReport,
+        options: InferOptions,
+        request: &InferRequest,
+    ) -> InferReport {
+        finish_infer(report, options, Some(observed_cwd(request).unwrap())).unwrap()
     }
 
     #[test]
@@ -246,6 +269,35 @@ mod tests {
         assert!(
             body.contains(canon.to_str().unwrap()),
             "missing observed path in:\n{body}"
+        );
+    }
+
+    #[test]
+    fn request_cwd_is_added_to_read_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let request = InferRequest {
+            program: PathBuf::from("/usr/bin/true"),
+            args: vec![],
+            current_dir: Some(dir.path().to_path_buf()),
+            env: vec![],
+        };
+        let report = BackendReport {
+            events: vec![],
+            diagnostics: vec![],
+            status: ExitStatus::from_raw(0),
+        };
+
+        let report = infer_from_request(report, InferOptions::default(), &request);
+        let cwd = std::fs::canonicalize(dir.path()).unwrap();
+        assert!(
+            report.config.filesystem.read_dirs.contains(&cwd),
+            "expected cwd {cwd:?} in {:?}",
+            report.config.filesystem.read_dirs
+        );
+        assert!(
+            report.config.filesystem.write_dirs.is_empty(),
+            "cwd must not be added as writable: {:?}",
+            report.config.filesystem.write_dirs
         );
     }
 
