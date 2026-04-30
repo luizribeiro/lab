@@ -397,14 +397,14 @@ impl ProxyLifecycle {
 
 fn check_program_executable(program: &Path) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(program)
-        .with_context(|| format!("lockin: program not found: {}", program.display()))?;
+        .with_context(|| format!("program not found: {}", program.display()))?;
     if !metadata.is_file() {
-        anyhow::bail!("lockin: not a regular file: {}", program.display());
+        anyhow::bail!("not a regular file: {}", program.display());
     }
     use std::os::unix::fs::PermissionsExt;
     let mode = metadata.permissions().mode();
     if mode & 0o111 == 0 {
-        anyhow::bail!("lockin: program is not executable: {}", program.display());
+        anyhow::bail!("program is not executable: {}", program.display());
     }
     Ok(())
 }
