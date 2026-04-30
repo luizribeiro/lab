@@ -2,9 +2,9 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 
@@ -14,10 +14,8 @@ use crate::{AccessEvent, ObserveOptions, ObservedRun};
 const LOG_BIN: &str = "/usr/bin/log";
 const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
 
-/// Time to let `log stream` warm up before launching the target.
-const LOG_STREAM_WARMUP: Duration = Duration::from_millis(250);
-/// Time to wait after the target exits to drain trailing events from `log stream`.
-const LOG_STREAM_GRACE: Duration = Duration::from_millis(500);
+const SENTINEL_TIMEOUT: Duration = Duration::from_secs(2);
+static LOG_STREAM_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn observe_with<F>(options: ObserveOptions<'_>, factory: F) -> anyhow::Result<ObservedRun>
 where
@@ -30,16 +28,28 @@ where
         return Err(anyhow!("{SANDBOX_EXEC_BIN} not found; not a macOS host?"));
     }
 
+    let _log_stream_guard = LOG_STREAM_LOCK.lock().unwrap();
+
     let run_id = format!("lockin-run-{}", uuid::Uuid::new_v4());
     let mut log_stream = start_log_stream(&run_id)?;
-    thread::sleep(LOG_STREAM_WARMUP);
+
+    let preflight = format!("{run_id} sentinel-preflight-{}", uuid::Uuid::new_v4());
+    emit_logger_sentinel(&preflight)?;
+    log_stream
+        .wait_for(&preflight, SENTINEL_TIMEOUT)
+        .context("log stream did not observe preflight sentinel within timeout")?;
 
     let builder = lockin::SandboxBuilder::new()
         .observation(crate::observation_mode(options.kind, run_id.clone()));
     let cmd = factory(builder)?;
     let status = crate::supervise(cmd, options.runtime)?;
 
-    thread::sleep(LOG_STREAM_GRACE);
+    let postflight = format!("{run_id} sentinel-postflight-{}", uuid::Uuid::new_v4());
+    emit_logger_sentinel(&postflight)?;
+    log_stream
+        .wait_for(&postflight, SENTINEL_TIMEOUT)
+        .context("log stream did not observe postflight sentinel within timeout")?;
+
     let lines = log_stream.stop_and_collect();
     let (events, diagnostics) = parse_log_lines(lines, &run_id);
 
@@ -53,7 +63,7 @@ where
 struct LogStream {
     child: ChildGuard,
     reader_thread: Option<thread::JoinHandle<()>>,
-    lines: Arc<Mutex<Vec<String>>>,
+    lines: Arc<SharedLines>,
 }
 
 fn start_log_stream(run_id: &str) -> anyhow::Result<LogStream> {
@@ -73,23 +83,34 @@ fn start_log_stream(run_id: &str) -> anyhow::Result<LogStream> {
         .take()
         .ok_or_else(|| anyhow!("log stream stdout missing"))?;
 
-    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let lines = Arc::new(SharedLines::new());
     let lines_for_thread = Arc::clone(&lines);
     let reader_thread = thread::spawn(move || {
         let reader = BufReader::new(log_stdout);
         for line in reader.lines().map_while(std::io::Result::ok) {
-            lines_for_thread.lock().unwrap().push(line);
+            lines_for_thread.push(line);
         }
     });
 
-    Ok(LogStream {
+    let stream = LogStream {
         child: ChildGuard(Some(log_child)),
         reader_thread: Some(reader_thread),
         lines,
-    })
+    };
+
+    // Wait for log stream to start reading so the subsequent sentinel is not emitted too early.
+    stream
+        .wait_for("Filtering the log data", SENTINEL_TIMEOUT)
+        .context("log stream did not print startup banner within timeout")?;
+
+    Ok(stream)
 }
 
 impl LogStream {
+    fn wait_for(&self, needle: &str, timeout: Duration) -> anyhow::Result<()> {
+        self.lines.wait_for(needle, timeout)
+    }
+
     fn stop_and_collect(&mut self) -> Vec<String> {
         // Killing log stream EOFs its stdout, which lets the reader thread exit.
         if let Some(mut c) = self.child.0.take() {
@@ -99,8 +120,64 @@ impl LogStream {
         if let Some(reader_thread) = self.reader_thread.take() {
             let _ = reader_thread.join();
         }
-        std::mem::take(&mut *self.lines.lock().unwrap())
+        self.lines.drain()
     }
+}
+
+struct SharedLines {
+    inner: Mutex<Vec<String>>,
+    cv: Condvar,
+}
+
+impl SharedLines {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(Vec::new()),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn push(&self, line: String) {
+        let mut lines = self.inner.lock().unwrap();
+        lines.push(line);
+        self.cv.notify_all();
+    }
+
+    fn wait_for(&self, needle: &str, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut lines = self.inner.lock().unwrap();
+        loop {
+            if lines.iter().any(|line| line.contains(needle)) {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                anyhow::bail!("timed out waiting for log stream line containing {needle:?}");
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (guard, result) = self.cv.wait_timeout(lines, remaining).unwrap();
+            lines = guard;
+            if result.timed_out() && !lines.iter().any(|line| line.contains(needle)) {
+                anyhow::bail!("timed out waiting for log stream line containing {needle:?}");
+            }
+        }
+    }
+
+    fn drain(&self) -> Vec<String> {
+        std::mem::take(&mut *self.inner.lock().unwrap())
+    }
+}
+
+fn emit_logger_sentinel(message: &str) -> anyhow::Result<()> {
+    let status = Command::new("/usr/bin/logger")
+        .arg(message)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("spawning /usr/bin/logger sentinel")?;
+    anyhow::ensure!(status.success(), "logger sentinel failed: {status}");
+    Ok(())
 }
 
 fn parse_log_lines(
@@ -120,6 +197,10 @@ fn parse_log_lines(
         let Some(message) = value.get("eventMessage").and_then(|v| v.as_str()) else {
             continue;
         };
+        // Logger sentinels prove stream readiness/drain and are not Seatbelt reports.
+        if is_logger_sentinel(message, run_id) {
+            continue;
+        }
         match parse_access_message(message, run_id) {
             SeatbeltParseOutcome::Event(ae) => events.push(ae),
             SeatbeltParseOutcome::Skip => {}
@@ -135,6 +216,12 @@ fn parse_log_lines(
     (events, diagnostics)
 }
 
+fn is_logger_sentinel(message: &str, run_id: &str) -> bool {
+    message.strip_prefix(run_id).is_some_and(|suffix| {
+        suffix.starts_with(" sentinel-preflight-") || suffix.starts_with(" sentinel-postflight-")
+    })
+}
+
 struct ChildGuard(Option<Child>);
 
 impl Drop for ChildGuard {
@@ -143,5 +230,37 @@ impl Drop for ChildGuard {
             let _ = c.kill();
             let _ = c.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_log_lines_filters_logger_sentinels() {
+        let run_id = "lockin-run-test";
+        let line = serde_json::json!({
+            "eventMessage": format!("{run_id} sentinel-preflight-1234")
+        })
+        .to_string();
+
+        let (events, diagnostics) = parse_log_lines(vec![line], run_id);
+
+        assert!(events.is_empty());
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn logger_sentinel_round_trips_through_log_stream() -> anyhow::Result<()> {
+        let run_id = format!("lockin-run-test-{}", uuid::Uuid::new_v4());
+        let mut log_stream = start_log_stream(&run_id)?;
+        let sentinel = format!("{run_id} sentinel-preflight-{}", uuid::Uuid::new_v4());
+
+        emit_logger_sentinel(&sentinel)?;
+        let result = log_stream.wait_for(&sentinel, SENTINEL_TIMEOUT);
+        let _ = log_stream.stop_and_collect();
+
+        result
     }
 }
