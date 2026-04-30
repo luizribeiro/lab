@@ -95,7 +95,9 @@ fn is_duplicate_report(s: &str) -> bool {
     let mut iter = s.splitn(2, ' ');
     let first = iter.next().unwrap_or("");
     let after = iter.next().unwrap_or("");
-    first.parse::<u64>().is_ok() && after.starts_with("duplicate report for ")
+    first.parse::<u64>().is_ok()
+        && (after.starts_with("duplicate report for ")
+            || after.starts_with("duplicate reports for "))
 }
 
 /// Parse `<name>(<pid>)` at the start of `s`. Returns (name, remainder
@@ -456,6 +458,16 @@ mod tests {
     #[test]
     fn double_digit_duplicate_report_line_is_skip() {
         let dup = "37 duplicate report for Sandbox: bash(2901) allow file-read-data /bin/bash";
+        assert_eq!(
+            parse_access_message(dup, RUN_ID),
+            SeatbeltParseOutcome::Skip
+        );
+    }
+
+    #[test]
+    fn plural_duplicate_reports_line_is_skip() {
+        // macOS pluralizes the count word when N > 1: `3 duplicate reports for ...`.
+        let dup = "3 duplicate reports for Sandbox: bash(2901) allow file-read-data /bin/bash";
         assert_eq!(
             parse_access_message(dup, RUN_ID),
             SeatbeltParseOutcome::Skip
