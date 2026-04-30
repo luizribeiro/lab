@@ -15,8 +15,11 @@ pub const HEADER: &str = "\
 # Notes:
 # - Allow events aren't shown — only denials.
 # - Code paths not exercised in this run aren't represented; rerun for more coverage.
-# - The line format is `denied: <op> <path>` for filesystem ops and
-#   `denied: exec <path>` for process exec.
+# - The line format is `denied: <op> <path>` for filesystem ops,
+#   `denied: exec <path>` for process exec, and `denied: <backend>:<op> <details>`
+#   for accesses outside lockin's allowlist schema (network, mach-lookup, etc.) —
+#   add the corresponding rule via `[darwin].raw_seatbelt_rules` (macOS) or
+#   `[linux].raw_syd_rules` (Linux) to permit them.
 ";
 
 /// Write `report.denials` as a human-readable log to `path`. Overwrites
@@ -40,10 +43,13 @@ pub fn write_denial_log(report: &TraceReport, path: &Path) -> Result<()> {
                 body.push_str(&path.display().to_string());
                 body.push('\n');
             }
-            // Unsupported events shouldn't appear in denials (the
-            // runner doesn't include them), but if one slips through
-            // skip silently.
-            InferEvent::Unsupported { .. } => {}
+            InferEvent::Unsupported { backend, raw, .. } => {
+                body.push_str("denied: ");
+                body.push_str(backend);
+                body.push(':');
+                body.push_str(raw);
+                body.push('\n');
+            }
         }
     }
     body.push('\n');
@@ -126,6 +132,27 @@ mod tests {
         assert!(
             body.ends_with("# 3 denial(s) recorded.\n"),
             "footer count must reflect the denials, got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn write_denial_log_renders_unsupported_denials_with_backend_op_remainder() {
+        let denials = vec![InferEvent::Unsupported {
+            backend: "seatbelt",
+            raw: "network-outbound /private/var/run/mDNSResponder".into(),
+            reason: "operation \"network-outbound\" has no lockin schema mapping".into(),
+        }];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lockin-denials.log");
+        write_denial_log(&report(denials), &path).unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            body.contains("\ndenied: seatbelt:network-outbound /private/var/run/mDNSResponder\n"),
+            "body:\n{body}"
+        );
+        assert!(
+            body.ends_with("# 1 denial(s) recorded.\n"),
+            "footer must count unsupported events too, got:\n{body}"
         );
     }
 
