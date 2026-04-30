@@ -77,6 +77,31 @@ fn tty_name_of_fd(fd: i32) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+/// Appends `path` and every ancestor needed to reach it to `paths`,
+/// preserving first-seen order and removing duplicates.
+///
+/// The root directory is included deliberately. A literal read grant
+/// for `/` permits enumerating the root directory itself but does not
+/// grant recursive reads of its children.
+///
+/// For each ancestor, also include the same path with its parent
+/// canonicalized but the final component left unresolved. That covers
+/// platforms such as macOS where `/var` is itself a symlink to
+/// `/private/var`: the kernel may walk `/private/var/.../link` when it
+/// needs read-data on `link`, even if the caller supplied
+/// `/var/.../link/probe`.
+pub(crate) fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
+    for ancestor in path.ancestors() {
+        push_unique(paths, ancestor.to_path_buf());
+
+        if let (Some(parent), Some(file_name)) = (ancestor.parent(), ancestor.file_name()) {
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                push_unique(paths, canonical_parent.join(file_name));
+            }
+        }
+    }
+}
+
 /// Appends `path` to `paths` if it isn't already present.
 /// Linear scan is fine: path lists are small (tens of entries).
 pub(crate) fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {

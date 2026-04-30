@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
+use crate::paths::{path_candidates, push_unique, push_with_ancestors, stdio_tty_paths};
 use crate::{NetworkMode, ObservationMode, SandboxSpec};
 
 /// syd categories observed/enforced uniformly across both observation modes.
@@ -376,15 +376,6 @@ fn add_lock_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
     }
 
     add_allow_rule(rules, prefix, path);
-}
-
-fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
-    for ancestor in path.ancestors() {
-        if ancestor == Path::new("/") {
-            break;
-        }
-        push_unique(paths, ancestor.to_path_buf());
-    }
 }
 
 fn escape_syd_path(path: &Path) -> String {

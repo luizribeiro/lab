@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::paths::{path_candidates, push_unique, stdio_tty_paths};
+use crate::paths::{path_candidates, push_unique, push_with_ancestors, stdio_tty_paths};
 use crate::SandboxSpec;
 
 #[derive(Debug, Default)]
@@ -12,7 +12,6 @@ pub(super) struct PathSets {
     pub(super) write_paths: Vec<PathBuf>,
     pub(super) write_dirs: Vec<PathBuf>,
     pub(super) ioctl_paths: Vec<PathBuf>,
-    pub(super) traversal_paths: Vec<PathBuf>,
 }
 
 impl PathSets {
@@ -62,45 +61,141 @@ impl PathSets {
     }
 
     fn add_read(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.read_paths);
     }
     fn add_read_dir(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.read_dirs);
     }
     fn add_write(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.write_paths);
     }
     fn add_write_dir(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.write_dirs);
     }
     fn add_exec(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.executable_paths);
-        self.add_read(path);
     }
     fn add_exec_dir(&mut self, path: &Path) {
+        self.collect_read_ancestors(path);
         self.collect_into(path, |s| &mut s.executable_dirs);
-        self.add_read_dir(path);
     }
     fn add_ioctl(&mut self, path: &Path) {
         self.collect_into(path, |s| &mut s.ioctl_paths);
     }
 
     fn collect_into(&mut self, path: &Path, target: fn(&mut Self) -> &mut Vec<PathBuf>) {
-        let candidates: Vec<_> = path_candidates(path);
-        for candidate in candidates {
-            push_unique(target(self), candidate.clone());
-            self.add_traversal_ancestors(&candidate);
+        for candidate in path_candidates(path) {
+            push_unique(target(self), candidate);
         }
     }
 
-    fn add_traversal_ancestors(&mut self, path: &Path) {
-        if let Some(parent) = path.parent() {
-            for ancestor in parent.ancestors() {
-                if ancestor == Path::new("/") {
-                    break;
-                }
-                push_unique(&mut self.traversal_paths, ancestor.to_path_buf());
-            }
+    fn collect_read_ancestors(&mut self, path: &Path) {
+        for candidate in path_candidates(path) {
+            push_with_ancestors(&mut self.read_paths, &candidate);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::SandboxSpec;
+
+    use super::PathSets;
+
+    fn path_sets_for(spec: &SandboxSpec) -> PathSets {
+        PathSets::from_inputs(Path::new("/bin/sh"), spec, Path::new("/tmp/lockin-private"))
+    }
+
+    fn assert_read_paths_contain(paths: &PathSets, expected: &[&str]) {
+        for expected in expected {
+            assert!(
+                paths.read_paths.contains(&PathBuf::from(expected)),
+                "read_paths missing {expected}; got {:?}",
+                paths.read_paths
+            );
+        }
+    }
+
+    #[test]
+    fn exec_path_adds_leaf_and_ancestors_to_read_paths() {
+        let spec = SandboxSpec {
+            exec_paths: vec![PathBuf::from("/usr/bin/foo")],
+            ..SandboxSpec::default()
+        };
+
+        let paths = path_sets_for(&spec);
+
+        assert_read_paths_contain(&paths, &["/usr/bin/foo", "/usr/bin", "/usr", "/"]);
+        assert!(paths
+            .executable_paths
+            .contains(&PathBuf::from("/usr/bin/foo")));
+    }
+
+    #[test]
+    fn each_filesystem_category_adds_ancestors_to_read_paths() {
+        let cases = [
+            SandboxSpec {
+                exec_dirs: vec![PathBuf::from("/opt/tool/bin")],
+                ..SandboxSpec::default()
+            },
+            SandboxSpec {
+                read_paths: vec![PathBuf::from("/var/data/input.txt")],
+                ..SandboxSpec::default()
+            },
+            SandboxSpec {
+                read_dirs: vec![PathBuf::from("/var/data")],
+                ..SandboxSpec::default()
+            },
+            SandboxSpec {
+                write_paths: vec![PathBuf::from("/var/output/result.txt")],
+                ..SandboxSpec::default()
+            },
+            SandboxSpec {
+                write_dirs: vec![PathBuf::from("/var/output")],
+                ..SandboxSpec::default()
+            },
+        ];
+        let expected = [
+            &["/opt/tool/bin", "/opt/tool", "/opt", "/"][..],
+            &["/var/data/input.txt", "/var/data", "/var", "/"][..],
+            &["/var/data", "/var", "/"][..],
+            &["/var/output/result.txt", "/var/output", "/var", "/"][..],
+            &["/var/output", "/var", "/"][..],
+        ];
+
+        for (spec, expected) in cases.iter().zip(expected) {
+            let paths = path_sets_for(spec);
+            assert_read_paths_contain(&paths, expected);
+        }
+    }
+
+    #[test]
+    fn shared_ancestors_are_deduplicated_in_read_paths() {
+        let spec = SandboxSpec {
+            exec_paths: vec![PathBuf::from("/usr/bin/foo"), PathBuf::from("/usr/bin/bar")],
+            ..SandboxSpec::default()
+        };
+
+        let paths = path_sets_for(&spec);
+
+        for shared in ["/usr/bin", "/usr", "/"] {
+            let count = paths
+                .read_paths
+                .iter()
+                .filter(|path| path.as_path() == Path::new(shared))
+                .count();
+            assert_eq!(
+                count, 1,
+                "{shared} should appear once in {:?}",
+                paths.read_paths
+            );
         }
     }
 }

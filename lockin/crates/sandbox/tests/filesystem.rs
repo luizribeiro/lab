@@ -6,6 +6,29 @@ mod common;
 
 use common::{run_probe, TestDir};
 
+#[cfg(target_os = "macos")]
+use lockin::SandboxBuilder;
+
+#[cfg(target_os = "macos")]
+#[test]
+fn symlinked_exec_path_runs_when_ancestors_need_read_data() {
+    let temp = TestDir::new("symlink-exec");
+    let link_dir = temp.join("link");
+    std::os::unix::fs::symlink("/bin", &link_dir).expect("symlink link -> /bin");
+    let linked_echo = link_dir.join("echo");
+
+    let mut command = SandboxBuilder::new()
+        .exec_path(linked_echo.clone())
+        .command(&linked_echo)
+        .unwrap_or_else(|e| panic!("failed to build sandbox for {}: {e}", linked_echo.display()));
+
+    let status = command
+        .arg("hello")
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run linked echo {}: {e}", linked_echo.display()));
+    assert!(status.success(), "linked echo exited with {status}");
+}
+
 // ── read scoping ─────────────────────────────────────────────
 
 #[test]

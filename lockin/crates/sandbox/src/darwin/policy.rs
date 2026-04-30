@@ -30,10 +30,6 @@ pub(super) fn build_policy(
     }
     policy.import_system();
 
-    for path in &paths.traversal_paths {
-        policy.allow_literal(&["file-read-metadata"], path);
-    }
-
     for path in &paths.executable_paths {
         policy.allow_literal(&["process-exec"], path);
     }
@@ -140,6 +136,61 @@ mod tests {
         assert!(
             rendered.contains(&dir_rule),
             "write dir missing file-map-executable rule: {dir_rule}\nrendered:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn exec_path_ancestors_render_as_full_file_read_not_metadata() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-exec-ancestor-policy-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let exec_path = base.path().join("sandbox-probe-XXX/bin/probe");
+        let mut spec = SandboxSpec::default();
+        spec.exec_paths.push(exec_path.clone());
+
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+
+        for ancestor in exec_path.ancestors().skip(1) {
+            let read_rule = format!("(allow file-read* (literal \"{}\"))", ancestor.display());
+            assert!(
+                rendered.contains(&read_rule),
+                "ancestor missing full file-read* rule {read_rule}; rendered:\n{rendered}"
+            );
+
+            let metadata_rule = format!(
+                "(allow file-read-metadata (literal \"{}\"))",
+                ancestor.display()
+            );
+            assert!(
+                !rendered.contains(&metadata_rule),
+                "ancestor must not use metadata-only traversal rule {metadata_rule}; rendered:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_spec_rendering_has_no_metadata_traversal_rules() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-default-policy-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let rendered: String =
+            build_policy(Path::new("/bin/ls"), &SandboxSpec::default(), &private_tmp).into();
+
+        assert!(
+            rendered.starts_with("(version 1)\n(deny default)\n(import \"system.sb\")\n"),
+            "default spec should keep the baseline header unchanged, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("file-read-metadata"),
+            "default spec should not render old traversal metadata rules, got:\n{rendered}"
         );
     }
 
