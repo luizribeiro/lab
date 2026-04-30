@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
 use anyhow::{Context, Result};
@@ -102,6 +102,7 @@ fn finish_infer(
     report: BackendReport,
     options: InferOptions,
     observed_cwd: Option<PathBuf>,
+    entrypoint: Option<&Path>,
 ) -> Result<InferReport> {
     let BackendReport {
         status,
@@ -120,7 +121,10 @@ fn finish_infer(
         })
         .collect();
 
-    let policy = compact(&events);
+    let mut policy = compact(&events);
+    if let Some(entrypoint) = entrypoint {
+        include_invocation_exec_path(&mut policy, entrypoint);
+    }
     let extra_read_dirs = observed_cwd.into_iter().collect::<Vec<_>>();
     let config = merge_into_config_with_read_dirs(&policy, options.seed.as_ref(), &extra_read_dirs);
 
@@ -139,11 +143,20 @@ fn finish_infer(
     })
 }
 
+fn include_invocation_exec_path(policy: &mut InferredPolicy, entrypoint: &Path) {
+    let Ok(canonical) = canonicalize_observed(entrypoint) else {
+        return;
+    };
+    if canonical != entrypoint && policy.exec_paths.contains(&canonical) {
+        policy.exec_paths.insert(entrypoint.to_path_buf());
+    }
+}
+
 /// Cross-platform default inference entrypoint.
 pub fn infer(request: InferRequest, options: InferOptions) -> Result<InferReport> {
     let report = run_observation(&request)?;
     let observed_cwd = observed_cwd(&request)?;
-    finish_infer(report, options, Some(observed_cwd))
+    finish_infer(report, options, Some(observed_cwd), Some(&request.program))
 }
 
 fn observed_cwd(request: &InferRequest) -> Result<PathBuf> {
@@ -160,11 +173,12 @@ mod tests {
     use super::*;
     use crate::emit::HEADER_COMMENT;
     use lockin_observe::{DiagnosticLevel, FsOp};
+    use std::os::unix::fs::symlink;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
     fn infer_from_report(report: BackendReport, options: InferOptions) -> InferReport {
-        finish_infer(report, options, None).unwrap()
+        finish_infer(report, options, None, None).unwrap()
     }
 
     fn infer_from_request(
@@ -172,7 +186,13 @@ mod tests {
         options: InferOptions,
         request: &InferRequest,
     ) -> InferReport {
-        finish_infer(report, options, Some(observed_cwd(request).unwrap())).unwrap()
+        finish_infer(
+            report,
+            options,
+            Some(observed_cwd(request).unwrap()),
+            Some(&request.program),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -270,6 +290,44 @@ mod tests {
             body.contains(canon.to_str().unwrap()),
             "missing observed path in:\n{body}"
         );
+    }
+
+    #[test]
+    fn symlink_entrypoint_is_added_when_canonical_exec_was_observed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        let symlink_path = dir.path().join("symlink-to-bin");
+        symlink(&bin, &symlink_path).unwrap();
+        let canonical_bin = std::fs::canonicalize(&bin).unwrap();
+
+        let request = InferRequest {
+            program: symlink_path.clone(),
+            args: vec![],
+            current_dir: Some(dir.path().to_path_buf()),
+            env: vec![],
+        };
+        let report = BackendReport {
+            events: vec![InferEvent::Exec {
+                path: canonical_bin.clone(),
+            }],
+            diagnostics: vec![],
+            status: ExitStatus::from_raw(0),
+        };
+
+        let report = infer_from_request(report, InferOptions::default(), &request);
+        assert!(
+            report.config.filesystem.exec_paths.contains(&canonical_bin),
+            "expected canonical exec path {canonical_bin:?} in {:?}",
+            report.config.filesystem.exec_paths
+        );
+        assert!(
+            report.config.filesystem.exec_paths.contains(&symlink_path),
+            "expected symlink exec path {symlink_path:?} in {:?}",
+            report.config.filesystem.exec_paths
+        );
+        assert!(report.policy.exec_paths.contains(&canonical_bin));
+        assert!(report.policy.exec_paths.contains(&symlink_path));
     }
 
     #[test]
