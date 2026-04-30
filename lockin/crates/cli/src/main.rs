@@ -1,5 +1,3 @@
-mod glob;
-
 use lockin_config as config;
 
 use std::ffi::OsString;
@@ -11,28 +9,11 @@ use anyhow::Context;
 use clap::Parser;
 
 use config::{
-    apply_config, load_config, resolve_command, resolve_executable, resolve_network_plan,
-    NetworkPlan,
+    apply_config, apply_env, load_config, resolve_command, resolve_executable,
+    resolve_network_plan, NetworkPlan,
 };
 
 const EXIT_LOCKIN_ERROR: u8 = 125;
-
-const BUILTIN_ENV_BLOCKLIST: &[&str] = &[
-    #[cfg(target_os = "linux")]
-    "LD_PRELOAD",
-    #[cfg(target_os = "linux")]
-    "LD_LIBRARY_PATH",
-    #[cfg(target_os = "linux")]
-    "LD_AUDIT",
-    #[cfg(target_os = "macos")]
-    "DYLD_INSERT_LIBRARIES",
-    #[cfg(target_os = "macos")]
-    "DYLD_LIBRARY_PATH",
-    #[cfg(target_os = "macos")]
-    "DYLD_FRAMEWORK_PATH",
-];
-
-const SANDBOX_OWNED_ENV: &[&str] = &["TMPDIR", "TMP", "TEMP"];
 
 #[derive(Parser, Debug)]
 #[command(name = "lockin", about = "Run programs inside an OS sandbox")]
@@ -338,58 +319,6 @@ impl ProxyLifecycle {
     }
 }
 
-// Non-UTF-8 env keys are skipped in pass matching and block filtering;
-// glob matching is byte-level ASCII.
-fn apply_env<I>(env: &config::EnvConfig, cmd: &mut lockin::SandboxedCommand, parent_env: I)
-where
-    I: IntoIterator<Item = (OsString, OsString)>,
-{
-    let parent: Vec<(OsString, OsString)> = parent_env.into_iter().collect();
-    let blocklist: Vec<&str> = BUILTIN_ENV_BLOCKLIST
-        .iter()
-        .copied()
-        .chain(env.block.iter().map(String::as_str))
-        .collect();
-    let is_blocked = |name: &str| blocklist.iter().any(|p| glob::matches(p, name));
-
-    if env.inherit {
-        for (key, _) in &parent {
-            if key.to_str().is_some_and(is_blocked) {
-                cmd.env_remove(key);
-            }
-        }
-    } else {
-        let preserved: Vec<(OsString, OsString)> = cmd
-            .as_command()
-            .get_envs()
-            .filter_map(|(k, v)| {
-                let name = k.to_str()?;
-                if SANDBOX_OWNED_ENV.contains(&name) {
-                    v.map(|v| (k.to_owned(), v.to_owned()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        cmd.env_clear();
-        for (k, v) in preserved {
-            cmd.env(k, v);
-        }
-        for (key, value) in &parent {
-            let Some(name) = key.to_str() else { continue };
-            if env.pass.iter().any(|p| glob::matches(p, name)) && !is_blocked(name) {
-                cmd.env(key, value);
-            }
-        }
-    }
-
-    for (key, value) in &env.set {
-        if !is_blocked(key) {
-            cmd.env(key, value);
-        }
-    }
-}
-
 fn child_exit_code(status: ExitStatus) -> u8 {
     if let Some(code) = status.code() {
         return code as u8;
@@ -530,7 +459,7 @@ mod tests {
     #[test]
     fn apply_env_strips_builtin_blocklist() {
         let mut cmd = build_cmd();
-        let mut parent: Vec<&str> = BUILTIN_ENV_BLOCKLIST.to_vec();
+        let mut parent: Vec<&str> = config::BUILTIN_ENV_BLOCKLIST.to_vec();
         parent.push("UNRELATED");
         let env_config = config::EnvConfig {
             inherit: true,
@@ -538,7 +467,7 @@ mod tests {
         };
         apply_env(&env_config, &mut cmd, synthetic_env(&parent));
         let removed = removed_keys(&cmd);
-        for var in BUILTIN_ENV_BLOCKLIST {
+        for var in config::BUILTIN_ENV_BLOCKLIST {
             assert!(
                 removed.iter().any(|k| k == var),
                 "expected {var} removed, got: {removed:?}"
@@ -666,7 +595,7 @@ mod tests {
     #[test]
     fn apply_env_builtin_blocklist_strips_set_entries() {
         let mut cmd = build_cmd();
-        let first_builtin = BUILTIN_ENV_BLOCKLIST[0];
+        let first_builtin = config::BUILTIN_ENV_BLOCKLIST[0];
         let env_config = config::EnvConfig {
             inherit: false,
             set: [(first_builtin.into(), "/evil".into())].into(),

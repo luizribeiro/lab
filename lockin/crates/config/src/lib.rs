@@ -1,8 +1,89 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+mod glob;
+
+/// Env vars whose presence in the parent process can compromise sandbox
+/// integrity (preload-style hijacks). Always stripped, regardless of
+/// `[env]` policy. Empty on platforms with no relevant variables.
+pub const BUILTIN_ENV_BLOCKLIST: &[&str] = &[
+    #[cfg(target_os = "linux")]
+    "LD_PRELOAD",
+    #[cfg(target_os = "linux")]
+    "LD_LIBRARY_PATH",
+    #[cfg(target_os = "linux")]
+    "LD_AUDIT",
+    #[cfg(target_os = "macos")]
+    "DYLD_INSERT_LIBRARIES",
+    #[cfg(target_os = "macos")]
+    "DYLD_LIBRARY_PATH",
+    #[cfg(target_os = "macos")]
+    "DYLD_FRAMEWORK_PATH",
+];
+
+/// Env vars the sandbox library sets on the command itself (private
+/// tmpdir wiring). Preserved across `env_clear` so `inherit = false`
+/// runs don't lose them.
+pub const SANDBOX_OWNED_ENV: &[&str] = &["TMPDIR", "TMP", "TEMP"];
+
+/// Mutates `cmd` so its env reflects `env_config` resolved against
+/// `parent_env`. Mirrors what every lockin entry point needs (run mode,
+/// trace mode, future modes), so it lives here rather than at any one
+/// caller. Non-UTF-8 env keys are skipped in pass matching and block
+/// filtering; glob matching is byte-level ASCII.
+pub fn apply_env<I>(env_config: &EnvConfig, cmd: &mut lockin::SandboxedCommand, parent_env: I)
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    let parent: Vec<(OsString, OsString)> = parent_env.into_iter().collect();
+    let blocklist: Vec<&str> = BUILTIN_ENV_BLOCKLIST
+        .iter()
+        .copied()
+        .chain(env_config.block.iter().map(String::as_str))
+        .collect();
+    let is_blocked = |name: &str| blocklist.iter().any(|p| glob::matches(p, name));
+
+    if env_config.inherit {
+        for (key, _) in &parent {
+            if key.to_str().is_some_and(is_blocked) {
+                cmd.env_remove(key);
+            }
+        }
+    } else {
+        let preserved: Vec<(OsString, OsString)> = cmd
+            .as_command()
+            .get_envs()
+            .filter_map(|(k, v)| {
+                let name = k.to_str()?;
+                if SANDBOX_OWNED_ENV.contains(&name) {
+                    v.map(|v| (k.to_owned(), v.to_owned()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        cmd.env_clear();
+        for (k, v) in preserved {
+            cmd.env(k, v);
+        }
+        for (key, value) in &parent {
+            let Some(name) = key.to_str() else { continue };
+            if env_config.pass.iter().any(|p| glob::matches(p, name)) && !is_blocked(name) {
+                cmd.env(key, value);
+            }
+        }
+    }
+
+    for (key, value) in &env_config.set {
+        if !is_blocked(key) {
+            cmd.env(key, value);
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq, Clone)]
 #[serde(default, deny_unknown_fields)]
