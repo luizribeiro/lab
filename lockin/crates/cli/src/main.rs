@@ -141,6 +141,7 @@ fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
 
     let program = resolve_executable(command[0].as_os_str(), None)
         .with_context(|| format!("resolving program {:?}", command[0]))?;
+    check_program_executable(&program)?;
     let args: Vec<OsString> = command[1..].to_vec();
 
     let request = lockin_infer::InferRequest {
@@ -234,6 +235,7 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
 
     let program = resolve_executable(command[0].as_os_str(), None)
         .with_context(|| format!("resolving program {:?}", command[0]))?;
+    check_program_executable(&program)?;
     let args: Vec<OsString> = command[1..].to_vec();
 
     eprintln!(
@@ -274,6 +276,7 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let (config, config_dir) = resolve_config(&cli.config)?;
     let (program, args) = resolve_command(&config, &cli.command, config_dir.as_deref())?;
+    check_program_executable(&program)?;
 
     let enforced = EnforcedRuntime::start(&config)?;
 
@@ -392,6 +395,20 @@ impl ProxyLifecycle {
     }
 }
 
+fn check_program_executable(program: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(program)
+        .with_context(|| format!("lockin: program not found: {}", program.display()))?;
+    if !metadata.is_file() {
+        anyhow::bail!("lockin: not a regular file: {}", program.display());
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let mode = metadata.permissions().mode();
+    if mode & 0o111 == 0 {
+        anyhow::bail!("lockin: program is not executable: {}", program.display());
+    }
+    Ok(())
+}
+
 fn child_exit_code(status: ExitStatus) -> u8 {
     if let Some(code) = status.code() {
         return code as u8;
@@ -423,6 +440,49 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(args)
+    }
+
+    #[test]
+    fn check_program_executable_rejects_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing");
+
+        let err = check_program_executable(&path).unwrap_err().to_string();
+
+        assert!(err.contains("program not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn check_program_executable_rejects_directory() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let err = check_program_executable(dir.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("not a regular file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn check_program_executable_rejects_non_executable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script");
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let err = check_program_executable(&path).unwrap_err().to_string();
+
+        assert!(err.contains("not executable"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn check_program_executable_accepts_executable_file() {
+        check_program_executable(Path::new("/bin/echo")).unwrap();
     }
 
     #[test]
