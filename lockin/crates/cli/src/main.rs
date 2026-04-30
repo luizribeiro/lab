@@ -8,10 +8,7 @@ use std::process::{ExitCode, ExitStatus};
 use anyhow::Context;
 use clap::Parser;
 
-use config::{
-    apply_config, apply_env, load_config, resolve_command, resolve_executable,
-    resolve_network_plan, NetworkPlan,
-};
+use config::{load_config, resolve_command, resolve_executable, resolve_network_plan, NetworkPlan};
 
 const EXIT_LOCKIN_ERROR: u8 = 125;
 
@@ -207,33 +204,23 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
         cli.output.display()
     );
 
-    // Trace mode mirrors run mode's network/env story: a Proxy plan
-    // needs the outpost-proxy daemon spinning before the sandbox starts,
-    // and the resolved NetworkMode + proxy env are threaded onto the
-    // TraceRequest so the runner's builder reflects the user's policy
-    // verbatim.
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .context("failed to build tokio runtime")?;
-    let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(&config)?)?;
+    let enforced = EnforcedRuntime::start(&config)?;
 
-    let request = lockin_trace::TraceRequest {
-        program,
-        args,
-        current_dir: None,
-        env: proxy.env_pairs(),
-        config,
-        config_dir,
-        network: proxy.sandbox_mode(),
-    };
-    let options = lockin_trace::TraceOptions {
-        output: Some(cli.output.clone()),
-        runtime: None,
-    };
-
-    let report = lockin_trace::trace(request, options)?;
+    let report = lockin_trace::trace(
+        lockin_trace::TraceRequest {
+            program,
+            args,
+            current_dir: None,
+            env: enforced.extra_env(),
+            config,
+            config_dir,
+            network: enforced.network_mode(),
+        },
+        lockin_trace::TraceOptions {
+            output: Some(cli.output.clone()),
+            runtime: Some(enforced.handle().clone()),
+        },
+    )?;
 
     for d in &report.diagnostics {
         eprintln!("lockin trace: {}", d.message);
@@ -244,8 +231,6 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
         cli.output.display()
     );
 
-    drop(proxy);
-    drop(runtime);
     Ok(ExitCode::from(child_exit_code(report.status)))
 }
 
@@ -253,29 +238,59 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     let (config, config_dir) = resolve_config(&cli.config)?;
     let (program, args) = resolve_command(&config, &cli.command, config_dir.as_deref())?;
 
-    // One runtime drives both outpost-proxy (when configured) and the
-    // signal-forwarding supervisor (always).
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .context("failed to build tokio runtime")?;
+    let enforced = EnforcedRuntime::start(&config)?;
 
-    let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(&config)?)?;
-    let network_mode = proxy.sandbox_mode();
+    let cmd = lockin_config::build_enforced_command(lockin_config::EnforcedCommandSpec {
+        builder: lockin::Sandbox::builder(),
+        config: &config,
+        config_dir: config_dir.as_deref(),
+        program: &program,
+        args: &args,
+        current_dir: None,
+        network: enforced.network_mode(),
+        parent_env: std::env::vars_os().collect(),
+        extra_env: enforced.extra_env(),
+    })?;
 
-    let mut cmd = apply_config(&config, config_dir.as_deref())?
-        .network(network_mode)
-        .command(&program)?;
-    cmd.args(&args);
-    apply_env(&config.env, &mut cmd, std::env::vars_os());
-    proxy.inject_env(&mut cmd);
-
-    let status = lockin::supervise::supervise_command(cmd, runtime.handle())?;
-
-    drop(proxy);
-    drop(runtime);
+    let status = lockin::supervise::supervise_command(cmd, enforced.handle())?;
     Ok(ExitCode::from(child_exit_code(status)))
+}
+
+/// CLI-side bundle of the tokio runtime and proxy lifecycle. Both run
+/// mode and trace mode need a runtime that outlives the supervised
+/// child (for outpost-proxy when [sandbox.network] mode = "proxy") AND
+/// the resolved network mode + proxy env to feed into command
+/// construction. Owning them together prevents drift between run and
+/// trace.
+struct EnforcedRuntime {
+    runtime: tokio::runtime::Runtime,
+    proxy: ProxyLifecycle,
+}
+
+impl EnforcedRuntime {
+    fn start(config: &config::Config) -> anyhow::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .context("failed to build tokio runtime")?;
+        let proxy = ProxyLifecycle::start(runtime.handle(), resolve_network_plan(config)?)?;
+        Ok(Self { runtime, proxy })
+    }
+
+    fn handle(&self) -> &tokio::runtime::Handle {
+        self.runtime.handle()
+    }
+
+    fn network_mode(&self) -> lockin::NetworkMode {
+        self.proxy.sandbox_mode()
+    }
+
+    /// HTTP_PROXY / HTTPS_PROXY / etc. for proxy-mode runs; empty
+    /// otherwise.
+    fn extra_env(&self) -> Vec<(OsString, OsString)> {
+        self.proxy.proxy_env_pairs()
+    }
 }
 
 /// Holds the `outpost-proxy` handle for proxy-mode runs, plus the
@@ -316,20 +331,10 @@ impl ProxyLifecycle {
         self.mode
     }
 
-    /// Writes `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and clears
-    /// `NO_PROXY` on the child command so every standard HTTP client
-    /// (libcurl, Python requests, Go net/http) routes through the
-    /// loopback proxy. No-op when not in proxy mode.
-    fn inject_env(&self, cmd: &mut lockin::SandboxedCommand) {
-        for (k, v) in self.env_pairs() {
-            cmd.env(k, v);
-        }
-    }
-
-    /// Same env contract as `inject_env`, but as an owned key/value
-    /// vector so callers that don't yet have a `SandboxedCommand` (the
-    /// trace runner builds it inside its own crate) can pass it in.
-    fn env_pairs(&self) -> Vec<(OsString, OsString)> {
+    /// `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` plus cleared `NO_PROXY`
+    /// as owned key/value pairs so command construction can inject them
+    /// after `[env]` policy is applied. No-op when not in proxy mode.
+    fn proxy_env_pairs(&self) -> Vec<(OsString, OsString)> {
         let Some(handle) = &self.handle else {
             return Vec::new();
         };
@@ -488,6 +493,45 @@ mod tests {
     }
 
     #[test]
+    fn enforced_runtime_extra_env_matches_network_mode() -> anyhow::Result<()> {
+        let deny = EnforcedRuntime::start(&config::Config::default())?;
+        assert_eq!(deny.network_mode(), lockin::NetworkMode::Deny);
+        assert!(deny.extra_env().is_empty());
+        drop(deny);
+
+        let mut allow = config::Config::default();
+        allow.sandbox.network.mode = config::NetworkConfigMode::AllowAll;
+        let allow = EnforcedRuntime::start(&allow)?;
+        assert_eq!(allow.network_mode(), lockin::NetworkMode::AllowAll);
+        assert!(allow.extra_env().is_empty());
+        drop(allow);
+
+        let mut proxy = config::Config::default();
+        proxy.sandbox.network.mode = config::NetworkConfigMode::Proxy;
+        proxy.sandbox.network.allow_hosts = vec!["example.com".into()];
+        let proxy = EnforcedRuntime::start(&proxy)?;
+        let lockin::NetworkMode::Proxy { loopback_port } = proxy.network_mode() else {
+            panic!("expected proxy network mode");
+        };
+        let url = OsString::from(format!("http://127.0.0.1:{loopback_port}"));
+        let env = proxy.extra_env();
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            assert!(env.iter().any(|(k, v)| k == key && v == &url));
+        }
+        assert!(env.iter().any(|(k, v)| k == "NO_PROXY" && v.is_empty()));
+        assert!(env.iter().any(|(k, v)| k == "no_proxy" && v.is_empty()));
+
+        Ok(())
+    }
+
+    #[test]
     fn apply_env_strips_builtin_blocklist() {
         let mut cmd = build_cmd();
         let mut parent: Vec<&str> = config::BUILTIN_ENV_BLOCKLIST.to_vec();
@@ -496,7 +540,7 @@ mod tests {
             inherit: true,
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&parent));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&parent));
         let removed = removed_keys(&cmd);
         for var in config::BUILTIN_ENV_BLOCKLIST {
             assert!(
@@ -515,7 +559,7 @@ mod tests {
             block: vec!["AWS_*".into(), "GITHUB_TOKEN".into()],
             ..Default::default()
         };
-        apply_env(
+        config::apply_env(
             &env_config,
             &mut cmd,
             synthetic_env(&["AWS_SECRET", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "OTHER"]),
@@ -536,7 +580,7 @@ mod tests {
             pass: vec!["HOME".into()],
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&["HOME", "OTHER"]));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&["HOME", "OTHER"]));
         let after = set_pairs(&cmd);
         assert_eq!(before, after, "pass must be a no-op when inherit=true");
     }
@@ -554,7 +598,7 @@ mod tests {
             ("HOME".into(), "/home/u".into()),
             ("UNRELATED".into(), "x".into()),
         ];
-        apply_env(&env_config, &mut cmd, parent);
+        config::apply_env(&env_config, &mut cmd, parent);
         let set = set_pairs(&cmd);
         assert!(set.iter().any(|(k, v)| k == "PATH" && v == "/bin:/usr/bin"));
         assert!(set.iter().any(|(k, v)| k == "HOME" && v == "/home/u"));
@@ -569,7 +613,7 @@ mod tests {
             pass: vec!["NIX_*".into()],
             ..Default::default()
         };
-        apply_env(
+        config::apply_env(
             &env_config,
             &mut cmd,
             synthetic_env(&["NIX_CC", "NIX_CFLAGS", "OTHER"]),
@@ -588,7 +632,7 @@ mod tests {
             set: [("LANG".into(), "C.UTF-8".into())].into(),
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&[]));
         let set = set_pairs(&cmd);
         assert!(set.iter().any(|(k, v)| k == "LANG" && v == "C.UTF-8"));
     }
@@ -603,7 +647,7 @@ mod tests {
             ..Default::default()
         };
         let parent: Vec<(OsString, OsString)> = vec![("TERM".into(), "xterm-256color".into())];
-        apply_env(&env_config, &mut cmd, parent);
+        config::apply_env(&env_config, &mut cmd, parent);
         let set = set_pairs(&cmd);
         let term = set.iter().find(|(k, _)| k == "TERM");
         assert_eq!(term.map(|(_, v)| v.to_str()), Some(Some("dumb")));
@@ -618,7 +662,7 @@ mod tests {
             block: vec!["AWS_*".into()],
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&[]));
         let set = set_pairs(&cmd);
         assert!(!set.iter().any(|(k, _)| k == "AWS_KEY"));
     }
@@ -632,7 +676,7 @@ mod tests {
             set: [(first_builtin.into(), "/evil".into())].into(),
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&[]));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&[]));
         let set = set_pairs(&cmd);
         assert!(
             !set.iter().any(|(k, _)| k == first_builtin),
@@ -649,7 +693,7 @@ mod tests {
             block: vec!["SECRET".into()],
             ..Default::default()
         };
-        apply_env(&env_config, &mut cmd, synthetic_env(&["SECRET"]));
+        config::apply_env(&env_config, &mut cmd, synthetic_env(&["SECRET"]));
         let set = set_pairs(&cmd);
         assert!(!set.iter().any(|(k, _)| k == "SECRET"));
     }
@@ -662,7 +706,7 @@ mod tests {
             !sandbox_env.is_empty(),
             "sandbox library should have set some env (TMPDIR etc.)"
         );
-        apply_env(
+        config::apply_env(
             &config::EnvConfig {
                 inherit: false,
                 ..Default::default()
