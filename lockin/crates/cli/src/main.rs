@@ -1,5 +1,6 @@
 use lockin_config as config;
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -155,7 +156,17 @@ fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
 
     let report = lockin_infer::infer(request, options)?;
 
+    let mut unsupported_ops = BTreeMap::<String, usize>::new();
     for d in &report.diagnostics {
+        // Seatbelt unsupported-op diagnostics are already explained in the
+        // generated TOML header. A future cleanup can mark these structurally
+        // on InferDiagnostic; until then, keep this parser scoped to the
+        // stable seatbelt diagnostic text emitted by lockin-observe.
+        if let Some(op) = seatbelt_schema_mapping_op(&d.message) {
+            *unsupported_ops.entry(op.to_string()).or_default() += 1;
+            continue;
+        }
+
         match d.level {
             lockin_infer::DiagnosticLevel::Error => {
                 eprintln!("lockin infer: error: {}", d.message)
@@ -168,8 +179,34 @@ fn do_infer(cli: InferCli) -> anyhow::Result<ExitCode> {
             }
         }
     }
+    if let Some(summary) = unsupported_schema_mapping_summary(&unsupported_ops) {
+        eprintln!("lockin infer: {summary}");
+    }
 
     Ok(ExitCode::from(child_exit_code(report.status)))
+}
+
+fn seatbelt_schema_mapping_op(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("seatbelt: operation \"")?;
+    let (op, rest) = rest.split_once('"')?;
+    if rest.starts_with(" has no lockin schema mapping") {
+        Some(op)
+    } else {
+        None
+    }
+}
+
+fn unsupported_schema_mapping_summary(ops: &BTreeMap<String, usize>) -> Option<String> {
+    let total: usize = ops.values().sum();
+    if total == 0 {
+        return None;
+    }
+
+    let op_kinds = ops.keys().cloned().collect::<Vec<_>>().join(", ");
+    Some(format!(
+        "{total} unsupported sandbox operation(s) observed across {} op kind(s) ({op_kinds}); see the generated TOML's header comment for context.",
+        ops.len()
+    ))
 }
 
 fn run_trace(cli: TraceCli) -> ExitCode {
@@ -834,6 +871,29 @@ mod tests {
     #[test]
     fn infer_parse_no_args_errors() {
         assert!(parse_infer(&["lockin infer"]).is_err());
+    }
+
+    #[test]
+    fn seatbelt_schema_mapping_diagnostics_are_summarized() {
+        assert_eq!(
+            seatbelt_schema_mapping_op(
+                "seatbelt: operation \"mach-lookup\" has no lockin schema mapping (Sandbox: git(1) allow mach-lookup com.apple.logd)"
+            ),
+            Some("mach-lookup")
+        );
+        assert_eq!(seatbelt_schema_mapping_op("seatbelt: malformed line"), None);
+        assert_eq!(
+            seatbelt_schema_mapping_op("syd: cap \"chown\" has no lockin schema mapping (pid=1)"),
+            None
+        );
+
+        let mut ops = BTreeMap::new();
+        ops.insert("mach-lookup".to_string(), 2);
+        ops.insert("sysctl-read".to_string(), 1);
+        assert_eq!(
+            unsupported_schema_mapping_summary(&ops).as_deref(),
+            Some("3 unsupported sandbox operation(s) observed across 2 op kind(s) (mach-lookup, sysctl-read); see the generated TOML's header comment for context.")
+        );
     }
 
     #[test]
