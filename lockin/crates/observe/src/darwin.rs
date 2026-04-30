@@ -21,6 +21,8 @@ pub fn observe_with<F>(options: ObserveOptions<'_>, factory: F) -> anyhow::Resul
 where
     F: FnOnce(lockin::SandboxBuilder) -> anyhow::Result<lockin::SandboxedCommand>,
 {
+    let stdio_backing_paths = crate::capture_stdio_backing_paths();
+
     if !std::path::Path::new(LOG_BIN).exists() {
         return Err(anyhow!("{LOG_BIN} not found; not a macOS host?"));
     }
@@ -51,7 +53,8 @@ where
         .context("log stream did not observe postflight sentinel within timeout")?;
 
     let lines = log_stream.stop_and_collect();
-    let (events, diagnostics) = parse_log_lines(lines, &run_id);
+    let (mut events, diagnostics) = parse_log_lines(lines, &run_id);
+    crate::filter_stdio_metadata_events(&mut events, &stdio_backing_paths);
 
     Ok(ObservedRun {
         status,

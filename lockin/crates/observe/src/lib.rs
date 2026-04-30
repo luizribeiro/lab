@@ -9,6 +9,7 @@ pub mod darwin;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+use std::path::PathBuf;
 use std::process::ExitStatus;
 
 use anyhow::Context;
@@ -81,6 +82,49 @@ where
     }
 }
 
+fn capture_stdio_backing_paths() -> Vec<PathBuf> {
+    (0..=2)
+        .filter_map(stdio_backing_path_for_fd)
+        .filter_map(|path| canonicalize_observed(&path).ok())
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn stdio_backing_path_for_fd(fd: i32) -> Option<PathBuf> {
+    use std::ffi::CStr;
+
+    let mut buf = [0 as libc::c_char; libc::PATH_MAX as usize];
+    // SAFETY: `buf` is valid writable storage of PATH_MAX bytes as required by F_GETPATH.
+    let rc = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) };
+    if rc == -1 {
+        return None;
+    }
+    // SAFETY: F_GETPATH writes a NUL-terminated C string on success.
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
+    Some(PathBuf::from(cstr.to_string_lossy().into_owned()))
+}
+
+#[cfg(target_os = "linux")]
+fn stdio_backing_path_for_fd(fd: i32) -> Option<PathBuf> {
+    let path = std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()?;
+    path.is_absolute().then_some(path)
+}
+
+fn filter_stdio_metadata_events(events: &mut Vec<AccessEvent>, stdio_paths: &[PathBuf]) {
+    events.retain(|ae| !is_filtered_stdio_metadata(ae, stdio_paths));
+}
+
+fn is_filtered_stdio_metadata(ae: &AccessEvent, stdio_paths: &[PathBuf]) -> bool {
+    let InferEvent::Fs {
+        op: FsOp::Stat,
+        path,
+    } = &ae.event
+    else {
+        return false;
+    };
+    stdio_paths.iter().any(|stdio_path| stdio_path == path)
+}
+
 fn observation_mode(kind: ObservationKind, run_id: String) -> ObservationMode {
     match kind {
         ObservationKind::InferAllowAll => ObservationMode::AllowAllWithRunId(run_id),
@@ -101,5 +145,54 @@ fn supervise(
             .build()
             .context("building tokio runtime for observation supervision")?;
         lockin::supervise::supervise_command(cmd, runtime.handle())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fs(action: AccessAction, op: FsOp, path: &str) -> AccessEvent {
+        AccessEvent {
+            action,
+            event: InferEvent::Fs {
+                op,
+                path: PathBuf::from(path),
+            },
+        }
+    }
+
+    #[test]
+    fn filters_only_stat_events_on_stdio_backing_paths() {
+        let stdio_paths = vec![PathBuf::from("/private/tmp/foo")];
+        let mut events = vec![
+            fs(AccessAction::Deny, FsOp::Stat, "/private/tmp/foo"),
+            fs(AccessAction::Deny, FsOp::Read, "/private/tmp/foo"),
+            fs(AccessAction::Deny, FsOp::Stat, "/private/tmp/bar"),
+            fs(AccessAction::Warn, FsOp::Write, "/private/tmp/foo"),
+            AccessEvent {
+                action: AccessAction::Deny,
+                event: InferEvent::Exec {
+                    path: PathBuf::from("/private/tmp/foo"),
+                },
+            },
+        ];
+
+        filter_stdio_metadata_events(&mut events, &stdio_paths);
+
+        assert_eq!(
+            events,
+            vec![
+                fs(AccessAction::Deny, FsOp::Read, "/private/tmp/foo"),
+                fs(AccessAction::Deny, FsOp::Stat, "/private/tmp/bar"),
+                fs(AccessAction::Warn, FsOp::Write, "/private/tmp/foo"),
+                AccessEvent {
+                    action: AccessAction::Deny,
+                    event: InferEvent::Exec {
+                        path: PathBuf::from("/private/tmp/foo"),
+                    },
+                },
+            ]
+        );
     }
 }

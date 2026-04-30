@@ -16,6 +16,7 @@ pub fn observe_with<F>(options: ObserveOptions<'_>, factory: F) -> anyhow::Resul
 where
     F: FnOnce(lockin::SandboxBuilder) -> anyhow::Result<lockin::SandboxedCommand>,
 {
+    let stdio_backing_paths = crate::capture_stdio_backing_paths();
     let run_id = format!("lockin-run-{}", uuid::Uuid::new_v4());
     let (read_fd, write_fd) = make_pipe().context("failed to create syd log pipe")?;
 
@@ -31,9 +32,10 @@ where
 
     let status = crate::supervise(cmd, options.runtime)?;
 
-    let (events, diagnostics) = drain
+    let (mut events, diagnostics) = drain
         .join()
         .map_err(|_| anyhow!("observe drain thread panicked"))?;
+    crate::filter_stdio_metadata_events(&mut events, &stdio_backing_paths);
 
     Ok(ObservedRun {
         status,
