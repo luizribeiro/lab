@@ -16,9 +16,3 @@ mod runner;
 
 pub use output::{write_denial_log, HEADER};
 pub use runner::{trace, TraceOptions, TraceReport, TraceRequest};
-
-#[cfg(target_os = "linux")]
-mod linux;
-
-#[cfg(target_os = "macos")]
-mod darwin;

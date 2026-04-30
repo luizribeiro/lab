@@ -366,15 +366,11 @@ name = "lockin-trace"
 version = "0.3.2"
 dependencies = [
  "anyhow",
- "libc",
  "lockin",
  "lockin-config",
- "lockin-infer",
  "lockin-observe",
- "serde_json",
  "tempfile",
  "tokio",
- "uuid",
 ]
 
 [[package]]

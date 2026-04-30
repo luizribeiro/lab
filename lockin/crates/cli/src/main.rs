@@ -230,6 +230,7 @@ fn do_trace(cli: TraceCli) -> anyhow::Result<ExitCode> {
     };
     let options = lockin_trace::TraceOptions {
         output: Some(cli.output.clone()),
+        runtime: None,
     };
 
     let report = lockin_trace::trace(request, options)?;
