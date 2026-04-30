@@ -9,6 +9,8 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::event::{DiagnosticLevel, InferDiagnostic, InferEvent};
+
 /// Canonicalize an observed path.
 ///
 /// - If the path exists, returns `std::fs::canonicalize(path)`.
@@ -52,6 +54,29 @@ pub fn canonicalize_observed(path: &Path) -> io::Result<PathBuf> {
             return Ok(append_tail(base, &tail));
         }
         current = parent;
+    }
+}
+
+/// Canonicalize paths inside an inference event.
+///
+/// Unsupported events are returned unchanged. Filesystem and exec events
+/// whose paths cannot be canonicalized are converted into warning
+/// diagnostics so callers can drop them without aborting the whole run.
+pub fn canonicalize_event(ev: &InferEvent) -> Result<InferEvent, InferDiagnostic> {
+    match ev {
+        InferEvent::Fs { op, path } => canonicalize_observed(path)
+            .map(|p| InferEvent::Fs { op: *op, path: p })
+            .map_err(|e| InferDiagnostic {
+                level: DiagnosticLevel::Warn,
+                message: format!("dropping fs event for {}: {}", path.display(), e),
+            }),
+        InferEvent::Exec { path } => canonicalize_observed(path)
+            .map(|p| InferEvent::Exec { path: p })
+            .map_err(|e| InferDiagnostic {
+                level: DiagnosticLevel::Warn,
+                message: format!("dropping exec event for {}: {}", path.display(), e),
+            }),
+        InferEvent::Unsupported { .. } => Ok(ev.clone()),
     }
 }
 

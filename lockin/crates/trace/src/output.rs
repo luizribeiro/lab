@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use lockin_infer::{FsOp, InferEvent};
+use lockin_observe::{FsOp, InferEvent};
 
 use crate::runner::TraceReport;
 

@@ -15,6 +15,7 @@ dist = false
 anyhow = "1"
 lockin = { path = "../sandbox", features = ["tokio"] }
 lockin-config = { path = "../config" }
+lockin-observe = { path = "../observe" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 toml = "0.8"

@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::event::{FsOp, InferEvent};
+use lockin_observe::{FsOp, InferEvent};
 
 /// Compacted, deduped, sorted policy derived from a batch of events.
 ///

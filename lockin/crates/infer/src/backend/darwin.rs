@@ -23,7 +23,7 @@ use lockin::{ObservationMode, SandboxBuilder};
 use uuid::Uuid;
 
 use crate::backend::{BackendReport, InferBackend, InferRequest};
-use crate::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
+use lockin_observe::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
 
 const LOG_BIN: &str = "/usr/bin/log";
 const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";

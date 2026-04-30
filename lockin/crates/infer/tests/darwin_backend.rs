@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use lockin_infer::backend::darwin;
 use lockin_infer::backend::InferRequest;
-use lockin_infer::event::{FsOp, InferEvent};
+use lockin_infer::{FsOp, InferEvent};
 
 fn macos_tools_present() -> bool {
     Path::new("/usr/bin/log").exists() && Path::new("/usr/bin/sandbox-exec").exists()

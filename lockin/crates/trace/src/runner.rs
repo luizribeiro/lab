@@ -9,9 +9,7 @@ use std::process::ExitStatus;
 
 use anyhow::Result;
 use lockin_config::Config;
-use lockin_infer::{
-    canonicalize_observed, AccessAction, AccessEvent, DiagnosticLevel, InferDiagnostic, InferEvent,
-};
+use lockin_observe::{canonicalize_event, AccessAction, AccessEvent, InferDiagnostic, InferEvent};
 
 /// Inputs to a single `trace()` run.
 #[derive(Debug, Clone)]
@@ -69,7 +67,7 @@ pub fn trace(request: TraceRequest, options: TraceOptions) -> Result<TraceReport
         if ae.action != AccessAction::Deny {
             continue;
         }
-        match canonicalize_one(&ae.event) {
+        match canonicalize_event(&ae.event) {
             Ok(ev) => denials.push(ev),
             Err(d) => diagnostics.push(d),
         }
@@ -107,27 +105,4 @@ fn run_platform(
     _request: &TraceRequest,
 ) -> Result<(ExitStatus, Vec<AccessEvent>, Vec<InferDiagnostic>)> {
     anyhow::bail!("lockin trace is not supported on this platform")
-}
-
-/// Canonicalize observed paths (resolve `..`, symlinks, relative
-/// segments) so denial events line up with the user's
-/// configured policy paths. Mirrors `lockin_infer::observe`'s private
-/// helper of the same name; duplicated rather than re-exported because
-/// it's <30 LoC and inline visibility wins over an extra public seam.
-fn canonicalize_one(ev: &InferEvent) -> std::result::Result<InferEvent, InferDiagnostic> {
-    match ev {
-        InferEvent::Fs { op, path } => canonicalize_observed(path)
-            .map(|p| InferEvent::Fs { op: *op, path: p })
-            .map_err(|e| InferDiagnostic {
-                level: DiagnosticLevel::Warn,
-                message: format!("dropping fs event for {}: {}", path.display(), e),
-            }),
-        InferEvent::Exec { path } => canonicalize_observed(path)
-            .map(|p| InferEvent::Exec { path: p })
-            .map_err(|e| InferDiagnostic {
-                level: DiagnosticLevel::Warn,
-                message: format!("dropping exec event for {}: {}", path.display(), e),
-            }),
-        InferEvent::Unsupported { .. } => Ok(ev.clone()),
-    }
 }

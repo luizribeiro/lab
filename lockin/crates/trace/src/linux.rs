@@ -14,8 +14,8 @@ use std::process::ExitStatus;
 use anyhow::{anyhow, Context, Result};
 
 use lockin::ObservationMode;
-use lockin_infer::parse::syd::{parse_access_line, SydParseOutcome};
-use lockin_infer::{AccessEvent, DiagnosticLevel, InferDiagnostic};
+use lockin_observe::parse::syd::{parse_access_line, SydParseOutcome};
+use lockin_observe::{AccessEvent, DiagnosticLevel, InferDiagnostic};
 
 use crate::runner::TraceRequest;
 

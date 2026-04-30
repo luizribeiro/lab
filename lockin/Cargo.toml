@@ -3,6 +3,7 @@ members = [
   "crates/cli",
   "crates/config",
   "crates/infer",
+  "crates/observe",
   "crates/sandbox",
   "crates/process",
   "crates/testkit",

@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use lockin::ObservationMode;
-use lockin_infer::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
-use lockin_infer::{AccessEvent, InferDiagnostic};
+use lockin_observe::parse::seatbelt::{parse_access_message, SeatbeltParseOutcome};
+use lockin_observe::{AccessEvent, InferDiagnostic};
 use uuid::Uuid;
 
 use crate::runner::TraceRequest;

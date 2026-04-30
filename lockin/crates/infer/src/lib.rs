@@ -9,14 +9,13 @@
 pub mod backend;
 pub mod compact;
 pub mod emit;
-pub mod event;
 pub mod observe;
-pub mod parse;
-pub mod path;
 
 pub use backend::{BackendReport, InferBackend, InferRequest};
 pub use compact::{compact, InferredPolicy};
 pub use emit::{merge_into_config, render_toml, HEADER_COMMENT};
-pub use event::{AccessAction, AccessEvent, DiagnosticLevel, FsOp, InferDiagnostic, InferEvent};
+pub use lockin_observe::{
+    canonicalize_event, canonicalize_observed, AccessAction, AccessEvent, DiagnosticLevel, FsOp,
+    InferDiagnostic, InferEvent,
+};
 pub use observe::{infer, infer_with_backend, InferOptions, InferReport};
-pub use path::canonicalize_observed;

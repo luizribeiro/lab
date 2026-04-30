@@ -14,7 +14,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-use crate::event::{InferDiagnostic, InferEvent};
+use lockin_observe::{InferDiagnostic, InferEvent};
 
 #[derive(Debug, Clone)]
 pub struct InferRequest {

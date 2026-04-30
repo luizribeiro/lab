@@ -76,7 +76,7 @@ fn union_into(target: &mut Vec<PathBuf>, source: &BTreeSet<PathBuf>) {
 mod tests {
     use super::*;
     use crate::compact::compact;
-    use crate::event::{FsOp, InferEvent};
+    use lockin_observe::{FsOp, InferEvent};
 
     fn fs_event(op: FsOp, p: &str) -> InferEvent {
         InferEvent::Fs {

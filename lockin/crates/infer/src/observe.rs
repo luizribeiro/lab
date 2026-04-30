@@ -11,8 +11,7 @@ use lockin_config::Config;
 use crate::backend::{BackendReport, InferBackend, InferRequest};
 use crate::compact::{compact, InferredPolicy};
 use crate::emit::{merge_into_config, render_toml};
-use crate::event::{DiagnosticLevel, InferDiagnostic, InferEvent};
-use crate::path::canonicalize_observed;
+use lockin_observe::{canonicalize_event, InferDiagnostic, InferEvent};
 
 /// Output of an inference run.
 #[derive(Debug)]
@@ -54,7 +53,7 @@ pub fn infer_with_backend<B: InferBackend>(
 
     let events: Vec<InferEvent> = events
         .into_iter()
-        .filter_map(|ev| match canonicalize_one(&ev) {
+        .filter_map(|ev| match canonicalize_event(&ev) {
             Ok(e) => Some(e),
             Err(d) => {
                 diagnostics.push(d);
@@ -98,29 +97,11 @@ pub fn infer(request: InferRequest, options: InferOptions) -> Result<InferReport
     }
 }
 
-fn canonicalize_one(ev: &InferEvent) -> Result<InferEvent, InferDiagnostic> {
-    match ev {
-        InferEvent::Fs { op, path } => canonicalize_observed(path)
-            .map(|p| InferEvent::Fs { op: *op, path: p })
-            .map_err(|e| InferDiagnostic {
-                level: DiagnosticLevel::Warn,
-                message: format!("dropping fs event for {}: {}", path.display(), e),
-            }),
-        InferEvent::Exec { path } => canonicalize_observed(path)
-            .map(|p| InferEvent::Exec { path: p })
-            .map_err(|e| InferDiagnostic {
-                level: DiagnosticLevel::Warn,
-                message: format!("dropping exec event for {}: {}", path.display(), e),
-            }),
-        InferEvent::Unsupported { .. } => Ok(ev.clone()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::emit::HEADER_COMMENT;
-    use crate::event::FsOp;
+    use lockin_observe::{DiagnosticLevel, FsOp};
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 

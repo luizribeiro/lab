@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use lockin_config::Config;
-use lockin_infer::{FsOp, InferEvent};
+use lockin_observe::{FsOp, InferEvent};
 use lockin_trace::{trace, TraceOptions, TraceReport, TraceRequest};
 
 fn macos_tools_present() -> bool {

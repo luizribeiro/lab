@@ -15,8 +15,8 @@ use anyhow::{anyhow, Context, Result};
 use lockin::{ObservationMode, SandboxBuilder};
 
 use crate::backend::{BackendReport, InferBackend, InferRequest};
-use crate::event::{AccessAction, InferDiagnostic, InferEvent};
-use crate::parse::syd::{parse_access_line, SydParseOutcome};
+use lockin_observe::parse::syd::{parse_access_line, SydParseOutcome};
+use lockin_observe::{AccessAction, InferDiagnostic, InferEvent};
 
 const SYD_LOG_FD: i32 = 3;
 
@@ -101,7 +101,7 @@ fn drain_events(read_fd: OwnedFd) -> (Vec<InferEvent>, Vec<InferDiagnostic>) {
             Ok(l) => l,
             Err(e) => {
                 diagnostics.push(InferDiagnostic {
-                    level: crate::event::DiagnosticLevel::Warn,
+                    level: lockin_observe::DiagnosticLevel::Warn,
                     message: format!("syd: log read error: {e}"),
                 });
                 break;

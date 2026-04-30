@@ -325,11 +325,20 @@ dependencies = [
  "libc",
  "lockin",
  "lockin-config",
+ "lockin-observe",
  "serde_json",
  "tempfile",
  "tokio",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "lockin-observe"
+version = "0.3.2"
+dependencies = [
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -356,6 +365,7 @@ dependencies = [
  "lockin",
  "lockin-config",
  "lockin-infer",
+ "lockin-observe",
  "serde_json",
  "tempfile",
  "tokio",

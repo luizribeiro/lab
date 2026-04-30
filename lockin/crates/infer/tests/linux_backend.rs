@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use lockin_infer::backend::linux;
 use lockin_infer::backend::InferRequest;
-use lockin_infer::event::{FsOp, InferEvent};
+use lockin_infer::{FsOp, InferEvent};
 
 fn syd_available() -> bool {
     std::env::var_os("LOCKIN_SYD_PATH").is_some()

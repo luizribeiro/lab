@@ -1,0 +1,18 @@
+[package]
+name = "lockin-observe"
+version = "0.3.2"
+edition = "2021"
+description = "Observation transport and event types for lockin (used by lockin-infer and lockin-trace)."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/lockin"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
