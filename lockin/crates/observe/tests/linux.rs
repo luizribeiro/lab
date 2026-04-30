@@ -1,19 +1,19 @@
-//! Integration tests for the Darwin observation backend. Each test
-//! spawns the compiled `sandbox_probe` under `sandbox-exec` via
-//! `darwin::run` and asserts the relevant event class shows up in the
-//! captured stream filtered by RUN_ID.
+//! Integration tests for the Linux observation transport. Each test
+//! spawns the compiled `sandbox_probe` under `syd -x` via `observe_with`
+//! and asserts the relevant event class shows up in the captured stream.
+//!
+//! Skipped silently when `LOCKIN_SYD_PATH` is unset (e.g. on a developer
+//! machine outside the devenv shell).
 
-#![cfg(target_os = "macos")]
+#![cfg(target_os = "linux")]
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use lockin_infer::backend::darwin;
-use lockin_infer::backend::InferRequest;
-use lockin_infer::{FsOp, InferEvent};
+use lockin_observe::{FsOp, InferEvent, ObservationKind, ObserveOptions, ObservedRun};
 
-fn macos_tools_present() -> bool {
-    Path::new("/usr/bin/log").exists() && Path::new("/usr/bin/sandbox-exec").exists()
+fn syd_available() -> bool {
+    std::env::var_os("LOCKIN_SYD_PATH").is_some()
 }
 
 fn probe_binary() -> PathBuf {
@@ -27,24 +27,38 @@ fn probe_binary() -> PathBuf {
     p.canonicalize().unwrap()
 }
 
-fn request(program: &Path, args: &[&str]) -> InferRequest {
-    InferRequest {
+struct TestRequest {
+    program: PathBuf,
+    args: Vec<OsString>,
+}
+
+fn request(program: &Path, args: &[&str]) -> TestRequest {
+    TestRequest {
         program: program.to_path_buf(),
         args: args.iter().map(OsString::from).collect(),
-        current_dir: None,
-        env: Vec::new(),
     }
 }
 
-fn run_or_skip(req: &InferRequest) -> Option<lockin_infer::backend::BackendReport> {
-    if !macos_tools_present() {
-        eprintln!("skipping: /usr/bin/log or /usr/bin/sandbox-exec missing");
+fn run_or_skip(req: &TestRequest) -> Option<ObservedRun> {
+    if !syd_available() {
+        eprintln!("skipping: LOCKIN_SYD_PATH not set");
         return None;
     }
-    Some(darwin::run(req).expect("backend run"))
+    Some(
+        lockin_observe::observe_with(
+            ObserveOptions::new(ObservationKind::InferAllowAll),
+            |builder| {
+                let mut cmd = builder.command(&req.program)?;
+                cmd.args(&req.args);
+                cmd.stdin(std::process::Stdio::null());
+                Ok(cmd)
+            },
+        )
+        .expect("observe_with"),
+    )
 }
 
-fn ends_with_name(path: &Path, name: &str) -> bool {
+fn ends_with(path: &Path, name: &str) -> bool {
     path.file_name().map(|n| n == name).unwrap_or(false)
 }
 
@@ -59,17 +73,17 @@ fn infer_read_emits_read_or_stat_event_for_target_path() {
         return;
     };
     assert!(report.status.success(), "probe failed: {:?}", report.status);
-    let saw = report.events.iter().any(|e| match e {
+    let saw = report.events.iter().any(|ae| match &ae.event {
         InferEvent::Fs {
             op: FsOp::Read | FsOp::Stat,
             path,
-        } => ends_with_name(path, "input.txt"),
+        } => ends_with(path, "input.txt"),
         _ => false,
     });
     assert!(
         saw,
-        "no Read/Stat event for input.txt; events={:?}",
-        report.events,
+        "no Read/Stat event for input.txt; events={:?} diags={:?}",
+        report.events, report.diagnostics
     );
 }
 
@@ -83,17 +97,17 @@ fn infer_write_emits_write_or_create_event_for_target_path() {
         return;
     };
     assert!(report.status.success(), "probe failed: {:?}", report.status);
-    let saw = report.events.iter().any(|e| match e {
+    let saw = report.events.iter().any(|ae| match &ae.event {
         InferEvent::Fs {
             op: FsOp::Write | FsOp::Create,
             path,
-        } => ends_with_name(path, "out.txt"),
+        } => ends_with(path, "out.txt"),
         _ => false,
     });
     assert!(
         saw,
-        "no Write/Create event for out.txt; events={:?}",
-        report.events,
+        "no Write/Create event for out.txt; events={:?} diags={:?}",
+        report.events, report.diagnostics
     );
 }
 
@@ -106,14 +120,13 @@ fn infer_exec_emits_exec_event_for_probe_binary() {
         return;
     };
     assert!(report.status.success(), "probe failed: {:?}", report.status);
-    let saw = report
-        .events
-        .iter()
-        .any(|e| matches!(e, InferEvent::Exec { path } if ends_with_name(path, "sandbox_probe")));
+    let saw = report.events.iter().any(
+        |ae| matches!(&ae.event, InferEvent::Exec { path } if ends_with(path, "sandbox_probe")),
+    );
     assert!(
         saw,
         "no Exec event for sandbox_probe; events={:?}",
-        report.events,
+        report.events
     );
 }
 
