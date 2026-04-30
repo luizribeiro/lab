@@ -15,9 +15,16 @@ pub enum SeatbeltParseOutcome {
     /// duplicate-compression line, allow process-fork without a path,
     /// etc.). Skip silently.
     Skip,
-    /// Recognized as a Seatbelt operation but not translatable (mach-lookup,
-    /// sysctl-read, file-ioctl, network*, etc.). Surfaces as a diagnostic.
-    Unsupported(InferDiagnostic),
+    /// Recognized as a Seatbelt operation but not translatable into the
+    /// concrete `InferEvent` schema (mach-lookup, sysctl-read,
+    /// file-ioctl, network*, etc.). Carries both an `AccessEvent`
+    /// wrapping `InferEvent::Unsupported` (so deny-trace callers can
+    /// still report the access in their denial log) and a human-readable
+    /// diagnostic (so infer callers can surface the warning).
+    Unsupported {
+        event: AccessEvent,
+        diagnostic: InferDiagnostic,
+    },
     /// Line did not match the expected Seatbelt grammar.
     Malformed(InferDiagnostic),
 }
@@ -159,10 +166,28 @@ fn classify(
             })
         }
         "process-fork" => SeatbeltParseOutcome::Skip,
-        _ => SeatbeltParseOutcome::Unsupported(diag(
-            DiagnosticLevel::Warn,
-            format!("{BACKEND}: operation {op:?} has no lockin schema mapping ({first_line})"),
-        )),
+        _ => {
+            let reason = format!("operation {op:?} has no lockin schema mapping");
+            let raw = if remainder.is_empty() {
+                op.to_string()
+            } else {
+                format!("{op} {remainder}")
+            };
+            SeatbeltParseOutcome::Unsupported {
+                event: AccessEvent {
+                    action,
+                    event: InferEvent::Unsupported {
+                        backend: BACKEND,
+                        raw,
+                        reason: reason.clone(),
+                    },
+                },
+                diagnostic: diag(
+                    DiagnosticLevel::Warn,
+                    format!("{BACKEND}: {reason} ({first_line})"),
+                ),
+            }
+        }
     }
 }
 
@@ -387,10 +412,10 @@ mod tests {
             &msg("Sandbox: bash(1) allow mach-lookup com.apple.foo"),
             RUN_ID,
         );
-        let SeatbeltParseOutcome::Unsupported(d) = outcome else {
+        let SeatbeltParseOutcome::Unsupported { diagnostic, .. } = outcome else {
             panic!("expected Unsupported, got {outcome:?}");
         };
-        assert!(d.message.contains("mach-lookup"));
+        assert!(diagnostic.message.contains("mach-lookup"));
     }
 
     #[test]
@@ -399,10 +424,10 @@ mod tests {
             &msg("Sandbox: bash(2901) allow sysctl-read kern.bootargs"),
             RUN_ID,
         );
-        let SeatbeltParseOutcome::Unsupported(d) = outcome else {
+        let SeatbeltParseOutcome::Unsupported { diagnostic, .. } = outcome else {
             panic!("expected Unsupported, got {outcome:?}");
         };
-        assert!(d.message.contains("sysctl-read"));
+        assert!(diagnostic.message.contains("sysctl-read"));
     }
 
     #[test]
@@ -411,10 +436,10 @@ mod tests {
             &msg("Sandbox: bash(1) allow network-outbound remote:*:443"),
             RUN_ID,
         );
-        let SeatbeltParseOutcome::Unsupported(d) = outcome else {
+        let SeatbeltParseOutcome::Unsupported { diagnostic, .. } = outcome else {
             panic!("expected Unsupported, got {outcome:?}");
         };
-        assert!(d.message.contains("network-outbound"));
+        assert!(diagnostic.message.contains("network-outbound"));
     }
 
     #[test]
@@ -425,7 +450,7 @@ mod tests {
             ),
             RUN_ID,
         );
-        assert!(matches!(outcome, SeatbeltParseOutcome::Unsupported(_)));
+        assert!(matches!(outcome, SeatbeltParseOutcome::Unsupported { .. }));
     }
 
     #[test]
@@ -462,6 +487,23 @@ mod tests {
             parse_access_message(dup, RUN_ID),
             SeatbeltParseOutcome::Skip
         );
+    }
+
+    #[test]
+    fn unsupported_op_carries_event_with_action_and_raw_remainder() {
+        let outcome = parse_access_message(
+            &msg("Sandbox: claude(81767) deny(1) network-outbound /private/var/run/mDNSResponder"),
+            RUN_ID,
+        );
+        let SeatbeltParseOutcome::Unsupported { event, .. } = outcome else {
+            panic!("expected Unsupported, got {outcome:?}");
+        };
+        assert_eq!(event.action, AccessAction::Deny);
+        let InferEvent::Unsupported { backend, raw, .. } = event.event else {
+            panic!("expected InferEvent::Unsupported, got {:?}", event.event);
+        };
+        assert_eq!(backend, "seatbelt");
+        assert_eq!(raw, "network-outbound /private/var/run/mDNSResponder");
     }
 
     #[test]
@@ -558,7 +600,7 @@ mod tests {
             assert!(
                 matches!(
                     parse_access_message(&m, RUN_ID),
-                    SeatbeltParseOutcome::Unsupported(_)
+                    SeatbeltParseOutcome::Unsupported { .. }
                 ),
                 "case: {first}"
             );

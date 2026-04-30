@@ -123,7 +123,15 @@ pub(crate) fn run(
         match parse_access_message(message, &run_id) {
             SeatbeltParseOutcome::Event(ae) => events.push(ae),
             SeatbeltParseOutcome::Skip => {}
-            SeatbeltParseOutcome::Unsupported(d) | SeatbeltParseOutcome::Malformed(d) => {
+            SeatbeltParseOutcome::Unsupported { event, .. } => {
+                // Drop the diagnostic — kernel-emitted unsupported ops
+                // (mach-lookup, ipc-posix-shm-write-create, etc.) are
+                // routinely chatty and per-line stderr noise drowns the
+                // useful signal. The denial event still flows through to
+                // the human-readable log.
+                events.push(event);
+            }
+            SeatbeltParseOutcome::Malformed(d) => {
                 diagnostics.push(d);
             }
         }

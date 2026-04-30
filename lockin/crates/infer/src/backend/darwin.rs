@@ -137,7 +137,11 @@ pub fn run(request: &InferRequest) -> Result<BackendReport> {
             // its own call site.
             SeatbeltParseOutcome::Event(ae) => events.push(ae.event),
             SeatbeltParseOutcome::Skip => {}
-            SeatbeltParseOutcome::Unsupported(d) | SeatbeltParseOutcome::Malformed(d) => {
+            SeatbeltParseOutcome::Unsupported { event, diagnostic } => {
+                events.push(event.event);
+                diagnostics.push(diagnostic);
+            }
+            SeatbeltParseOutcome::Malformed(d) => {
                 diagnostics.push(d);
             }
         }
