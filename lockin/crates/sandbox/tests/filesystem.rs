@@ -453,6 +453,37 @@ fn readdir_is_denied_without_explicit_allowlist() {
     ));
 }
 
+// Allowing a single file inside a directory must not grant the
+// ability to enumerate that directory's contents. The directory is
+// only an ancestor and should receive lookup/stat at most — the
+// listing of sibling filenames is information the sandboxed process
+// has no business seeing.
+#[test]
+fn read_allowlist_does_not_grant_readdir_on_ancestor() {
+    let temp = TestDir::new("ancestor-readdir");
+    let allowed = temp.join("allowed.txt");
+    std::fs::write(&allowed, b"allowed").expect("write allowed");
+    std::fs::write(temp.join("secret.txt"), b"secret").expect("write secret");
+
+    assert!(!run_probe(
+        common::sandbox_builder().read_path(allowed),
+        &["can-readdir", &temp.join("").display().to_string()]
+    ));
+}
+
+#[test]
+fn write_allowlist_does_not_grant_readdir_on_ancestor() {
+    let temp = TestDir::new("ancestor-readdir-w");
+    let allowed = temp.join("allowed.txt");
+    std::fs::write(&allowed, b"allowed").expect("write allowed");
+    std::fs::write(temp.join("secret.txt"), b"secret").expect("write secret");
+
+    assert!(!run_probe(
+        common::sandbox_builder().write_path(allowed),
+        &["can-readdir", &temp.join("").display().to_string()]
+    ));
+}
+
 // ── stat scoping ─────────────────────────────────────────────
 
 #[test]

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::paths::{path_candidates, push_unique, push_with_ancestors, stdio_tty_paths};
+use crate::paths::{ancestor_sets, path_candidates, push_unique, stdio_tty_paths};
 use crate::{NetworkMode, ObservationMode, SandboxSpec};
 
 /// syd categories observed/enforced uniformly across both observation modes.
@@ -190,51 +190,64 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     }
 
     let mut read_paths = Vec::new();
+    let mut stat_paths = Vec::new();
     let mut read_recursive_paths = Vec::new();
     let mut exec_paths = Vec::new();
     let mut exec_recursive_paths = Vec::new();
 
+    let mut add_readable =
+        |read_paths: &mut Vec<PathBuf>, stat_paths: &mut Vec<PathBuf>, candidate: &Path| {
+            let (traversal, symlink) = ancestor_sets(candidate);
+            for ancestor in traversal {
+                push_unique(stat_paths, ancestor);
+            }
+            for ancestor in symlink {
+                push_unique(read_paths, ancestor);
+            }
+            push_unique(read_paths, candidate.to_path_buf());
+        };
+
     for candidate in path_candidates(program) {
-        push_with_ancestors(&mut read_paths, &candidate);
+        add_readable(&mut read_paths, &mut stat_paths, &candidate);
         push_unique(&mut exec_paths, candidate);
     }
 
     for path in &spec.read_paths {
         for candidate in path_candidates(path) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
         }
     }
 
     for dir in &spec.read_dirs {
         for candidate in path_candidates(dir) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
             push_unique(&mut read_recursive_paths, candidate);
         }
     }
 
     for path in &spec.write_paths {
         for candidate in path_candidates(path) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
         }
     }
 
     for dir in &spec.write_dirs {
         for candidate in path_candidates(dir) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
             push_unique(&mut read_recursive_paths, candidate);
         }
     }
 
     for path in &spec.exec_paths {
         for candidate in path_candidates(path) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
             push_unique(&mut exec_paths, candidate);
         }
     }
 
     for dir in &spec.exec_dirs {
         for candidate in path_candidates(dir) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
             push_unique(&mut read_recursive_paths, candidate.clone());
             push_unique(&mut exec_recursive_paths, candidate);
         }
@@ -246,25 +259,29 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         PathBuf::from("/etc/ld.so.preload"),
     ] {
         for candidate in path_candidates(&path) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
         }
     }
 
     for path in stdio_tty_paths("/proc/self/fd") {
         for candidate in path_candidates(&path) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
         }
     }
 
     if spec.allow_kvm {
         for candidate in path_candidates(Path::new("/dev/kvm")) {
-            push_with_ancestors(&mut read_paths, &candidate);
+            add_readable(&mut read_paths, &mut stat_paths, &candidate);
         }
     }
 
     for candidate in path_candidates(private_tmp) {
-        push_with_ancestors(&mut read_paths, &candidate);
+        add_readable(&mut read_paths, &mut stat_paths, &candidate);
         push_unique(&mut read_recursive_paths, candidate);
+    }
+
+    for path in stat_paths {
+        add_allow_rule(&mut rules, "allow/stat", &path);
     }
 
     for path in read_paths {
@@ -720,6 +737,74 @@ mod tests {
         );
         let default_rules = syd_rules(Path::new("/bin/sh"), &SandboxSpec::default(), tmp.path());
         assert_eq!(none_rules, default_rules);
+    }
+
+    #[test]
+    fn non_symlink_ancestors_get_stat_only_not_read() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-linux-ancestor-test-")
+            .tempdir()
+            .expect("tempdir");
+        let nested = base.path().join("plain/data");
+        std::fs::create_dir_all(&nested).expect("create plain dir tree");
+        let leaf = nested.join("file.txt");
+        std::fs::write(&leaf, b"x").expect("create leaf");
+
+        let spec = SandboxSpec {
+            read_paths: vec![leaf.clone()],
+            ..SandboxSpec::default()
+        };
+        let rules = rules_for(&spec);
+
+        let escaped_nested = escape_syd_path(&nested);
+        assert!(
+            rules
+                .iter()
+                .any(|r| r == &format!("allow/stat+{escaped_nested}")),
+            "plain-dir ancestor must get allow/stat, got: {rules:?}"
+        );
+        assert!(
+            !rules
+                .iter()
+                .any(|r| r == &format!("allow/read,stat+{escaped_nested}")),
+            "plain-dir ancestor must not get readdir-granting allow/read,stat, got: {rules:?}"
+        );
+
+        let escaped_leaf = escape_syd_path(&leaf);
+        assert!(
+            rules
+                .iter()
+                .any(|r| r == &format!("allow/read,stat+{escaped_leaf}")),
+            "leaf must still get full read,stat, got: {rules:?}"
+        );
+    }
+
+    #[test]
+    fn symlinked_ancestor_is_promoted_to_full_read() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-linux-symlink-test-")
+            .tempdir()
+            .expect("tempdir");
+        let real = base.path().join("real");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("create symlink");
+        let leaf = link.join("probe.txt");
+        std::fs::write(&leaf, b"x").expect("create leaf");
+
+        let spec = SandboxSpec {
+            read_paths: vec![leaf.clone()],
+            ..SandboxSpec::default()
+        };
+        let rules = rules_for(&spec);
+
+        let escaped_link = escape_syd_path(&link);
+        assert!(
+            rules
+                .iter()
+                .any(|r| r == &format!("allow/read,stat+{escaped_link}")),
+            "symlink ancestor must get full read so the kernel can follow it, got: {rules:?}"
+        );
     }
 
     #[test]

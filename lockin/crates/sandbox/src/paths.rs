@@ -77,29 +77,49 @@ fn tty_name_of_fd(fd: i32) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
-/// Appends `path` and every ancestor needed to reach it to `paths`,
-/// preserving first-seen order and removing duplicates.
+/// Splits the strict ancestors of `path` (i.e. excluding the leaf
+/// itself) into the components the kernel only needs to look up
+/// versus the components it needs to read the bytes of.
 ///
-/// The root directory is included deliberately. A literal read grant
-/// for `/` permits enumerating the root directory itself but does not
-/// grant recursive reads of its children.
+/// A directory just needs lookup/stat to traverse — granting
+/// `file-read-data` on it would also grant `readdir`, leaking the
+/// directory's listing. A symlink, however, must be readable as data
+/// for the kernel to follow it. So we lstat each ancestor and place
+/// it in the appropriate bucket; ancestors that don't exist (or fail
+/// to stat) fall through to traversal, which is the safe default
+/// since a non-symlink rule grants strictly less than read-data.
 ///
-/// For each ancestor, also include the same path with its parent
-/// canonicalized but the final component left unresolved. That covers
-/// platforms such as macOS where `/var` is itself a symlink to
-/// `/private/var`: the kernel may walk `/private/var/.../link` when it
-/// needs read-data on `link`, even if the caller supplied
-/// `/var/.../link/probe`.
-pub(crate) fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
-    for ancestor in path.ancestors() {
-        push_unique(paths, ancestor.to_path_buf());
-
+/// For each ancestor we also include the same component rebuilt
+/// against its parent's canonical form. This covers cases like macOS
+/// `/var → /private/var`: when the kernel resolves `/var/.../link`
+/// it can hand the policy check the post-resolution path
+/// `/private/var/.../link`, even though the caller only ever named
+/// `/var`.
+///
+/// The returned vectors are deduplicated and ordered leaf-to-root.
+pub(crate) fn ancestor_sets(path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut traversal = Vec::new();
+    let mut symlink = Vec::new();
+    for ancestor in path.ancestors().skip(1) {
+        classify_ancestor(ancestor, &mut traversal, &mut symlink);
         if let (Some(parent), Some(file_name)) = (ancestor.parent(), ancestor.file_name()) {
             if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-                push_unique(paths, canonical_parent.join(file_name));
+                let rebuilt = canonical_parent.join(file_name);
+                if rebuilt != ancestor {
+                    classify_ancestor(&rebuilt, &mut traversal, &mut symlink);
+                }
             }
         }
     }
+    (traversal, symlink)
+}
+
+fn classify_ancestor(path: &Path, traversal: &mut Vec<PathBuf>, symlink: &mut Vec<PathBuf>) {
+    let target = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => symlink,
+        _ => traversal,
+    };
+    push_unique(target, path.to_path_buf());
 }
 
 /// Appends `path` to `paths` if it isn't already present.

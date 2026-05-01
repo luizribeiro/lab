@@ -30,6 +30,10 @@ pub(super) fn build_policy(
     }
     policy.import_system();
 
+    for path in &paths.traversal_paths {
+        policy.allow_literal(&["file-read-metadata"], path);
+    }
+
     for path in &paths.executable_paths {
         policy.allow_literal(&["process-exec"], path);
     }
@@ -140,40 +144,83 @@ mod tests {
     }
 
     #[test]
-    fn exec_path_ancestors_render_as_full_file_read_not_metadata() {
+    fn non_symlink_ancestors_render_as_metadata_only_not_full_read() {
         let base = tempfile::Builder::new()
-            .prefix("lockin-exec-ancestor-policy-test-")
+            .prefix("lockin-ancestor-policy-test-")
             .tempdir()
             .expect("create test base dir");
         let private_tmp = base.path().join("tmp");
         std::fs::create_dir_all(&private_tmp).expect("create private tmp");
 
-        let exec_path = base.path().join("sandbox-probe-XXX/bin/probe");
+        // Real plain-directory ancestors so symlink_metadata reports
+        // them as directories — they must not be promoted to read.
+        let exec_dir = base.path().join("plain/bin");
+        std::fs::create_dir_all(&exec_dir).expect("create exec dir");
+        let exec_path = exec_dir.join("probe");
+        std::fs::write(&exec_path, b"#!/bin/sh\n").expect("create exec file");
+
         let mut spec = SandboxSpec::default();
         spec.exec_paths.push(exec_path.clone());
 
         let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
 
-        for ancestor in exec_path.ancestors().skip(1) {
-            let read_rule = format!("(allow file-read* (literal \"{}\"))", ancestor.display());
-            assert!(
-                rendered.contains(&read_rule),
-                "ancestor missing full file-read* rule {read_rule}; rendered:\n{rendered}"
-            );
-
+        // Only assert about ancestors strictly inside the tempdir we
+        // built — going further up the host filesystem can hit real
+        // symlinks (e.g. /var → /private/var on macOS), which are
+        // promoted by design.
+        for ancestor in exec_path
+            .ancestors()
+            .skip(1)
+            .take_while(|a| a.starts_with(base.path()))
+        {
             let metadata_rule = format!(
                 "(allow file-read-metadata (literal \"{}\"))",
                 ancestor.display()
             );
             assert!(
-                !rendered.contains(&metadata_rule),
-                "ancestor must not use metadata-only traversal rule {metadata_rule}; rendered:\n{rendered}"
+                rendered.contains(&metadata_rule),
+                "plain-dir ancestor missing metadata rule {metadata_rule}; rendered:\n{rendered}"
+            );
+
+            let read_rule = format!("(allow file-read* (literal \"{}\"))", ancestor.display());
+            assert!(
+                !rendered.contains(&read_rule),
+                "plain-dir ancestor must not get directory-listing grant {read_rule}; rendered:\n{rendered}"
             );
         }
     }
 
     #[test]
-    fn default_spec_rendering_has_no_metadata_traversal_rules() {
+    fn symlinked_ancestor_renders_as_full_read_to_allow_resolution() {
+        let base = tempfile::Builder::new()
+            .prefix("lockin-symlink-policy-test-")
+            .tempdir()
+            .expect("create test base dir");
+        let private_tmp = base.path().join("tmp");
+        std::fs::create_dir_all(&private_tmp).expect("create private tmp");
+
+        let real = base.path().join("real");
+        std::fs::create_dir_all(&real).expect("create real dir");
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("create symlink");
+        let probe = link.join("probe.txt");
+        std::fs::write(&probe, b"x").expect("create probe");
+
+        let spec = SandboxSpec {
+            read_paths: vec![probe.clone()],
+            ..SandboxSpec::default()
+        };
+        let rendered: String = build_policy(Path::new("/bin/ls"), &spec, &private_tmp).into();
+
+        let read_rule = format!("(allow file-read* (literal \"{}\"))", link.display());
+        assert!(
+            rendered.contains(&read_rule),
+            "symlink ancestor must get full file-read*: {read_rule}; rendered:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn default_spec_renders_no_traversal_rules_at_all() {
         let base = tempfile::Builder::new()
             .prefix("lockin-default-policy-test-")
             .tempdir()
@@ -187,10 +234,6 @@ mod tests {
         assert!(
             rendered.starts_with("(version 1)\n(deny default)\n(import \"system.sb\")\n"),
             "default spec should keep the baseline header unchanged, got:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("file-read-metadata"),
-            "default spec should not render old traversal metadata rules, got:\n{rendered}"
         );
     }
 
