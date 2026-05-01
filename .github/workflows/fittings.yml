@@ -35,7 +35,9 @@ jobs:
         with:
           determinate: true
 
-      - uses: DeterminateSystems/flakehub-cache-action@v2
+      - uses: DeterminateSystems/magic-nix-cache-action@c6a5746789488c8753af0d61fc6b5d79a80391f3
+        with:
+          use-flakehub: false
 
       - name: Run tests
         run: |
