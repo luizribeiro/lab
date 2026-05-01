@@ -26,9 +26,16 @@ pub const BUILTIN_ENV_BLOCKLIST: &[&str] = &[
 ];
 
 /// Env vars the sandbox library sets on the command itself (private
-/// tmpdir wiring). Preserved across `env_clear` so `inherit = false`
-/// runs don't lose them.
-pub const SANDBOX_OWNED_ENV: &[&str] = &["TMPDIR", "TMP", "TEMP"];
+/// tmpdir wiring and observation-mode log routing). Preserved across
+/// `env_clear` so `inherit = false` runs don't lose them.
+pub const SANDBOX_OWNED_ENV: &[&str] = &[
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SYD_LOG",
+    "SYD_LOG_FD",
+    "SYD_NO_SYSLOG",
+];
 
 /// Mutates `cmd` so its env reflects `env_config` resolved against
 /// `parent_env`. Mirrors what every lockin entry point needs (run mode,
