@@ -453,6 +453,22 @@ fn readdir_is_denied_without_explicit_allowlist() {
     ));
 }
 
+// Plain-directory ancestors of an allowed path must remain stat-able
+// — many tools resolve paths by lstat-walking each component, and
+// breaking that breaks them. The companion readdir tests below pin
+// the upper bound on this access.
+#[test]
+fn read_allowlist_grants_stat_on_ancestor() {
+    let temp = TestDir::new("ancestor-stat");
+    let allowed = temp.join("allowed.txt");
+    std::fs::write(&allowed, b"allowed").expect("write allowed");
+
+    assert!(run_probe(
+        common::sandbox_builder().read_path(allowed),
+        &["can-stat", &temp.join("").display().to_string()]
+    ));
+}
+
 // Allowing a single file inside a directory must not grant the
 // ability to enumerate that directory's contents. The directory is
 // only an ancestor and should receive lookup/stat at most — the
