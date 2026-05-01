@@ -14,7 +14,7 @@ use crate::{AccessEvent, ObserveOptions, ObservedRun};
 const LOG_BIN: &str = "/usr/bin/log";
 const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
 
-const SENTINEL_TIMEOUT: Duration = Duration::from_secs(2);
+const SENTINEL_TIMEOUT: Duration = Duration::from_secs(5);
 static LOG_STREAM_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn observe_with<F>(options: ObserveOptions<'_>, factory: F) -> anyhow::Result<ObservedRun>
@@ -36,9 +36,8 @@ where
     let mut log_stream = start_log_stream(&run_id)?;
 
     let preflight = format!("{run_id} sentinel-preflight-{}", uuid::Uuid::new_v4());
-    emit_logger_sentinel(&preflight)?;
     log_stream
-        .wait_for(&preflight, SENTINEL_TIMEOUT)
+        .emit_and_wait_for(&preflight, SENTINEL_TIMEOUT)
         .context("log stream did not observe preflight sentinel within timeout")?;
 
     let builder = lockin::SandboxBuilder::new()
@@ -47,9 +46,8 @@ where
     let status = crate::supervise(cmd, options.runtime)?;
 
     let postflight = format!("{run_id} sentinel-postflight-{}", uuid::Uuid::new_v4());
-    emit_logger_sentinel(&postflight)?;
     log_stream
-        .wait_for(&postflight, SENTINEL_TIMEOUT)
+        .emit_and_wait_for(&postflight, SENTINEL_TIMEOUT)
         .context("log stream did not observe postflight sentinel within timeout")?;
 
     let lines = log_stream.stop_and_collect();
@@ -114,6 +112,33 @@ impl LogStream {
         self.lines.wait_for(needle, timeout)
     }
 
+    /// Emit `needle` to the unified log on a steady cadence and wait for
+    /// it to come back through the log stream. Necessary because the
+    /// "Filtering the log data" banner prints before logd has actually
+    /// installed our predicate; emits during that window are lost. Once
+    /// the filter is live the next emit lands within milliseconds.
+    fn emit_and_wait_for(&self, needle: &str, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_for_thread = Arc::clone(&stop);
+        let needle_for_thread = needle.to_owned();
+        let emitter = thread::spawn(move || {
+            while !stop_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Err(e) = emit_logger_sentinel(&needle_for_thread) {
+                    eprintln!("sentinel emit failed: {e}");
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let result = self
+            .lines
+            .wait_for(needle, deadline.saturating_duration_since(Instant::now()));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = emitter.join();
+        result
+    }
+
     fn stop_and_collect(&mut self) -> Vec<String> {
         // Killing log stream EOFs its stdout, which lets the reader thread exit.
         if let Some(mut c) = self.child.0.take() {
@@ -171,15 +196,24 @@ impl SharedLines {
     }
 }
 
+extern "C" {
+    fn lockin_observe_emit_public_log(msg: *const std::os::raw::c_char);
+}
+
+/// Emit `message` to the unified log via os_log with `%{public}s`. Going
+/// through `os_log` directly (rather than `/usr/bin/logger`) is what
+/// keeps the message off the privacy-redaction path: `/usr/bin/logger`'s
+/// underlying syslog → unified-log bridge stores the dynamic argument
+/// against a `%s` format string, which `log stream` resolves as
+/// `<private>` in `composedMessage` (the field its predicate matches
+/// against). On runners without `Enable-Private-Data` (e.g. GitHub
+/// Actions macOS images) that redaction makes the sentinel unmatchable.
 fn emit_logger_sentinel(message: &str) -> anyhow::Result<()> {
-    let status = Command::new("/usr/bin/logger")
-        .arg(message)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("spawning /usr/bin/logger sentinel")?;
-    anyhow::ensure!(status.success(), "logger sentinel failed: {status}");
+    let cstr = std::ffi::CString::new(message).context("sentinel contained NUL byte")?;
+    // SAFETY: `cstr` is a valid NUL-terminated C string; the C function
+    // copies the argument into the unified log and does not retain the
+    // pointer past the call.
+    unsafe { lockin_observe_emit_public_log(cstr.as_ptr()) };
     Ok(())
 }
 
@@ -260,8 +294,7 @@ mod tests {
         let mut log_stream = start_log_stream(&run_id)?;
         let sentinel = format!("{run_id} sentinel-preflight-{}", uuid::Uuid::new_v4());
 
-        emit_logger_sentinel(&sentinel)?;
-        let result = log_stream.wait_for(&sentinel, SENTINEL_TIMEOUT);
+        let result = log_stream.emit_and_wait_for(&sentinel, SENTINEL_TIMEOUT);
         let _ = log_stream.stop_and_collect();
 
         result
