@@ -292,7 +292,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "lockin"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-cli"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-config"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "lockin",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-infer"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-observe"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cc",
@@ -365,14 +365,14 @@ dependencies = [
 
 [[package]]
 name = "lockin-process"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "lockin-testkit"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "libc",
  "lockin",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "lockin-trace"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "lockin",
