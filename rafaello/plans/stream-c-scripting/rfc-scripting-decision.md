@@ -187,7 +187,164 @@ and provenance metadata — are required from Stream A regardless of
 the scripting decision, so the scripting decision does not gate
 CaMeL.
 
-## Scenario 3 — SWE-bench-style evals
+## Scenario 4 — Tiny customizations
+
+This is the scenario where subprocess overhead is highest relative
+to the value delivered, and where the embedded plane has its
+strongest case. Three concrete tasks:
+
+### 4a. A 3-line keymap: `Ctrl+G` opens an editor for the current message
+
+#### With Luau
+
+```lua
+-- ~/.config/rfl/init.luau
+rfl.keymap("ctrl+g", function(ctx)
+  ctx.input.edit_in_editor()
+end)
+```
+
+Three lines. Hot-reload via `:reload`. Cost: negligible.
+
+#### Without Luau
+
+```toml
+# ~/.config/rfl/config.toml
+[keymaps]
+"ctrl+g" = "core.input.edit_in_editor"
+```
+
+One line. The action `core.input.edit_in_editor` is a built-in,
+exactly because "open the current message in $EDITOR" is the kind
+of thing that ships with the agent. The user is *picking* an
+action from the available action namespace, not authoring one.
+
+This is the right primitive. Neovim's `vim.keymap.set` exists
+because the action set is too large and too dynamic to enumerate
+declaratively, but rafaello's action set is small (probably under
+200 actions in v1) and its dynamism is provided by plugins, which
+*also* register actions by ID into the same namespace.
+
+What if the user wants to compose actions? "Ctrl+G saves a
+checkpoint and *then* opens the editor." Two options:
+
+```toml
+[keymaps]
+"ctrl+g" = ["core.session.checkpoint", "core.input.edit_in_editor"]
+```
+
+A bare array means "run in sequence." This handles 95% of
+compositions. For anything more elaborate, the user writes a
+plugin — which is also where they should be writing it for
+auditability.
+
+**Verdict 4a: declarative wins on every axis** including line
+count.
+
+### 4b. Hook re-emitting `model.token` to OpenTelemetry
+
+#### With Luau
+
+```lua
+-- ~/.config/rfl/init.luau
+local otel = require "rfl.otel"
+local tracer = otel.tracer("rfl")
+
+rfl.on("model.token", function(ev)
+  tracer:span("model.token", {
+    session = ev.session_id,
+    tokens  = ev.count,
+  })
+end)
+```
+
+This requires `rfl.otel` to be a host-provided Lua module — i.e.,
+rfl ships with OpenTelemetry built into the binary and exposes it
+to Luau. That's a substantial built-in dependency. Alternative:
+the user vendors a pure-Lua OTLP client. Painful and slow.
+
+#### Without Luau
+
+The user installs an `otel` plugin (or writes a tiny one in
+~30 lines of Python or Go) and wires it in:
+
+```toml
+# .rfl/config.toml
+[[plugins]]
+source = "github:luizribeiro/rfl-otel@0.1"
+
+[plugins.otel.config]
+endpoint = "http://localhost:4318"
+service  = "rfl"
+
+[[hooks]]
+on     = "model.token"
+plugin = "otel"
+method = "emit_span"
+```
+
+Cost: per-token bus dispatch. Token streaming is high-frequency
+(hundreds per second peak), so we should think about this.
+
+Per-token cost: in-process channel send + JSON serialise + pipe
+write. On Linux a 200-byte JSON message over a pipe is
+~5–20 µs. At 500 tokens/s that's 2.5–10 ms/s of CPU — fine. We
+can also batch: rfl can offer `subscribe(topic, batch={ms:50})`
+in the manifest, so the otel plugin gets one message with 25
+tokens every 50 ms. Then it's microseconds.
+
+The mild downside: the user has to install a plugin to do what
+five lines of Lua could do with a host-exposed `rfl.otel`. The
+upside: that plugin is sandboxed, its network grants are
+auditable, the OTel code is testable in isolation, and it's
+useful to other rfl users as a shareable artifact.
+
+**Verdict 4b: subprocess wins on isolation and reusability,
+loses slightly on first-time-setup friction.** The friction is
+mitigated by `rfl-otel` being one `rfl install` away, which is
+how good plugin ecosystems work anyway.
+
+### 4c. One-line prompt template: `/explain` expands to a fixed system prompt
+
+#### With Luau
+
+```lua
+rfl.command("/explain", function(args, ctx)
+  ctx.session.append_system(
+    "Explain the following at the level of a senior engineer."
+  )
+  ctx.session.append_user(args)
+end)
+```
+
+#### Without Luau
+
+```markdown
+<!-- ~/.config/rfl/prompts/explain.md -->
+---
+description: Explain code at senior-engineer level
+---
+Explain the following at the level of a senior engineer.
+
+$ARGUMENTS
+```
+
+Pi already does this. The filename becomes the command name. No
+language at all. **Strictly better than Lua** because it's
+copy-paste-shareable, version-controllable as plain prose, and
+diffable.
+
+**Verdict 4c: declarative wins decisively.**
+
+### Aggregate verdict on Scenario 4
+
+Across the three sub-cases the declarative plane is *better*, not
+merely adequate. Pi's evidence supports this: pi has TypeScript
+extensions but explicitly chose JSON for keybindings and Markdown
+for prompts and skills, because those are not coding tasks.
+Rafaello can simply skip the TypeScript-equivalent layer.
+
+
 
 UX target: an external harness drives `rfl` headless, one instance
 per task, possibly tens or hundreds in parallel, each inside its
