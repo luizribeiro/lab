@@ -114,15 +114,48 @@ subsequent inbound `notifications/cancelled` with `requestId: 1`
 must match — and will only match if `Request.id` carried the
 original `JsonRpcId`, not a stringified copy.
 
-Decision: **`Request.id` and `Response.id` change to `JsonRpcId`**
-in `fittings-core`. `Response.id` is still required (every response
-has an id), so it is `JsonRpcId` not `Option<JsonRpcId>`.
+Decision (revised after pi-review-2):
+
+- **`Request.id: Option<JsonRpcId>`** — `None` for inbound
+  notifications, `Some(id)` for inbound requests. This is the
+  only model that preserves the wire distinction between "no
+  id" (notification) and `"id": null` (a request whose id
+  happens to be the JSON null literal).
+- **`Response.id: JsonRpcId`** — required. Notifications never
+  produce responses, so the `Service::call` path for a `None`
+  `Request.id` returns `Result<(), FittingsError>` semantically
+  (we simulate this by *dropping* the returned `Response`
+  entirely; see §5).
+
+Wire-level rules for `id: null`:
+
+- An inbound request envelope with `"id": null` is a request
+  (not a notification). It enters `in_flight` keyed on
+  `JsonRpcId::Null`. The dispatcher accepts at most one
+  in-flight `Null`-keyed entry at a time; a second inbound
+  request with `"id": null` while one is in flight is a
+  protocol error and produces an `-32600 Invalid Request`
+  response with `id: null`.
+- An inbound notification envelope (no `id` field at all)
+  has `Request.id = None`.
+- Cancellation matching against `Null` works the same as any
+  other id, but is rare in practice.
+- Every response carries a non-Null id when possible: if the
+  request used `id: null`, the response also uses `id: null`,
+  per spec.
 
 This is a breaking change to every `Service` and `MethodRouter`
-impl. The migration is mechanical (`req.id.clone()` ⇒ `req.id.clone()`
-of a `JsonRpcId`, `id: req.id` ⇒ `id: req.id`, with the type
-substitution implicit). It is bundled with the broader trait
-breakage in this RFC, so consumers absorb it once.
+impl. Migration:
+
+- `req.id.clone()` (was `String`) → `req.id.clone()` (now
+  `Option<JsonRpcId>`). Handlers that assumed an id was always
+  present must `.expect(...)` or pattern-match.
+- Constructing a `Response` requires producing a `JsonRpcId`,
+  not a `String`. For id-bearing requests this is `req.id
+  .clone().unwrap()` (safe — guaranteed `Some` for any path
+  that returns `Ok(Response)`); for inbound notifications,
+  the framework discards the `Response` so its `id` is
+  immaterial — see §5.
 
 `fittings-core` becomes the canonical owner of `JsonRpcId`. We move
 the type from `fittings-wire` down to `fittings-core` and re-export
@@ -372,12 +405,25 @@ change. There are roughly six in-tree impls; that's acceptable churn.
 
 JSON-RPC 2.0 says servers MUST NOT respond to inbound notifications.
 The current server already drops the response when `request.id` is
-`None` (`server.rs:248`). With `ServiceContext`, an inbound
-notification still goes through `Service::call`, but `request_id`
-is `None` and any returned `Response.result` is dropped. Errors
-returned from the handler are logged (the framework already
-discards them today; we can keep that behaviour and emit a `tracing`
-event). Cancellation does not apply (no id to cancel against).
+`None` (`server.rs:248`). With `ServiceContext`:
+
+- Inbound notification → `Request.id = None`,
+  `ctx.request_id() = None`.
+- The framework still calls `Service::call(req, ctx)`. The
+  handler must produce a `Response` to satisfy the type, but
+  its `id` and `result` are **discarded by the framework**.
+  Idiomatic: handlers can construct `Response { id:
+  JsonRpcId::Null, result: Value::Null, metadata: Default
+  ::default() }` for notifications and forget about it.
+- Handler `Err(_)` is logged at `tracing::warn!` and dropped
+  on the wire (no spec-conformant alternative).
+- Cancellation does not apply (no id to cancel against;
+  `ctx.cancelled()` for a notification handler is wired to a
+  token that fires only on connection shutdown).
+
+A future minor revision could change `Service::call` to return
+`Result<Option<Response>, _>` so notification handlers can return
+`Ok(None)`, but that's a wider trait churn than warranted now.
 
 ### 6. Client side: receiving server-pushed notifications
 
