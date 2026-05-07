@@ -771,9 +771,9 @@ of the union over those request_ids. Events not declaring
 Core enforces this rule before delivering any tool_request to
 its target plugin:
 
-> If `taint` is non-empty *and* the target tool is declared as
-> a **sink** (see §7.2.5) *and* the taint sources do not all
-> match `{source: "user"}`, the request is held and a
+> If the target tool is declared as a **sink** (see §7.2.5) and
+> the request is not covered by a matching **user grant**
+> (§7.2.4), the request is held and a
 > `core.session.confirm_request` is published instead. The
 > tool_request only proceeds after a matching
 > `core.session.confirm_reply` from the user-facing frontend
@@ -781,22 +781,71 @@ its target plugin:
 
 This is the structural fix the previous draft was missing. The
 trifecta is broken **at the bus**, not just per-plugin: any tool
-call whose arguments carry data the LLM saw from a non-user
-source pauses for explicit user consent before reaching a sink.
-"Refuses tainted input" is no longer a manifest hint; it is
+call to a sink pauses for explicit user consent unless the user
+already granted that specific sink invocation. "Refuses tainted
+input" is no longer a manifest hint; sink confirmation is
 core-enforced and not opt-in.
 
 The user can persist a confirmation for the rest of the session
-("always allow"), which is recorded in-session only; it is not
-written to the lock and does not survive process exit.
+("always allow this exact sink invocation"), which is recorded
+in-session only; it is not written to the lock and does not
+survive process exit.
 
-#### 7.2.4 What "user-only taint" means
+#### 7.2.4 User grants vs. user data provenance
 
-When the only taint source is `{source: "user"}`, the data came
-verbatim from the user message; the LLM did not introduce it.
-That data is treated as authorising whatever sink the user named.
-This is what allows ordinary use ("send mail to alice@") to work
-without confirmation.
+The previous draft conflated two distinct things:
+
+- **User data provenance** — bytes whose taint sources are all
+  `{source: "user"}` came verbatim from the user's prompt. They
+  weren't introduced by the LLM or any tool.
+- **User authorisation** — the user explicitly granted a
+  specific sink invocation (e.g. "send mail to alice@", "push
+  to origin/main").
+
+Provenance is *not* authorisation. A user may paste a secret,
+an API key, or a private note into a prompt; that user-provenance data must not silently authorise sending itself anywhere.
+v1 therefore treats user-only taint as **no special pass for
+sink confirmation**.
+
+To still allow ordinary use ("send mail to alice@example.com")
+to work without confirming every step, v1 introduces a small
+**`user_grants`** session table maintained by core. Entries are
+created when:
+
+1. The user types an `rfl` slash-command that explicitly grants
+   a sink for the rest of the session, e.g. `/grant send_mail
+   alice@example.com`. (Grant entry: `{tool: "send_mail",
+   matcher: {to: "alice@example.com"}, scope: "session"}`.)
+2. The user answers a `core.session.confirm_request` with
+   `always_allow_session` (§5.6); core records the sink
+   invocation that was being confirmed as a grant.
+3. (Optional, conservative) The provider plugin extracts a
+   structured grant proposal from the user's prompt and asks
+   core to confirm it once via the standard protocol; the
+   answer becomes a `user_grants` entry. The provider's
+   extraction is *advice*; the user still confirms once. CaMeL
+   (v2) is the obvious consumer of this path.
+
+A tool_request to a sink is admitted without confirmation only
+when there is a matching `user_grants` entry. Matching is
+exact on tool name and uses the matcher schema declared in the
+tool's manifest (`provides.tool.<n>.grant_match`); if no
+matcher schema is declared, the only match is "any invocation
+of this tool", which the confirmation protocol treats as a
+broad grant and labels accordingly.
+
+`user_grants` lives in core memory only, never in the lock.
+Process exit clears it.
+
+#### 7.2.4.1 Why this is conservative-by-default
+
+A pasted secret in the user prompt now triggers sink
+confirmation if the LLM tries to send it anywhere — because
+"send X" with no prior `user_grants` entry is just a sink call
+with arguments. The trade-off is one extra prompt the very
+first time a user-named action runs, in exchange for closing
+the user-provenance bypass. We accept the prompt; "loud is
+better than silent" matches the rest of the model.
 
 #### 7.2.5 Sinks (declared in manifest, snapshotted into lock)
 
