@@ -1312,7 +1312,6 @@ error preservation.
 | Embedded scripting (Luau or other)            | See §1.2; can be added later, removing later is hard |
 | Branching sessions                            | Linear sessions cover demos; branching needs UX work |
 | Multi-session daemon                          | Single-session `rfl serve` is the v1 shape           |
-| Server-originated fittings requests           | Notifications cover v1 needs; deferred per Stream B  |
 | Project-type lazy-load triggers (`ft` analog) | Needs "project kind" abstraction in core             |
 | Network-attached frontends (TCP)              | UDS-only is the v1 attach surface                    |
 | Dynamic capability scoping in the sandbox     | lockin can't switch policies live; core enforces above the sandbox in v1 |
