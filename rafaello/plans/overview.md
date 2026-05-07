@@ -496,13 +496,37 @@ Mandatory taint propagation on both `core.session.tool_result`
 and `core.session.tool_request`, **populated by core, not by
 the publisher**, by matching arg values against recently-emitted
 result payloads in the same session (security RFC §7.2.1–7.2.2).
-Before any tool_request reaches its target plugin:
 
-> If the target tool declares any sink class and there is no
-> matching `user_grants` entry for this invocation, the request
-> is held and a `core.session.confirm_request` is published
-> instead. Delivery proceeds only after a matching
-> `core.session.confirm_reply` from a frontend.
+The canonical confirmation rule, normative for v1:
+
+> **Any tool_request whose target tool declares one or more
+> sink classes is held until a matching `core.session.
+> confirm_reply` from a frontend, unless a matching
+> `user_grants` entry covers the invocation. The rule is
+> independent of whether the args carry taint — taint
+> influences the wording and details of the confirmation
+> prompt, not whether the prompt fires.**
+
+The carried implications:
+
+- An *untainted* sink call (e.g. the LLM proposes
+  `git_push` purely from a user message with no prior tool
+  results in scope) still requires confirmation absent
+  `user_grants`. This is intentional: the LLM may have
+  decided to push for reasons the user did not endorse.
+- A sink call whose only taint is `{source: "user"}` also
+  requires confirmation absent `user_grants`. Per §6.4
+  below, user-data provenance is not user authorisation.
+- The `user_grants` table (§6.4) is therefore the only
+  way for a sink call to bypass confirmation.
+
+This is the rule pinned by security RFC §7.2.3. Stream A §10
+("the v1 summary") still describes the older "non-user taint
+AND declared sink" formulation; that summary line must be
+patched in the next milestone retrospective to match §7.2.3
+and this overview. **Where Stream A §10 disagrees with this
+overview, the overview wins** (per `plans/README.md`
+§Workflow). The §7.2.3 rule itself is unchanged.
 
 This is the structural fix that broke through pi-A round 2:
 the trifecta is gated *at the bus*, not just at the plugin
