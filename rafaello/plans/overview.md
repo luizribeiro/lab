@@ -213,14 +213,52 @@ here:
   identity" exist. It uses fittings notifications as its wire
   format but is not part of fittings itself.
 
-Concretely: a plugin emitting a bus event calls fittings'
-`ctx.notify("bus.publish", { topic, payload, in_reply_to,
-taint? })` on its connection to core. Core's broker receives
-that, validates publish authority against the lock, synthesises
-taint and `in_reply_to` enforcement, fans out to subscribers as
-fittings notifications (`bus.event`) on each subscriber's
-connection. Plugins do not connect to each other; every event
-is a core-mediated re-emission.
+Concretely: each plugin runs a fittings *server* on its bus
+fd (so it can serve inbound RPC like `tool.call`), and core
+runs a fittings *server* on the other end of every connection
+(so it can serve `bus.publish` notifications and the attach
+handshake). Both ends therefore use both fittings client and
+server APIs.
+
+- **Plugin → core publish.** The plugin's fittings *client*
+  sends a JSON-RPC notification to core: `Client::notify(
+  "bus.publish", { topic, payload, in_reply_to, taint? })`.
+  This works in v1 fittings as it stands; the notifications
+  RFC §6 already defines a client-side notification path.
+- **Core → plugin/frontend fan-out.** Core needs to *send*
+  notifications onto each subscriber's connection at
+  arbitrary times (token streaming, `core.session.*`
+  fan-out, confirmation requests) — **outside any inbound
+  request handler**. The current `ServiceContext::notify`
+  is per-request and cannot serve this; the notifications
+  RFC's "Future work" lists a connection-scoped
+  `ServerHandle::notify` as deferred. **Decision: promote
+  `ServerHandle::notify` to a v1 fittings requirement.**
+  The shape:
+
+  ```rust
+  impl<T> Server<T> {
+      /// Connection-scoped handle, cheap to clone, valid for
+      /// the lifetime of the connection. Sends a JSON-RPC
+      /// notification to the peer regardless of whether a
+      /// request handler is currently in flight.
+      pub fn handle(&self) -> ServerHandle;
+  }
+
+  impl ServerHandle {
+      pub fn notify(&self, method: &str, params: Value)
+          -> Result<(), FittingsError>;
+  }
+  ```
+
+  Backpressure semantics match `ServiceContext::notify`
+  (the bounded notification channel from the notifications
+  RFC §3b applies; drop-on-full). This is a non-breaking
+  *addition* to fittings' v1 surface, not a redesign.
+  Tracked as a Stream B follow-up edit in §15.6.
+
+Plugins do not connect to each other; every event is a
+core-mediated re-emission.
 
 Reconciliation note: Stream A specifies the *broker* semantics
 (publish authority, taint, ACL). Stream B specifies the
@@ -1050,8 +1088,42 @@ change is required.
 Renderer registration uses fittings request/response
 (`renderer.render`); streaming entry events use fittings
 notifications (`core.session.entry.*`). Both fit cleanly inside
-Stream B's API as it stands; renderer cache invalidation on
-plugin reload is core's job, not fittings'.
+Stream B's API as it stands once §15.6 lands; renderer cache
+invalidation on plugin reload is core's job, not fittings'.
+
+### 15.6 Connection-scoped `ServerHandle::notify` is a v1 fittings primitive
+
+Pi flagged this in finding 1 of overview-review-1: the
+overview's bus design assumes core can fan out notifications
+on every subscriber's connection at any time, but Stream B's
+v1 API only exposes `ServiceContext::notify` (per inbound
+request). The notifications RFC's "Future work" lists
+`ServerHandle::notify` as deferred.
+
+**Decision: promote it to v1 scope.** Without it, the bus
+broker has no way to push `core.session.*` events outside an
+inbound request, which kills the §4 design.
+
+Required Stream B follow-up edit (in m1's stream-B brief):
+
+1. Add `Server::handle() -> ServerHandle` and
+   `ServerHandle::notify(method, params)` to
+   `rfc-fittings-notifications.md`. Cheap-to-clone, valid
+   for the lifetime of the underlying connection.
+2. Specify it shares the bounded notification channel
+   defined in §3b of that RFC (capacity default 1024, drop-
+   on-full, two-channel writer); no new channel needed.
+3. Specify behaviour when the connection is closed: returns
+   `Err(FittingsError::Transport { ... })`.
+4. Move the corresponding "Future work" bullet to
+   "Acceptance criteria": one new test exercises a
+   `ServerHandle::notify` from outside any handler and
+   verifies the peer observes it.
+
+This is non-breaking on the trait surface; it adds a method,
+it does not change `Service`. The scope is small enough to
+land in the same PR series as the rest of the v1 fittings
+work.
 
 ## 16. v1 scope cut
 
@@ -1061,11 +1133,13 @@ core-mediated sink confirmation with `user_grants`; carve-out
 by decomposition with loud override; helper plugins; frontends
 as bus principals with UDS+token attach; default ratatui TUI;
 CLI subcommands `rfl init / install / grant / revoke / update
-/ provider use / status / serve`; default provider built into
-core; renderer model with semantic render-tree and
+/ provider use / status / serve`; bundled `rfl-litellm`
+default provider plugin (§8.1); renderer model with semantic
+render-tree and
 server-side downgrade; entry persistence in SQLite; lazy
 loading with five triggers + manual; declarative config
 (TOML+Markdown); fittings v1 with `ServiceContext`,
+connection-scoped `ServerHandle::notify` (§15.6),
 cancellation, two-channel server loop, predefined error
 preservation.
 
