@@ -213,49 +213,81 @@ here:
   identity" exist. It uses fittings notifications as its wire
   format but is not part of fittings itself.
 
-Concretely: each plugin runs a fittings *server* on its bus
-fd (so it can serve inbound RPC like `tool.call`), and core
-runs a fittings *server* on the other end of every connection
-(so it can serve `bus.publish` notifications and the attach
-handshake). Both ends therefore use both fittings client and
-server APIs.
+Concretely: every bus fd is a **bidirectional fittings peer
+connection**. Each side runs both a fittings server (handling
+inbound requests + notifications from the peer) and a fittings
+client (issuing outbound requests + notifications to the peer)
+over the same fd. This is the v1 transport primitive; it is a
+small but real extension to the v1 fittings cut and is detailed
+in §15.6.
 
-- **Plugin → core publish.** The plugin's fittings *client*
-  sends a JSON-RPC notification to core: `Client::notify(
+The four flow shapes that ride on a peer connection:
+
+- **Plugin → core notification** (e.g. `bus.publish`). The
+  plugin's local fittings *client* sends a JSON-RPC
+  notification to the core-side server: `Client::notify(
   "bus.publish", { topic, payload, in_reply_to, taint? })`.
-  This works in v1 fittings as it stands; the notifications
-  RFC §6 already defines a client-side notification path.
-- **Core → plugin/frontend fan-out.** Core needs to *send*
-  notifications onto each subscriber's connection at
-  arbitrary times (token streaming, `core.session.*`
-  fan-out, confirmation requests) — **outside any inbound
-  request handler**. The current `ServiceContext::notify`
-  is per-request and cannot serve this; the notifications
-  RFC's "Future work" lists a connection-scoped
-  `ServerHandle::notify` as deferred. **Decision: promote
-  `ServerHandle::notify` to a v1 fittings requirement.**
-  The shape:
+  Already in v1 fittings.
+- **Plugin → core request** (e.g. `bus.subscribe` confirming
+  a runtime subscribe pattern, `helper.spawn`). Plugin's
+  client issues a request: `Client::call("bus.subscribe",
+  ...).await`. Already in v1 fittings.
+- **Core → plugin/frontend notification** (broker fan-out:
+  token streaming, `core.session.*` events, confirmation
+  requests). Core uses the connection-scoped *server*
+  handle: `peer.notify(method, params)`. Outside any
+  inbound handler. **New in v1** (was deferred in Stream
+  B's "Future work"; promoted by decision 22).
+- **Core → plugin/frontend request** (e.g.
+  `renderer.render`, `frontend.hello` reverse direction,
+  CaMeL helper-spawn synchronous handshake). Core uses the
+  same handle: `peer.call(method, params).await`. **New in
+  v1** (lifted from Stream B's "Server-originated requests:
+  v1 cut", since the bus design and the renderer model both
+  require it).
 
-  ```rust
-  impl<T> Server<T> {
-      /// Connection-scoped handle, cheap to clone, valid for
-      /// the lifetime of the connection. Sends a JSON-RPC
-      /// notification to the peer regardless of whether a
-      /// request handler is currently in flight.
-      pub fn handle(&self) -> ServerHandle;
-  }
+The unified API surface, layered onto Stream B:
 
-  impl ServerHandle {
-      pub fn notify(&self, method: &str, params: Value)
-          -> Result<(), FittingsError>;
-  }
-  ```
+```rust
+// Each side of a fittings connection holds one of these.
+// Cheap to clone; valid for the lifetime of the connection.
+impl PeerHandle {
+    /// Outbound notification (no response expected).
+    /// Shares the bounded notification channel from the
+    /// notifications RFC §3b; drop-on-full, non-blocking.
+    pub fn notify(&self, method: &str, params: Value)
+        -> Result<(), FittingsError>;
 
-  Backpressure semantics match `ServiceContext::notify`
-  (the bounded notification channel from the notifications
-  RFC §3b applies; drop-on-full). This is a non-breaking
-  *addition* to fittings' v1 surface, not a redesign.
-  Tracked as a Stream B follow-up edit in §15.6.
+    /// Outbound request (response correlated by JsonRpcId).
+    /// Pending state is tracked in a per-connection
+    /// HashMap<JsonRpcId, oneshot::Sender>, mirror of the
+    /// existing client-side correlator.
+    pub async fn call(&self, method: &str, params: Value)
+        -> Result<Value, FittingsError>;
+
+    /// Resolves when the connection has been closed (peer
+    /// shutdown, transport error, local shutdown).
+    pub async fn closed(&self);
+}
+
+impl<T: Service> Server<T> {
+    /// Connection-scoped peer handle. Replaces the round-1
+    /// ServerHandle sketch; same notification semantics,
+    /// adds outbound `call`.
+    pub fn peer(&self) -> PeerHandle;
+}
+```
+
+Symmetrically, the existing `Client` type gains the inbound
+side: a `Client::new(transport, service)` constructor binds
+an inbound `Service` impl that handles peer-originated
+requests (replacing the v1 cut's `-32601` reject path) and a
+`Client::peer() -> PeerHandle` that exposes outbound
+notify/call.
+
+Authoritative spec: `streams/b-fittings/rfc-fittings-
+notifications.md` after the patch tracked in §15.6 of this
+overview.
 
 Plugins do not connect to each other; every event is a
 core-mediated re-emission.
@@ -932,8 +964,9 @@ project owner should review before m1:
     in lockin.** §5.2.
 18. **fittings: `Request.id: Option<JsonRpcId>`,
     `Response.id: JsonRpcId`; two channels (unbounded
-    response, bounded notification) with drop-on-full.** §4
-    and Stream B.
+    response, bounded notification) with drop-on-full;
+    bidirectional `PeerHandle` (notify + call, both
+    directions over one fd).** §4 and Stream B.
 19. **Render-tree is purely semantic (no colour/layout); core
     downgrades unsupported nodes to `Unknown { fallback }`
     server-side.** §11.
@@ -1171,39 +1204,81 @@ notifications (`core.session.entry.*`). Both fit cleanly inside
 Stream B's API as it stands once §15.6 lands; renderer cache
 invalidation on plugin reload is core's job, not fittings'.
 
-### 15.6 Connection-scoped `ServerHandle::notify` is a v1 fittings primitive
+### 15.6 Bidirectional fittings peer is a v1 primitive
 
-Pi flagged this in finding 1 of overview-review-1: the
-overview's bus design assumes core can fan out notifications
-on every subscriber's connection at any time, but Stream B's
-v1 API only exposes `ServiceContext::notify` (per inbound
-request). The notifications RFC's "Future work" lists
-`ServerHandle::notify` as deferred.
+Pi-review-1 finding 1 promoted connection-scoped
+`ServerHandle::notify` to v1. Pi-review-2 blocking finding 1
+showed that **notifications alone are not enough**: the bus
+design (`renderer.render`, `frontend.hello` reverse direction,
+helper-spawn handshake, future tool-call request/response
+modes) needs full bidirectional request/response over the
+same fd. Stream B v1 still defers server-originated requests.
 
-**Decision: promote it to v1 scope.** Without it, the bus
-broker has no way to push `core.session.*` events outside an
-inbound request, which kills the §4 design.
+**Decision: lift the v1 cut on server-originated requests and
+ship a unified `PeerHandle` exposing both `notify` and `call`
+on the same connection.** This generalises the round-1
+`ServerHandle::notify` decision; both are now sub-cases of one
+peer surface.
 
-Required Stream B follow-up edit (in m1's stream-B brief):
+Required Stream B follow-up edits (m1's stream-B brief; the
+patches landed in this revision under
+`docs(rafaello-stream-b): promote bidirectional peer to v1`):
 
-1. Add `Server::handle() -> ServerHandle` and
-   `ServerHandle::notify(method, params)` to
-   `rfc-fittings-notifications.md`. Cheap-to-clone, valid
-   for the lifetime of the underlying connection.
-2. Specify it shares the bounded notification channel
-   defined in §3b of that RFC (capacity default 1024, drop-
-   on-full, two-channel writer); no new channel needed.
-3. Specify behaviour when the connection is closed: returns
-   `Err(FittingsError::Transport { ... })`.
-4. Move the corresponding "Future work" bullet to
-   "Acceptance criteria": one new test exercises a
-   `ServerHandle::notify` from outside any handler and
-   verifies the peer observes it.
+1. **Replace** the round-1 `Server::handle() -> ServerHandle`
+   sketch with `Server::peer() -> PeerHandle` and a matching
+   `Client::peer() -> PeerHandle`. Both types expose the same
+   `notify` / `call` / `closed` surface.
+2. **Add outbound `call` to the server side.** Track pending
+   responses in a per-connection
+   `HashMap<JsonRpcId, oneshot::Sender>`, mirror of the
+   existing client-side correlator. The dispatcher already
+   owns `in_flight: HashMap<JsonRpcId, CancellationToken>`;
+   `pending_outbound` is a sibling map.
+3. **Add inbound request handling to the client side.** The
+   client's `select!` loop already tolerates inbound
+   id-bearing frames by sending `-32601`; replace that branch
+   with a dispatch into a user-supplied `Service` impl when
+   one is registered (`Client::with_service(svc)`), preserving
+   the `-32601` fallback when no service is registered.
+4. **Reuse existing channel infrastructure.** `peer.notify`
+   shares the bounded notification channel (notifications RFC
+   §3b, drop-on-full). `peer.call` writes into the unbounded
+   response channel (responses are bounded by
+   `max_in_flight + max_outbound_pending`, so unbounded-writer
+   semantics remain safe); reads correlate via the new
+   pending map.
+5. **Specify request-id allocation.** Each side of a peer
+   connection allocates `JsonRpcId`s from its own monotonic
+   counter; collisions between directions are impossible
+   because each direction tracks pending state independently.
+   (Inbound and outbound share the wire, but the response-id
+   space is partitioned by who is correlating: if I sent
+   request id 7, only my pending map cares about response
+   id 7.)
+6. **Connection-closed behaviour.** Both `peer.notify` and
+   `peer.call` return `Err(FittingsError::Transport { ... })`
+   once the writer task observes the connection closed.
+   `peer.closed()` resolves on close.
+7. **Acceptance criteria.** Two new tests:
+   - core→plugin `peer.call` round-trip outside any inbound
+     handler (the renderer test);
+   - simultaneous in-flight calls in both directions (plugin
+     calling `bus.publish` while core is calling
+     `renderer.render`).
 
-This is non-breaking on the trait surface; it adds a method,
-it does not change `Service`. The scope is small enough to
-land in the same PR series as the rest of the v1 fittings
-work.
+This is a more substantial change than the round-1
+`ServerHandle::notify`, but it is still **non-breaking on the
+`Service` trait**: existing handlers continue to compile
+unchanged. The added surface is `Server::peer()`,
+`Client::with_service()`, `Client::peer()`, and `PeerHandle`;
+the `-32601` reject path is replaced by a dispatch when a
+service is registered. The scope fits one PR series alongside
+the other v1 fittings work.
+
+(The `ServerHandle` name from round-1 is dropped in favour of
+`PeerHandle`, since the type is symmetric across both ends of
+the connection. Decision 22 in `decisions.md` is amended
+accordingly.)
 
 ## 16. v1 scope cut
 
@@ -1219,9 +1294,9 @@ render-tree and
 server-side downgrade; entry persistence in SQLite; lazy
 loading with five triggers + manual; declarative config
 (TOML+Markdown); fittings v1 with `ServiceContext`,
-connection-scoped `ServerHandle::notify` (§15.6),
-cancellation, two-channel server loop, predefined error
-preservation.
+bidirectional `PeerHandle` (notify + call in both directions,
+§15.6), cancellation, two-channel server loop, predefined
+error preservation.
 
 **Deferred to v2.**
 
