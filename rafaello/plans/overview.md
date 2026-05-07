@@ -158,16 +158,34 @@ A running rafaello session is a small, fixed cast of OS processes:
   their parent over a second inherited socketpair fd
   (`RFL_HELPER_FD`) carrying point-to-point JSON-RPC. Helpers
   cannot speak on the bus.
-- **Frontends** are bus principals (§10). Local-spawned
-  frontends (the default TUI) inherit a socketpair like a
-  plugin. External frontends (web, IDE, email) attach via a
-  per-session UDS at
+- **Frontends** are bus principals (§10), **always separate
+  processes from core** — there is no in-process frontend in
+  v1. The default TUI is a separate `rfl-tui` subprocess
+  spawned by core with an inherited bus socketpair like a
+  plugin (`RFL_BUS_FD`). External frontends (web, IDE, email)
+  attach via a per-session UDS at
   `${XDG_RUNTIME_DIR}/rafaello/<session>/attach.sock` (mode
-  `0600`) presenting a one-shot attach token.
+  `0600`) presenting a one-shot attach token from
+  `attach.token` in the same dir.
 
-There is exactly one trusted process (core) per session. Every
-other process is sandboxed by lockin and reaches the rest of the
-system only through fds core hands it.
+Trust posture for the cast above:
+
+- Core is the only **trusted** process.
+- Plugins (including helpers) are **untrusted, lockin-
+  sandboxed**: a separate compiled lockin policy per spawn,
+  derived from the lock.
+- Frontends are **trusted user-interface principals, not
+  lockin-sandboxed plugins**. They speak for the user inside
+  the trust model (they answer confirmation requests; security
+  RFC §5.7.2 makes this explicit) and therefore are not
+  confined by a lockin policy. Their authority on the bus is
+  scoped to `frontend.<attach-id>.*` by the broker; they have
+  no manifest, no grant block in the lock, and no compiled
+  capabilities.
+- A user with filesystem access to
+  `${XDG_RUNTIME_DIR}/rafaello/` is by definition the user
+  (single-user-CLI non-goal); anyone else with that access is
+  outside the threat model.
 
 ## 4. The bus
 
@@ -748,11 +766,18 @@ ownership, attached frontends, and `user_grants`.
   supported (the renderer is a pure function of entry +
   capabilities), but interactive replay is post-v1.
 
-**Daemon mode** (`rfl serve`) is the same `rfl` binary with
-the attach socket exposed. It is *not* a separate process from
-the agent core; the binary either runs interactively (TUI
-spawned in-process) or in attach-only mode. A future
-multi-session daemon is post-v1.
+**Interactive vs daemon mode.** The `rfl` binary always
+exposes the attach socket. In **interactive mode** (`rfl`
+with no subcommand, the common case), core *additionally*
+spawns the bundled `rfl-tui` subprocess and waits on it for
+the session lifetime; the TUI is a separate process attached
+over an inherited bus socketpair (§3, §10), not an
+in-process module. In **daemon mode** (`rfl serve`), core
+runs without spawning a TUI and waits for external frontends
+to connect to the attach socket. The two modes share one
+core process; they differ only in whether core also spawns a
+default frontend at startup. A future multi-session daemon
+is post-v1.
 
 ## 13. Load-bearing decisions (mirror to `decisions.md`)
 
