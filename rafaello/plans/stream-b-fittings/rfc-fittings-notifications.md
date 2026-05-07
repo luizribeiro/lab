@@ -498,6 +498,40 @@ transport write directly, which serialises all handlers behind
 each other, or (b) a per-frame ack signal, which doubles channel
 traffic. Neither is worth it for v1.
 
+## Server-originated requests: v1 cut
+
+**Out of scope for v1. Explicitly deferred. Concrete cut:**
+
+- `ServiceContext` does NOT expose a `request(method, params)`
+  method in v1. Reserved for a follow-up RFC.
+- The server loop does NOT read response frames (it has no
+  outstanding outbound requests, so there are none to correlate).
+  No `pending: HashMap<JsonRpcId, oneshot::Sender>` on the server.
+- The client loop, conversely, learns to *receive* notifications
+  (this RFC) and to politely reject inbound id-bearing requests
+  with `-32601` (this RFC, §"Client-side: server-originated
+  requests arriving when not supported"). The reject behaviour is
+  the v1 cut: it leaves the protocol forward-compatible for when
+  we do ship server→client requests.
+- Cancellation flows **client → server only** in v1. There is no
+  symmetric mechanism for the server to cancel a request it never
+  issued.
+
+When this is revisited (likely once rafaello needs human-in-the-
+loop confirmation prompts), the follow-up RFC will:
+
+1. Add `ServiceContext::request(...) -> impl Future<Result>`.
+2. Teach the server loop to track outstanding outbound requests
+   and parse inbound response frames.
+3. Teach the client to dispatch inbound id-bearing requests to a
+   user-supplied handler, replacing the -32601 reject.
+4. Decide whether bidirectional cancellation is in scope.
+
+This RFC does not include scaffolding for that work. Doing so
+would either pollute `ServiceContext` with an unused method or
+make `Server::serve` carry plumbing it doesn't need yet. The
+follow-up will add both at once, on demand.
+
 ## Future work (deferred)
 
 - **Server→client requests.** Sampling/elicitation. Requires the server
