@@ -62,15 +62,21 @@ Proposed:
 pub enum FittingsError {
     /// Framework couldn't even parse the inbound bytes as JSON.
     #[error("parse error: {message}")]
-    Parse { message: String },
+    Parse { message: String, data: Option<Value> },
 
     /// JSON parsed but didn't fit a JSON-RPC 2.0 request shape.
     #[error("invalid request: {message}")]
     InvalidRequest { message: String, data: Option<Value> },
 
-    /// Method routed but the name is unknown.
-    #[error("method not found: {method}")]
-    MethodNotFound { method: String },
+    /// Method routed but the name is unknown. `method` is the
+    /// non-conformant name (extracted from `data.method` when
+    /// inbound, or the request's method when outbound).
+    #[error("method not found: {message}")]
+    MethodNotFound {
+        method: Option<String>,
+        message: String,
+        data: Option<Value>,
+    },
 
     /// Method routed but params didn't validate.
     #[error("invalid params: {message}")]
@@ -99,9 +105,11 @@ pub enum FittingsError {
     #[error("transport: {message}")]
     Transport { message: String },
 
-    /// Anything else the framework itself produced.
+    /// Anything else the framework itself produced. Carries
+    /// arbitrary `data` so peers' framework-internal payloads
+    /// (e.g. `fittingsKind` markers from §B) can round-trip.
     #[error("internal: {message}")]
-    Internal { message: String },
+    Internal { message: String, data: Option<Value> },
 
     /// The request has been cancelled by the peer (or by local
     /// shutdown). Has no wire mapping: the server suppresses the
@@ -187,18 +195,18 @@ Symmetric requirement to §C. `to_error_envelope` MUST preserve
 the variant's `message` and `data` for predefined codes too, not
 just for `Service`. Concrete table:
 
-| Variant                                     | `code`     | `message`            | `data`                                                       |
-|---------------------------------------------|------------|----------------------|--------------------------------------------------------------|
-| `Parse { message }`                         | `-32700`   | `message`            | `None`                                                       |
-| `InvalidRequest { message, data }`          | `-32600`   | `message`            | `data` (preserved verbatim)                                  |
-| `MethodNotFound { method }`                 | `-32601`   | `"method not found: {method}"` | `Some(json!({"method": method}))`                  |
-| `InvalidParams { message, data }`           | `-32602`   | `message`            | `data` (preserved verbatim)                                  |
-| `Internal { message }`                      | `-32603`   | `message`            | `None`                                                       |
-| `Transport { message }`                     | `-32603`   | `"transport"`        | `Some(json!({"fittingsKind":"transport","detail":message}))` |
-| `Panic { message }`                         | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"panic","detail":message}))`     |
-| `Service { code, message, data }` (valid)   | `code`     | `message`            | `data`                                                       |
-| `Service { code, .. }` (invalid range)      | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"invalidServiceCode"}))`         |
-| `Cancelled { .. }`                          | (no envelope; response suppressed)                                                                |
+| Variant                                                   | `code`     | `message`            | `data`                                                       |
+|-----------------------------------------------------------|------------|----------------------|--------------------------------------------------------------|
+| `Parse { message, data }`                                 | `-32700`   | `message`            | `data` (preserved verbatim)                                  |
+| `InvalidRequest { message, data }`                        | `-32600`   | `message`            | `data` (preserved verbatim)                                  |
+| `MethodNotFound { method, message, data }`                | `-32601`   | `message`            | `data` if `Some`, else `Some(json!({"method": method}))` when `method.is_some()`, else `None` |
+| `InvalidParams { message, data }`                         | `-32602`   | `message`            | `data` (preserved verbatim)                                  |
+| `Internal { message, data }`                              | `-32603`   | `message`            | `data` (preserved verbatim)                                  |
+| `Transport { message }`                                   | `-32603`   | `"transport"`        | `Some(json!({"fittingsKind":"transport","detail":message}))` |
+| `Panic { message }`                                       | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"panic","detail":message}))`     |
+| `Service { code, message, data }` (valid)                 | `code`     | `message`            | `data`                                                       |
+| `Service { code, .. }` (invalid range)                    | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"invalidServiceCode"}))`         |
+| `Cancelled { .. }`                                        | (no envelope; response suppressed)                                                                |
 
 This explicitly **replaces** the current `to_error_envelope`
 behaviour, which substitutes canonical English strings
@@ -224,18 +232,34 @@ ErrorEnvelope { code: METHOD_NOT_FOUND_CODE, .. } =>
 Proposed:
 
 ```rust
+ErrorEnvelope { code: PARSE_ERROR_CODE, message, data } =>
+    FittingsError::Parse { message, data },
+ErrorEnvelope { code: INVALID_REQUEST_CODE, message, data } =>
+    FittingsError::InvalidRequest { message, data },
 ErrorEnvelope { code: METHOD_NOT_FOUND_CODE, message, data } =>
     FittingsError::MethodNotFound {
-        method: extract_method(&data).unwrap_or(message),
+        method: extract_method(&data),  // Option<String>
+        message,
+        data,
     },
 ErrorEnvelope { code: INVALID_PARAMS_CODE, message, data } =>
     FittingsError::InvalidParams { message, data },
-// etc.
+ErrorEnvelope { code: INTERNAL_ERROR_CODE, message, data } => {
+    match data.as_ref().and_then(|d| d.get("fittingsKind")).and_then(|k| k.as_str()) {
+        Some("transport") => FittingsError::Transport { message: extract_detail(&data, message) },
+        Some("panic")     => FittingsError::Panic     { message: extract_detail(&data, message) },
+        _                 => FittingsError::Internal  { message, data },
+    }
+}
+// Service codes: unchanged; preserve all three fields verbatim.
 ```
 
-The decoder preserves `message` and `data`, and uses our
-`fittingsKind` data marker to distinguish `Transport`/`Panic` from
-`Internal` when present.
+The decoder preserves `message` and `data` for every predefined
+code, and uses the `fittingsKind` data marker to distinguish
+`Transport`/`Panic` from a vanilla `Internal` when the peer sent
+one. A peer that did not set `fittingsKind` (e.g. a non-fittings
+JSON-RPC server) still produces a faithful `Internal` with both
+`message` and `data` preserved.
 
 This is a behaviour change visible to any consumer pattern-matching
 on the *string* contents of the variant. We accept that — the
@@ -500,5 +524,13 @@ Total change size: roughly 700 lines across the workspace, of which
 - A transport drop mid-call produces no response on the wire and a
   single `tracing::error!` server-side; in-flight workers are
   cancelled via the same token used by the notifications RFC.
-- All five JSON-RPC pre-defined codes round-trip without information
-  loss.
+- All five JSON-RPC pre-defined codes round-trip with both
+  `message` and `data` preserved verbatim. Concretely: encode an
+  `ErrorEnvelope { code, message: "...", data: Some(json!({...}))
+  }` for each of `-32700`, `-32600`, `-32601`, `-32602`, `-32603`,
+  decode it via `from_error_envelope`, re-encode via
+  `to_error_envelope`, and assert byte-equal envelopes.
+  Exception: an `Internal { ... }` carrying a `data.fittingsKind
+  = "transport" | "panic"` marker is reconstructed as the
+  corresponding `Transport` / `Panic` variant on decode, then
+  re-encoded with the same marker. The byte-equality test holds.
