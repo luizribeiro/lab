@@ -106,8 +106,8 @@ write_dirs   = []
 exec_paths   = []
 network      = { mode = "deny" }
 env_pass     = []
-subscribes   = ["session.tool_request:grep.*"]
-publishes    = ["session.tool_result:grep.*"]
+subscribes   = ["plugin.acme_grep.tool_request"]
+publishes    = ["plugin.acme_grep.tool_result", "plugin.acme_grep.progress"]
 ```
 
 The grant block is a **subset** of the manifest's request and is
@@ -159,49 +159,108 @@ binds *content*, not just *name*.
 
 ## 5. The bus ACL
 
-### 5.1 Topics and namespacing
+### 5.1 Topic grammar (canonical)
 
-Topics are dotted strings. Two top-level namespaces:
+A topic is a dot-separated sequence of **segments**:
 
-- `core.*` — published by the agent core only. Examples:
-  `core.session.user_message`, `core.session.tool_request`,
-  `core.session.tool_result`, `core.lifecycle.plugin_loaded`.
-  Plugins may subscribe (if granted) but never publish.
-- `<plugin-id>.*` — published by exactly one plugin (the one
-  whose id matches the prefix). Other plugins may subscribe if
-  granted.
+```
+topic   := segment ("." segment)+
+segment := [a-z0-9_-]+
+```
+
+That is the entire grammar. No `:` separators, no embedded
+discriminators in the topic string, no slashes. Tool names,
+correlation ids, and other discriminators live in the **payload**
+(the JSON-RPC envelope), never in the topic. Plugin ids that
+contain forbidden characters (e.g. `github:acme/grep@1.4.2`) are
+rendered into the topic by replacing `:`, `/`, and `@` with `_`,
+producing `github_acme_grep_1_4_2`. The lock stores the canonical
+plugin id; the broker holds the topic-form on the side.
+
+The broker matches a subscribe pattern against a topic with these
+rules:
+
+- A pattern segment of `*` matches exactly one topic segment.
+- A pattern segment of `**` matches one or more trailing topic
+  segments (only allowed as the final segment).
+- All other pattern segments are literal.
+
+Examples:
+
+| pattern                        | matches                          | does not match            |
+|--------------------------------|----------------------------------|---------------------------|
+| `core.session.tool_result`     | `core.session.tool_result`       | anything else             |
+| `core.session.*`               | `core.session.user_message`      | `core.session.foo.bar`    |
+| `core.session.**`              | `core.session.foo.bar`           | `core.lifecycle.x`        |
+| `provider.camel.tool_request`  | exact                            | exact-only                |
+
+There is no in-segment glob. `grep.*` does **not** mean "grep and
+its subtopics" — it means "two-segment topic starting with
+`grep`". For tool-name-scoped routing, see §5.3 (the tool name is
+in the payload, not the topic).
+
+### 5.2 Topic namespaces and publish authority
+
+Three top-level namespaces, with publish authority fixed by the
+broker:
+
+| Prefix          | Publish authority                                 | Example                              |
+|-----------------|---------------------------------------------------|--------------------------------------|
+| `core.*`        | agent core only                                   | `core.session.user_message`          |
+| `provider.*`    | the bound provider plugin only (see §5.3)         | `provider.camel.tool_request`        |
+| `plugin.<id>.*` | the plugin whose canonical id renders to `<id>`   | `plugin.acme_grep.progress`          |
+
+Plugins never publish on `core.*`. The provider plugin publishes
+only on `provider.<provider-id>.*`; core observes those topics
+(it has implicit subscribe authority on everything) and re-emits
+canonical `core.session.tool_request` and
+`core.session.assistant_message` events after validating the
+provider's claim. This is the "core re-emits" model that resolves
+finding 2; CaMeL never publishes `core.*` directly.
 
 The broker tags every event at publish time with the publisher's
 plugin id (taken from the authenticated bus connection, not from
-the message body) and rejects publishes whose topic prefix does
-not match the publisher.
+the message body) and rejects publishes whose namespace does not
+match.
 
-### 5.2 Subscribe authority
+### 5.3 Subscribe authority
 
-A plugin's `subscribes` grant is a list of topic patterns. The
-broker checks each delivery against the list. Globs are allowed
-within a single dot-segment (`core.session.tool_result:grep.*`).
+A plugin's `subscribes` grant is a list of patterns drawn from
+the §5.1 grammar. The broker checks each delivery against the
+list; non-match → drop, no error to publisher. The manifest+lock
+*is* the ACL, which keeps lock-the-grant as the single source of
+truth.
 
-There is no separate ACL file and no policy language. The
-manifest+lock *is* the ACL, which keeps lock-the-grant as the
-single source of truth.
-
-### 5.3 Tool-call routing
+### 5.4 Tool-call routing
 
 Tool calls flow through the bus as `core.session.tool_request`
-events. Routing rule:
+events. The tool name is a payload field, not a topic segment.
+Routing rule (executed by core, not by direct broker delivery):
 
-- Each plugin declares the tool names it implements
-  (`provides.tools = ["grep", "rg"]`).
-- A request for tool `grep` is delivered only to the unique
-  plugin whose lock grants `provides.tools = ["grep"]`.
-- Conflicting providers are a lock-time error: the user must
-  pick one with `rfl provider grep <plugin-id>`.
+- Each plugin declares the tool names it implements via the
+  manifest field `provides.tools = ["grep", "rg"]`. The lock
+  copies these into a `bindings.tools` table (§3.2).
+- When core publishes `core.session.tool_request` it inspects
+  the payload's `tool` field, looks up the plugin in the lock's
+  `bindings.tools`, and routes the event by **publishing** to
+  that plugin's request topic, e.g.
+  `plugin.acme_grep.tool_request`. The plugin subscribes to its
+  own request topic by default (an automatic grant the compiler
+  inserts).
+- Conflicting tool bindings are a lock-time error: the user
+  resolves with `rfl provider tool grep <plugin-id>`. The choice
+  is persisted in the lock.
 
-This means the LLM cannot "address" a plugin directly; it asks
-for a tool by name, and core picks the bound plugin. Plugins
-cannot impersonate each other on the bus because the bus
-connection is authenticated per-process.
+This means the LLM cannot "address" a plugin directly; the
+provider asks for a tool by name, and core picks the bound
+plugin. Plugins cannot impersonate each other on the bus because
+the bus connection is authenticated per-process.
+
+The architectural commitment: **`core.session.tool_request` is
+the only path from any LLM-shaped output to a tool plugin**.
+There is no plugin-to-plugin RPC route that bypasses core. Stream
+B fittings RPC, when it crosses plugin boundaries, must be
+expressed as bus events and is therefore subject to this rule.
 
 ### 5.4 Bus authentication
 
@@ -327,11 +386,16 @@ the user accidentally enabling.
 
 Plugin A calls a fittings method on plugin B. By default this
 is denied — the bus broker only routes events whose topic the
-caller is granted to publish. Cross-plugin RPC is expressed as
-"plugin A publishes `B.method_call`, plugin B subscribes,
-replies on `B.method_reply:<id>`." The grant in A must include
-the publish; the grant in B must include the subscribe. No
-hidden authority.
+caller is granted to publish. Cross-plugin RPC is expressed
+entirely in §5.1 grammar: A publishes
+`plugin.<a>.rpc_call.<b>` (a topic A is allowed to publish per
+its `plugin.<a>.*` namespace), B subscribes to that pattern,
+and replies on `plugin.<b>.rpc_reply` with a payload-level
+correlation id. The grant in A must include the publish; the
+grant in B must include the subscribe. No hidden authority, and
+crucially **no path that bypasses core's tool-routing rule for
+LLM-originated calls** — RPC between plugins is plugin-author-
+originated, not LLM-shaped data.
 
 ## 7. The grant compiler
 
@@ -346,11 +410,13 @@ For each plugin, the compiler computes three booleans:
 
 - `reads_untrusted`: any of (a) `network.mode != "deny"`,
   (b) `read_dirs` includes any path outside `${PROJECT_ROOT}`,
-  (c) `subscribes` includes a `core.session.tool_result:*`
-  pattern (i.e. the plugin sees model-shaped data).
+  (c) `subscribes` matches `core.session.tool_result` or
+  `core.session.assistant_message` (i.e. the plugin sees
+  model-shaped data).
 - `has_outbound`: `network.mode != "deny"` *or* the plugin
-  publishes on any non-`core.*` topic that another plugin's
-  grant subscribes to with a `network.mode != "deny"`.
+  publishes on a topic that another plugin's grant subscribes to
+  *and that other plugin has* `network.mode != "deny"`. This is
+  a one-hop direct check, not transitive — see §7.6.
 - `has_workspace_write`: `write_dirs` non-empty.
 
 If a plugin has all three of `(reads_untrusted, has_outbound,
