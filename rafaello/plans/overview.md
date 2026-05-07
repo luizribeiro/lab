@@ -836,9 +836,11 @@ pay subprocess RTT.
 Stream E's renderer-over-JSON-RPC fits cleanly into Stream B's
 notification API:
 
-- `core.session.entry.*` events use the connection-scoped server notification handle (§4.1, fittings'
-  notification path); they require no response and benefit from
-  the bounded-with-drop notification sink (Stream B §"Notification
+- `core.session.entry.*` events flow as JSON-RPC notifications
+  on each subscriber's bus connection, emitted via the
+  connection-scoped server notification handle introduced in
+  §4.1. They require no response and benefit from the
+  bounded-with-drop notification sink (Stream B §"Notification
   sink"). This is fine because entry patches are advisory
   intermediate frames; the `finalized` event carries the
   authoritative payload.
