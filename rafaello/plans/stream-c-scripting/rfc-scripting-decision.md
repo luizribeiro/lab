@@ -187,6 +187,51 @@ and provenance metadata — are required from Stream A regardless of
 the scripting decision, so the scripting decision does not gate
 CaMeL.
 
+## Scenario 3 — SWE-bench-style evals
+
+UX target: an external harness drives `rfl` headless, one instance
+per task, possibly tens or hundreds in parallel, each inside its
+own dev VM.
+
+### With embedded Luau
+
+The harness has nothing to do with Luau directly. It either:
+
+- spawns `rfl --headless --task task.json` and reads JSON from
+  stdout, or
+- connects to `rfl daemon` over the bus.
+
+Whether `rfl` has Luau embedded is irrelevant to the harness; it
+might be relevant only because the *evaluated agent's*
+configuration could include a Luau init file. In which case the
+Luau cold-start cost (sub-millisecond) is amortised over the
+multi-minute SWE task.
+
+### Without embedded Luau
+
+Identical from the harness's perspective. The agent's
+configuration is TOML; the harness can template a TOML config per
+task ("for this task, allow writes to `/repo/`, allow these
+hosts") and pass it via `--config` or the daemon's `session.open`
+RPC.
+
+The harness itself is a perfect demonstration of the third plane:
+it is rfl's *parent* over the bus. If the rfl bus is well
+specified (Stream B), the harness is a small amount of code in
+any language. Luau adds nothing here.
+
+**Verdict on Scenario 3: tied; embedded language is irrelevant.**
+The eval scenario is entirely about bus quality, headless-mode
+quality, and configuration ergonomics for templated runs. None of
+those are language questions.
+
+The mild push *toward* declarative-only: a TOML config is trivially
+templatable from the harness language (`format!`, f-strings,
+`tera`). A Luau init file is also templatable but with worse
+ergonomics (string concatenation into another language is
+fiddly). One-runtime-fewer is also one-fewer-thing-to-version
+across the eval matrix.
+
 
 
 The pushback the project owner raised — "if everything talks the
