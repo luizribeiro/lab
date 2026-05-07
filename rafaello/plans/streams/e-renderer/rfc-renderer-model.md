@@ -39,8 +39,8 @@ events back into the agent (covered in stream B fittings).
 ```
 
 Entries flow on the fittings event bus as JSON-RPC notifications
-(`session.entry.appended`, `session.entry.patched`,
-`session.entry.finalized`). Renderers are pure functions
+(`core.session.entry.appended`, `core.session.entry.patched`,
+`core.session.entry.finalized`). Renderers are pure functions
 `(kind, payload, capabilities) -> RenderTree`. The frontend is the
 only side-effectful component.
 
@@ -230,16 +230,16 @@ fallback) and gives plugins one place to ship a textual answer.
 The model produces a reply token by token. The bus carries three
 notifications per streaming entry:
 
-- `session.entry.appended` — initial entry with
+- `core.session.entry.appended` — initial entry with
   `metadata.stream_state = "open"` and (usually) empty payload
   content. The entry's `id` is the handle for subsequent patches.
-- `session.entry.patched` — `{ id, seq, patch }`. `patch` is a small
+- `core.session.entry.patched` — `{ id, seq, patch }`. `patch` is a small
   tagged delta:
   - `{ "op": "append_text", "path": "$.text", "value": "..." }` for
     the common case
   - `{ "op": "replace", "path": "$.status", "value": "running" }`
   - `{ "op": "append_child", "path": "$.children", "value": <tree> }`
-- `session.entry.finalized` — `{ id, payload }` containing the
+- `core.session.entry.finalized` — `{ id, payload }` containing the
   authoritative final payload, with `metadata.stream_state = "final"`.
   The frontend SHOULD treat this as the canonical version (e.g. for
   re-export, replay).
@@ -256,7 +256,7 @@ Re-rendering after each patch is the responsibility of the
   `append_text` deltas where possible, which the frontend can stream
   directly to stdout. When a non-append patch arrives (e.g. a tool
   call's `status` flips from `running` to `ok`), the daemon sends a
-  *line-stable* `session.entry.patched` and the frontend prints a
+  *line-stable* `core.session.entry.patched` and the frontend prints a
   small status footer line below. On `finalized`, the frontend prints
   a final delimiter; nothing earlier is rewritten.
 
@@ -265,16 +265,16 @@ Re-rendering after each patch is the responsibility of the
 Bus traffic (abridged):
 
 ```
-1. session.entry.appended {
+1. core.session.entry.appended {
      id: "01J...A",
      kind: "text",
      payload: { text: "", markdown: true },
      metadata: { author: "assistant", stream_state: "open", seq: 0 }
    }
-2. session.entry.patched { id: "01J...A", seq: 1,
+2. core.session.entry.patched { id: "01J...A", seq: 1,
      patch: { op: "append_text", path: "$.text", value: "Sure" } }
 3. ... 99 more patched notifications ...
-101. session.entry.finalized { id: "01J...A",
+101. core.session.entry.finalized { id: "01J...A",
      payload: { text: "<full 100 tokens>", markdown: true },
      metadata: { stream_state: "final", seq: 101 } }
 ```
