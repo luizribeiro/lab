@@ -78,7 +78,7 @@ shaped by a prompt-injection in any previous tool result.
 
 ## 3. The three artifacts
 
-### 3.1 Manifest (`plugin.toml`, in the plugin)
+### 3.1 Manifest (`rafaello.toml`, in the plugin)
 
 The plugin author's *request*. Declares identity, methods,
 subscribed/published topics, FS/network/env capabilities,
@@ -198,7 +198,7 @@ rafaello does, after fetch.
 Two events trigger re-confirmation, both surfaced as an
 interactive prompt to the user:
 
-1. **Manifest changed.** The plugin's `plugin.toml` differs from
+1. **Manifest changed.** The plugin's `rafaello.toml` differs from
    the snapshot taken at the last grant — even if the version
    string is the same. (`rfl update` diff-prints the request
    delta and asks for confirmation per added capability.)

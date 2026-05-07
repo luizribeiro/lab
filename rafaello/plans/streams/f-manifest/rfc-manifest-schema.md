@@ -87,12 +87,12 @@ layer; it does not affect sandboxing.
 ```toml
 [bus]
 subscribes = [
-  "session.started",
-  "fs.changed:**/*.rs",                       # glob suffix on a topic
+  "core.session.started",
+  "core.fs.changed",                          # plugin filters payload by extension
 ]
 publishes = [
-  "rust.diagnostics",
-  "rust.format.completed",
+  "plugin.<topic-id>.rust.diagnostics",
+  "plugin.<topic-id>.rust.format.completed",
 ]
 ```
 
@@ -359,11 +359,11 @@ rafaello = ">=0.1, <0.2"
 openrpc = "openrpc.json"
 
 [bus]
-subscribes = ["fs.changed:**/*.rs"]
-publishes  = ["rust.diagnostics"]
+subscribes = ["core.fs.changed"]              # plugin filters by extension in payload
+publishes  = ["plugin.<topic-id>.rust.diagnostics"]
 
 [load]
-event   = ["fs.changed:**/*.rs"]
+event   = ["core.fs.changed"]                 # payload-level filter applied after wake
 command = ["rust.format", "rust.check"]
 
 [capabilities.default.filesystem]
@@ -515,10 +515,15 @@ bind-mounted.
    without specifying the keystore. Is that a separate stream
    (Stream A's purview), or does this RFC need to nail it down?
 
-5. **Bus topic ACL grammar.** §4 defers to Stream B's fittings
-   ACL grammar, which is itself draft. If fittings settles on
-   something incompatible with the glob suffix shown
-   (`fs.changed:**/*.rs`), this RFC needs an editorial pass.
+5. **Bus topic ACL grammar — resolved.** Per `overview.md`
+   §4.2 and security RFC §5.1, the canonical topic grammar
+   forbids `:` and `/` inside segments and uses dot-separated
+   pattern segments with `*` (one segment) and `**` (final,
+   trailing-only) as the only wildcards. The earlier
+   `fs.changed:**/*.rs` examples in §4 / §9.1 above have been
+   rewritten to plain `core.fs.changed`; payload-level
+   extension filtering is the plugin's responsibility, not the
+   broker's.
 
 6. **Renderer priority ties.** §6's `priority` is an integer; ties
    are unspecified. Stream E should pin tie-breaking (insertion

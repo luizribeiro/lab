@@ -492,12 +492,14 @@ Boot sequence (paraphrased):
 4. on first event/command/kind hitting a stub, spawns the
    plugin and holds the dispatch until handshake completes.
 
-Eager-plugin handshake failure is **fail-closed by default**
-(security RFC §9 #7 carried into here): the loop refuses to
-accept the first turn until the plugin attaches or the user
-overrides. This is the conservative posture; it can be relaxed
-per-plugin via a `load.eager_failure = "open"` knob if usage
-shows it is too strict.
+Eager-plugin handshake failure is **fail-closed in v1**
+(security RFC §9 #7): the loop refuses to accept the first
+turn until the plugin attaches; the only override is the CLI
+flag `rfl plugin start --skip-eager <name>`. There is no
+manifest-level "fail open" knob in v1 — pi flagged the earlier
+draft's `load.eager_failure` as a speculative schema field
+Stream F never committed to. A per-plugin manifest knob is
+deferred to v2 pending real usage data.
 
 ### 5.5 Per-plugin private state
 
@@ -1009,23 +1011,87 @@ schema RFC has not yet committed:
 | `helper_for` (lock-side binding)     | helper plugins (§9)               | absent — F's open question #1 unrelated |
 | `requires_confirmation` (advisory)   | UX hint                           | absent |
 
-**Proposed fix.** Add a `[provides]` block to the manifest
-schema (with `tools`, `provider`, and per-tool `sinks` /
-`grant_match` sub-tables) and add `helper_for` as a top-level
-manifest field that compiles into `bindings.helper_for` in the
-lock. Stream F gets a follow-up edit in m1's stream-F brief.
+**Normative delta (binding for Stream F's next revision).**
+Pi flagged that the loose "proposed fix" wording was
+insufficient for ratification. The following is the precise
+schema delta Stream F must adopt before m1 implementation:
 
-Also, Stream F's example `fs.changed:**/*.rs` topic violates
-the canonical grammar (§4.2): replace with payload-level glob
-filtering. This is a documentation fix, not a schema fix.
+1. **Add a `[provides]` block** at the manifest top level:
 
-Also, Stream F's `[capabilities]` block uses the field names
-`read_paths`, `read_dirs`, `write_dirs`, `exec_paths`,
-`exec_dirs`. Stream A's lock excerpt uses the same names (§3.2
-of the security RFC: `read_dirs`, `write_dirs`, `exec_paths`).
-**Aligned.** Stream A's earlier draft mention of `env_pass` (one
-word) is a typo for the manifest's `env.pass` (with dot); the
-compiler treats them identically.
+   ```toml
+   [provides]
+   tools    = ["grep", "rg"]                # zero or more tool names
+   provider = "litellm"                     # absent if not a provider; one provider-id per plugin
+   helpers  = ["github:org/qllm@1.0.0"]     # canonical ids of helpers this plugin may spawn
+
+   [provides.tool.grep]
+   sinks                  = []              # zero or more of: "network", "vcs_push", "mail", "workspace_write", "exec", custom strings
+   grant_match            = "schemas/grep-grant-match.json"  # JSON-Schema for user_grants matcher; absent → "any invocation" matcher
+   requires_confirmation  = false           # advisory hint; not enforced — see security RFC §9.1 "refuses_tainted_input demoted to advisory"
+   ```
+
+   The `[provides]` block is the manifest-side declaration;
+   `rfl install` snapshots it into the lock's
+   `bindings.tools`, `bindings.provider_id`,
+   `bindings.tool_meta.<name>.{sinks,grant_match,requires_confirmation}`,
+   and `bindings.helpers`.
+
+2. **Add a top-level `helper_for` manifest field**:
+
+   ```toml
+   helper_for = "github:anthropic/camel@0.1.0"   # canonical id of the parent plugin
+   ```
+
+   Snapshotted to `bindings.helper_for` in the lock. Mutually
+   exclusive with `[provides.provider]`: a helper cannot be a
+   provider in the same manifest.
+
+3. **Validation rules at install time:**
+   - A plugin with `[provides.provider]` must declare at
+     least one `[capabilities.<bundle>.network]` entry, or
+     `rfl install` warns.
+   - Every entry in `[provides.tools]` must have a matching
+     `[provides.tool.<name>]` table; missing tables default
+     to `{ sinks = [], grant_match = absent, requires_confirmation = false }`.
+   - `helper_for` referencing a plugin whose lock entry does
+     not list this helper in `bindings.helpers` is rejected
+     at install time.
+   - `requires_confirmation = true` causes core to *also*
+     gate the tool through confirmation even when its
+     `sinks = []`; it is the explicit opt-in for read-only
+     tools that nonetheless want a human review step.
+
+4. **Eager-failure mode field — STRIKE.** The earlier overview
+   draft mentioned `load.eager_failure = "open"` as a knob.
+   Stream F has no such field and pi flagged it as
+   speculative. **Decision: defer this knob to v2.** v1 is
+   fail-closed-only on eager-plugin handshake, with a
+   per-plugin override only via `rfl plugin start --skip-eager
+   <name>` at the CLI. Overview §5.4 is patched accordingly.
+
+5. **Topic example fix (already applied to the RFC).** The
+   `fs.changed:**/*.rs` example in
+   `rfc-manifest-schema.md` §4 / §9.1 / §11 has been
+   rewritten to plain `core.fs.changed`; payload-level
+   filtering is the plugin's responsibility. This was a
+   documentation fix, applied directly during this revision.
+
+6. **Manifest filename harmonised (already applied).** The
+   security RFC's stale `plugin.toml` references
+   (`rfc-security-model.md` §3.1, §4) have been replaced
+   with `rafaello.toml` to match Stream F.
+
+7. **Capability-field naming aligned.** Stream F's
+   `[capabilities]` block uses `read_paths`, `read_dirs`,
+   `write_dirs`, `exec_paths`, `exec_dirs`. Stream A's lock
+   excerpt uses the same names (§3.2). The earlier mention of
+   `env_pass` (one word) in Stream A is a typo for the
+   manifest's `env.pass` (with dot); the compiler treats them
+   identically. No schema change needed.
+
+Items 1–4 are real Stream F work for m1; items 5–7 were
+documentation fixes applied in this revision (commit
+`docs(rafaello-overview): manifest documentation harmonisation`).
 
 ### 15.2 Schema ownership: Stream A owns broker envelopes; Stream B owns JSON-RPC framing
 
