@@ -332,9 +332,6 @@ The three id types and their lifetimes:
 Subscribe authority is per-pattern, granted by the lock and
 checked on every delivery.
 
-Subscribe authority is per-pattern, granted by the lock and
-checked on every delivery.
-
 ### 4.4 Provider plugins and the "core re-emit" rule
 
 A provider plugin (the LLM client; e.g. anthropic, openai, the
