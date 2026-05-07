@@ -262,19 +262,62 @@ There is no plugin-to-plugin RPC route that bypasses core. Stream
 B fittings RPC, when it crosses plugin boundaries, must be
 expressed as bus events and is therefore subject to this rule.
 
-### 5.4 Bus authentication
+### 5.5 Bus authentication and transport
 
-The bus is a Unix domain socket under
-`${XDG_RUNTIME_DIR}/rafaello/<session-id>/bus.sock`. The agent
-core spawns each plugin and passes a freshly-minted bearer
-token through an env var (`RFL_BUS_TOKEN`) that the plugin
-presents on connect. The token binds the connection to a plugin
-id; the broker uses that id for all ACL decisions.
+The bus is **not** a UDS path the plugin connects to. Plugins
+have `network.mode = "deny"` by default, which blocks AF_UNIX
+outbound, and `proxy` mode is HTTP-CONNECT-only and not a
+general UDS allow mechanism. Trying to allowlist a session-
+specific UDS path through lockin would also leak the path
+through the env, with no clean way to authenticate it.
 
-Why a token rather than SO_PEERCRED? Plugins may, in v2, run in
-capsa VMs where the kernel-level peer credential is the VM
-supervisor, not the plugin. A bearer token makes the path
-runtime-agnostic.
+Instead, the agent core spawns each plugin **with a pre-opened
+socketpair fd** that is the plugin's only handle to the bus:
+
+- Core creates a `socketpair(AF_UNIX, SOCK_STREAM, 0)`.
+- One end is retained by core and registered with the broker
+  bound to the plugin's id (this is the authentication: the
+  binding is established before the plugin runs, not by a
+  token the plugin presents).
+- The other end is passed to the child via lockin's
+  `inherit_fd` mechanism (already supported by lockin per its
+  README: fds explicitly passed via `inherit_fd` survive the
+  CLOEXEC sweep). The fd number is communicated to the plugin
+  via a reserved env var **`RFL_BUS_FD`** (an integer, not a
+  secret).
+- The plugin's lockin policy needs `network.mode = "deny"` for
+  IP networking but does not need any UDS allow rule, because
+  it never `connect()`s — it just `read()`/`write()`s the
+  inherited fd.
+
+This means the bus connection is impossible to forge from
+inside the sandbox: a plugin cannot create a second
+authenticated connection because the fd is the connection.
+
+#### 5.5.1 Reserved env vars (core-injected, never user-derived)
+
+Two env vars are reserved by core and exempted from the §7.4
+credential scrubber and from `env.pass` user supply:
+
+| Var          | Set by | Meaning                                                     |
+|--------------|--------|-------------------------------------------------------------|
+| `RFL_BUS_FD` | core   | Inherited fd number for the bus socketpair                  |
+| `RFL_PLUGIN` | core   | Canonical plugin id, for the plugin's own logging / error reporting |
+
+The scrubber's pattern `*_SECRET` / `*_TOKEN` etc. does not
+match these names. Core also strips both vars from the parent
+environment before computing `env.pass`, so a user accidentally
+exporting `RFL_BUS_FD=99` cannot redirect a plugin's bus.
+
+#### 5.5.2 Why not a token-presenting design
+
+The earlier draft proposed `RFL_BUS_TOKEN` plus a UDS path. That
+is incompatible with lockin's deny-by-default network model and
+would also be stripped by the credential scrubber. The fd-passing
+design has the additional property that v2 capsa VMs can use the
+identical primitive — a vsock fd inherited at boot — so the
+runtime-agnostic property the original draft wanted is preserved
+without an in-band auth token.
 
 ## 6. Attack scenarios
 
