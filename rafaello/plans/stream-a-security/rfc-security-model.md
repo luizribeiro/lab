@@ -299,6 +299,49 @@ There is no plugin-to-plugin RPC route that bypasses core. Stream
 B fittings RPC, when it crosses plugin boundaries, must be
 expressed as bus events and is therefore subject to this rule.
 
+#### 5.4.1 Result routing (symmetric to request routing)
+
+Plugins cannot publish on `core.*`, but providers and other
+subscribers consume `core.session.tool_result`. Result routing
+is core-mediated, mirroring request routing:
+
+```
+plugin.<tool-id>.tool_result          (plugin publishes)
+   -> core validates against §7.2.2:
+        - in_reply_to is present and references a tool_request
+          previously routed to this plugin (§7.2.6 mandatory)
+        - taint is a superset of the referenced request's taint
+          (the plugin may add taint sources synthesised by core,
+          e.g. read_file path → project taint, web.fetch host →
+          web taint)
+        - request_id, tool name, and result schema match the
+          subscribed tool binding from the lock
+   -> core canonicalises to core.session.tool_result with the
+      validated taint, request_id, tool, and result payload
+   -> delivered to subscribers: the bound provider, any plugin
+      with a matching subscribe grant, and frontends.
+```
+
+The plugin's own `plugin.<id>.tool_result` event is **not**
+delivered to other plugins or providers directly — only core's
+canonical re-emission is. A plugin's subscribe grant on its own
+`plugin.<id>.tool_result` is an introspection convenience (e.g.
+for a renderer plugin reading its own outputs); it is not how
+results reach the LLM.
+
+If validation fails (missing `in_reply_to`, wrong tool name for
+the bound plugin, taint subset violation), core drops the event
+and emits `core.lifecycle.tool_result_rejected` with the
+reason; the request is timed out for the provider via the
+existing tool_request timeout, and the failure surfaces to the
+user as a tool error, not as silently-stuck output.
+
+This symmetric path is what makes mandatory `in_reply_to`
+(§7.2.6) and taint-superset enforcement (§7.2.2) meaningful:
+results never reach the provider unvalidated, and there is no
+broker shortcut a hostile plugin can exploit by skipping the
+canonical topic.
+
 ### 5.5 Bus authentication and transport
 
 The bus is **not** a UDS path the plugin connects to. Plugins
