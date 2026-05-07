@@ -818,13 +818,13 @@ server-side render-tree downgrades (§11).
 
 Spec: `streams/e-renderer/rfc-renderer-model.md` §5.
 
-Reconciliation note: Stream E uses unprefixed topic strings
-(`session.entry.appended`) for streaming entry notifications.
-Under the canonical Stream A grammar these belong inside
-`core.session.entry.*`. **Stream A's namespace wins**:
-streaming entries are core-emitted, so they live under `core.*`.
-Stream E gets this corrected in the next milestone retrospective
-(the topic spelling, not the streaming model).
+Reconciliation note: Stream E originally used unprefixed
+topic strings (`session.entry.appended`) for streaming entry
+notifications. Under the canonical Stream A grammar these
+belong inside `core.session.entry.*` because streaming
+entries are core-emitted. **Stream A's namespace wins**, and
+Stream E was patched in-place during this revision to use
+`core.session.entry.*` consistently — see §15.3.
 
 ## 11. Renderer model and render tree
 
@@ -1184,11 +1184,13 @@ RFC §9 #5):
 
 ### 15.3 Stream E topic spelling
 
-Stream E uses unprefixed `session.entry.*` topics; the
-canonical namespace requires `core.session.entry.*` because
-streaming entries are core-emitted (entries are validated and
-canonicalised by core before fan-out). **Decision: rename in
-Stream E.** Already pinned in §4.2 reconciliation note above.
+Stream E originally used unprefixed `session.entry.*` topics;
+the canonical namespace requires `core.session.entry.*`
+because streaming entries are core-emitted (entries are
+validated and canonicalised by core before fan-out). The
+rename was applied in-place during this revision (commit
+`docs(rafaello-stream-e): use core.session.entry.* spelling
+consistently`); Stream E is now consistent with overview.
 
 ### 15.4 ServiceContext shape vs bus needs
 
