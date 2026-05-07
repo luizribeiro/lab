@@ -108,12 +108,48 @@ network      = { mode = "deny" }
 env_pass     = []
 subscribes   = ["plugin.acme_grep.tool_request"]
 publishes    = ["plugin.acme_grep.tool_result", "plugin.acme_grep.progress"]
+
+[plugin."github:acme/grep@1.4.2".bindings]
+# Manifest-derived authority, snapshotted into the lock at install
+# time. Runtime routing reads only from here, never from the
+# current on-disk manifest.
+provider          = false
+tools             = ["grep", "rg"]
+renderer_kinds    = ["grep.matches"]
+
+[plugin."github:acme/grep@1.4.2".bindings.tool_meta.grep]
+sinks             = []                 # not a sink — read-only
+refuses_tainted   = false              # advisory hint, not enforcement
+
+[plugin."github:acme/grep@1.4.2".bindings.tool_meta.rg]
+sinks             = []
+refuses_tainted   = false
 ```
 
-The grant block is a **subset** of the manifest's request and is
-the source of truth. The compiler that produces the lockin
-policy reads the grant only; the manifest is not consulted at
-spawn time.
+The grant block is a **subset** of the manifest's request. The
+bindings block is a **snapshot** of manifest-derived runtime
+authority (tool names, provider role, renderer registrations,
+sink metadata). The compiler that produces the lockin policy
+and the broker ACL reads only from the lock — the on-disk
+manifest is consulted only at install/update time, not at spawn
+time. (The earlier draft said "manifest not consulted at spawn
+time" loosely; the precise statement is that *manifest-derived
+authority is snapshotted into the lock at install time and the
+spawn path reads the snapshot, not the live manifest*.)
+
+For provider plugins the bindings include the provider id:
+
+```toml
+[plugin."github:anthropic/camel@0.1.0".bindings]
+provider     = true
+provider_id  = "camel"   # used in provider.<id>.* topics
+tools        = []
+```
+
+There is at most one plugin in the lock with `provider = true`
+active per session; switching is `rfl provider use <plugin-id>`,
+which is a lock mutation (recorded in `bindings.provider_active
+= "<plugin-id>"`).
 
 ### 3.3 Lockin policy (compiled, ephemeral)
 
@@ -308,6 +344,67 @@ The scrubber's pattern `*_SECRET` / `*_TOKEN` etc. does not
 match these names. Core also strips both vars from the parent
 environment before computing `env.pass`, so a user accidentally
 exporting `RFL_BUS_FD=99` cannot redirect a plugin's bus.
+
+### 5.6 Confirmation protocol (core-mediated)
+
+When core needs explicit user consent (sink confirmation per
+§7.2.3, or a plugin-requested confirmation), the protocol is:
+
+| Topic                            | Publisher | Subscribers              |
+|----------------------------------|-----------|--------------------------|
+| `core.session.confirm_request`   | core only | frontends (TUI, web, …)  |
+| `core.session.confirm_reply`     | core only | the requesting plugin    |
+
+The frontend publishes its user-supplied answer on a dedicated
+namespace `frontend.<id>.confirm_answer`, which **only the
+authenticated frontend** is permitted to publish (the frontend
+authenticates the same way plugins do — inherited socketpair fd
+on attach, with a `frontend` role). Core subscribes to all
+`frontend.*.confirm_answer`, validates the correlation id
+matches a held `confirm_request`, and only then publishes
+`core.session.confirm_reply`.
+
+This design means **plugins cannot spoof user consent**: even a
+plugin that subscribes to `core.session.confirm_request` (no
+secret information leaks there) can't publish a reply, because
+the reply topic is core-only and the answer topic is frontend-
+only.
+
+Schema (payload):
+
+```json
+// core.session.confirm_request
+{
+  "request_id": "<uuid>",
+  "what": "tool_call" | "grant_change" | "plugin_load",
+  "summary": "git_push to github.com using data tainted by web:evil.example.com",
+  "details": { ... },                  // tool args, taint trace, etc.
+  "default": "deny",
+  "ttl_seconds": 60
+}
+
+// frontend.<id>.confirm_answer
+{
+  "request_id": "<uuid>",
+  "answer": "allow" | "deny" | "always_allow_session"
+}
+
+// core.session.confirm_reply (delivered to the holding plugin)
+{
+  "request_id": "<uuid>",
+  "answer": "allow" | "deny"
+}
+```
+
+Timeout: if no `confirm_answer` arrives within `ttl_seconds`
+(default 60), core publishes `confirm_reply` with `answer:
+"deny"`. **Fail-closed.** "always_allow_session" persists in
+core memory only; it never reaches the lock, so a restart
+re-prompts.
+
+The confirmation protocol is core-mediated by design; CaMeL (v2)
+can layer additional confirmations using the same protocol, but
+v1 cross-tool sink confirmation does not require CaMeL.
 
 #### 5.5.2 Why not a token-presenting design
 
