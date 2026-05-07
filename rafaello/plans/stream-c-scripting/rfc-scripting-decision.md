@@ -35,7 +35,76 @@ The rest of this document walks four UX scenarios in both worlds,
 then tallies cost/benefit, then specifies the v1 declarative surface
 that the recommendation depends on.
 
-## Framing: three planes, not two
+## Scenario 1 — Snappy CLI
+
+UX target: cold start under ~100 ms, sub-frame keystroke latency,
+popups/statusline/command-palette feel native.
+
+### With embedded Luau
+
+On startup `rfl` boots the Tokio runtime, opens the session DB,
+constructs a `Lua` instance with `mlua` + `luau` feature, calls
+`Lua::sandbox(true)`, and `dofile`s `~/.config/rfl/init.luau` plus
+the project's `.rfl/init.luau` if present. The init script
+registers keymaps, hook callbacks, statusline segments, and any
+`/command` definitions by calling functions on a `rfl` global.
+
+Cost: Luau interpreter init is sub-millisecond; the script reads
+config and registers tables of callbacks — tens of microseconds for
+a typical user file. Per-keystroke a keymap dispatch is a Lua
+function call from Rust — sub-microsecond. **Cold start is fine,
+keystroke is fine.** The cost is binary size (~1–2 MB), one more
+runtime to crash-handle, and one more attack surface (sandboxed,
+but exposed Rust functions can still be misused — see CaMeL
+discussion).
+
+### Without embedded Luau
+
+`rfl` parses `~/.config/rfl/config.toml` and `.rfl/config.toml`
+into a typed config struct. Keymaps are TOML tables. Statusline is
+a TOML array of segments referencing built-in or
+plugin-contributed segment IDs. Templates are `*.md` files in
+`prompts/`. Hooks are TOML stanzas mapping bus topics to plugin
+methods.
+
+```toml
+# ~/.config/rfl/config.toml
+[keymaps]
+"ctrl+g"   = "core.message.edit_in_editor"
+"ctrl+l"   = "core.history.scroll_to_latest"
+"alt+ret"  = "core.input.submit_with_no_confirm"
+
+[statusline]
+left  = ["core.session.name", "core.model.id"]
+right = ["core.tokens.in_minute", "core.cost.session"]
+
+[[hooks]]
+on    = "model.token"
+plugin = "otel"
+method = "on_token"
+```
+
+Cost: TOML parse is sub-millisecond. Keystroke dispatch is a
+hashmap lookup of action ID → built-in handler or plugin handler.
+For built-in actions there is zero IPC. For plugin handlers there
+is one bus dispatch (in-process channel send to the plugin
+multiplexer; the plugin process itself is already running because
+it was eagerly spawned at startup, or lazily on first matching
+event per Stream F). **Cold start is faster** than the Luau case
+(no interpreter, no script execution); keystroke latency is the
+same in practice for the common case (built-in actions) and one
+short pipe write for the plugin case.
+
+The only thing the user cannot do without code is *compute* a
+keymap or statusline segment. That is exactly the case where they
+should write a plugin — i.e., where being forced down the
+subprocess path is correct.
+
+**Verdict on Scenario 1: subprocess-only wins.** It is faster cold,
+identical hot for the common case, and forecloses a class of
+"wrote a script that imports the world" footguns.
+
+
 
 The pushback the project owner raised — "if everything talks the
 bus, any language can extend rafaello" — is correct, but it
