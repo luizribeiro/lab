@@ -157,3 +157,27 @@ One open question for the project owner: whether to commit the
 `bindings.helper_for` primitive in v1 to support clean Q-LLM
 isolation in CaMeL, or to accept CaMeL's degraded in-process
 Q-LLM. Author recommends commit; it is small and broadly useful.
+
+## F8. Round-2 revisions
+
+Round 2 closes all six pi must-fixes plus the eight minor items.
+Notable structural moves:
+
+- **Helper plugin primitive committed.** `bindings.helper_for`
+  + `RFL_HELPER_FD` is in §7.4.1; CaMeL's row 10 is no longer a
+  gap. Stream B owes the helper-channel framing spec.
+- **Frontend principals first-class.** `frontend.<id>.*` joins
+  `core.*` / `provider.*` / `plugin.<id>.*` as a publish
+  namespace, with attach/auth flow in §5.7.
+- **Symmetric result routing.** §5.4.1 mirrors request routing;
+  plugins never reach the provider directly.
+- **User-only-taint bypass removed.** Replaced with explicit
+  `user_grants` session table (§7.2.4). Pasted secrets now
+  trigger sink confirmation.
+- **`in_reply_to` mandatory on inheritance-bearing event
+  classes** (§7.2.6).
+- **Plugin-id topic rendering is now hash-based** with
+  collision rejection at install.
+
+No deferrals; round 2 is intended as the implementation-handoff
+draft.
