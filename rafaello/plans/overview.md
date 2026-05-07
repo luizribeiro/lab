@@ -65,8 +65,12 @@ in the streams; this document does not duplicate them.
   not detected.
 - **No anti-laundering of taint.** v1 catches verbatim
   exfiltration; rephrased exfiltration is CaMeL territory.
-- **No server→client JSON-RPC requests in fittings.** v1 ships
-  notifications only; bidirectional requests are deferred.
+- **No higher-level sampling/elicitation protocol in v1.** The
+  fittings transport supports bidirectional `PeerHandle::call`
+  (§4.1, §15.6) — that is the v1 transport-layer commitment.
+  But specific human-in-the-loop protocol methods (LSP-style
+  sampling, MCP-style elicitation, structured progress
+  prompts) are deferred to a follow-up RFC layered on top.
 - **No project-type / filetype lazy-load triggers.** rafaello
   has no buffer concept; `ft`-style triggers are deferred until
   there is a "project kind" abstraction in core.
