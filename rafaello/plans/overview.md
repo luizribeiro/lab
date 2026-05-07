@@ -669,10 +669,9 @@ maps emphasis → ANSI bold or CSS `<strong>`. Variants:
 `Collapsed`, `Raw`, `Unknown`. Spec:
 `streams/e-renderer/rfc-renderer-model.md` §4.
 
-Streaming uses three notification kinds (`session.entry.appended`,
-`session.entry.patched`, `session.entry.finalized`); under the
-canonical namespace these are
-`core.session.entry.{appended,patched,finalized}`. Frontends
+Streaming uses three core-emitted notifications:
+`core.session.entry.appended`, `core.session.entry.patched`,
+and `core.session.entry.finalized`. Frontends
 on append-only surfaces (TUI inline, email) consume only the
 `finalized` event for non-text kinds and stream `append_text`
 patches directly to stdout; redrawable frontends (web, TUI
@@ -695,7 +694,7 @@ pay subprocess RTT.
 Stream E's renderer-over-JSON-RPC fits cleanly into Stream B's
 notification API:
 
-- `session.entry.*` events use `ctx.notify` (fittings'
+- `core.session.entry.*` events use the connection-scoped server notification handle (§4.1, fittings'
   notification path); they require no response and benefit from
   the bounded-with-drop notification sink (Stream B §"Notification
   sink"). This is fine because entry patches are advisory
@@ -708,10 +707,11 @@ notification API:
   frontend's fittings *client* calling core's *server* role).
 
 The one architectural commitment: bus broker fan-out of
-`session.entry.*` runs at notification rates (token streaming
+`core.session.entry.*` runs at notification rates (token streaming
 can be hundreds/sec), so Stream B's drop-on-full sink behaviour
 applies. Streaming consumers must tolerate dropped intermediate
-patches; the `finalized` event is the only authoritative frame.
+patches; the `core.session.entry.finalized` event is the only
+authoritative frame.
 
 ## 12. Sessions, persistence, daemon mode
 
@@ -925,7 +925,7 @@ change is required.
 
 Renderer registration uses fittings request/response
 (`renderer.render`); streaming entry events use fittings
-notifications (`session.entry.*`). Both fit cleanly inside
+notifications (`core.session.entry.*`). Both fit cleanly inside
 Stream B's API as it stands; renderer cache invalidation on
 plugin reload is core's job, not fittings'.
 
