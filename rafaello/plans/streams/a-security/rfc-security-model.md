@@ -158,7 +158,11 @@ table, not inside any one plugin's bindings:
 ```toml
 [session]
 provider_active = "github:anthropic/camel@0.1.0"
-# absent or null → use the built-in default provider
+# absent or null → no active provider; rfl runs as a tool-less
+# LLM client and refuses tool calls. The bundled `rfl-litellm`
+# provider plugin (overview.md §8.1) is installed and selected
+# by `rfl init` as the default; if the user revokes it without
+# installing a replacement, this field is null.
 ```
 
 `rfl provider use <plugin-id>` rewrites `session.provider_active`
@@ -1277,11 +1281,18 @@ grant, lockin is the enforcer", with four substantive additions:
   `tool_request` envelopes**, with core synthesising taint by
   matching arg values to recent results.
 - **Core-enforced sink confirmation**: any tool_request whose
-  args carry non-user taint and whose target tool declares any
-  sink class is held pending interactive user consent. This is
-  what structurally mitigates LLM-mediated cross-tool exfil
-  *for verbatim flows*. Laundered flows (model-rephrased data)
-  remain v2/CaMeL territory.
+  target tool declares one or more sink classes is held
+  pending interactive user consent unless a matching
+  `user_grants` entry covers the invocation. **The rule is
+  taint-independent** (see §7.2.3 and `overview.md` §6.2 /
+  decision 9 — the earlier wording in this section, which
+  read "args carry non-user taint and target declares a
+  sink", was stale and is replaced here). Taint influences
+  the wording of the confirmation prompt; it does not gate
+  whether the prompt fires. This is what structurally
+  mitigates LLM-mediated cross-tool exfil *for verbatim
+  flows*. Laundered flows (model-rephrased data) remain
+  v2/CaMeL territory.
 - **Carve-out by decomposition**: credential paths and the lock
   file are excluded from grants by refusing or decomposing
   ancestor grants at compile time, with a loud
