@@ -181,6 +181,37 @@ and so logs on this side capture the detail. The peer's
 `from_error_envelope` reads `fittingsKind` and rebuilds the right
 variant.
 
+### B.1 Outbound error preservation (`to_error_envelope`)
+
+Symmetric requirement to §C. `to_error_envelope` MUST preserve
+the variant's `message` and `data` for predefined codes too, not
+just for `Service`. Concrete table:
+
+| Variant                                     | `code`     | `message`            | `data`                                                       |
+|---------------------------------------------|------------|----------------------|--------------------------------------------------------------|
+| `Parse { message }`                         | `-32700`   | `message`            | `None`                                                       |
+| `InvalidRequest { message, data }`          | `-32600`   | `message`            | `data` (preserved verbatim)                                  |
+| `MethodNotFound { method }`                 | `-32601`   | `"method not found: {method}"` | `Some(json!({"method": method}))`                  |
+| `InvalidParams { message, data }`           | `-32602`   | `message`            | `data` (preserved verbatim)                                  |
+| `Internal { message }`                      | `-32603`   | `message`            | `None`                                                       |
+| `Transport { message }`                     | `-32603`   | `"transport"`        | `Some(json!({"fittingsKind":"transport","detail":message}))` |
+| `Panic { message }`                         | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"panic","detail":message}))`     |
+| `Service { code, message, data }` (valid)   | `code`     | `message`            | `data`                                                       |
+| `Service { code, .. }` (invalid range)      | `-32603`   | `"internal error"`   | `Some(json!({"fittingsKind":"invalidServiceCode"}))`         |
+| `Cancelled { .. }`                          | (no envelope; response suppressed)                                                                |
+
+This explicitly **replaces** the current `to_error_envelope`
+behaviour, which substitutes canonical English strings
+("Parse error", "Invalid Request", etc.) and drops `data`. We
+preserve the handler-supplied message verbatim, since the handler
+is the only thing that knows the call-site detail. The canonical
+strings live in tests, not in the encoder.
+
+Implementer note: the encoder MUST NOT silently downgrade
+detailed errors to short strings. If a future linter or wire
+test wants canonical strings, it can fail loudly; it must not
+re-introduce the lossy path.
+
 ### C. `from_error_envelope` stops dropping data
 
 Today (`error_map.rs:64–96`):
