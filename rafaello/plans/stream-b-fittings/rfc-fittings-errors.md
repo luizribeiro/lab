@@ -300,21 +300,62 @@ WireDecodeError::InvalidRequest { message, .. } =>
 This matches what we do server-side and gives consumers actual
 debugging info.
 
-### I. Middleware contract
+### I. Middleware contract (trait redesign)
 
-Today's `Middleware::handle(req, next) -> Result<Response, _>` is fine
-in shape, but the contract is undefined. Document:
+This is a real API change, not just documentation. The current
+`Middleware::handle(req, next) -> Result<Response, _>`
+(`fittings/crates/core/src/middleware.rs`) has no context parameter,
+so the "middleware emits notifications" promise from earlier drafts
+is unimplementable today.
 
-- Middleware sees the handler's `Err` *after* it returns, but does
-  *not* see panics — those are caught further out in
-  `execute_request`. (We could move `catch_unwind` into the middleware
-  chain, but that complicates the chain semantics; rejecting for
-  simplicity.)
-- Middleware MAY transform an error variant; if it does, it MUST NOT
-  invent a `Service` code outside the valid range.
-- Middleware MAY emit notifications via `ctx.notify` (logging, tracing).
-- Middleware does NOT see decode errors. Decode errors are produced
-  before any service is invoked.
+New trait:
+
+```rust
+#[async_trait]
+pub trait Middleware: Send + Sync {
+    async fn handle(
+        &self,
+        req: Request,
+        ctx: ServiceContext,
+        next: &dyn Service,
+    ) -> Result<Response, FittingsError>;
+}
+```
+
+Contract:
+
+- The dispatcher constructs the `ServiceContext` once per request
+  and passes the **same** instance to every middleware in the chain
+  and to the inner handler. Cancellation, notifications, and request
+  id are therefore consistent across the stack.
+- Middleware MAY observe cancellation via `ctx.cancelled()` and
+  short-circuit the chain by returning `Err(FittingsError::Cancelled
+  { reason: None })`. Suppression rules from the notifications RFC
+  apply: a cancelled response is dropped on the wire.
+- Middleware MAY emit notifications via `ctx.notify(...)` for
+  logging/tracing/metrics. Notifications are subject to the
+  delivery contract (best-effort, lossy under backpressure — see
+  notifications RFC).
+- Middleware sees handler `Err(_)` returns. It does NOT see
+  panics; `catch_unwind` lives outside the middleware chain in
+  `Server::execute_request`. Rationale: putting `catch_unwind`
+  inside the chain forces every middleware to be `UnwindSafe`,
+  which is hostile and unnecessary.
+- Middleware MAY transform error variants. If it does, it MUST
+  preserve the validity rule from §B (no inventing
+  `Service { code }` outside the valid range). Implementations
+  that produce an invalid code are normalised by `to_error_envelope`
+  to `-32603` with a `tracing::warn!`; we do not panic.
+- Middleware does NOT see decode errors. Decode errors come from
+  the dispatcher before any service is invoked, and are mapped
+  directly to `to_error_envelope`.
+
+Composition: there is no `ServiceStack` type yet. The expectation
+is that consumers compose middleware with a small `MiddlewareStack`
+struct — out of scope for this RFC, mentioned for completeness.
+
+Migration: the in-tree `Middleware::handle` impl in tests is the
+only call site. One signature edit each.
 
 ### J. Inbound notifications: error policy
 
@@ -367,6 +408,8 @@ land together in one PR series since they touch the same trait.
 
 Code-search hits to update:
 
+- `fittings/crates/core/src/middleware.rs` — `Middleware` trait
+  picks up `ctx: ServiceContext`.
 - `fittings/crates/macros/src/expand.rs` — handler invocation site.
 - `fittings/crates/server/src/server.rs` — execute_request,
   send_single_response.
