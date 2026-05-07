@@ -1,7 +1,7 @@
 { pkgs, ... }:
 
 let
-  workspaces = [ "capsa" "fittings" "lockin" ];
+  workspaces = [ "capsa" "fittings" "lockin" "rafaello" ];
   wsFlags = builtins.concatStringsSep " " workspaces;
 
   clippy-monorepo = pkgs.writeShellScript "clippy-monorepo" ''
