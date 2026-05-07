@@ -119,10 +119,31 @@ shared `NotificationSink`. Per-request worker construction now:
 4. On worker completion, removes from `in_flight` and sends the
    response frame.
 
-The receive arm gains one extra branch: when an inbound notification
-arrives whose method matches a configured **cancellation method**
-(default: `"$/cancelRequest"`, MCP override `"notifications/cancelled"`),
-look up the `id` in `in_flight` and trigger the token.
+**Cancellation must NOT go through the request-worker semaphore.**
+Today the receive arm calls `spawn_frame_handler` which does
+`semaphore.acquire_owned().await` *before* decoding the frame
+(`server/src/server.rs:107–126`). Under saturation, a cancellation
+notification queued behind the long-running calls it is meant to
+cancel would deadlock: the cancel can't be dispatched until a
+worker frees a permit, and no worker frees a permit because none
+of them have been told to cancel yet.
+
+The new design:
+
+1. The receive arm peeks at every inbound frame **before** acquiring
+   a permit. We do a cheap `serde_json::from_slice::<RequestEnvelope>`
+   and inspect `id`/`method`. This is the same work the worker
+   would have done; we just do it on the receive task.
+2. If `id.is_none()` (a notification) **and** `method` matches the
+   configured cancellation method, we resolve the target id from
+   `params` and signal the token in `in_flight` immediately, without
+   touching the semaphore, without spawning a worker. Done.
+3. All other notifications and all id-bearing requests fall through
+   to the existing semaphore-gated worker spawn.
+
+Effectively: **cancellation is a fast-path the dispatcher handles
+itself.** The semaphore only exists to bound concurrent *handler*
+work, and cancellation is not handler work.
 
 ```rust
 // Server::new keeps its current shape; cancellation is configurable:
@@ -134,6 +155,16 @@ Server::new(service, transport)
 A reasonable default extractor reads `params.id` (LSP-ish) and a
 named extractor reads `params.requestId` (MCP-ish). Either way, the
 runtime owns the wiring — handlers just `select!` on `ctx.cancelled()`.
+
+Trade-off: the receive arm now parses frame headers twice (once on
+the dispatcher to check method, once in the worker to fully decode).
+Acceptable cost; full decode of large param payloads still happens on
+the worker side.
+
+A defensive belt-and-braces alternative — running a separate
+`cancellation_dispatcher` task that listens on its own channel — is
+rejected as overkill. The single dispatcher task already serialises
+inbound frames; peeking and routing in place is ~20 lines.
 
 ### 4. `Service` blanket impls and migration
 
