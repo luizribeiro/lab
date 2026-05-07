@@ -87,6 +87,43 @@ impl ServiceContext {
 }
 ```
 
+### 2a. Core `Request`/`Response` migrate to `JsonRpcId`
+
+Today `Request.id` and `Response.id` are `String`
+(`fittings/crates/core/src/message.rs:8–20`). The wire layer already
+uses `JsonRpcId` (string | number | null), and `Server::execute_request`
+stringifies it before handing it to the handler — at which point
+numeric ids and string ids are indistinguishable, and a null id
+arrives as the literal string `"null"`.
+
+This is fine today only because handlers never use the id for
+correlation. As soon as cancellation joins the picture (this RFC's
+`in_flight: HashMap<JsonRpcId, _>`), the dispatcher needs to look
+up the *exact* id the peer sent. Round-tripping through `String`
+breaks the lookup for numeric ids: `JsonRpcId::Number(1)` formats
+as `"1"`, but the `in_flight` map is keyed on `JsonRpcId`, so a
+subsequent inbound `notifications/cancelled` with `requestId: 1`
+must match — and will only match if `Request.id` carried the
+original `JsonRpcId`, not a stringified copy.
+
+Decision: **`Request.id` and `Response.id` change to `JsonRpcId`**
+in `fittings-core`. `Response.id` is still required (every response
+has an id), so it is `JsonRpcId` not `Option<JsonRpcId>`.
+
+This is a breaking change to every `Service` and `MethodRouter`
+impl. The migration is mechanical (`req.id.clone()` ⇒ `req.id.clone()`
+of a `JsonRpcId`, `id: req.id` ⇒ `id: req.id`, with the type
+substitution implicit). It is bundled with the broader trait
+breakage in this RFC, so consumers absorb it once.
+
+`fittings-core` becomes the canonical owner of `JsonRpcId`. We move
+the type from `fittings-wire` down to `fittings-core` and re-export
+it from `fittings-wire` for source compatibility. This avoids the
+awkward `core` depending on `wire` cycle.
+
+Future RFCs that add server-originated requests will use the same
+type and benefit from the unified model.
+
 Internally `ServiceContextInner` holds:
 
 - `notifier: NotificationSink` — an `mpsc::UnboundedSender<Vec<u8>>`
