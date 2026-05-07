@@ -106,8 +106,8 @@ write_dirs   = []
 exec_paths   = []
 network      = { mode = "deny" }
 env_pass     = []
-subscribes   = ["plugin.acme_grep.tool_request"]
-publishes    = ["plugin.acme_grep.tool_result", "plugin.acme_grep.progress"]
+subscribes   = ["plugin.id_<hash>.tool_request"]
+publishes    = ["plugin.id_<hash>.tool_result", "plugin.id_<hash>.progress"]
 
 [plugin."github:acme/grep@1.4.2".bindings]
 # Manifest-derived authority, snapshotted into the lock at install
@@ -146,10 +146,23 @@ provider_id  = "camel"   # used in provider.<id>.* topics
 tools        = []
 ```
 
-There is at most one plugin in the lock with `provider = true`
-active per session; switching is `rfl provider use <plugin-id>`,
-which is a lock mutation (recorded in `bindings.provider_active
-= "<plugin-id>"`).
+Multiple plugins may have `provider = true` in their bindings
+(installed providers), but at most one is **active** per
+project. The active provider is recorded in a top-level lock
+table, not inside any one plugin's bindings:
+
+```toml
+[session]
+provider_active = "github:anthropic/camel@0.1.0"
+# absent or null → use the built-in default provider
+```
+
+`rfl provider use <plugin-id>` rewrites `session.provider_active`
+and is a normal lock mutation (re-confirmation flow applies if
+the new provider is being granted for the first time). The
+`session` table is also where future per-session lock-level
+state belongs (e.g. policy-flag overrides written by `rfl grant
+--i-know-what-im-doing`).
 
 ### 3.3 Lockin policy (compiled, ephemeral)
 
@@ -195,31 +208,43 @@ binds *content*, not just *name*.
 
 ## 5. The bus ACL
 
-### 5.1 Topic grammar (canonical)
+### 5.1 Topic and pattern grammars (canonical)
 
-A topic is a dot-separated sequence of **segments**:
+Topics and subscribe patterns are different grammars; conflating
+them was a bug in the round-1 draft.
+
+**Topic grammar.** A topic is a dot-separated sequence of
+**segments**:
 
 ```
-topic   := segment ("." segment)+
-segment := [a-z0-9_-]+
+topic    := segment ("." segment)+
+segment  := [a-z0-9_-]+
 ```
 
-That is the entire grammar. No `:` separators, no embedded
-discriminators in the topic string, no slashes. Tool names,
-correlation ids, and other discriminators live in the **payload**
-(the JSON-RPC envelope), never in the topic. Plugin ids that
-contain forbidden characters (e.g. `github:acme/grep@1.4.2`) are
-rendered into the topic by replacing `:`, `/`, and `@` with `_`,
-producing `github_acme_grep_1_4_2`. The lock stores the canonical
-plugin id; the broker holds the topic-form on the side.
+No `:` separators, no embedded discriminators in the topic
+string, no slashes, no wildcards. Tool names, correlation ids,
+and other discriminators live in the **payload**, never in the
+topic.
 
-The broker matches a subscribe pattern against a topic with these
-rules:
+**Pattern grammar.** A subscribe pattern is a dot-separated
+sequence of pattern-segments, with `*` and `**` allowed as
+whole-segment wildcards but not as parts of literal segments:
 
-- A pattern segment of `*` matches exactly one topic segment.
-- A pattern segment of `**` matches one or more trailing topic
-  segments (only allowed as the final segment).
-- All other pattern segments are literal.
+```
+pattern  := pseg ("." pseg)+
+pseg     := segment | "*" | "**"          ; ** only as final pseg
+```
+
+Implementations must treat patterns as a distinct type from
+topics; an in-pattern `*` is never a valid topic in its own
+right.
+
+Pattern-vs-topic match rules:
+
+- A pseg of `*` matches exactly one topic segment.
+- A pseg of `**` (final only) matches one or more trailing
+  topic segments.
+- Other psegs match by exact string equality.
 
 Examples:
 
@@ -232,8 +257,29 @@ Examples:
 
 There is no in-segment glob. `grep.*` does **not** mean "grep and
 its subtopics" — it means "two-segment topic starting with
-`grep`". For tool-name-scoped routing, see §5.3 (the tool name is
-in the payload, not the topic).
+`grep`". For tool-name-scoped routing, see §5.4 (the tool name
+is in the payload, not the topic).
+
+**Plugin-id rendering into topics.** The canonical plugin id
+(`<source>:<name>@<version>`) cannot appear literally in a
+segment because it contains `:`, `/`, and `@`. The earlier draft
+proposed replacing those with `_`, but that mapping is not
+collision-safe (`a/b@c` and `a_b_c@_c` collide). Instead:
+
+```
+topic-id := "id_" base32-no-pad-lower(sha256(canonical-id))[0..16]
+```
+
+The first 80 bits of a SHA-256 of the canonical id, base32-
+lowercase-no-padding, prefixed with `id_` so the segment is
+recognisable in logs (and not a valid all-digit string). The
+canonical id is retained in the lock, in payloads, and in
+`rfl status` output for human readability; the topic-form is
+purely for the broker. Collision rejection at lock time is also
+enforced as a defense-in-depth: if two installed plugins render
+to the same `topic-id` (collision probability is ≪ 2⁻³⁰ per
+project, but trivial to handle), `rfl install` errors and the
+second plugin's lock entry is rejected.
 
 ### 5.2 Topic namespaces and publish authority
 
@@ -244,7 +290,7 @@ broker:
 |-------------------|----------------------------------------------------------------|----------------------------------------|
 | `core.*`          | agent core only                                                | `core.session.user_message`            |
 | `provider.*`      | the bound provider plugin only (see §5.4)                      | `provider.camel.tool_request`          |
-| `plugin.<id>.*`   | the plugin whose canonical id is `<id>`                        | `plugin.<acme-grep-id>.progress`       |
+| `plugin.<id>.*`   | the plugin whose `topic-id` is `<id>` (see §5.1)               | `plugin.id_xxxxxxxxxxxxxxxx.progress`  |
 | `frontend.<id>.*` | the authenticated frontend whose attach id is `<id>` (see §5.7)| `frontend.tui.confirm_answer`          |
 
 Plugins never publish on `core.*`. The provider plugin publishes
@@ -281,7 +327,7 @@ Routing rule (executed by core, not by direct broker delivery):
   the payload's `tool` field, looks up the plugin in the lock's
   `bindings.tools`, and routes the event by **publishing** to
   that plugin's request topic, e.g.
-  `plugin.acme_grep.tool_request`. The plugin subscribes to its
+  `plugin.id_<hash>.tool_request`. The plugin subscribes to its
   own request topic by default (an automatic grant the compiler
   inserts).
 - Conflicting tool bindings are a lock-time error: the user
@@ -681,7 +727,12 @@ For each plugin, the compiler computes three booleans:
   publishes on a topic that another plugin's grant subscribes to
   *and that other plugin has* `network.mode != "deny"`. This is
   a one-hop direct check, not transitive — see §7.6.
-- `has_workspace_write`: `write_dirs` non-empty.
+- `has_workspace_write`: `write_dirs` non-empty, **excluding the
+  automatic per-plugin private state grant** (§7.5). The private
+  state subtree is core-issued, isolated per plugin, and
+  invisible to others; counting it would trip the trifecta rule
+  for nearly every plugin and is not a real workspace-write
+  authority.
 
 If a plugin has all three of `(reads_untrusted, has_outbound,
 has_workspace_write)`, **the compiler refuses**. The user
@@ -863,12 +914,23 @@ sinks = []  # not a sink — read-only
 ```
 
 Sink declarations are copied into the lock's
-`bindings.tools.<name>.sinks`. The compiler treats any
-unrecognised sink class as opaque-but-tracked: missing sink
-metadata defaults to `["network"]` if the plugin's grant is
-non-deny network, else `[]` if its grant is deny+write, else
-`[]`. Conservative; the manifest schema (Stream F) should pin
-this down.
+`bindings.tool_meta.<name>.sinks`. The compiler defaults missing
+sink metadata as follows (deliberately permissive only for
+read-only plugins):
+
+| Plugin grant                                | Default sinks               |
+|---------------------------------------------|-----------------------------|
+| `network.mode != "deny"`                    | includes `"network"`        |
+| `write_dirs` non-empty (excluding private)  | includes `"workspace_write"`|
+| both of the above                           | both classes                |
+| neither                                     | `[]`                        |
+
+A filesystem-writing tool is a sink: writing tainted bytes into
+the project tree is irreversible and can be exfiltrated by a
+later read-and-network step or by a human committing it. The
+earlier draft only treated network as a sink; that was wrong.
+Manifest authors should declare sinks explicitly; the table is
+the conservative default for tools that don't.
 
 This adds a real v1 obligation on Stream F: tools must declare
 sinks. Non-declaring tools default to opaque-network if they
