@@ -19,10 +19,16 @@ The gap is purely on the trait/runtime side.
 Non-goals for v1:
 
 - Server-originated *requests* to the client (sampling, elicitation).
-  Designed-around, not designed-in. See "Future work".
-- Per-handler back-pressure on notification volume.
+  Designed-around, not designed-in. See "Future work" and the
+  explicit "Server-originated requests: v1 cut" section below.
+- Async-flow-control backpressure (handlers being suspended when
+  the transport is slow). v1 ships a **bounded sink with drop-on-
+  full semantics** — see "Notification sink: bounded with drop"
+  below for the resolved contract. Earlier drafts oscillated; this
+  is the settled form.
 - Ordering guarantees stronger than "notifications observed by the
-  framework in order N are written to the transport in order N".
+  framework in order N are written to the transport in order N
+  *if not dropped*".
 
 ## Today
 
@@ -366,12 +372,8 @@ that it's small enough to evolve without ceremony.
    Adopting it means a new dependency on `tokio-util` for `core`.
    The MCP example already rolled its own; that suggests the
    inhouse version is fine.
-2. **Backpressure.** If a handler emits 10k progress events while the
-   transport is slow, the unbounded mpsc grows without bound. Should
-   `notify` become `async fn notify` with a bounded channel? Probably
-   yes for v1. Default cap of 1024 with `try_send` semantics on
-   overflow (drop with a `tracing::warn!` and a metric, since
-   notifications are by definition lossy).
+2. **Backpressure.** *Resolved (was open).* See
+   "Notification sink: bounded with drop" below.
 3. **Per-request vs per-connection context.** Does the bus event-stream
    case want a context that survives a single request? Probably
    handled by the connection-scoped notify sink (a separate
@@ -423,6 +425,39 @@ via `tokio::time::timeout` + drop on the future; we keep that.
 Rafaello's client wrapper will translate "we sent a cancel and
 then the call's future was dropped" into a domain `Cancelled`
 result on its own; fittings does not need an in-band signal.
+
+## Notification sink: bounded with drop
+
+Resolves the backpressure question normatively.
+
+- The outbound notification channel is a `tokio::sync::mpsc` with a
+  bounded capacity. **Default capacity: 1024 frames.**
+  Configurable via `Server::with_notification_capacity(n)`.
+- `ctx.notify(method, params)` is **synchronous, non-blocking**.
+  Internally it encodes the frame and `try_send`s. Three outcomes:
+  - success → `Ok(())`.
+  - channel full → drop the frame, increment a `notifications_dropped`
+    metric, emit `tracing::warn!` (rate-limited per request id),
+    return `Ok(())`. Rationale: notifications are advisory by spec;
+    making `notify` fail or block forces every handler to write
+    error-handling code for a condition the consumer cannot recover
+    from anyway.
+  - channel closed (dispatcher shutting down) → return
+    `Err(FittingsError::Transport { ... })`. Handlers may bail.
+- `notify` is therefore **lossy under load, never blocking, never
+  back-pressuring the handler**. Streaming-tokens consumers must
+  tolerate dropped intermediate frames. (In practice: emit a final
+  "done" frame the consumer can verify.)
+- The same channel is used for **response frames** so the dispatcher
+  preserves global order. Responses are *not* dropped — a full
+  channel will block the response writer briefly until a frame
+  drains, but since responses are at most 1 per request and
+  `max_in_flight` bounds requests, this cannot deadlock as long as
+  capacity ≥ `max_in_flight`. Validation: panic in `Server::serve`
+  if `notification_capacity < max_in_flight`.
+
+This contract is the API for `notify`. It does not change later
+without an RFC.
 
 ## ctx.notify delivery contract
 
