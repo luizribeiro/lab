@@ -755,16 +755,15 @@ shape. It does not catch laundering through the model
   taint that authorises sinks; see 7.2.4).
 
 Plugin-added taint must use the form `{source: "plugin.<id>",
-detail: "..."}`. The broker rejects publishes whose `taint` is
-not a superset of the union of taints of inputs the plugin has
-subscribed to in the same correlation window — but the broker
-does not know which inputs the plugin actually *used*, only what
-it *received*. To make this implementable v1 ties superset
-checking to a **correlation id**: the plugin includes
-`in_reply_to: [<request_id>, ...]` in any event it publishes,
-and the broker enforces that the published taint is a superset
-of the union over those request_ids. Events not declaring
-`in_reply_to` are treated as having no inherited taint.
+detail: "..."}`. Taint inheritance is enforced via the mandatory
+`in_reply_to` correlation field (§7.2.6): the broker/core
+require it on any event class that is semantically a reply or a
+transformation, and verify that the published taint is a
+superset of the union of taints of every event referenced in
+`in_reply_to`. Optional-`in_reply_to` is restricted to
+unrelated telemetry classes (e.g. progress) where no taint
+inheritance is implied; making it optional everywhere would let
+a hostile plugin strip taint by simply omitting the field.
 
 #### 7.2.3 Mandatory sink enforcement (the cross-tool fix)
 
@@ -874,6 +873,41 @@ this down.
 This adds a real v1 obligation on Stream F: tools must declare
 sinks. Non-declaring tools default to opaque-network if they
 have any outbound capability, which biases towards confirmation.
+
+#### 7.2.6 Mandatory `in_reply_to`
+
+`in_reply_to: [<request_id>, ...]` is **required**, not
+advisory, on every event whose semantics imply inheriting taint
+from prior events. Core/broker rejects events missing it for
+the required classes, with the rejection surfaced as
+`core.lifecycle.<class>_rejected`:
+
+| Event class                       | `in_reply_to` policy                                              |
+|-----------------------------------|--------------------------------------------------------------------|
+| `plugin.<id>.tool_result`         | **required**, exactly one entry, must reference the matching tool_request previously routed to this plugin |
+| `provider.<id>.tool_request`      | **required**, ≥0 entries, each referencing a tool_result the provider has already received |
+| `provider.<id>.assistant_message` | **required**, ≥0 entries (the conversation context the message is replying to) |
+| `plugin.<a>.rpc_reply`            | **required**, exactly one entry, must reference the matching `plugin.<b>.rpc_call.<a>` |
+| `frontend.<id>.confirm_answer`    | **required**, exactly one entry, must reference the matching `core.session.confirm_request` |
+| `frontend.<id>.user_message`      | optional (no taint inheritance — user messages are roots)         |
+| `plugin.<id>.progress`            | optional (telemetry, no taint claim)                              |
+| `plugin.<id>.*` (other)           | optional, but if present is enforced by the superset rule         |
+
+A plugin that publishes `plugin.<id>.tool_result` without
+`in_reply_to`, or with an `in_reply_to` referencing an event the
+plugin never received, has its event dropped at core
+canonicalisation (§5.4.1) and the original tool_request times
+out for the provider with a structured failure. A plugin that
+includes `in_reply_to` referencing only some of the inputs it
+actually consumed cannot reduce taint below the union over the
+referenced ids — but it can hide a *subset* of inputs from the
+audit trace. v1 accepts that residual: detection of "plugin
+under-reports its inputs" requires a deeper analysis (CaMeL or
+external instrumentation).
+
+This makes taint inheritance non-bypassable for the event
+classes that matter, and removes the "just omit the field"
+escape from the previous draft.
 
 ### 7.3 Carve-outs by decomposition (lockin-implementable)
 
