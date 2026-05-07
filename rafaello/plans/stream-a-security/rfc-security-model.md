@@ -1,6 +1,6 @@
 # RFC — rafaello v1 security model
 
-Status: draft, stream-a, first pass for review.
+Status: revised after pi-review-2 (round-2 draft).
 Scope: the complete v1 security posture — trust boundaries, the
 manifest/lock/policy pipeline, the bus ACL, attack scenarios, and
 the explicit v1/v2 cut.
@@ -16,16 +16,20 @@ the explicit v1/v2 cut.
    can invoke, and no prompt it can write, can mutate the lock,
    broaden a sandbox, or load a new plugin.
 3. **The lethal trifecta** (untrusted data + tools + outbound
-   communication) is broken at the plugin boundary, not by hoping
-   the model is well-behaved.
+   communication) is reduced per plugin by the trifecta refusal
+   rule, and cross-tool exfiltration is gated at the bus by
+   mandatory taint propagation plus core-mediated sink
+   confirmation. We do not rely on the model being well-behaved.
 4. **Supply-chain risk is structural, not policy-based.** Vibe-
    coded or actively malicious plugins are bounded by the
    sandbox, not by trust in their author.
 5. **The model is implementable on `lockin` today.** No new
    sandbox layer is required for v1; capsa VMs are deferred.
-6. **CaMeL is buildable as a v2 plugin** without extending v1
-   primitives (modulo the single envelope field documented in
-   §8).
+6. **CaMeL is buildable as a v2 plugin** on top of the v1
+   primitives enumerated in `rfc-camel-on-v1.md` §3 (provider
+   role, structured taint, sink confirmation, frontend-mediated
+   confirmation protocol, helper plugins). All ten dependency
+   rows are committed v1 primitives.
 
 ### 1.2 Non-goals (v1)
 
@@ -670,10 +674,22 @@ address classes after DNS resolution; we have **filed a request**
 for `proxy` mode to deny resolution to private/loopback/link-
 local/cloud-metadata ranges by default, but until lockin accepts
 and ships it, this remains a **documented residual risk**, not a
-mitigation. The `rfl install` flow surfaces it as a warning when
-a plugin's `allow_hosts` includes any non-wildcard hostname the
-user is not the publisher of, and the docs recommend pinning
-hosts the user controls.
+mitigation.
+
+`rfl install` and `rfl update` warn whenever a plugin's
+`allow_hosts` contains:
+
+- a wildcard pattern (`*.example.com`);
+- a host that resolves to a private, loopback, link-local, or
+  cloud-metadata address at install time;
+- any host on the in-tree warn list of frequently-misallowed
+  domains.
+
+Earlier wording referenced "domains the user is not the
+publisher of"; we cannot reliably determine that, so the warning
+no longer claims ownership-based heuristics. The docs recommend
+that users themselves keep `allow_hosts` to specific public
+hostnames they trust, and avoid wildcards on shared domains.
 
 ### 6.8 Sandbox escape via `LD_PRELOAD`
 
@@ -1223,6 +1239,25 @@ revision:
 
 No findings were dismissed. Every row above is a code/text
 change in this revision.
+
+## 9.2 Resolved disagreements with pi-review-2
+
+| Finding (pi-2) | Resolution                                                                                          |
+|----------------|------------------------------------------------------------------------------------------------------|
+| 1              | CaMeL RFC items 1, 3, 4 patched: provider namespace, structured taint, fd-based bus; bus.sock test rewritten. |
+| 2              | `bindings.helper_for` accepted as v1; specified in §7.4.1 (spawn, comm via `RFL_HELPER_FD`, lifecycle, lock fields). |
+| 3              | Frontends added as a fourth namespace (§5.2) with attach/auth model in §5.7.                          |
+| 4              | Symmetric result-routing rule added in §5.4.1: `plugin.<id>.tool_result` → core validates → `core.session.tool_result`. |
+| 5              | User-only-taint sink bypass removed; replaced with explicit `user_grants` session table (§7.2.4).     |
+| 6              | `in_reply_to` mandatory on tool_result, RPC reply, confirm_answer, provider tool_request and assistant_message (§7.2.6). |
+| 7              | Plugin-id rendering changed to `id_<base32(sha256(canonical))[0..16]>` with collision rejection at install (§5.1). |
+| 8              | `has_workspace_write` excludes private state grant (§7.1); filesystem-write tools default to `workspace_write` sink (§7.2.5). |
+| 9              | Goal #3 rewritten to "reduced per plugin … gated at the bus" (§1.1).                                  |
+| 10             | Goal #6 rewritten to reference the dependency table in CaMeL §3, no "single envelope" wording.       |
+| 11             | Status updated to "round-2 draft".                                                                    |
+| 12             | Pattern grammar separated from topic grammar (§5.1).                                                  |
+| 13             | `provider_active` moved to top-level `[session]` table (§3.2).                                        |
+| 14             | DNS warning rewritten to drop unverifiable ownership claim; concrete trigger list added (§6.7).      |
 
 ## 10. Summary
 
