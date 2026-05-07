@@ -1160,14 +1160,14 @@ binding for v1:**
 | Bus-event payload schemas      | Stream A | Schemas for `core.session.tool_request`, `core.session.tool_result`, `core.session.confirm_*`, `core.session.user_message`, `core.session.entry.*`, `provider.<id>.tool_request`, `frontend.<attach-id>.confirm_answer`, etc. — including the `taint`, `in_reply_to`, `request_id`, and `topic` fields |
 | Fan-out / re-emission          | Stream A | Provider-namespace → core-namespace re-emission rules (§4.4), result-routing path (§5.4.1)                  |
 
-Pinned implication: **Security RFC §9 item 3's "Stream B must
-commit to the bus event schema" wording is stale** and must
-be patched in the next milestone retrospective to read "Stream
-A owns the bus event payload schemas; Stream B owns the
-JSON-RPC envelopes that carry them." Stream B's schema crates
-host the JSON-RPC envelope shape; Stream A's RFC is where
-`taint`, `in_reply_to`, and topic-payload schemas are
-specified.
+Implementation note: security RFC §9 item 3 was patched
+in-place during this revision (commit
+`docs(rafaello-overview): pin bus schema ownership split
+(A=payloads, B=envelopes)`) to read "Stream A owns the bus
+event payload schemas; Stream B owns the JSON-RPC envelopes
+that carry them." Stream B's schema crates host the JSON-RPC
+envelope shape; Stream A's RFC is where `taint`,
+`in_reply_to`, and topic-payload schemas are specified.
 
 What Stream B *does* additionally owe (carried from security
 RFC §9 #5):
