@@ -240,22 +240,41 @@ be read as `fs.changed` with payload-level filtering.
 
 ### 4.3 Top-level namespaces
 
-Four publish-authority bands; a plugin that publishes outside
-its band is rejected at the broker:
+Four publish-authority bands; a publisher that emits outside
+its band is rejected at the broker. The `<...>` placeholders
+denote **three different id types**, not one — keep them
+distinct in implementation:
 
-| Prefix            | Publisher                    |
-|-------------------|------------------------------|
-| `core.*`          | agent core only              |
-| `provider.<id>.*` | the bound provider plugin    |
-| `plugin.<id>.*`   | the plugin whose topic-id is `<id>` |
-| `frontend.<id>.*` | the authenticated frontend   |
+| Prefix                     | Publisher                           | What `<id>` means here          |
+|----------------------------|-------------------------------------|---------------------------------|
+| `core.*`                   | agent core only                     | n/a                             |
+| `provider.<provider-id>.*` | the bound provider plugin           | `provider-id` (human-readable, lock-bound) |
+| `plugin.<topic-id>.*`      | the plugin authenticated on the connection | `topic-id` (hashed plugin id)   |
+| `frontend.<attach-id>.*`   | the authenticated frontend          | `attach-id` (human-readable, attach-bound) |
 
-`<id>` is the **topic-id form** of a plugin id:
-`id_<base32-no-pad-lower(sha256(canonical-id))[0..16]>`. The
-canonical id (`<source>:<name>@<version>`) contains characters
-illegal in segments; the topic-id is collision-checked at
-install time. Authoritative spec:
-`streams/a-security/rfc-security-model.md` §5.1.
+The three id types and their lifetimes:
+
+- **`provider-id`** is the human-readable string a provider
+  plugin declares in its manifest as `provides.provider`
+  (e.g. `camel`, `anthropic`); it is recorded in the lock's
+  `bindings.provider_id` for that plugin (security RFC §3.2).
+  Provider ids are user-meaningful and stable across plugin
+  versions; they are *not* hashed.
+- **`topic-id`** is the only namespace that uses the hashed
+  form `id_<base32-no-pad-lower(sha256(canonical-id))[0..16]>`,
+  because the canonical plugin id `<source>:<name>@<version>`
+  contains `:`, `/`, and `@` which are illegal in topic
+  segments. Collision-checked at install time. Authoritative
+  spec: `streams/a-security/rfc-security-model.md` §5.1.
+- **`attach-id`** is the human-readable id assigned to a
+  frontend at attach time (`tui`, `gui`, `ide`, `email`); for
+  local-spawned frontends core picks the id, for external
+  frontends the frontend proposes one and core refuses
+  collisions (security RFC §5.7.1). Attach ids are scoped to
+  the session; they do not persist in the lock.
+
+Subscribe authority is per-pattern, granted by the lock and
+checked on every delivery.
 
 Subscribe authority is per-pattern, granted by the lock and
 checked on every delivery.
