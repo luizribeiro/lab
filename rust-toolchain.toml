@@ -1,0 +1,17 @@
+# Pinned Rust toolchain for the lab monorepo.
+#
+# This file is the single source of truth for the rustc/cargo/clippy/
+# rustfmt/rust-analyzer versions used by:
+#   - the devenv-managed dev shell (via languages.rust.toolchainFile in
+#     shared/nix/devenv/base.nix), and
+#   - the rustfmt/clippy monorepo pre-commit hooks (via
+#     config.languages.rust.toolchain.{cargo,clippy,rustfmt,rustc}
+#     in shared/nix/git-hooks.nix).
+#
+# Bump deliberately. Drive-by updates are how clippy lints flip
+# silently and break unrelated commits.
+
+[toolchain]
+channel = "1.94.0"
+components = ["rustc", "cargo", "clippy", "rustfmt", "rust-analyzer"]
+profile = "minimal"

@@ -5,6 +5,14 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     devenv.url = "github:cachix/devenv";
+
+    # Rust toolchain pinned via rust-toolchain.toml; consumed by
+    # devenv's languages.rust.toolchainFile and by the monorepo
+    # pre-commit hook scripts in shared/nix/git-hooks.nix.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   nixConfig = {
