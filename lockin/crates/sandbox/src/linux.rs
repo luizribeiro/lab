@@ -195,7 +195,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
     let mut exec_paths = Vec::new();
     let mut exec_recursive_paths = Vec::new();
 
-    let mut add_readable =
+    let add_readable =
         |read_paths: &mut Vec<PathBuf>, stat_paths: &mut Vec<PathBuf>, candidate: &Path| {
             let (traversal, symlink) = ancestor_sets(candidate);
             for ancestor in traversal {
