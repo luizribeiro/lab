@@ -96,10 +96,29 @@ publishes = [
 ]
 ```
 
-Topic strings follow Stream B's fittings ACL grammar
-(`namespace.event[:filter]`). Core events (`session.*`, `agent.*`)
-are host-published only — a plugin cannot list them under
-`publishes`. `rfl install` rejects manifests that try.
+Topic strings follow Stream A's broker grammar — dot-separated
+lowercase segments (`segment := [a-z0-9_-]+`), with `*` and
+`**` as whole-segment wildcards in subscribe patterns only
+(see security RFC §5.1 / `overview.md` §4.2). The earlier
+`namespace.event[:filter]` notation in this section was
+**stale**: `:` is illegal inside a topic segment, and
+payload-level filtering is the plugin's job, not the broker's.
+
+Publish authority follows the four-namespace model in
+security RFC §5.2 / `overview.md` §4.3:
+
+- `core.*` is core-published only — a plugin cannot list any
+  `core.*` topic under `publishes`. `rfl install` rejects
+  manifests that try.
+- `provider.<provider-id>.*` is publishable only by the
+  plugin whose `[provides] provider = "<provider-id>"`
+  matches the segment.
+- `plugin.<topic-id>.*` is publishable by the plugin whose
+  hashed canonical id matches `<topic-id>`. `rfl install`
+  computes and validates the topic-id.
+- `frontend.<attach-id>.*` is publishable by frontends only,
+  not plugins; `rfl install` rejects plugin manifests that
+  list these topics under `publishes`.
 
 ## 5. Capabilities
 
@@ -428,9 +447,23 @@ entry = "bin/anthropic-provider"
 [rpc]
 openrpc = "openrpc.json"
 
+[provides]
+provider = "anthropic"                              # provider-id used in topics
+
 [bus]
-publishes  = ["provider.tokens", "provider.cost"]
-subscribes = []
+# All provider publishes live under `provider.<provider-id>.*`
+# per security RFC §5.2.
+publishes  = [
+  "provider.anthropic.tool_request",
+  "provider.anthropic.assistant_message",
+  "provider.anthropic.tokens",
+  "provider.anthropic.cost",
+]
+subscribes = [
+  "core.session.user_message",
+  "core.session.tool_result",
+  "core.session.confirm_reply",
+]
 
 # Providers must be live before the loop accepts the first turn.
 load = "eager"
