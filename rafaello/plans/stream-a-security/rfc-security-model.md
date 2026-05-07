@@ -363,14 +363,17 @@ session-static allowlist, prompts the user. Annoying, deliberately.
 ### 6.3 Malicious plugin tries to mutate `rafaello.lock`
 
 The plugin's lockin policy never includes write access to
-`rafaello.lock`. The file lives under `${PROJECT_ROOT}` but the
-grant compiler (§7) excludes it from any plugin's `write_dirs`,
-even if the user grants the project root write — `rafaello.lock`
-and `.rafaello/` are an unconditional carve-out. **Mitigated.**
+`rafaello.lock` or `.rafaello/` *unless* the user passes
+`rfl grant --allow-credential-paths` (§7.3). Without that flag,
+the compiler refuses or decomposes any grant whose ancestor
+would cover those paths, so the lockin sandbox is the enforcer
+and the kernel denies the write. **Mitigated by default; loud
+override available.**
 
-Residual: if a plugin has unrestricted exec + a writable
-ancestor of the lock (e.g. user grants `/`), all bets are off.
-Documented as "do not do this".
+Residual: with the override, or with a manually-written lock
+that includes a path like `/` and the override, the plugin can
+mutate the lock. `rfl status` flags the override in red on every
+invocation so this state is not silent.
 
 ### 6.4 Plugin tries to impersonate `core`
 
@@ -488,21 +491,79 @@ field is populated. CaMeL-as-plugin (v2) is the consumer.
 
 This is the single envelope-level commitment v1 makes for v2.
 
-### 7.3 Carve-outs
+### 7.3 Carve-outs by decomposition (lockin-implementable)
 
-The compiler always strips the following from any plugin's FS
-grant, regardless of what the user granted:
+`lockin` does not currently support deny-subpath precedence
+inside an allowed recursive directory. A grant of
+`write_dirs = ["${PROJECT_ROOT}"]` cannot mean "the project
+except `rafaello.lock` and `.rafaello/**`" with current lockin
+primitives.
+
+The compiler therefore enforces carve-outs by **refusing to
+compile broad recursive grants when a sensitive subpath would
+fall inside them**, and decomposing the grant into concrete
+narrower entries that lockin can express. There is no silent
+filtering at the lockin layer; if the compiler can't represent
+the user's grant precisely with the current lockin schema, it
+errors out and tells the user how to narrow the grant.
+
+The carve-out set ("sensitive subpaths") is:
 
 - `${PROJECT_ROOT}/rafaello.lock`
-- `${PROJECT_ROOT}/.rafaello/**`
+- `${PROJECT_ROOT}/.rafaello/**` (excluding the per-plugin
+  state subtree, see §7.5)
 - `${HOME}/.config/rafaello/**`
 - `${HOME}/.ssh/**`
 - `${HOME}/.gnupg/**`
 - `${HOME}/.aws/**`, `${HOME}/.config/gh/**`, `${HOME}/.netrc`
 
-These are denied even if the user grants `/` or `${HOME}`. The
-user override (which we should make hard to find) is
-`--allow-credential-paths` on `rfl grant`.
+Compilation rules:
+
+1. If a plugin's `write_dirs` contains an ancestor of any
+   carve-out path, the compiler errors with
+   `cannot represent <path> carve-out under <ancestor>; narrow
+   the grant or pass --allow-credential-paths`.
+2. If a plugin's `read_dirs` contains an ancestor of any
+   `${HOME}/.ssh`-class carve-out, same rule.
+3. The compiler will **decompose** an ancestor grant
+   automatically when it can. For example, a request for
+   `read_dirs = ["${PROJECT_ROOT}"]` with a `.rafaello/`
+   carve-out is decomposed into `read_dirs = [<every immediate
+   child of ${PROJECT_ROOT} except ".rafaello">]`. The
+   decomposition is computed at compile time, snapshotted into
+   the lockin policy, and re-evaluated only when the lock
+   changes — it is not a live filter.
+4. Decomposition is bounded: the compiler caps the number of
+   synthesized entries (default 256). Above the cap, it errors
+   rather than producing a huge policy that may not match the
+   user's intent.
+5. The override is `rfl grant --allow-credential-paths
+   <plugin>`, which sets a flag in the lock that suppresses the
+   carve-out class entirely (i.e. the lockin policy will then
+   include the broad grant verbatim, with the lock file and
+   credential dirs reachable). The flag appears in red in
+   `rfl status`. There is **no** "unconditional, non-overridable"
+   claim; v1 has one consistent model — *deny by default, override
+   exists, and the override is loud*.
+
+### 7.3.1 Hidden-directory rule (also via decomposition)
+
+The default workspace grant historically said "non-recursive
+into hidden directories starting with `.`". Because lockin can't
+express that as a rule, the compiler implements it by listing
+the immediate non-hidden children of `${PROJECT_ROOT}` plus
+`${PROJECT_ROOT}/.rafaello-plugin-data/<plugin-id>/`. If the
+user wants a hidden directory included (e.g. `.config/` for an
+editor plugin), they list it explicitly in the grant.
+
+### 7.3.2 Lockin extension request (would simplify but not block)
+
+A future lockin feature that would simplify this: native
+`deny_paths` / `deny_dirs` that take precedence over `read_*` /
+`write_*` for the same subtree. With it, the compiler emits a
+broad grant plus an explicit deny list, instead of the
+decomposition algorithm. This is logged as an upstream ask but
+is **not** required for v1 — decomposition is sufficient.
 
 ### 7.4 Env scrubbing
 
@@ -512,14 +573,20 @@ keys. `env.pass` patterns matching any of `*_TOKEN`, `*_SECRET`,
 `ANTHROPIC_*` are stripped *after* `pass` is computed, with the
 same `--i-know-what-im-doing` escape.
 
-### 7.5 Project scope
+### 7.5 Project scope and per-plugin private state
 
-`${PROJECT_ROOT}` resolves to the directory of `rafaello.lock`.
-Default `read_dirs` / `write_dirs` for any plugin that requests
-"workspace access" without specifics is exactly that path,
-non-recursive into hidden directories starting with `.` other
-than `.rafaello-plugin-data/<plugin-id>/` (a per-plugin private
-state dir).
+`${PROJECT_ROOT}` resolves to the directory containing
+`rafaello.lock`. The compiler implements "workspace access" as
+described in §7.3.1 (immediate non-hidden children, plus the
+plugin's own private state dir).
+
+Every plugin receives, automatically and unconditionally, a
+recursive read+write grant on
+`${PROJECT_ROOT}/.rafaello-plugin-data/<plugin-id>/` — this is
+the plugin's private state dir. It is not a request the manifest
+must make, and it is not a grant the user has to confirm. It is
+how plugins persist anything they need across runs (caches,
+audit logs, indexes). Other plugins cannot read it.
 
 ## 8. The v1/v2 cut
 
