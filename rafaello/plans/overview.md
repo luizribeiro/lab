@@ -628,10 +628,54 @@ Providers `subscribe` to `core.session.user_message` and
 `provider.<id>.tool_request` and `provider.<id>.assistant_message`.
 Core re-emits canonical `core.*` events as in §4.4.
 
-The default v1 provider is built into core (a fittings client
-that talks to `litellm.thepromisedlan.club/v1` per
-`plans/README.md` §"Tooling notes"); third-party providers
-ship as plugins exactly like any other.
+### 8.1 The default provider is a bundled plugin, not a core feature
+
+To preserve the "providers ship as plugins" goal (§1.1) and
+the trust model (§2), the default provider is **bundled but
+not built-in**: it is a real subprocess plugin named
+`rfl-litellm` whose binary ships in the rafaello release and
+whose manifest is shipped alongside, but which goes through
+the same lock/grant/sandbox/bus path as any third-party
+provider.
+
+Concretely:
+
+- `rfl init` materialises `rafaello.lock` with a default
+  entry for `rfl-litellm`, pre-populating bindings
+  (`provider = true`, `provider_id = "litellm"`),
+  `[session].provider_active = "<rfl-litellm-id>"`, and a
+  conservative grant: `network.mode = "proxy"` with
+  `allow_hosts = ["litellm.thepromisedlan.club"]` (the
+  endpoint from `plans/README.md` §"Tooling notes"),
+  `env.pass = ["LITELLM_API_KEY"]`, `read_dirs` /
+  `write_dirs = []` apart from per-plugin private state.
+- The user is prompted at `rfl init` time to confirm the
+  default grant (the same `rfl install` review flow), with
+  a clearly-labelled "this is the bundled default provider"
+  notice. Declining swaps to a tool-less LLM-only
+  configuration; the user can later `rfl install` an
+  alternate provider.
+- Spawn, identity, taint, sink confirmation, and topic
+  routing are **identical** to any other provider: lockin
+  policy compiled from the lock, bus principal bound at
+  spawn, `provider.litellm.*` namespace, core re-emits
+  canonical `core.*`. There is no "well-known" path that
+  bypasses these.
+- The `rfl-litellm` binary lives in the same release crate
+  tree but is built and shipped as a plugin artifact, not
+  linked into `rfl`. This is a single-binary-source
+  release-engineering convenience; it does not change the
+  trust model.
+
+Reconciliation note: an earlier overview draft said the
+default provider was "built into core". Pi flagged this as
+incompatible with §1.1 goals 2–3 and the trust model.
+**Decision: bundled-plugin model.** This is the canonical v1
+shape; the LiteLLM client code lives in `rfl-litellm`, not in
+`rfl`'s core crate.
+
+Third-party providers ship as plugins exactly like
+`rfl-litellm`.
 
 ## 9. Helper plugins
 
