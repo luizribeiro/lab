@@ -218,6 +218,94 @@ A defensive belt-and-braces alternative — running a separate
 rejected as overkill. The single dispatcher task already serialises
 inbound frames; peeking and routing in place is ~20 lines.
 
+### 3a. Dispatcher MUST NOT block on the semaphore
+
+Pi-review-2 finding 11. The dispatcher today does
+`semaphore.acquire_owned().await` *inside* the `recv` branch of its
+top-level `select!`. With a bounded outbound channel (see §
+"Notification sink: bounded with drop"), this creates a deadlock:
+
+1. all `max_in_flight` permits are held by running workers;
+2. workers emit notifications until the bounded outbound channel
+   fills;
+3. workers then try to send their final response frame, but
+   `mpsc::Sender::send` blocks because the channel is full;
+4. the dispatcher is the only task that drains the outbound
+   channel — but it is parked in `semaphore.acquire_owned()`
+   waiting for a permit;
+5. permits never release because the workers can't finish, and
+   the channel never drains.
+
+**Resolution: the dispatcher must never `.await` the semaphore on
+the same task that drains the outbound channel.** Specifically:
+
+1. Replace `spawn_frame_handler`'s `semaphore.acquire_owned().await`
+   with a non-blocking `semaphore.try_acquire_owned()` plus a
+   bounded backlog channel (call it `pending_workers: mpsc::Sender
+   <(Frame, OwnedSemaphorePermit)>`, capacity = `max_in_flight`).
+2. A small **worker-spawner task** owns the semaphore:
+   `loop { permit = sem.acquire().await; frame = backlog.recv()
+   .await; spawn(handle(frame, permit)) }`. This task does the
+   awaiting; it never touches the outbound channel.
+3. The dispatcher receive arm does `try_acquire`; on failure it
+   pushes onto `pending_workers` (which is bounded but always
+   drainable because the spawner is awaiting it). On success it
+   spawns directly.
+4. The dispatcher's top-level `select!` continues to include a
+   `response_rx.recv()` arm that drains the outbound channel
+   regardless of semaphore state. **This is the invariant: the
+   dispatcher's drain loop is never gated by the semaphore.**
+
+Equivalent simpler refactor (preferred unless we discover a need
+for the extra task): collapse the worker model entirely to a
+`JoinSet`-driven design:
+
+- the dispatcher receives frames, decodes, optionally short-
+  circuits (cancellation, parse error), and otherwise tries to
+  spawn a worker;
+- workers do **not** write responses to a channel — they return
+  `(JsonRpcId, Result<Value, FittingsError>)` from the `JoinSet`;
+- a third `select!` arm on `workers.join_next()` consumes
+  completions and writes responses *directly* to the transport
+  (or to the bounded outbound channel — either way, the writer
+  task is separate from the spawn-side semaphore wait).
+- the spawn-side `acquire_owned().await` is moved off the
+  dispatcher task into the same JoinSet style as the MCP example
+  in `fittings/examples/mcp-server/src/mcp.rs:587–705` already
+  uses.
+
+**Normative invariant (must appear as a server-loop test):** with
+`notification_capacity = 1`, `max_in_flight = 1`, and a handler
+that emits two notifications then completes, the server must not
+deadlock. The current architecture, naively bound, does. The
+refactor above breaks the cycle.
+
+### 3b. One channel or two?
+
+Pi-review-2 finding 11 also raises whether responses and
+notifications share one channel. We commit to **two channels**:
+
+- `response_tx: mpsc::Sender<Vec<u8>>`, **unbounded**. Responses
+  are at most one per in-flight worker, so total queue depth
+  is bounded by `max_in_flight`. Unbounded is safe and removes
+  the responses-block-on-full failure mode entirely.
+- `notification_tx: mpsc::Sender<Vec<u8>>`, **bounded** at
+  `notification_capacity` (default 1024). Drop-on-full per the
+  notification sink contract.
+
+The dispatcher's `select!` polls *both* receive ends and writes
+to the transport in arrival order between channels. Notifications
+emitted before a response are still delivered before that
+response (within a connection); fairness across requests is a
+tokio-select coin flip — fine.
+
+This supersedes the earlier wording ("the same channel is used for
+response frames so the dispatcher preserves global order"). The
+old wording was wrong: it created the deadlock pi-review-2 caught.
+
+The validation rule (`notification_capacity ≥ max_in_flight`) is
+no longer needed and is removed.
+
 ### 4. `Service` blanket impls and migration
 
 The current single-arg form is used by `fn`-style handlers in
@@ -457,13 +545,12 @@ Resolves the backpressure question normatively.
   back-pressuring the handler**. Streaming-tokens consumers must
   tolerate dropped intermediate frames. (In practice: emit a final
   "done" frame the consumer can verify.)
-- The same channel is used for **response frames** so the dispatcher
-  preserves global order. Responses are *not* dropped — a full
-  channel will block the response writer briefly until a frame
-  drains, but since responses are at most 1 per request and
-  `max_in_flight` bounds requests, this cannot deadlock as long as
-  capacity ≥ `max_in_flight`. Validation: panic in `Server::serve`
-  if `notification_capacity < max_in_flight`.
+- **Responses use a separate, unbounded channel.** See §3b. The
+  bounded sink applies to *notifications only*. An earlier draft
+  shared one channel and risked a worker-blocks-on-full deadlock;
+  pi-review-2 caught this. Two channels, polled in the same
+  `select!`, sidestep the issue without losing ordering within
+  notifications or within responses.
 
 This contract is the API for `notify`. It does not change later
 without an RFC.
