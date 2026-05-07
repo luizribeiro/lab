@@ -565,6 +565,73 @@ Settled here, referenced from the errors RFC. v1 rules:
    on; it is not worth the complexity to clamp.
 5. **Inbound cancellation for an unknown id is silently dropped.**
    It is a benign race (cancel arrived after handler completed).
+   Recorded at `tracing::trace!` only.
+6. **Malformed cancellation payloads are dropped, not fatal.**
+   Specifically, the dispatcher applies the configured
+   `cancellation_id_extractor` and on any of:
+   - `params` is missing or `null`;
+   - the extractor's target field (`id` / `requestId`) is
+     missing;
+   - the target field is not a JSON-RPC id type (e.g. an object,
+     array, boolean, or fractional number);
+   it logs at `tracing::warn!` (with the raw payload truncated
+   to 256 bytes) and drops the frame. The connection is **not**
+   torn down; this is treated as peer noise, not a protocol
+   violation.
+7. **`"1"` (string) and `1` (number) are distinct ids.** The
+   dispatcher uses `JsonRpcId`'s native equality. A peer that
+   sent `id: 1` and then `notifications/cancelled` with
+   `requestId: "1"` will see no cancellation; this is a peer
+   bug. We do not normalise.
+8. **Duplicate cancellation notifications for the same in-flight
+   id are idempotent.** Triggering an already-fired token is a
+   no-op (`CancellationToken::cancel` is idempotent by design).
+   No log.
+
+### Cancellation in batch requests
+
+The current server processes JSON-RPC batches inside one worker
+sequentially (`server/src/server.rs:168–219`). The revised design
+must define how cancellation interacts with batches, since fittings
+already supports them.
+
+Rules:
+
+1. **Cancellation notifications inside a batch are fast-pathed
+   item-by-item.** When the dispatcher peels open a batch on
+   the receive side (before semaphore acquisition), each
+   notification item is checked against the cancellation
+   method just like a top-level frame. Any matching items are
+   dispatched immediately; non-cancellation items continue
+   into the worker as before.
+2. **Each id-bearing item in a batch is a separate `in_flight`
+   entry.** The batch worker registers all ids before
+   processing begins and removes them as each completes.
+3. **Cancelling one item of a batch suppresses *that item's*
+   response only.** Other items in the same batch still
+   produce responses. The batch response array therefore may
+   be shorter than the request array — this matches the
+   "notification items produce no response" rule the spec
+   already requires.
+4. **If every item in a batch is cancelled (or every item is
+   a notification), no batch response is emitted.** The
+   current behaviour at `server.rs:211–213` already handles
+   "no responses → emit nothing"; we keep it.
+5. **Batches still occupy one semaphore permit total**, not
+   one per item. The unit of concurrency is the inbound
+   frame, and the existing test
+   `batch_with_notifications_and_calls_returns_only_call_responses`
+   captures the contract. Changing this is out of scope.
+6. **A cancellation notification may target an id that is
+   currently mid-batch.** This works exactly because the
+   batch worker registered each item id in `in_flight`
+   individually (rule 2). The mid-batch worker observes the
+   token, drops the in-progress item's would-be response, and
+   continues with the next batch item.
+
+This preserves current batch behaviour for fittings consumers
+that don't use cancellation, and gives consumers that do a
+predictable per-item model.
 6. **No LSP-style `RequestCancelled` error response.** Suppression
    is the chosen policy; it is not configurable in v1. If a
    non-MCP consumer ever needs the LSP behaviour, adding
