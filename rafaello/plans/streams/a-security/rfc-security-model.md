@@ -1191,8 +1191,10 @@ consumer of an existing data flow.
    accepts the change.
 2. Stream F must commit to the manifest fields:
    `provides.tools`, `provides.provider`, `provides.tool.<n>.sinks`,
-   `subscribes`, `publishes`, `helper_for` (see #5),
-   `requires_confirmation` (advisory).
+   `provides.tool.<n>.grant_match`, `subscribes`, `publishes`,
+   `helper_for` (see #5), `always_confirm` (per-tool, enforced
+   UX gate; see `overview.md` §15.1 row 3 — replaces the earlier
+   advisory `requires_confirmation`).
 3. **Bus event payload schemas live in Stream A**, not Stream
    B (per `overview.md` §15.2). Stream A owes complete schemas
    for `core.session.tool_result`, `core.session.tool_request`,
