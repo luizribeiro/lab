@@ -467,7 +467,7 @@ compatibility requirement:
 | `[load]`                                  | Lazy-load triggers                        | already in F §7 |
 | `[[renderers]]`                           | Renderer registry (§8)                    | already in F §6 |
 | `helper_for` (lock-side `bindings`)       | Helper-plugin parent declaration (§9)     | NEW — gap, see §15 |
-| `requires_confirmation` (advisory)        | Hint, not enforcement                     | NEW — gap, see §15 |
+| `always_confirm` (per-tool, enforced)     | Force confirmation even when `sinks = []` (UX gate; see §15.1 row 3 below) | NEW — gap, see §15 |
 
 The **NEW** rows are real cross-stream gaps the manifest RFC
 has not yet committed to; they are tracked in §15 and must
@@ -1009,7 +1009,7 @@ schema RFC has not yet committed:
 | `provides.tool.<n>.sinks = [...]`    | sink-class confirmation (§6.2)    | absent |
 | `provides.tool.<n>.grant_match`      | `user_grants` matcher (§6.4)      | absent |
 | `helper_for` (lock-side binding)     | helper plugins (§9)               | absent — F's open question #1 unrelated |
-| `requires_confirmation` (advisory)   | UX hint                           | absent |
+| `always_confirm` (per-tool, enforced) | Force confirmation even when not a sink | absent |
 
 **Normative delta (binding for Stream F's next revision).**
 Pi flagged that the loose "proposed fix" wording was
@@ -1025,16 +1025,28 @@ schema delta Stream F must adopt before m1 implementation:
    helpers  = ["github:org/qllm@1.0.0"]     # canonical ids of helpers this plugin may spawn
 
    [provides.tool.grep]
-   sinks                  = []              # zero or more of: "network", "vcs_push", "mail", "workspace_write", "exec", custom strings
-   grant_match            = "schemas/grep-grant-match.json"  # JSON-Schema for user_grants matcher; absent → "any invocation" matcher
-   requires_confirmation  = false           # advisory hint; not enforced — see security RFC §9.1 "refuses_tainted_input demoted to advisory"
+   sinks            = []              # zero or more of: "network", "vcs_push", "mail", "workspace_write", "exec", custom strings
+   grant_match      = "schemas/grep-grant-match.json"  # JSON-Schema for user_grants matcher; absent → "any invocation" matcher
+   always_confirm   = false           # enforced opt-in: when true, core gates the tool through confirmation even if sinks = []
    ```
 
    The `[provides]` block is the manifest-side declaration;
    `rfl install` snapshots it into the lock's
    `bindings.tools`, `bindings.provider_id`,
-   `bindings.tool_meta.<name>.{sinks,grant_match,requires_confirmation}`,
+   `bindings.tool_meta.<name>.{sinks,grant_match,always_confirm}`,
    and `bindings.helpers`.
+
+   **Renaming note (pi review 2 finding 2):** the round-1
+   draft used `requires_confirmation` and described it as
+   "advisory hint". That conflicted with §5.3 calling it
+   "Hint, not enforcement" while the validation rules below
+   said it was core-enforced. **Decision: enforced opt-in,
+   renamed to `always_confirm` for clarity.** It is a UX
+   gate (forces a confirmation prompt) layered on top of the
+   sink-confirmation rule (§6.2); it is *not* a security
+   sink class itself. The advisory-hint flavour is dropped
+   entirely — manifest authors who want a hint without
+   enforcement can put it in `description`.
 
 2. **Add a top-level `helper_for` manifest field**:
 
@@ -1052,14 +1064,16 @@ schema delta Stream F must adopt before m1 implementation:
      `rfl install` warns.
    - Every entry in `[provides.tools]` must have a matching
      `[provides.tool.<name>]` table; missing tables default
-     to `{ sinks = [], grant_match = absent, requires_confirmation = false }`.
+     to `{ sinks = [], grant_match = absent, always_confirm = false }`.
    - `helper_for` referencing a plugin whose lock entry does
      not list this helper in `bindings.helpers` is rejected
      at install time.
-   - `requires_confirmation = true` causes core to *also*
-     gate the tool through confirmation even when its
-     `sinks = []`; it is the explicit opt-in for read-only
-     tools that nonetheless want a human review step.
+   - `always_confirm = true` causes core to gate the tool
+     through the confirmation protocol (§6.6) even when its
+     `sinks = []` and no `user_grants` entry is involved;
+     this is the explicit opt-in for read-only tools that
+     nonetheless want a human review step. Bypass via the
+     same `user_grants` mechanism as sink confirmation.
 
 4. **Eager-failure mode field — STRIKE.** The earlier overview
    draft mentioned `load.eager_failure = "open"` as a knob.
