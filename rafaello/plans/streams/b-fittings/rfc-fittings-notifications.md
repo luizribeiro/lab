@@ -18,9 +18,16 @@ The gap is purely on the trait/runtime side.
 
 Non-goals for v1:
 
-- Server-originated *requests* to the client (sampling, elicitation).
-  Designed-around, not designed-in. See "Future work" and the
-  explicit "Server-originated requests: v1 cut" section below.
+- ~~Server-originated *requests* to the client.~~
+  **Reversed by `overview.md` decision 22 (round 2).** v1 now
+  ships a bidirectional `PeerHandle` exposing both `notify`
+  and `call` on each side of the connection; see the new
+  "Bidirectional `PeerHandle`" section below. This is the
+  rafaello bus design's transport requirement
+  (`renderer.render` from core, helper-spawn handshake,
+  future tool-call request modes). The "Server-originated
+  requests: v1 cut" section below is preserved for history
+  and explicitly marked superseded.
 - Async-flow-control backpressure (handlers being suspended when
   the transport is slow). v1 ships a **bounded sink with drop-on-
   full semantics** — see "Notification sink: bounded with drop"
@@ -729,9 +736,160 @@ transport write directly, which serialises all handlers behind
 each other, or (b) a per-frame ack signal, which doubles channel
 traffic. Neither is worth it for v1.
 
-## Server-originated requests: v1 cut
+## Bidirectional `PeerHandle` (v1)
 
-**Out of scope for v1. Explicitly deferred. Concrete cut:**
+> **Status:** added in round 3, after `overview.md` decision
+> 22 lifted the v1 cut on server-originated requests. This
+> section *replaces* the "Server-originated requests: v1 cut"
+> below (kept for history). It also generalises the round-1
+> `ServerHandle::notify` proposal: `notify` and `call` are
+> two methods on the same `PeerHandle` type, exposed
+> symmetrically on both ends of a connection.
+
+### Why
+
+The rafaello bus is a bidirectional transport. Concrete v1
+needs:
+
+- core publishes `core.session.entry.*` to plugin/frontend
+  subscribers as JSON-RPC notifications outside any inbound
+  handler;
+- core calls `renderer.render` on a renderer plugin's
+  fittings server (request/response, with cancellation if
+  the requesting frontend disconnects);
+- core calls `frontend.hello` reverse-direction for capability
+  negotiation at attach time;
+- a parent plugin asks core to `helper.spawn` (request) and
+  later receives `helper.crashed` (notification);
+- a plugin emits `bus.publish` (notification) while a core→
+  plugin `tool.invoke` request is in flight.
+
+`ServiceContext::notify` does not cover any of these because
+it requires an inbound request to be in flight. The earlier
+round-1 `ServerHandle::notify` covered (1) but not (2)–(4).
+A unified `PeerHandle` covers all of them with one type.
+
+### API
+
+```rust
+/// Cheap-to-clone, valid for the lifetime of the connection.
+/// Each side of a fittings connection holds one of these.
+pub struct PeerHandle { /* internally Arc<PeerHandleInner> */ }
+
+impl PeerHandle {
+    /// Outbound JSON-RPC notification. Shares the bounded
+    /// notification channel from §3b (drop-on-full,
+    /// non-blocking). `Ok(())` confirms local enqueue, not
+    /// peer delivery — same contract as `ctx.notify`.
+    pub fn notify(&self, method: &str, params: Value)
+        -> Result<(), FittingsError>;
+
+    /// Outbound JSON-RPC request. Resolves when the response
+    /// frame arrives, or with `Transport` if the connection
+    /// closes first.
+    pub async fn call(&self, method: &str, params: Value)
+        -> Result<Value, FittingsError>;
+
+    /// Resolves when the connection has been closed.
+    pub async fn closed(&self);
+}
+
+impl<S: Service> Server<S> {
+    /// Connection-scoped peer handle. Replaces the round-1
+    /// `Server::handle()` sketch.
+    pub fn peer(&self) -> PeerHandle;
+}
+
+impl<C: Transport> Client<C> {
+    /// Bind an inbound `Service` impl to this client. Inbound
+    /// id-bearing requests dispatch into `svc` instead of
+    /// being rejected with -32601. Optional; without it,
+    /// inbound id-bearing requests still get the -32601
+    /// reject (preserving the round-1 behaviour for
+    /// client-only consumers).
+    pub fn with_service<S: Service>(self, svc: S) -> Self;
+
+    /// Symmetric peer handle on the client side.
+    pub fn peer(&self) -> PeerHandle;
+}
+```
+
+### Implementation notes
+
+1. **Pending outbound state.** Each side tracks
+   `pending_outbound: HashMap<JsonRpcId, oneshot::Sender>`,
+   mirror of the existing client-side correlator. Server-side
+   adds this as a sibling to the existing
+   `in_flight: HashMap<JsonRpcId, CancellationToken>` for
+   inbound calls; client-side adds it as a sibling to the
+   existing `pending` map for outbound calls.
+2. **Request-id allocation.** Each side allocates from its
+   own monotonic counter. Inbound and outbound id spaces are
+   tracked in disjoint maps, so even if both sides pick
+   `JsonRpcId::Number(7)`, the routing is unambiguous: a
+   response with id `7` arriving at side A correlates against
+   A's `pending_outbound[7]`, never against A's inbound
+   `in_flight[7]`.
+3. **Channel reuse.** `peer.notify` writes into the bounded
+   notification channel from §3b. `peer.call`'s outbound
+   request frame writes into the unbounded response channel
+   (the queue depth bound is now
+   `max_in_flight + max_outbound_pending`; both are bounded
+   by the user's per-connection in-flight cap). Reads use
+   the existing dispatcher loop's response-decode arm,
+   extended to consult `pending_outbound` when an inbound
+   frame's id matches one of *our* outstanding calls.
+4. **Inbound request dispatch on the client.** The client
+   loop's existing `RequestEnvelope` branch already produces
+   an `-32601` for unknown id-bearing requests; with
+   `with_service`, that branch becomes a service-dispatch
+   call (constructing a `ServiceContext` whose
+   `peer = self.peer()`). The dispatch runs on a spawned
+   task identical to the server's worker.
+5. **Cancellation.** Inbound cancellation continues to flow
+   per the existing rules (§"Cancellation response
+   semantics"). For *outbound* requests, the caller can drop
+   the future to stop awaiting; the corresponding pending
+   slot is removed and a `notifications/cancelled` (or
+   configured equivalent) is emitted. v1 supports outbound
+   cancellation symmetrically; the configured cancellation
+   method applies to both directions.
+6. **Connection-closed behaviour.** On close, every entry in
+   both `pending` and `pending_outbound` resolves with
+   `Err(FittingsError::Transport { ... })`, every entry in
+   `in_flight` cancels its token, and `peer.closed()`
+   resolves.
+
+### Acceptance criteria (in addition to §"Acceptance criteria" below)
+
+- A core→plugin `peer.call` round-trip outside any inbound
+  handler delivers a response. (Direct test for
+  `renderer.render`.)
+- Simultaneous in-flight calls in both directions over a
+  single connection complete without interleaving issues.
+  (Plugin calling `bus.publish` while core is calling
+  `renderer.render`.)
+- Dropping the future returned by `peer.call` cancels the
+  request and emits the configured cancellation
+  notification.
+- Connection close drains both `pending` and
+  `pending_outbound` with `Transport` errors.
+
+### Migration
+
+`Server::serve` keeps its current shape; `peer()` is
+additive. `ServiceContext` gains a `peer: PeerHandle` field
+so handlers can also issue outbound calls (this is how a
+handler that *receives* `bus.publish` could turn around and
+issue a `helper.spawn` request — though that specific case
+is core's, not a plugin's). Existing `Service` impls compile
+unchanged.
+
+## Server-originated requests: v1 cut (superseded)
+
+> **Superseded by the "Bidirectional `PeerHandle` (v1)"
+> section above and `overview.md` decision 22.** Kept for
+> history. The earlier v1 cut, summarised:
 
 - `ServiceContext` does NOT expose a `request(method, params)`
   method in v1. Reserved for a follow-up RFC.
@@ -765,15 +923,17 @@ follow-up will add both at once, on demand.
 
 ## Future work (deferred)
 
-- **Server→client requests.** Sampling/elicitation. Requires the server
-  loop to read response frames and correlate them, mirroring the
-  current client. Likely surfaces as
-  `ServiceContext::request(method, params) -> impl Future<Result>`.
-  v1 of `ServiceContext` reserves the method name but does not ship it.
+- ~~**Server→client requests.**~~ **Promoted to v1** by
+  `overview.md` decision 22; specified in the
+  "Bidirectional `PeerHandle` (v1)" section above.
+- ~~**Connection-scoped `ServerHandle`.**~~ **Promoted to
+  v1** as part of `PeerHandle`.
 - **Typed notification dispatch on the client.** A
-  `NotificationRouter` analogous to `MethodRouter`.
-- **Connection-scoped `ServerHandle`** for emitting notifications
-  outside any handler (heartbeat, broadcast, eventbus push).
+  `NotificationRouter` analogous to `MethodRouter`. Still
+  deferred — orthogonal to bidirectionality.
+- **Sampling / elicitation protocols layered on top of
+  `peer.call`.** Naming the methods and shaping the
+  payloads is a separate RFC; the transport is now in v1.
 
 ## Acceptance criteria
 
