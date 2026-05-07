@@ -1,12 +1,30 @@
 # RFC — CaMeL on v1: a v2 agent prompt
 
-Status: draft, stream-a, first pass.
+Status: revised after pi-review-1.
 Scope: a self-contained prompt that hands a v2 implementation
 agent the task of building CaMeL (arXiv:2503.18813) as a rafaello
-plugin, using only v1 primitives. A short companion analysis at
-the end of the file checks the prompt against §7-8 of
-`rfc-security-model.md` and notes the one v1 envelope commitment
-this depends on (`taint` on `core.session.tool_result`).
+plugin. The earlier draft claimed "no v1 gap" too strongly; this
+revision lists the v1 contracts CaMeL depends on and points each
+to the canonical security-RFC section, so the implementation
+agent (and v1 implementers) can verify the contracts hold before
+work begins.
+
+### Provider-vs-middleware decision
+
+CaMeL is implemented as a **provider plugin** for v1, not as a
+middleware shim. Reasons:
+
+- The bus has no chain-of-responsibility primitive; introducing
+  one is a v3 conversation.
+- The "core re-emits canonical `core.*` events from
+  `provider.<id>.*`" model in security RFC §5.2 already gives
+  CaMeL the interception point it needs.
+- The provider role is already a v1 primitive (security RFC
+  §5.4 `bindings.provider`).
+
+The earlier RFC's open question about provider-vs-middleware is
+resolved here in favour of provider; middleware-style chaining
+remains a v3 candidate.
 
 ## 1. Why CaMeL fits as a plugin (not core)
 
@@ -17,11 +35,14 @@ privileged LLM never sees raw tool results; instead, it operates
 on **capability-tagged values** synthesised by a small policy
 engine that sits between the two models.
 
-In rafaello terms this is exactly a **provider plugin** that
-also subscribes to `core.session.tool_result` and republishes a
-filtered/transformed view to the agent loop. Nothing in this
-shape requires changes to v1 once the taint envelope (§7.2 of
-the security RFC) is committed.
+In rafaello terms this is a **provider plugin** that publishes
+on `provider.camel.*` and subscribes to
+`core.session.tool_result`. Core re-emits its
+`provider.camel.tool_request` events as canonical
+`core.session.tool_request` after applying taint-propagation and
+sink-confirmation rules (security RFC §5.2, §7.2). CaMeL's own
+capability check is layered on top of those v1 enforcements; it
+strengthens, not replaces, them.
 
 ## 2. The prompt
 
@@ -67,12 +88,21 @@ the security RFC) is committed.
 >   (or the same endpoint with a distinct API key) so failures
 >   are independently observable.
 > - `subscribes = ["core.session.user_message",
->   "core.session.tool_result"]`.
-> - `publishes = ["core.session.tool_request",
->   "core.session.assistant_message"]`. (Provider plugins are
->   the only plugins permitted to publish on these two topics;
->   that authorisation is already in v1.)
-> - No filesystem grants. CaMeL does not touch the project.
+>   "core.session.tool_result", "core.session.confirm_reply"]`.
+> - `publishes = ["provider.camel.tool_request",
+>   "provider.camel.assistant_message"]`. (Per security RFC
+>   §5.2, providers publish on the `provider.<id>.*` namespace;
+>   core re-emits canonical `core.*` events. The earlier draft
+>   that had providers publishing `core.*` directly was
+>   incorrect.)
+> - The per-plugin private state dir
+>   (`.rafaello-plugin-data/camel/`) is granted automatically by
+>   the v1 grant compiler (security RFC §7.5) and is where CaMeL
+>   writes its audit log. **No additional filesystem grant is
+>   required** — but you must not request `read_dirs` /
+>   `write_dirs` for anything else, because doing so would put
+>   you on the wrong side of the trifecta rule (§7.1) given your
+>   network grant.
 >
 > ### What the v1 primitives give you
 >
@@ -106,12 +136,28 @@ the security RFC) is committed.
 >    is constrained *before* the call leaves you, by the policy
 >    engine.
 >
-> 5. **Q-LLM isolation.** Spawn the Q-LLM as a child plugin
->    (use the fittings spawn API) with its own lockin policy:
->    network only to the Q-LLM endpoint, no FS, no bus access.
->    A Q-LLM that ever publishes on the bus is a bug, not a
->    feature; the lockin policy makes the bug structurally
->    impossible because it has no `RFL_BUS_TOKEN`.
+> 5. **Q-LLM isolation — via core, not via fittings spawn.**
+>    The earlier draft suggested using the fittings spawn API
+>    directly. That is not the right primitive: fittings'
+>    subprocess support spawns a normal JSON-RPC subprocess; it
+>    does not compile a lockin policy or own plugin authority.
+>    Plugin spawning, including any sandboxed helper plugin, is
+>    rafaello core's job.
+>
+>    Therefore: ship the Q-LLM as a **separate installed plugin
+>    named `camel-qllm`** with its own manifest, its own lock
+>    entry, and its own `network.mode = "proxy"` /
+>    `allow_hosts = [<Q-LLM endpoint>]`. The plugin has no
+>    `RFL_BUS_FD` granted (it is spawned with no bus
+>    socketpair), so it has no path to publish anything; the
+>    core spawns it on demand for CaMeL via a new
+>    `bindings.helper_for = "camel"` lock field that authorises
+>    CaMeL to request its instantiation. This is a v1 contract
+>    the security RFC must commit to (see §3 below); without it,
+>    CaMeL falls back to running the Q-LLM as an in-process
+>    HTTP request from inside the CaMeL plugin — which means
+>    Q-LLM lives in the same process as P-LLM logic, weaker
+>    isolation but still a viable v2.
 >
 > ### What you must implement inside the plugin
 >
@@ -148,17 +194,24 @@ the security RFC) is committed.
 >    into JSON {fields: ...}"). The schema strips free-text
 >    channels for indirect prompt injection back into the P-LLM.
 >
-> 5. **User confirmations.** For sinks that are inherently
->    irreversible (network egress to a host not previously
->    confirmed in the session, file writes outside the project,
->    `git push`, sending mail), even a passing policy check
->    must produce an interactive confirmation event on the bus.
->    The agent core's TUI (or any frontend) can render the
->    confirmation; you do not own the UI. Use a
->    `camel.confirm_request` topic published with the proposed
->    action and the capability trace, and wait for a
->    `camel.confirm_reply` from the user-facing frontend before
->    proceeding.
+> 5. **User confirmations — use the v1 core protocol, not your
+>    own.** Security RFC §5.6 defines a core-mediated
+>    confirmation protocol with topics
+>    `core.session.confirm_request` (core-published) and
+>    `core.session.confirm_reply` (core-published, delivered to
+>    the requesting plugin), and frontends answer on
+>    `frontend.<id>.confirm_answer`. The earlier draft of this
+>    RFC invented `camel.confirm_request` /
+>    `camel.confirm_reply`; that conflicted with the §5.2
+>    namespace model (plugins cannot publish to other plugins
+>    under their plugin namespace, and they cannot accept
+>    consent answers without enabling spoofing). Use the core
+>    protocol: emit a confirmation request as a payload field on
+>    your own `provider.camel.tool_request` (set
+>    `requires_confirmation: true` with a human-readable
+>    summary), and core will hold the request and run the
+>    protocol on your behalf, delivering the answer back to you
+>    in the matching `core.session.confirm_reply`.
 >
 > ### Tests you must write
 >
@@ -199,23 +252,41 @@ the security RFC) is committed.
 
 ## 3. v1 dependency check
 
-The prompt above relies on exactly these v1 commitments:
+CaMeL-as-plugin is plausible on v1 **only if all of the
+following v1 contracts are committed**. Each row points to its
+defining section in the security RFC; if any row is left
+unspecified at v1 ship time, CaMeL must be reworked.
 
-| Requirement                                                        | Source         |
-|--------------------------------------------------------------------|----------------|
-| Provider plugin role with sole publish on `tool_request`/`assistant_message` | Stream F manifest, §5.3 of security RFC |
-| Bus event `core.session.tool_result` carries `taint: [string, ...]` | §7.2 security RFC (the one envelope commitment) |
-| Plugin can spawn a child plugin under its own lockin policy        | fittings `spawn` crate (already in tree) |
-| Plugins have a private per-plugin state dir                        | §7.5 security RFC |
-| `core.session.tool_request` is the only path from LLM to tools     | §5.3 security RFC |
-| User-confirmation pattern via published topic + reply              | §5 security RFC (no new primitive — uses bus normally) |
+| # | Primitive CaMeL needs                                          | v1 source (security RFC)              | Status     |
+|---|----------------------------------------------------------------|---------------------------------------|------------|
+| 1 | Provider role, exclusive publish on `provider.<id>.*`          | §5.2, §5.4, §3.2 `bindings.provider`  | committed  |
+| 2 | Core re-emits `provider.camel.tool_request` → `core.session.tool_request` | §5.2                          | committed  |
+| 3 | `core.session.tool_request` is the only LLM-to-tool path       | §5.4 (architectural)                  | committed  |
+| 4 | Structured taint on both `tool_result` and `tool_request`      | §7.2 (`{source, detail}`)             | committed  |
+| 5 | Core-enforced sink confirmation gate                           | §7.2.3                                | committed  |
+| 6 | Confirmation protocol with frontend authentication             | §5.6                                  | committed  |
+| 7 | Per-plugin private state dir granted automatically             | §7.5                                  | committed  |
+| 8 | Reserved env vars (`RFL_BUS_FD`, `RFL_PLUGIN`) for transport   | §5.5.1                                | committed  |
+| 9 | Tool sink metadata snapshotted into lock                       | §3.2 `bindings.tool_meta.<n>.sinks`   | committed  |
+| 10| Sandboxed helper plugin spawn (`camel-qllm`) owned by core     | not yet — see below                   | **gap**    |
 
-There is **no v1 gap** that blocks CaMeL-as-plugin, provided the
-taint envelope ships in v1. If the taint field is omitted, CaMeL
-can still be built but its capability tags collapse to "did the
-data ever pass through a tool?" — a strictly weaker analysis
-that misses cross-tool flows where the taint sources matter
-(distinguishing a webpage from a project file from a git diff).
+Row 10 is the single remaining v1 gap. CaMeL can ship a degraded
+implementation without it (Q-LLM as in-process HTTP), but the
+clean implementation needs core to support a "helper plugin"
+relationship: a plugin whose lock entry has
+`bindings.helper_for = "<other-plugin-id>"`, which (a) suppresses
+its bus fd at spawn, (b) authorises the parent plugin to request
+its instantiation, and (c) makes it not directly user-facing
+(does not appear as a tool to the LLM). The security RFC should
+either add this as a v1 commitment or this RFC must commit to
+the in-process Q-LLM degradation. **This revision flags it as
+the open v1-scope question for the project owner.**
+
+If the taint envelope (row 4) were ever omitted, CaMeL's
+capability tags would collapse to "did the data ever pass
+through a tool?" — a strictly weaker analysis. Row 4 is the
+single most-load-bearing commitment; rows 5-6 build directly on
+it.
 
 ## 4. What this prompt deliberately leaves to v2
 
@@ -229,22 +300,29 @@ that misses cross-tool flows where the taint sources matter
   Optimisation (caching the Q-LLM, batching summaries, etc.) is
   out of scope of v1's enabling work.
 
-## 5. Open questions for the reviewer
+## 5. Resolved disagreements / open questions
 
-1. Is "provider plugin owns `tool_request` publish" the right
-   primitive, or should CaMeL be modelled as a *middleware*
-   that wraps an underlying provider plugin? The latter is more
-   composable but requires a chain-of-responsibility primitive
-   in the bus that v1 doesn't have.
-2. Should `taint` be a list of strings or a structured object
-   (`{ source: ..., kind: ... }`)? The current draft says
-   strings for simplicity; CaMeL would prefer structured. v1
-   could ship strings with the convention that they are
-   colon-prefixed (`web:<host>`, `project:<path>`) and let
-   CaMeL parse, deferring the structured form to v2.
-3. The `--i-know-what-im-doing` override on the trifecta rule
-   (§7.1 of the security RFC) is bypassable by the user, which
-   is fine, but: if the user is running CaMeL, should CaMeL be
-   allowed to *re-impose* a denied combination? Probably yes
-   (CaMeL is the more sophisticated authority), but the
-   mechanism is unspecified.
+**Resolved (this revision):**
+
+- Provider vs middleware: committed to provider for v1 (§ top
+  of this RFC). Middleware revisited in v3.
+- Taint as `[string]` vs structured: committed to structured
+  `{source, detail}` in security RFC §7.2.
+- Confirmation protocol: replaced CaMeL-private topics with the
+  v1 core-mediated `core.session.confirm_*` protocol (security
+  RFC §5.6). CaMeL does not own confirmation UX.
+- Q-LLM spawning: the earlier "use fittings spawn" instruction
+  was wrong; replaced with "ship as a separate `camel-qllm`
+  plugin orchestrated by core" plus an in-process fallback.
+
+**Open for the project owner:**
+
+- Helper plugin spawn (`bindings.helper_for`) — accept as v1
+  commitment, or accept the in-process Q-LLM degradation? See
+  §3 row 10.
+- The `--i-know-what-im-doing` override on the v1 trifecta rule
+  (security RFC §7.1) is bypassable by the user. If the user
+  has installed CaMeL as their provider, should CaMeL be
+  permitted to *re-impose* a combination the user previously
+  bypassed? Mechanism unspecified; defer to CaMeL-the-plugin's
+  own UX in v2.
