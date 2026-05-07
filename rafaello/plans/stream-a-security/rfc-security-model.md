@@ -506,12 +506,15 @@ attacker controls `api.partner.com` DNS and resolves it to
 `169.254.169.254` (cloud metadata). Lockin's proxy admits the
 connection because the hostname matched.
 
-Documented in lockin's CLI doc; v1 mitigation is **deny private
-address ranges in the proxy** as a non-overridable policy when
-the grant is not `allow_all`. This is a small extension we ask
-of lockin. If lockin can't ship that in time, v1 documents the
-risk and recommends not allowlisting domains the user does not
-control.
+Documented in lockin's CLI doc. lockin currently does not filter
+address classes after DNS resolution; we have **filed a request**
+for `proxy` mode to deny resolution to private/loopback/link-
+local/cloud-metadata ranges by default, but until lockin accepts
+and ships it, this remains a **documented residual risk**, not a
+mitigation. The `rfl install` flow surfaces it as a warning when
+a plugin's `allow_hosts` includes any non-wildcard hostname the
+user is not the publisher of, and the docs recommend pinning
+hosts the user controls.
 
 ### 6.8 Sandbox escape via `LD_PRELOAD`
 
@@ -832,15 +835,65 @@ consumer of an existing data flow.
 ## 9. What we still owe before v1 ships
 
 1. The lockin extension to deny private address ranges in
-   `proxy` mode irrespective of `allow_hosts` (§6.7). If lockin
-   can't take it, document the residual risk and ship.
+   `proxy` mode irrespective of `allow_hosts` (§6.7). Currently
+   filed as a residual risk, not a mitigation, until lockin
+   accepts the change.
 2. Stream F must commit to the manifest fields:
-   `provides.tools`, `provides.provider`,
-   `subscribes`, `publishes`, `refuses_tainted_input`.
+   `provides.tools`, `provides.provider`, `provides.tool.<n>.sinks`,
+   `subscribes`, `publishes`, `helper_for` (see #5),
+   `requires_confirmation` (advisory).
 3. Stream B must commit to the bus event schema for
-   `core.session.tool_result` including the `taint` field.
+   `core.session.tool_result`, `core.session.tool_request`,
+   `core.session.confirm_*` and `frontend.<id>.confirm_answer`,
+   including the structured `taint` and `in_reply_to` fields.
 4. The grant compiler tests must include each scenario in §6 as
    a concrete refusal-or-allow assertion.
+5. **Decide the helper-plugin question (CaMeL row 10).** Either
+   accept `bindings.helper_for` as a v1 commitment (small
+   surface: a lock field plus core's spawn path honouring it),
+   or accept that CaMeL ships in v2 with an in-process Q-LLM
+   that is structurally weaker. The author's recommendation:
+   accept it — it's small, and it benefits any future helper-
+   pattern plugin, not just CaMeL.
+6. **Document exec-time tamper as a user-visible non-goal.**
+   Install-time digest is checked; mid-run swap of plugin
+   binaries on disk (e.g. when installed from a mutable local
+   directory) is not detected. The `rfl install` UI must warn
+   when a plugin source is a mutable local path, and `rfl status`
+   must label such plugins (`source: local-mutable`) so this
+   residual risk is visible in normal operation, not buried in
+   docs.
+
+## 9.1 Resolved disagreements with pi-review-1
+
+For traceability, the disagreements explicitly resolved in this
+revision:
+
+| Finding | Resolution                                                                  |
+|---------|-----------------------------------------------------------------------------|
+| 1       | Replaced UDS+token with inherited socketpair fd; reserved env vars (§5.5). |
+| 2       | Provider plugins publish only `provider.<id>.*`; core re-emits `core.*`. |
+| 3       | Carve-outs implemented by compile-time decomposition (§7.3); no lockin extension required. |
+| 4       | Taint mandatory on both result and request envelopes; core-enforced sink confirmation (§7.2.2-7.2.5). v1 claim downgraded to "verbatim flows" with laundering deferred to CaMeL. |
+| 5       | Single canonical topic grammar (§5.1). |
+| 6       | CaMeL-on-v1 RFC now lists each contract row by row; one explicit gap (helper-plugin spawn) flagged for owner decision. |
+| 7       | Q-LLM spawning is core's job, not fittings'; ship as `camel-qllm` plugin or in-process fallback. |
+| 8       | Per-plugin private state dir is automatic (§7.5); CaMeL audit logs there. |
+| 9       | Confirmation protocol fully specified (§5.6), core-mediated, fail-closed. |
+| 10      | Lock now includes `bindings` block with tool/provider/sink metadata (§3.2). |
+| Other: refuses_tainted_input weak | Demoted to advisory hint; structural enforcement is §7.2.3. |
+| Other: taint superset             | Tied to `in_reply_to` correlation ids (§7.2.2). |
+| Other: trifecta graph             | Specified as one-hop direct (§7.1.1). |
+| Other: private-IP filter          | Downgraded from mitigation to documented residual risk (§6.7). |
+| Other: carve-out language         | Single model (deny + loud override). |
+| Other: env core-injected          | Reserved vars exempted from scrubbing (§5.5.1). |
+| Other: sink metadata              | In lock at `bindings.tool_meta.<n>.sinks` (§3.2). |
+| Other: provider-vs-middleware     | Provider for v1 (CaMeL RFC top). |
+| Other: tool_request architectural | §5.4 last paragraph. |
+| Other: exec-time tamper visibility| §9 #6 above. |
+
+No findings were dismissed. Every row above is a code/text
+change in this revision.
 
 ## 10. Summary
 
