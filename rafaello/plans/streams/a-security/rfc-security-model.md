@@ -1189,10 +1189,17 @@ consumer of an existing data flow.
    `provides.tools`, `provides.provider`, `provides.tool.<n>.sinks`,
    `subscribes`, `publishes`, `helper_for` (see #5),
    `requires_confirmation` (advisory).
-3. Stream B must commit to the bus event schema for
-   `core.session.tool_result`, `core.session.tool_request`,
-   `core.session.confirm_*` and `frontend.<id>.confirm_answer`,
-   including the structured `taint` and `in_reply_to` fields.
+3. **Bus event payload schemas live in Stream A**, not Stream
+   B (per `overview.md` §15.2). Stream A owes complete schemas
+   for `core.session.tool_result`, `core.session.tool_request`,
+   `core.session.confirm_*`, `frontend.<attach-id>.confirm_answer`,
+   `core.session.user_message`, and `core.session.entry.*`,
+   including the structured `taint`, `in_reply_to`, `request_id`,
+   and `topic` fields. Stream B's commitment is narrower: the
+   JSON-RPC 2.0 envelopes that carry these payloads
+   (`RequestEnvelope`, `ResponseEnvelope`, `ErrorEnvelope`,
+   `JsonRpcId`) and the `\n`-framed wire format reused for
+   helper channels.
 4. The grant compiler tests must include each scenario in §6 as
    a concrete refusal-or-allow assertion.
 5. **Helper-plugin primitive accepted as v1.** `bindings.helper_for`

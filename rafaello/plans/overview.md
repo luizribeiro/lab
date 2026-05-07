@@ -945,15 +945,33 @@ of the security RFC: `read_dirs`, `write_dirs`, `exec_paths`).
 word) is a typo for the manifest's `env.pass` (with dot); the
 compiler treats them identically.
 
-### 15.2 Stream B fittings is the transport, not the broker
+### 15.2 Schema ownership: Stream A owns broker envelopes; Stream B owns JSON-RPC framing
 
-The bus broker is a core component, not a fittings feature.
-Fittings does not need a "topic" concept; rafaello core layers
-topics on top of fittings notifications. This is reconciled in
-§4.1 above; Stream B's RFCs do not need to grow a topic concept.
+Pi flagged a real contradiction in the round-1 draft: the
+overview said Stream A owns bus-level schemas while security
+RFC §9 item 3 said Stream B owes them. **Canonical split,
+binding for v1:**
 
-What Stream B *does* owe (security RFC §9 #5 carried into
-overview §15):
+| Layer                          | Owner    | Concretely                                                                                                  |
+|--------------------------------|----------|-------------------------------------------------------------------------------------------------------------|
+| JSON-RPC 2.0 envelopes         | Stream B | `RequestEnvelope`, `ResponseEnvelope`, `ErrorEnvelope`, `JsonRpcId` type, predefined error codes/data fields |
+| Wire framing                   | Stream B | `\n`-delimited line framing on bus / helper / attach connections; one-shot `socketpair`                     |
+| Connection authentication      | Stream A | Inherited fd binding, principal namespace assignment, attach-token handshake                                 |
+| Topic grammar + namespace ACL  | Stream A | Topic / pattern grammar (§4.2), four-namespace publish authority (§4.3), broker subscribe matching          |
+| Bus-event payload schemas      | Stream A | Schemas for `core.session.tool_request`, `core.session.tool_result`, `core.session.confirm_*`, `core.session.user_message`, `core.session.entry.*`, `provider.<id>.tool_request`, `frontend.<attach-id>.confirm_answer`, etc. — including the `taint`, `in_reply_to`, `request_id`, and `topic` fields |
+| Fan-out / re-emission          | Stream A | Provider-namespace → core-namespace re-emission rules (§4.4), result-routing path (§5.4.1)                  |
+
+Pinned implication: **Security RFC §9 item 3's "Stream B must
+commit to the bus event schema" wording is stale** and must
+be patched in the next milestone retrospective to read "Stream
+A owns the bus event payload schemas; Stream B owns the
+JSON-RPC envelopes that carry them." Stream B's schema crates
+host the JSON-RPC envelope shape; Stream A's RFC is where
+`taint`, `in_reply_to`, and topic-payload schemas are
+specified.
+
+What Stream B *does* additionally owe (carried from security
+RFC §9 #5):
 
 - **Helper-channel framing definition.** `RFL_HELPER_FD`
   carries point-to-point JSON-RPC, framed identically to the
@@ -961,15 +979,9 @@ overview §15):
   should add a one-paragraph reference in
   `rfc-fittings-notifications.md` clarifying that the framing
   is reused for unbrokered helper channels.
-- **Bus event envelope schema** for `core.session.tool_result`,
-  `core.session.tool_request`, `core.session.confirm_*`,
-  `frontend.<id>.confirm_answer`, including the `taint` and
-  `in_reply_to` fields. Stream B's schema crates already host
-  the JSON-RPC envelope; Stream A owes the bus-level schema
-  document. **Decision: this lives in Stream A**, not Stream
-  B, because the broker semantics (taint, in_reply_to,
-  request_id) are security model concerns. Stream B owns only
-  the JSON-RPC framing.
+- **Connection-scoped server notification handle.** See §15.6
+  below — required to make the bus broker fan-out
+  implementable.
 
 ### 15.3 Stream E topic spelling
 
