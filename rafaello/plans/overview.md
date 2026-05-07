@@ -1,8 +1,12 @@
 # rafaello v1 architecture (overview)
 
-> **Status:** first full draft, authored by claude on
-> `agents/overview/claude`. Pi has not yet reviewed. The project
-> owner ratifies on convergence.
+> **Status:** converged after three pi review rounds. Reviews live
+> at `overview-review-1.md`, `overview-review-2.md`, and
+> `overview-review-3.md`; pi's round-3 verdict was "sign off after
+> the §1.2 / §16 contradiction patches", and those patches landed.
+> Pending project-owner ratification — the 25 decisions in
+> `decisions.md` are marked `proposed` and flip to `ratified` on
+> sign-off.
 >
 > This is the single source of truth for v1. If anything in
 > `streams/` conflicts with what is written here, this document
