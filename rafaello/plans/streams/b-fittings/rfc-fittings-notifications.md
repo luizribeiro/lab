@@ -493,9 +493,16 @@ Failure semantics, normative:
 
 ### Client-side: server-originated *requests* arriving when not supported
 
+> **Superseded for clients that register a service via
+> `Client::with_service` — see "Bidirectional `PeerHandle`
+> (v1)" below. This section now describes the fallback
+> behaviour for clients that do *not* register a service
+> (preserving v1 forward-compat for client-only consumers).**
+
 The wire decoder will see an inbound `RequestEnvelope` *with* an
-`id` and a method that the client never expected (because v1 of
-fittings doesn't ship server→client requests). Policy:
+`id` and a method the client cannot dispatch (no `Service` was
+registered, or a registered service explicitly returned
+`MethodNotFound`). Fallback policy:
 
 1. The client responds with `ErrorEnvelope { code: -32601,
    message: "Method not found", data: None }` so a future-aware
@@ -504,9 +511,12 @@ fittings doesn't ship server→client requests). Policy:
 3. Connection is **not** torn down. This is a soft failure, not
    a protocol violation by the peer.
 
-This keeps the door open for server-originated requests in a
-later RFC: when we add support, we just stop returning -32601 for
-the methods we now handle.
+For clients that *do* register a service (the common path on
+the rafaello bus, where each plugin and frontend serves
+inbound `renderer.render`, `frontend.hello`, etc.), inbound
+id-bearing requests dispatch into the service exactly like
+the server-side path. The `-32601` reject above only applies
+when no service is registered.
 
 ## Smallest viable change vs. clean change
 
