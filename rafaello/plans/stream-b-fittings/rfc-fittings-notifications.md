@@ -282,21 +282,63 @@ bus work, the client must:
 API addition:
 
 ```rust
-impl<C> Client<C> { ... }
-
 impl<C> Client<C> {
-    pub fn on_notification<F>(&mut self, handler: F)
+    /// Register a notification sink. Inbound id-less frames are
+    /// forwarded here. Replaces any previous sink.
+    pub fn on_notification<F>(&self, handler: F)
     where
-        F: Fn(&str, Value) + Send + Sync + 'static;
+        F: Fn(String, Value) + Send + Sync + 'static;
 }
 ```
 
-The handler runs on the client loop; if a consumer wants async work,
-it spawns. v1 keeps it simple — no per-method routing in the client,
-no typed dispatch. Rafaello layers its own router on top.
+**Execution model: spawn per notification, do not run inline.**
 
-This is the smallest change that unblocks bidirectional notification
-flow. Server-originated *requests* are deferred (see Future work).
+The earlier draft proposed running the handler on the client loop
+itself. That makes the handler a head-of-line blocker for every
+subsequent response. We change to: the client loop, on receiving a
+notification frame, calls `tokio::spawn(handler(method, params))`
+and immediately returns to its `select!`. Cost: one
+`Arc<dyn Fn>` clone + one tokio task per notification. Acceptable
+for rafaello's expected throughput (≪10k/s).
+
+Failure semantics, normative:
+
+- **Blocking.** A handler that takes a long time does not stall
+  the client loop, because it runs in a spawned task. It can stall
+  *itself* if the consumer registered a sequential queue, but
+  that's the consumer's choice.
+- **Panics.** Each handler invocation runs inside the spawned
+  task. `tokio` will print a panic message and drop the task; the
+  client loop is unaffected. The framework does not call
+  `catch_unwind` on the handler — consumers who need panic
+  isolation install it themselves.
+- **Re-entrancy.** A handler MAY call back into `Client::call` /
+  `Client::notify`. Because handlers run on spawned tasks, not
+  on the client loop, there is no deadlock. The standard
+  channel-based path delivers the new request to the loop.
+- **Synchronous expensive work.** Discouraged. The handler's
+  `Fn` signature is sync; consumers needing async should
+  `tokio::spawn` further or hand the params to a `mpsc::Sender`
+  the consumer drains elsewhere. Documented in the rustdoc.
+- **No handler registered.** Inbound notifications are silently
+  dropped after a `tracing::trace!`. Not an error.
+
+### Client-side: server-originated *requests* arriving when not supported
+
+The wire decoder will see an inbound `RequestEnvelope` *with* an
+`id` and a method that the client never expected (because v1 of
+fittings doesn't ship server→client requests). Policy:
+
+1. The client responds with `ErrorEnvelope { code: -32601,
+   message: "Method not found", data: None }` so a future-aware
+   peer learns the client is not capable of this request.
+2. A `tracing::warn!` records method + id.
+3. Connection is **not** torn down. This is a soft failure, not
+   a protocol violation by the peer.
+
+This keeps the door open for server-originated requests in a
+later RFC: when we add support, we just stop returning -32601 for
+the methods we now handle.
 
 ## Smallest viable change vs. clean change
 
