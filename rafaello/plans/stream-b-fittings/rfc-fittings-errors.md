@@ -102,6 +102,13 @@ pub enum FittingsError {
     /// Anything else the framework itself produced.
     #[error("internal: {message}")]
     Internal { message: String },
+
+    /// The request has been cancelled by the peer (or by local
+    /// shutdown). Has no wire mapping: the server suppresses the
+    /// response frame entirely. See the notifications RFC,
+    /// "Cancellation response semantics".
+    #[error("cancelled{}", reason.as_ref().map(|r| format!(": {r}")).unwrap_or_default())]
+    Cancelled { reason: Option<String> },
 }
 ```
 
@@ -391,14 +398,18 @@ Total change size: roughly 700 lines across the workspace, of which
    and forces explicit thought at the call site. Trait form is
    ergonomic for crate authors who want one canonical mapping. v1 ships
    the argument form; trait form can come later non-breakingly.
-5. **Cancellation as an error?** When `ctx.cancelled()` fires mid-call,
-   does the handler return `Err(FittingsError::Cancelled)` or just
-   stop emitting and return whatever partial result it has?
-   Recommendation: a new variant `Cancelled { reason: Option<String> }`,
-   and the server *suppresses* the response entirely when this variant
-   surfaces (matching MCP semantics: cancelled requests do not get a
-   response). This couples slightly with the notifications RFC; flagged
-   there too.
+5. **Cancellation as an error?** *Resolved (was open).*
+   - A new variant `Cancelled { reason: Option<String> }` is added
+     to `FittingsError`, mirroring the `Cancelled` notification
+     payload. Handlers may return it via `?` from helpers that
+     observe `ctx.cancelled()`.
+   - **Wire mapping:** none. The dispatcher unconditionally
+     suppresses the response frame for any request whose
+     cancellation token has fired, regardless of which variant
+     (or `Ok`) the handler returned. The `Cancelled` variant
+     therefore has no wire code.
+   - This is normative; full spec is in the notifications RFC
+     under "Cancellation response semantics".
 
 ## Acceptance criteria
 

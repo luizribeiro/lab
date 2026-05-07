@@ -271,6 +271,78 @@ that it's small enough to evolve without ceremony.
    Keep it configurable, default to LSP since fittings markets itself
    as transport-agnostic.
 
+## Cancellation response semantics (normative)
+
+Settled here, referenced from the errors RFC. v1 rules:
+
+1. **A request that has been cancelled gets no response on the wire.**
+   The dispatcher tracks per-request cancellation state. When a
+   worker completes, the dispatcher checks the token before
+   serialising the response; if the token fired, the response
+   (success *or* error) is dropped. This matches MCP semantics and
+   is the only behaviour rafaello needs.
+2. **Handlers should observe `ctx.cancelled()` and return promptly.**
+   Recommended return: `Err(FittingsError::Cancelled { reason })`
+   (variant added in the errors RFC). The variant exists so handlers
+   can `?`-bubble cancellation through helper functions; the
+   dispatcher then suppresses the response regardless of variant.
+3. **Returning `Ok(_)` after cancellation is also fine** — the
+   dispatcher still suppresses. We do not require handlers to
+   return any specific error variant for correctness.
+4. **`ctx.notify` after cancellation:** `notify` continues to
+   succeed (still enqueues local frames; see "ctx.notify delivery
+   contract" below) until the dispatcher actually shuts the worker
+   down. There is a small window where late notifications can reach
+   the peer for a request whose response will be suppressed. The
+   peer must tolerate this — JSON-RPC notifications are fire-and-
+   forget by spec, and MCP/LSP both already require clients to
+   tolerate post-cancel notifications. We document this and move
+   on; it is not worth the complexity to clamp.
+5. **Inbound cancellation for an unknown id is silently dropped.**
+   It is a benign race (cancel arrived after handler completed).
+6. **No LSP-style `RequestCancelled` error response.** Suppression
+   is the chosen policy; it is not configurable in v1. If a
+   non-MCP consumer ever needs the LSP behaviour, adding
+   `Server::with_cancellation_response_policy(...)` is a
+   non-breaking change later.
+
+What the **client** sees for a cancelled call: its `pending`
+oneshot is never resolved. The client API today exposes this
+via `tokio::time::timeout` + drop on the future; we keep that.
+Rafaello's client wrapper will translate "we sent a cancel and
+then the call's future was dropped" into a domain `Cancelled`
+result on its own; fittings does not need an in-band signal.
+
+## ctx.notify delivery contract
+
+**Important:** `ctx.notify(...)` reports *local enqueue* status
+only. It does **not** confirm peer delivery.
+
+- `Ok(())` means the frame was encoded and pushed onto the
+  outbound mpsc that the dispatcher drains.
+- `Err(FittingsError::Internal { ... })` means encoding failed
+  (params not serialisable). Handler bug; surface it.
+- `Err(FittingsError::Transport { ... })` means the outbound mpsc
+  itself is closed, which only happens on dispatcher shutdown
+  (graceful EOF path). This is rare and informational; handlers
+  may ignore.
+
+**`Ok(())` does NOT mean the peer received the notification.**
+Transport failure (broken pipe, peer crash) is discovered
+asynchronously by the dispatcher's next `transport.send`, at
+which point the dispatcher trips cancellation on every in-flight
+worker and shuts the connection. Handlers can observe this via
+`ctx.cancelled()`.
+
+This is a softening of the original RFC text, which implied
+`notify` could report "peer gone" synchronously. With the
+mpsc-writer architecture it cannot — the writer task is the only
+component that touches the transport, and it does so out of band.
+Changing this would require either (a) making `notify` await the
+transport write directly, which serialises all handlers behind
+each other, or (b) a per-frame ack signal, which doubles channel
+traffic. Neither is worth it for v1.
+
 ## Future work (deferred)
 
 - **Server→client requests.** Sampling/elicitation. Requires the server
