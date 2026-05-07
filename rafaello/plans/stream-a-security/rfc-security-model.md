@@ -237,14 +237,15 @@ in the payload, not the topic).
 
 ### 5.2 Topic namespaces and publish authority
 
-Three top-level namespaces, with publish authority fixed by the
+Four top-level namespaces, with publish authority fixed by the
 broker:
 
-| Prefix          | Publish authority                                 | Example                              |
-|-----------------|---------------------------------------------------|--------------------------------------|
-| `core.*`        | agent core only                                   | `core.session.user_message`          |
-| `provider.*`    | the bound provider plugin only (see §5.3)         | `provider.camel.tool_request`        |
-| `plugin.<id>.*` | the plugin whose canonical id renders to `<id>`   | `plugin.acme_grep.progress`          |
+| Prefix            | Publish authority                                              | Example                                |
+|-------------------|----------------------------------------------------------------|----------------------------------------|
+| `core.*`          | agent core only                                                | `core.session.user_message`            |
+| `provider.*`      | the bound provider plugin only (see §5.4)                      | `provider.camel.tool_request`          |
+| `plugin.<id>.*`   | the plugin whose canonical id is `<id>`                        | `plugin.<acme-grep-id>.progress`       |
+| `frontend.<id>.*` | the authenticated frontend whose attach id is `<id>` (see §5.7)| `frontend.tui.confirm_answer`          |
 
 Plugins never publish on `core.*`. The provider plugin publishes
 only on `provider.<provider-id>.*`; core observes those topics
@@ -357,9 +358,8 @@ When core needs explicit user consent (sink confirmation per
 
 The frontend publishes its user-supplied answer on a dedicated
 namespace `frontend.<id>.confirm_answer`, which **only the
-authenticated frontend** is permitted to publish (the frontend
-authenticates the same way plugins do — inherited socketpair fd
-on attach, with a `frontend` role). Core subscribes to all
+authenticated frontend** is permitted to publish (frontend auth
+and attach flow are specified in §5.7). Core subscribes to all
 `frontend.*.confirm_answer`, validates the correlation id
 matches a held `confirm_request`, and only then publishes
 `core.session.confirm_reply`.
@@ -405,6 +405,76 @@ re-prompts.
 The confirmation protocol is core-mediated by design; CaMeL (v2)
 can layer additional confirmations using the same protocol, but
 v1 cross-tool sink confirmation does not require CaMeL.
+
+### 5.7 Frontends as bus principals
+
+Frontends (the default TUI, an IDE plugin, a web UI, an email
+relay) are first-class bus principals because they answer
+confirmation requests — i.e. they speak for the user inside the
+trust model. The RFC names them explicitly here.
+
+#### 5.7.1 Authentication and attach flow
+
+Two frontend classes:
+
+- **Local-spawned frontends.** The TUI and any frontend started
+  by `rfl` itself are spawned the same way plugins are: core
+  creates a socketpair, hands one end to the frontend via
+  `RFL_BUS_FD`, and binds the other end to a `frontend.<id>`
+  principal in the broker. The id is assigned by core
+  (`tui`, `gui`, `ide`, ...). No token, no UDS path. Identical
+  primitive to the plugin path (§5.5).
+- **External-attached frontends.** A web/email/Slack frontend
+  cannot be spawned by `rfl`; it has to attach. The attach
+  surface is a single `rfl serve` command (the daemon mode
+  named in `rafaello/README.md`) that listens on a UDS at
+  `${XDG_RUNTIME_DIR}/rafaello/<session-id>/attach.sock`. The
+  socket is mode `0600` (filesystem ACL is the user-level
+  authentication; the kernel enforces it). On connect, core
+  performs a handshake: the frontend declares its proposed id
+  and a one-shot **attach token** read from
+  `${XDG_RUNTIME_DIR}/rafaello/<session-id>/attach.token` (a
+  64-byte random string written by `rfl serve` at startup,
+  mode `0600`, regenerated each session). Successful handshake
+  binds that connection to `frontend.<id>` and gives it
+  publish authority on `frontend.<id>.*` only. An attempt to
+  use an id already bound is refused.
+
+#### 5.7.2 Trust model for confirmation answers
+
+Frontends are trusted **as user-authorised UI principals**: a
+local user with filesystem access to the runtime dir is, by
+definition, the user. Anyone else with filesystem access to
+`${XDG_RUNTIME_DIR}/rafaello/` is already in a position to read
+the user's session and is outside rafaello's threat model
+(consistent with the single-user-CLI non-goal in §1.2).
+
+The model does not extend to network-attached frontends without
+an additional layer. An email relay or a hosted web UI is
+expected to terminate user authentication itself before
+forwarding answers; rafaello cannot validate "the email reply
+was actually from the user". The `rfl serve` command, when run
+without `--bind-unix-only`, prints a loud warning and refuses
+to attach by default; turning on a TCP listener is an explicit
+opt-in with a v2-track checklist.
+
+For v1 the only supported attach surface is the local UDS.
+Remote frontends are designed for, but not enabled in, v1.
+
+#### 5.7.3 What frontends may publish
+
+A frontend with id `<id>` may publish on `frontend.<id>.*`
+only. The two confirmation topics defined in §5.6 are
+`frontend.<id>.confirm_answer` and (reserved)
+`frontend.<id>.user_message`, the latter being how non-default
+frontends inject user input. Core subscribes to all
+`frontend.*.user_message` and re-emits canonical
+`core.session.user_message` after tagging the source frontend.
+
+Frontends never publish on `core.*`, `provider.*`, or
+`plugin.*`. They never directly answer plugin-issued
+confirmation requests; only the core-mediated protocol
+(§5.6) carries answers.
 
 #### 5.5.2 Why not a token-presenting design
 
