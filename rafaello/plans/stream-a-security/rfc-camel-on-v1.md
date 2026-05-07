@@ -145,28 +145,37 @@ strengthens, not replaces, them.
 >    fine: the P-LLM's output is constrained *before* the call
 >    leaves you, by the policy engine.
 >
-> 5. **Q-LLM isolation — via core, not via fittings spawn.**
->    The earlier draft suggested using the fittings spawn API
->    directly. That is not the right primitive: fittings'
->    subprocess support spawns a normal JSON-RPC subprocess; it
->    does not compile a lockin policy or own plugin authority.
->    Plugin spawning, including any sandboxed helper plugin, is
->    rafaello core's job.
+> 5. **Q-LLM isolation — helper plugin via core.** Ship the
+>    Q-LLM as a **separate installed plugin named `camel-qllm`**
+>    whose lock entry has `bindings.helper_for = "<camel-id>"`
+>    (security RFC §7.4.1). This is a committed v1 primitive,
+>    not an open gap.
 >
->    Therefore: ship the Q-LLM as a **separate installed plugin
->    named `camel-qllm`** with its own manifest, its own lock
->    entry, and its own `network.mode = "proxy"` /
->    `allow_hosts = [<Q-LLM endpoint>]`. The plugin has no
->    `RFL_BUS_FD` granted (it is spawned with no bus
->    socketpair), so it has no path to publish anything; the
->    core spawns it on demand for CaMeL via a new
->    `bindings.helper_for = "camel"` lock field that authorises
->    CaMeL to request its instantiation. This is a v1 contract
->    the security RFC must commit to (see §3 below); without it,
->    CaMeL falls back to running the Q-LLM as an in-process
->    HTTP request from inside the CaMeL plugin — which means
->    Q-LLM lives in the same process as P-LLM logic, weaker
->    isolation but still a viable v2.
+>    Concretely:
+>
+>    - `camel-qllm`'s manifest declares
+>      `network.mode = "proxy"`, `allow_hosts = [<Q-LLM
+>      endpoint>]`. CaMeL's own manifest does **not** include
+>      the Q-LLM endpoint in its `allow_hosts` — only the P-LLM
+>      endpoint. Q-LLM egress lives entirely in the helper.
+>    - `camel-qllm` is spawned with no `RFL_BUS_FD`; it has no
+>      bus handle. It cannot publish, subscribe, or answer
+>      confirmations. Its only I/O is the helper socketpair
+>      (`RFL_HELPER_FD`) connecting it to CaMeL, plus its
+>      proxied HTTPS to the Q-LLM endpoint.
+>    - Communication with CaMeL is point-to-point JSON-RPC over
+>      `RFL_HELPER_FD`. CaMeL sends a `summarise` call with the
+>      tainted text and a target schema; the helper returns a
+>      structured response. The helper has no concept of
+>      sessions, taint, or capabilities — those are CaMeL's job
+>      to apply on the response.
+>    - Lifecycle is core's responsibility: core spawns the
+>      helper on first use within a session and SIGTERMs it on
+>      session end or CaMeL exit.
+>    - `camel-qllm` is installed independently
+>      (`rfl install github:anthropic/camel-qllm`); the install
+>      flow surfaces the helper relationship to CaMeL as part
+>      of the grant prompt.
 >
 > ### What you must implement inside the plugin
 >
@@ -282,19 +291,12 @@ unspecified at v1 ship time, CaMeL must be reworked.
 | 7 | Per-plugin private state dir granted automatically             | §7.5                                  | committed  |
 | 8 | Reserved env vars (`RFL_BUS_FD`, `RFL_PLUGIN`) for transport   | §5.5.1                                | committed  |
 | 9 | Tool sink metadata snapshotted into lock                       | §3.2 `bindings.tool_meta.<n>.sinks`   | committed  |
-| 10| Sandboxed helper plugin spawn (`camel-qllm`) owned by core     | not yet — see below                   | **gap**    |
+| 10| Sandboxed helper plugin spawn (`camel-qllm`) owned by core     | §7.4.1 (`bindings.helper_for`)        | committed  |
 
-Row 10 is the single remaining v1 gap. CaMeL can ship a degraded
-implementation without it (Q-LLM as in-process HTTP), but the
-clean implementation needs core to support a "helper plugin"
-relationship: a plugin whose lock entry has
-`bindings.helper_for = "<other-plugin-id>"`, which (a) suppresses
-its bus fd at spawn, (b) authorises the parent plugin to request
-its instantiation, and (c) makes it not directly user-facing
-(does not appear as a tool to the LLM). The security RFC should
-either add this as a v1 commitment or this RFC must commit to
-the in-process Q-LLM degradation. **This revision flags it as
-the open v1-scope question for the project owner.**
+All ten rows are committed v1 primitives in this revision; there
+is no remaining open gap. Row 10 was promoted from gap to commit
+in round 2 per the project owner's decision: helper-plugin spawn
+is a small, broadly useful v1 primitive (security RFC §7.4.1).
 
 If the taint envelope (row 4) were ever omitted, CaMeL's
 capability tags would collapse to "did the data ever pass
@@ -331,9 +333,6 @@ it.
 
 **Open for the project owner:**
 
-- Helper plugin spawn (`bindings.helper_for`) — accept as v1
-  commitment, or accept the in-process Q-LLM degradation? See
-  §3 row 10.
 - The `--i-know-what-im-doing` override on the v1 trifecta rule
   (security RFC §7.1) is bypassable by the user. If the user
   has installed CaMeL as their provider, should CaMeL be

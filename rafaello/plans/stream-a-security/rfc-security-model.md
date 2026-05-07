@@ -795,6 +795,79 @@ keys. `env.pass` patterns matching any of `*_TOKEN`, `*_SECRET`,
 `ANTHROPIC_*` are stripped *after* `pass` is computed, with the
 same `--i-know-what-im-doing` escape.
 
+### 7.4.1 Helper plugins (`bindings.helper_for`)
+
+Some plugins need to spawn a sandboxed sibling whose only job is
+to do one thing in tighter isolation than the parent — most
+concretely, CaMeL's Q-LLM. v1 supports this as a first-class
+primitive rather than letting plugins wing their own subprocess
+spawning.
+
+**Definition.** A helper plugin is a normal installed plugin
+whose lock entry includes `bindings.helper_for = "<parent-id>"`.
+A helper:
+
+1. Has its own digest, manifest snapshot, lock entry, and
+   compiled lockin policy. It is installed and updated like any
+   other plugin (`rfl install`, `rfl update`).
+2. Is **not** visible as a tool, provider, or renderer unless
+   its manifest also declares those roles independently. By
+   default, a helper does not appear in the LLM's tool list.
+3. Is spawned **by core**, not by the parent. Helpers are
+   spawned on demand when the parent publishes
+   `provider.<parent-id>.spawn_helper` (for providers) or
+   `plugin.<parent-id>.spawn_helper` (for non-providers); core
+   verifies `helper_for` matches the parent's id.
+4. Is spawned **without an `RFL_BUS_FD`**. A helper has no bus
+   handle and therefore cannot publish, subscribe, or accept
+   confirmations. It exists only to do work for its parent.
+5. Communicates with its parent via a **second inherited
+   socketpair fd** advertised as `RFL_HELPER_FD`. Core creates
+   the socketpair: one end goes to the parent (multiplexed so
+   the parent sees one fd per active helper, with a small
+   header naming the helper instance), the other end is the
+   helper's only handle to anything. The protocol on the wire
+   is plain JSON-RPC over `\n`-delimited frames, identical to
+   the bus framing — but it is point-to-point, not brokered.
+6. Has lockin policy compiled normally from its grant. The
+   helper's network/FS/env grants are independent of the
+   parent's, which is the whole point.
+7. Has its lifecycle owned by core: core sends SIGTERM on
+   parent exit, on session end, or on `rfl helper stop`.
+   Helpers are not persistent across `rfl` invocations.
+
+**Lock authorisation.** A parent plugin's lock entry includes
+`bindings.helpers = ["<helper-id>", ...]` listing exactly which
+helpers it may request. The helper itself must have
+`bindings.helper_for = "<parent-id>"`. Both directions must
+agree at lock time; the user's `rfl install` of the helper
+shows the relationship as part of the grant prompt.
+
+```toml
+[plugin."github:anthropic/camel-qllm@0.1.0".bindings]
+helper_for = "github:anthropic/camel@0.1.0"
+provider   = false
+tools      = []
+# no provider, no user-visible tools — pure helper
+
+[plugin."github:anthropic/camel@0.1.0".bindings]
+provider     = true
+provider_id  = "camel"
+helpers      = ["github:anthropic/camel-qllm@0.1.0"]
+```
+
+**Failure propagation.** A helper that crashes is reported to
+the parent over the helper fd as a structured close event with
+exit code; the parent decides whether to retry, report to the
+LLM, or fail. Helpers that exceed `limits.max_cpu_time` are
+killed by lockin and surfaced the same way.
+
+**Why a v1 commitment.** This is the smallest primitive that
+unblocks clean CaMeL Q-LLM isolation, and it generalises beyond
+CaMeL — any plugin needing a sandboxed sub-task with a stricter
+lockin policy benefits. The author's recommendation in §9 is
+adopted: ship in v1.
+
 ### 7.5 Project scope and per-plugin private state
 
 `${PROJECT_ROOT}` resolves to the directory containing
@@ -848,13 +921,11 @@ consumer of an existing data flow.
    including the structured `taint` and `in_reply_to` fields.
 4. The grant compiler tests must include each scenario in §6 as
    a concrete refusal-or-allow assertion.
-5. **Decide the helper-plugin question (CaMeL row 10).** Either
-   accept `bindings.helper_for` as a v1 commitment (small
-   surface: a lock field plus core's spawn path honouring it),
-   or accept that CaMeL ships in v2 with an in-process Q-LLM
-   that is structurally weaker. The author's recommendation:
-   accept it — it's small, and it benefits any future helper-
-   pattern plugin, not just CaMeL.
+5. **Helper-plugin primitive accepted as v1.** `bindings.helper_for`
+   and `RFL_HELPER_FD` are specified in §7.4.1; Stream B owes
+   the helper-channel framing definition (identical to bus
+   framing, point-to-point, no broker). This unblocks the clean
+   CaMeL Q-LLM design.
 6. **Document exec-time tamper as a user-visible non-goal.**
    Install-time digest is checked; mid-run swap of plugin
    binaries on disk (e.g. when installed from a mutable local
