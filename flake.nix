@@ -52,15 +52,19 @@
           scope = import ./scope/nix {
             inherit pkgs;
           };
+
+          rafaello = import ./rafaello/nix {
+            inherit pkgs;
+          };
         in
         {
-          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib // scope.lib;
+          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib // scope.lib // rafaello.lib;
 
-          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // scope.packages // {
+          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // scope.packages // rafaello.packages // {
             default = capsa.packages.capsa;
           };
 
-          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks // scope.checks;
+          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks // scope.checks // rafaello.checks;
 
           devShells = {
             default = devenv.lib.mkShell {
@@ -108,6 +112,14 @@
               modules = [
                 ./shared/nix/devenv/base.nix
                 ./scope/nix/devenv.nix
+              ];
+            };
+
+            rafaello = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+                ./rafaello/nix/devenv.nix
               ];
             };
           };
