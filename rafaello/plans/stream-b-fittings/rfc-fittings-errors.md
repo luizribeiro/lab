@@ -77,9 +77,11 @@ pub enum FittingsError {
     InvalidParams { message: String, data: Option<Value> },
 
     /// Application-level error from a handler.
-    /// `code` MUST be in the JSON-RPC server-error range
-    /// (-32099..=-32000) OR the application-defined range
-    /// (-32768..=-32100, plus the positive 1..=32767).
+    /// `code` MUST be either:
+    ///   - in the JSON-RPC server-error range `-32099..=-32000`, or
+    ///   - any code outside the JSON-RPC reserved range `-32768..=-32000`
+    ///     (i.e. `i32::MIN..=-32769` or `1..=i32::MAX`).
+    /// Code `0` is not used.
     #[error("{message} (code {code})")]
     Service {
         code: i32,
@@ -124,10 +126,13 @@ JSON-RPC 2.0 reserves:
 - `-32602` invalid params
 - `-32603` internal error
 - `-32099..=-32000` server-defined errors (open to applications)
-- everything else outside `-32768..=-32000` is application-defined
+- the rest of `-32768..=-32000` is **reserved for future predefined
+  errors** by JSON-RPC 2.0 — applications must NOT use it
+- everything outside `-32768..=-32000` is application-defined
 
 Today we accept positive `1..=999` as the only valid plugin range.
-That excludes the JSON-RPC server-error band entirely. New rule:
+That excludes the JSON-RPC server-error band entirely *and* artificially
+truncates the positive application range. New rule:
 
 | Variant            | Outbound code            | Inbound recognises |
 |--------------------|--------------------------|---------------------|
@@ -144,19 +149,23 @@ That excludes the JSON-RPC server-error band entirely. New rule:
 
 ```rust
 const fn is_valid_application_code(code: i32) -> bool {
-    // server-defined range
+    // JSON-RPC server-defined band, explicitly application-usable
     (-32099..=-32000).contains(&code)
-        // application range above the reserved cluster
-        || (-32768..=-32100).contains(&code)
-        // application range below the reserved cluster
+        // application range below the JSON-RPC reserved cluster
         || (i32::MIN..=-32769).contains(&code)
-        // positive application range
+        // application range above the JSON-RPC reserved cluster
         || (1..=i32::MAX).contains(&code)
 }
 ```
 
-i.e. "anything except the five well-known codes and zero". This is the
-spec's actual rule; we have been more restrictive without justification.
+i.e. "any code not zero, not in `-32768..=-32100`, and not one of the
+five predefined codes". The previously-mentioned `-32768..=-32100`
+range is **reserved by the spec for future predefined errors** and is
+explicitly excluded; using it would be non-conformant.
+
+Note that the positive band is the full `1..=i32::MAX`, not
+`1..=32767`. JSON-RPC does not constrain positive codes; an earlier
+draft of this RFC said `32767` and was wrong.
 
 `Transport` and `Panic` mapping to `-32603` add a structured
 `data: { "fittingsKind": "transport" | "panic", "detail": "..." }`
