@@ -108,3 +108,29 @@ isn't reverse-engineering it from string heuristics.
 If we don't add the taint envelope to the bus event schema, CaMeL
 is buildable but every plugin author would have to opt in. That's
 the v1 commitment that unlocks v2 cleanly.
+
+## F6. First-pass status
+
+Both deliverables exist:
+
+- `rfc-security-model.md` — covers trust model, three-artifact
+  pipeline, bus ACL, ten attack scenarios with mitigations, the
+  grant compiler (trifecta rule, taint envelope, carve-outs),
+  and the v1/v2 cut.
+- `rfc-camel-on-v1.md` — self-contained prompt for the v2 agent,
+  plus a dependency-check table showing CaMeL needs only the
+  taint envelope as a new v1 commitment.
+
+Open questions surfaced for the pi review:
+
+- Provider-vs-middleware framing for CaMeL (is "provider plugin
+  owns tool_request publish" the right hook, or do we need a
+  bus-level chain-of-responsibility?).
+- `taint` as `[string]` vs. structured object — punt to v2 by
+  convention or commit now.
+- `--i-know-what-im-doing` interaction with CaMeL's own policy.
+- Whether the lockin private-IP-range deny in proxy mode is in
+  scope for lockin v1 or stays a documented residual risk.
+
+These are flagged in §5 of the CaMeL RFC and §9 of the security
+RFC.
