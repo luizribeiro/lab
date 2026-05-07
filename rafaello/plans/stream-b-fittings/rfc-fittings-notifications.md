@@ -454,8 +454,11 @@ impl<C> Client<C> {
 The earlier draft proposed running the handler on the client loop
 itself. That makes the handler a head-of-line blocker for every
 subsequent response. We change to: the client loop, on receiving a
-notification frame, calls `tokio::spawn(handler(method, params))`
-and immediately returns to its `select!`. Cost: one
+notification frame, wraps the sync handler in an async block —
+`tokio::spawn(async move { handler(method, params); })` — and
+immediately returns to its `select!`. (The handler is
+`Fn(String, Value) + Send + Sync`, returning `()`; the surrounding
+`async move` is what makes it spawn-able.) Cost: one
 `Arc<dyn Fn>` clone + one tokio task per notification. Acceptable
 for rafaello's expected throughput (≪10k/s).
 
@@ -540,20 +543,37 @@ that it's small enough to evolve without ceremony.
 
 Settled here, referenced from the errors RFC. v1 rules:
 
-1. **A request that has been cancelled gets no response on the wire.**
-   The dispatcher tracks per-request cancellation state. When a
-   worker completes, the dispatcher checks the token before
-   serialising the response; if the token fired, the response
-   (success *or* error) is dropped. This matches MCP semantics and
-   is the only behaviour rafaello needs.
-2. **Handlers should observe `ctx.cancelled()` and return promptly.**
-   Recommended return: `Err(FittingsError::Cancelled { reason })`
-   (variant added in the errors RFC). The variant exists so handlers
-   can `?`-bubble cancellation through helper functions; the
-   dispatcher then suppresses the response regardless of variant.
-3. **Returning `Ok(_)` after cancellation is also fine** — the
-   dispatcher still suppresses. We do not require handlers to
-   return any specific error variant for correctness.
+1. **A request whose cancellation token has fired gets no response
+   on the wire.** The dispatcher tracks per-request cancellation
+   state. When a worker completes, the dispatcher checks the token
+   before serialising the response; if the token fired, the response
+   (success *or* error) is dropped.
+2. **A handler that returns `Err(FittingsError::Cancelled { .. })`
+   also produces no response, even if the token did not fire.**
+   This is the second suppression trigger. Rationale: handlers
+   sometimes decide to abort locally (a helper observed an
+   abort flag, an internal deadline expired, the handler maps a
+   library cancellation into `FittingsError::Cancelled`) and the
+   peer cares only about the suppression behaviour, not which side
+   originated it. Two triggers, one outcome.
+3. **The two triggers are otherwise independent.** The dispatcher
+   does **not** retroactively fire the cancellation token if the
+   handler returned `Cancelled`; if a follow-up cancellation
+   notification arrives, it is treated as "unknown id" (rule 6
+   below) because the request is no longer in `in_flight`. We
+   accept this — the peer learned no response was coming, which
+   is what matters.
+4. **Returning `Ok(_)` after the token fired still suppresses.**
+   We do not require handlers to return any specific error variant
+   for correctness when they observe their own token.
+5. **Recommended pattern.** Handlers `select!` on `ctx.cancelled()`
+   and return `Err(FittingsError::Cancelled { reason })` when the
+   token fires. This makes `?`-bubbling work cleanly through
+   helper functions. The variant is the contract handlers should
+   adopt; the framework does the rest.
+6. **Handlers MAY return `Cancelled` without the token having fired.**
+   This is supported, deliberate, and the same on the wire as the
+   token-fired case (suppression). It is *not* a bug.
 4. **`ctx.notify` after cancellation:** `notify` continues to
    succeed (still enqueues local frames; see "ctx.notify delivery
    contract" below) until the dispatcher actually shuts the worker

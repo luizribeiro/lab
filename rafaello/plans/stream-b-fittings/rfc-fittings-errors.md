@@ -498,14 +498,15 @@ Total change size: roughly 700 lines across the workspace, of which
    the argument form; trait form can come later non-breakingly.
 5. **Cancellation as an error?** *Resolved (was open).*
    - A new variant `Cancelled { reason: Option<String> }` is added
-     to `FittingsError`, mirroring the `Cancelled` notification
-     payload. Handlers may return it via `?` from helpers that
-     observe `ctx.cancelled()`.
-   - **Wire mapping:** none. The dispatcher unconditionally
-     suppresses the response frame for any request whose
-     cancellation token has fired, regardless of which variant
-     (or `Ok`) the handler returned. The `Cancelled` variant
-     therefore has no wire code.
+     to `FittingsError`. Handlers may return it via `?` from helpers
+     that observe `ctx.cancelled()`.
+   - **Wire mapping:** none. The dispatcher suppresses the response
+     frame on **either** of two triggers:
+     1. the request's cancellation token fired (peer asked to
+        cancel); or
+     2. the handler returned `Err(FittingsError::Cancelled { .. })`
+        (handler chose to cancel locally).
+     Either trigger is sufficient; both are equivalent on the wire.
    - This is normative; full spec is in the notifications RFC
      under "Cancellation response semantics".
 
