@@ -141,11 +141,20 @@ Internally `ServiceContextInner` holds:
 `notify` builds a `RequestEnvelope::notification`, encodes it once, and
 pushes it onto the outbound channel. Errors:
 
-- `Err(FittingsError::transport(...))` if the channel is closed
-  (peer gone). Handlers can ignore-or-bail at their discretion.
-- `Err(FittingsError::internal(...))` if encoding fails (params not
-  serialisable). This should be rare; treating it as internal keeps
-  the API total without a separate error type.
+- `Err(FittingsError::Transport { ... })` if the *outbound mpsc*
+  is closed, which happens only on dispatcher shutdown. This does
+  **not** mean the peer is gone — it means the local serve loop
+  is exiting. Peer-disconnect is detected asynchronously by the
+  dispatcher's next `transport.send`. See "ctx.notify delivery
+  contract" below for the full story.
+- `Err(FittingsError::Internal { ... })` if encoding fails (params
+  not serialisable). This should be rare; treating it as internal
+  keeps the API total without a separate error type.
+
+**Successful `Ok(())` does NOT confirm peer delivery.** It only
+confirms the frame was queued for the dispatcher. This is
+explicit; the original draft of this RFC implied otherwise and
+was wrong on the architecture.
 
 ### 3. `Server::serve` plumbing
 
