@@ -211,11 +211,43 @@ The current single-arg form is used by `fn`-style handlers in
 - Update `Service` itself.
 - Update `RouterService` / `MethodRouter::route` to take a context
   too (`route(method, params, metadata, ctx) -> ...`).
-- The fittings-macros expansion gets a per-method choice: handlers
-  that don't need it accept `_ctx: ServiceContext`; handlers that do
-  declare it explicitly. We can do this with a function-arity check
-  in the macro, but the simpler path is: **always** pass `ctx`, and
-  let the user prefix with `_` if unused.
+- **Macro signature: pick one shape, no overloading.** The macro's
+  parser today (`fittings/crates/macros/src/parse.rs:193–217`) hard-
+  requires `inputs.len() == 2` and rejects anything else. We change
+  it to hard-require `inputs.len() == 3`:
+
+  ```rust
+  async fn name(&self, ctx: ServiceContext, params: P)
+      -> Result<R, FittingsError>
+  ```
+
+  *Not* optional. *Not* arity-sniffed. Handlers that don't use the
+  context write `_ctx: ServiceContext`. This is the same churn as
+  any other breaking trait change and keeps the macro expander a
+  hundred lines simpler than the optional-arg alternative.
+
+  Generated server-side dispatch (`MethodRouter::route` impl produced
+  by the macro) calls `self.name(ctx, deserialized_params).await`.
+
+  Generated client-side stub (the macro also emits a typed client)
+  takes a `&Client<C>` and the params; it does **not** take a
+  `ServiceContext` because clients have no inbound context. Client
+  stubs are unchanged in shape.
+
+- **`MethodRouter` trait** changes to:
+
+  ```rust
+  async fn route(
+      &self,
+      method: &str,
+      params: Value,
+      metadata: Metadata,
+      ctx: ServiceContext,
+  ) -> Result<Value, FittingsError>;
+  ```
+
+  Hand-written `MethodRouter` impls migrate the same way as macro-
+  generated ones.
 - Provide a `From<Request> for (Request, ServiceContext::detached())`
   helper for tests, plus a `ServiceContext::detached()` constructor
   that drops notifications and is never cancelled. This keeps
