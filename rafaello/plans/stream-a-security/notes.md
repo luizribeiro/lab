@@ -134,3 +134,26 @@ Open questions surfaced for the pi review:
 
 These are flagged in §5 of the CaMeL RFC and §9 of the security
 RFC.
+
+## F7. Revision after pi-review-1
+
+All ten findings plus all "other important issues" addressed; see
+the resolved-disagreements table at security RFC §9.1 for the
+finding-by-finding map. Three load-bearing changes:
+
+1. **Bus transport is now an inherited socketpair fd**, not a
+   UDS+token. Resolves the lockin compatibility blocker.
+2. **Taint is mandatory on `tool_request` as well as `tool_result`,
+   and core enforces a sink-confirmation gate.** This is the
+   structural answer to LLM-mediated cross-tool exfiltration the
+   first draft was missing. The v1 exfiltration claim is now
+   precise: prevents *verbatim* flows; laundering is v2/CaMeL.
+3. **Carve-outs are implemented by grant decomposition at compile
+   time**, not by deny-subpath rules in lockin (which doesn't
+   support them). The compiler refuses or rewrites grants whose
+   ancestors would cover sensitive subpaths.
+
+One open question for the project owner: whether to commit the
+`bindings.helper_for` primitive in v1 to support clean Q-LLM
+isolation in CaMeL, or to accept CaMeL's degraded in-process
+Q-LLM. Author recommends commit; it is small and broadly useful.
