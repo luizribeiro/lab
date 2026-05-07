@@ -343,7 +343,7 @@ plugins never see the provider's namespace; they see only
 core's canonical events.
 
 The symmetric path applies to results: a tool plugin publishes
-`plugin.<id>.tool_result`; core validates `in_reply_to` and the
+`plugin.<topic-id>.tool_result`; core validates `in_reply_to` and the
 taint-superset rule, then re-emits canonical
 `core.session.tool_result` to subscribers (the bound provider,
 frontends, and any other plugin granted the subscription).
@@ -618,7 +618,7 @@ Three core-only topics plus a frontend topic:
 
 - `core.session.confirm_request` (core → frontends)
 - `core.session.confirm_reply` (core → requesting plugin)
-- `frontend.<id>.confirm_answer` (frontend → core)
+- `frontend.<attach-id>.confirm_answer` (frontend → core)
 
 Plugins cannot publish replies; frontends cannot publish
 replies; only core re-emits a validated answer. Timeout:
@@ -630,10 +630,10 @@ A tool call is the only path from LLM-shaped output to a tool
 plugin. The path is:
 
 ```
-provider plugin            -> provider.<id>.tool_request
+provider plugin            -> provider.<provider-id>.tool_request
 core (taint + sink gate)   -> core.session.tool_request
-                              + plugin.<targeted-id>.tool_request
-target plugin              -> plugin.<id>.tool_result
+                              + plugin.<topic-id>.tool_request
+target plugin              -> plugin.<topic-id>.tool_result
 core (in_reply_to + taint) -> core.session.tool_result
                               -> provider, frontends, subscribers
 ```
@@ -662,7 +662,7 @@ time, the install confirmation flow runs.
 
 Providers `subscribe` to `core.session.user_message` and
 `core.session.tool_result`, and `publish` on
-`provider.<id>.tool_request` and `provider.<id>.assistant_message`.
+`provider.<provider-id>.tool_request` and `provider.<provider-id>.assistant_message`.
 Core re-emits canonical `core.*` events as in §4.4.
 
 ### 8.1 The default provider is a bundled plugin, not a core feature
@@ -729,7 +729,7 @@ A helper plugin:
 - has `bindings.helper_for = "<parent-id>"` in its lock;
 - the parent's lock binding lists which helper ids it may
   spawn (`bindings.helpers = [...]`);
-- is **spawned by core** on `provider.<parent>.spawn_helper`
+- is **spawned by core** on `provider.<parent-provider-id>.spawn_helper`
   (or `plugin.<parent>.spawn_helper`), not by the parent
   directly;
 - runs **without** `RFL_BUS_FD` — it has no bus handle, cannot
@@ -757,10 +757,11 @@ model — they answer confirmation requests. Two flavours:
   `${XDG_RUNTIME_DIR}/rafaello/<session>/attach.sock` (mode
   `0600`) and presents a one-shot 64-byte attach token from
   `attach.token` in the same dir. Successful handshake binds
-  the connection to `frontend.<id>` for the rest of the
-  session. Filesystem ACL is the user-level authentication.
+  the connection to `frontend.<attach-id>` for the rest of
+  the session. Filesystem ACL is the user-level
+  authentication.
 
-Frontends may publish on `frontend.<id>.*` only:
+Frontends may publish on `frontend.<attach-id>.*` only:
 `confirm_answer`, `user_message`, plus future-reserved topics.
 Core re-emits validated `frontend.*.user_message` as canonical
 `core.session.user_message`.
@@ -898,12 +899,12 @@ project owner should review before m1:
 3. **Bus = broker (in core) + transport (fittings).** Two
    layers, not one. §4.1.
 4. **Single canonical topic grammar with four namespaces**
-   (`core.*`, `provider.<id>.*`, `plugin.<id>.*`,
-   `frontend.<id>.*`). §4.2–4.3.
+   (`core.*`, `provider.<provider-id>.*`,
+   `plugin.<topic-id>.*`, `frontend.<attach-id>.*`). §4.2–4.3.
 5. **Topic-id form is `id_<base32(sha256(canonical))[0..16]>`**
    with collision rejection at install. §4.3.
-6. **Provider plugins publish on `provider.<id>.*`; core
-   re-emits canonical `core.*` events.** §4.4.
+6. **Provider plugins publish on `provider.<provider-id>.*`;
+   core re-emits canonical `core.*` events.** §4.4.
 7. **Mandatory taint on tool_request *and* tool_result;
    structured `{source, detail}`; populated by core.** §4.5,
    §6.2.
@@ -923,7 +924,7 @@ project owner should review before m1:
 14. **Helper plugins are a v1 primitive**
     (`bindings.helper_for`, `RFL_HELPER_FD`). §9.
 15. **Frontends are first-class bus principals**
-    (`frontend.<id>.*`); UDS attach + token for external. §10.
+    (`frontend.<attach-id>.*`); UDS attach + token for external. §10.
 16. **Per-plugin private state is automatic and excluded from
     `has_workspace_write`.** §5.5.
 17. **Capability scoped bundles are accepted, flattened at
