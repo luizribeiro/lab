@@ -40,7 +40,9 @@ pub trait Service: Send + Sync {
 ```
 
 `Server::serve` owns a private `mpsc::UnboundedSender<Vec<u8>>` that
-only its workers reach (`server/src/server.rs:49`). One worker produces
+only its workers reach (`server/src/server.rs:49`). The proposal
+splits this into a separate `notification_tx` (bounded) and
+`response_tx` (unbounded); see §3b. One worker produces
 exactly one `ResponseEnvelope`. The example MCP server replaced
 `Server::serve` with its own loop because of this; see
 `fittings/examples/mcp-server/src/mcp.rs:587–705`.
@@ -132,8 +134,12 @@ type and benefit from the unified model.
 
 Internally `ServiceContextInner` holds:
 
-- `notifier: NotificationSink` — an `mpsc::UnboundedSender<Vec<u8>>`
-  pointing at the same outbound channel `Server::serve` already drains.
+- `notifier: NotificationSink` — a bounded
+  `tokio::sync::mpsc::Sender<Vec<u8>>` (capacity =
+  `notification_capacity`, default 1024) drained by the dispatcher.
+  `notify` uses `try_send` and drops on full per the
+  "Notification sink: bounded with drop" contract. *Not* the same
+  channel as response frames; see §3b.
 - `cancel: tokio_util::sync::CancellationToken` (or our own equivalent
   if we're avoiding the dependency).
 - `request_id: Option<JsonRpcId>`.
@@ -141,8 +147,9 @@ Internally `ServiceContextInner` holds:
 `notify` builds a `RequestEnvelope::notification`, encodes it once, and
 pushes it onto the outbound channel. Errors:
 
-- `Err(FittingsError::Transport { ... })` if the *outbound mpsc*
-  is closed, which happens only on dispatcher shutdown. This does
+- `Err(FittingsError::Transport { ... })` if the bounded
+  notification channel is closed, which happens only on
+  dispatcher shutdown. This does
   **not** mean the peer is gone — it means the local serve loop
   is exiting. Peer-disconnect is detected asynchronously by the
   dispatcher's next `transport.send`. See "ctx.notify delivery
@@ -158,11 +165,13 @@ was wrong on the architecture.
 
 ### 3. `Server::serve` plumbing
 
-The existing outbound `mpsc::UnboundedSender<Vec<u8>>` becomes the
-shared `NotificationSink`. Per-request worker construction now:
+The existing outbound `mpsc::UnboundedSender<Vec<u8>>` is split into
+two channels (see §3b): a bounded `notification_tx` (the
+`NotificationSink`) and an unbounded `response_tx`. Per-request
+worker construction now:
 
 1. Builds a `ServiceContext` carrying:
-   - a clone of the response sender (for notifications),
+   - a clone of the bounded `notification_tx` (for `ctx.notify`),
    - a fresh `CancellationToken`,
    - the request's `JsonRpcId`.
 2. Stores the cancellation handle in an `in_flight: HashMap<JsonRpcId,
@@ -560,14 +569,16 @@ without an RFC.
 **Important:** `ctx.notify(...)` reports *local enqueue* status
 only. It does **not** confirm peer delivery.
 
-- `Ok(())` means the frame was encoded and pushed onto the
-  outbound mpsc that the dispatcher drains.
+- `Ok(())` means the frame was encoded and `try_send`-ed onto
+  the bounded notification channel that the dispatcher drains.
+  This includes the drop-on-full case (see "Notification sink:
+  bounded with drop"): a dropped frame still returns `Ok(())`.
 - `Err(FittingsError::Internal { ... })` means encoding failed
   (params not serialisable). Handler bug; surface it.
-- `Err(FittingsError::Transport { ... })` means the outbound mpsc
-  itself is closed, which only happens on dispatcher shutdown
-  (graceful EOF path). This is rare and informational; handlers
-  may ignore.
+- `Err(FittingsError::Transport { ... })` means the bounded
+  notification channel is closed, which only happens on
+  dispatcher shutdown (graceful EOF path). This is rare and
+  informational; handlers may ignore.
 
 **`Ok(())` does NOT mean the peer received the notification.**
 Transport failure (broken pipe, peer crash) is discovered
