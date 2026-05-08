@@ -1,5 +1,7 @@
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Number, Value};
+use serde_json::Value;
+
+pub use fittings_core::message::JsonRpcId;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -28,81 +30,6 @@ impl<'de> Deserialize<'de> for JsonRpcVersion {
                 "field `jsonrpc` must be \"{JSONRPC_VERSION}\""
             )))
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcId {
-    String(String),
-    Number(Number),
-    Null,
-}
-
-impl JsonRpcId {
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for JsonRpcId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::String(value) => write!(f, "{value}"),
-            Self::Number(value) => write!(f, "{value}"),
-            Self::Null => f.write_str("null"),
-        }
-    }
-}
-
-impl From<String> for JsonRpcId {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
-
-impl From<&str> for JsonRpcId {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_owned())
-    }
-}
-
-impl From<&String> for JsonRpcId {
-    fn from(value: &String) -> Self {
-        Self::String(value.clone())
-    }
-}
-
-impl From<&JsonRpcId> for JsonRpcId {
-    fn from(value: &JsonRpcId) -> Self {
-        value.clone()
-    }
-}
-
-impl From<i64> for JsonRpcId {
-    fn from(value: i64) -> Self {
-        Self::Number(value.into())
-    }
-}
-
-impl From<u64> for JsonRpcId {
-    fn from(value: u64) -> Self {
-        Self::Number(value.into())
-    }
-}
-
-impl From<Number> for JsonRpcId {
-    fn from(value: Number) -> Self {
-        Self::Number(value)
-    }
-}
-
-impl PartialEq<&str> for JsonRpcId {
-    fn eq(&self, other: &&str) -> bool {
-        matches!(self, Self::String(value) if value == other)
     }
 }
 

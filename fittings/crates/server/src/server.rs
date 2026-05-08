@@ -230,7 +230,7 @@ where
 {
     let request_id = request.id.clone();
     let request = Request {
-        id: request.id.clone().unwrap_or(JsonRpcId::Null).to_string(),
+        id: request.id,
         method: request.method,
         params: request.params.unwrap_or(Value::Null),
         metadata: Default::default(),
@@ -328,7 +328,7 @@ mod tests {
             sleep(Duration::from_millis(delay_ms)).await;
 
             Ok(Response {
-                id: req.id,
+                id: req.id.unwrap_or(JsonRpcId::Null),
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })
@@ -671,7 +671,7 @@ mod tests {
             }
 
             Ok(Response {
-                id: req.id,
+                id: req.id.unwrap_or(JsonRpcId::Null),
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })
@@ -706,8 +706,9 @@ mod tests {
     #[async_trait]
     impl Service for WrongIdService {
         async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+            let id = req.id.unwrap_or(JsonRpcId::Null);
             Ok(Response {
-                id: format!("{}-wrong", req.id),
+                id: JsonRpcId::from(format!("{id}-wrong")),
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })
