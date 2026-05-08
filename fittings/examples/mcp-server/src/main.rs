@@ -1,14 +1,12 @@
-use std::env;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
-use mcp::{serve_stdio, McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
+use mcp::{McpServiceImpl, ToolRegistry, ToolsCallResult};
 
 mod mcp;
-#[allow(dead_code)]
 mod mcpfit_example;
 
 fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
@@ -163,28 +161,14 @@ fn build_service() -> McpServiceImpl {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let is_stdio_serve =
-        env::var("FITTINGS").is_ok() && matches!(args.first(), Some(arg) if arg == "serve");
-
-    if is_stdio_serve {
-        let service = build_service().with_tools_list_changed(true);
-        let transport = fittings::from_process_stdio(1_048_576);
-        let server = mcp_server::configure_cancellation(fittings::Server::new(
-            service.into_service(),
-            transport,
-        ));
-        let exit_code = match server.serve().await {
-            Ok(()) => 0,
-            Err(error) => {
-                eprintln!("mcp-server serve error: {error}");
-                1
-            }
-        };
-        process::exit(exit_code);
-    }
-
-    process::exit(build_service().main().await);
+    let exit_code = match mcpfit_example::build_server().run_entrypoint().await {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("mcp-server serve error: {error}");
+            1
+        }
+    };
+    process::exit(exit_code);
 }
 
 #[cfg(test)]
