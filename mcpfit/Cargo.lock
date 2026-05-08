@@ -245,12 +245,17 @@ version = "0.0.0"
 dependencies = [
  "fittings",
  "fittings-testkit",
+ "mcpfit-macros",
  "schemars",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
 ]
+
+[[package]]
+name = "mcpfit-macros"
+version = "0.0.0"
 
 [[package]]
 name = "memchr"
