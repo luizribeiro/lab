@@ -1,10 +1,10 @@
 # m1 — manifest / lock / grant / compiler foundation — scope
 
-> **Status:** draft (round 3). Two pi review rounds so far
-> (`pi-review-1.md` 7 blocking + 3 non-blocking; `pi-review-2.md`
-> 4 blocking + 5 high + 4 medium). This revision resolves all
-> findings from both rounds. The "What changed from prior drafts"
-> section at the end records the deltas. Pi review-3 pending.
+> **Status:** draft (round 4). Three pi review rounds so far
+> (`pi-review-1.md` 7+3; `pi-review-2.md` 4+5+4;
+> `pi-review-3.md` 4+4+1). This revision resolves all
+> findings. The "What changed from prior drafts" section at
+> the end records the deltas. Owner ratification gate next.
 
 ## Goal
 
@@ -100,16 +100,25 @@ call when drafting `commits.md`.
   - `thiserror = "1"`
   - `semver = { version = "1", features = ["serde"] }`
   - `chrono = { version = "0.4", features = ["serde"] }`  (RFC 3339 parsing for `granted_at`; matches the workspace family default)
-  - `lockin = { path = "../../../lockin/crates/sandbox" }` (path dep, no version pin)
-  - `lockin-config = { package = "lockin-config", path =
-    "../../../lockin/crates/config" }` for the
-    `NetworkPlan` re-export.
-  - `outpost = { path = "../../../outpost" }` — direct dep
-    (pi review-2 finding 6: m1's
-    `compile_invalid_allow_hosts.rs` calls
+  - `lockin = { path = "../lockin/crates/sandbox" }` — m2's
+    consumer needs the `SandboxBuilder` type publicly so the
+    `CompiledPlugin` plan can be applied; m1 itself doesn't
+    construct one but the type re-export is part of the
+    public m1 surface (`use lockin::SandboxBuilder`).
+  - `outpost = { path = "../outpost/crates/outpost" }` —
+    direct dep (pi review-2 finding 6 + pi review-3 finding 1:
+    m1's `compile_invalid_allow_hosts.rs` calls
     `outpost::NetworkPolicy::from_allowed_hosts(...)` for
-    dry-run validation; transitive access via `lockin-config`
-    isn't usable from another crate).
+    dry-run `allow_hosts` validation). Path is workspace-local
+    relative to `rafaello/Cargo.toml` (`lab/outpost/crates/outpost`).
+  - **No `lockin-config` dep** — pi review-3 finding 1 caught
+    that `lockin_config::NetworkPlan` is `Proxy { policy:
+    outpost::NetworkPolicy }`, while m1's own `NetworkPlan`
+    is `Proxy { allow_hosts: Vec<String> }` (m2 starts the
+    proxy and resolves the policy at spawn time). The two are
+    different types at different boundaries; m1 owns its
+    `NetworkPlan` outright and uses `outpost` only for the
+    parse-time dry-run.
   - `tempfile = "3"` as a `[dev-dependencies]` entry for the
     fixture trees the digest / carve-out tests build.
   m1 introduces no other top-level deps. The "no new top-level
@@ -127,10 +136,14 @@ matches Stream F **post-simplifications**: no `runtime`, no
 `[rpc]`, no `helper_for`. The `[provides]` block follows the
 §15.1 normative delta in `overview.md`.
 
-- **M1.** Top-level required fields: `schema = 1`, `name`,
-  `version` (`semver::Version`), `entry` (relative path inside
-  the package — see M11 for the path-safety rule), `rafaello =
-  ">=0.1, <0.2"` (`semver::VersionReq`). Optional
+- **M1.** Top-level required fields: `schema = 1`, `name`
+  (must match the topic-segment grammar `[a-z0-9_][a-z0-9_-]*`
+  per L8 — pi review-3 finding 8 caught that the round-3 draft
+  validated the lock-side canonical-id `name` but not the
+  manifest-side `name`), `version` (`semver::Version`),
+  `entry` (relative path inside the package — see M11 for the
+  path-safety rule), `rafaello = ">=0.1, <0.2"`
+  (`semver::VersionReq`). Optional
   metadata: `description`, `authors`, `license`, `homepage`.
   All structs use `#[serde(deny_unknown_fields)]` so unknown TOML
   keys are a typed parse error.
@@ -223,13 +236,22 @@ matches Stream F **post-simplifications**: no `runtime`, no
   "TOML re-emit with sorted keys at every table level" via
   `toml::Table` — no semantic transforms.
 - **M10.** **Package-level validation**, per `decisions.md`
-  row 31 + pi review-2 findings 1 and 9. The single entry point
+  row 31 + pi review-2 findings 1 and 9 + pi review-3 finding 4.
+  The single entry point
   `manifest::validate_with_package(manifest_path, package_dir,
   manifest)` performs every check that requires the on-disk
   package layout:
-  - **`openrpc.json` sibling**: if `provides.tools` is non-empty,
-    `<package_dir>/openrpc.json` must exist as a regular file.
-    Absent → `ManifestError::MissingOpenRpc`.
+  - **`openrpc.json` sibling**: `<package_dir>/openrpc.json`
+    must exist as a regular file for **every** plugin
+    (matching `decisions.md` row 31's unqualified text — pi
+    review-3 finding 4 caught the round-3 narrowing to
+    `provides.tools` non-empty as drift from the ratified
+    decision). Provider plugins, renderer-only plugins, and
+    pure-bus plugins all ship an `openrpc.json` sibling; for a
+    plugin that exposes no methods, the file lists no methods
+    but still satisfies row 31's manifest-decoupling intent
+    (Stream F can describe its surface in OpenRPC instead of
+    re-stating it in TOML). Absent → `ManifestError::MissingOpenRpc`.
   - **`entry` resolution**: the manifest's `entry` field, after
     canonicalisation against `package_dir`, must point at an
     existing regular file *inside* `package_dir` (no traversal
@@ -285,13 +307,23 @@ to carry every input the compiler needs.
       the user resolves with `rfl provider tool grep
       <plugin-id>`. The choice is persisted in the lock");
       m1 round-trips and respects this table.
-- **L2.** **`.entry: PathBuf`** per plugin (pi-1 finding 2). The
-  manifest's `entry` field is snapshotted into the lock at
-  install time; the compiler reads this field to resolve
-  `entry_absolute = ${plugin_dir}/<entry>`. The lock-side copy
-  is what makes the spawn path independent of the on-disk
-  manifest (security RFC §3.2 "spawn path reads the snapshot,
-  not the live manifest").
+- **L2.** **`.entry: SafePath`** per plugin (pi-1 finding 2 +
+  pi-3 finding 2). The manifest's `entry` field is snapshotted
+  into the lock at install time; the compiler reads this field
+  to resolve `entry_absolute = ${plugin_dir}/<entry>`. The
+  lock-side copy is what makes the spawn path independent of
+  the on-disk manifest (security RFC §3.2). The lock loader
+  parses `.entry` through the same M11 `SafePath` rule as the
+  manifest (rejects absolute paths, `..`, empty segments,
+  control chars, `\` separators). The compiler additionally
+  checks at compile time that
+  `${plugin_dir}/<lock-entry>` resolves (after canonicalisation
+  + symlink follow-up) to a regular file inside `plugin_dir` —
+  failures: `CompileError::EntryEscape`,
+  `CompileError::EntryNotFound`, `CompileError::EntryNotFile`.
+  These mirror the manifest-time M10 checks but run against
+  the lock snapshot to defend against a hand-edited lock that
+  bypasses install-time validation.
 - **L3.** **`.grant.bundles`** — bundle-aware grant shape. The
   grant block is a map `BTreeMap<BundleKey, GrantBundle>` where
   `BundleKey ∈ { Default, Named(String) }` and `GrantBundle`
@@ -413,11 +445,18 @@ finding 4).
     (`network`/`vcs_push`/`mail`/`workspace_write`/`exec`) or
     match the custom-class grammar `[a-z0-9_]+`.
   - **Lazy-load triggers** (`[load]`) cross-validated against
-    declared methods/topics/kinds: a `command = ["foo"]` trigger
-    referencing a tool not in `provides.tools`, or an
-    `event = ["x.y"]` trigger referencing a topic not in
-    `bus.subscribes`, or a `kind = ["k"]` trigger referencing
-    a kind not in `[[renderers]]`, is rejected.
+    declared methods/topics/kinds:
+    - `command = ["foo"]` trigger referencing a tool not in
+      `provides.tools` → rejected.
+    - `event = ["x.y"]` trigger requires that **at least one
+      pattern in `bus.subscribes` matches the trigger topic**
+      under the §5.1 pattern grammar (pi review-3 finding 9 —
+      pattern-match, not literal-equality, so a subscribe of
+      `core.session.**` covers a load trigger of
+      `core.session.started` without forcing the manifest to
+      duplicate the literal).
+    - `kind = ["k"]` trigger referencing a kind not in
+      `[[renderers]]` → rejected.
   - **Capability bundle keys** match `default` or a tool name
     from `provides.tools`.
 - **V2.** `validate::manifest_with_id(manifest: &Manifest,
@@ -573,10 +612,13 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   each file's relative-path bytes (length-prefixed) followed
   by file-content bytes (length-prefixed); fold into a single
   sha256. **Symlinks** are followed when their target resolves
-  inside `package_dir` (whether the target is a file or a
-  directory; directory-typed symlinks recurse normally), and
-  refused when the target resolves outside
-  (`DigestError::SymlinkEscape`). File permission bits,
+  inside `package_dir`, and refused when the target resolves
+  outside (`DigestError::SymlinkEscape`). Directory-typed
+  symlinks are followed with **canonical-target cycle
+  detection** via a visited-set keyed on the canonicalised
+  absolute path — pi review-3 finding 7 caught the cycle hole.
+  Cycles → `DigestError::SymlinkCycle { at: PathBuf }` (no
+  silent skip). File permission bits,
   mtimes, and ownership are intentionally **excluded** from
   the digest so it is reproducible across hosts. The exact
   algorithm is pinned in m1's commit body and a doc comment on
@@ -743,27 +785,32 @@ Per security RFC §7.4.
 Per security RFC §7.2.5 (pi review-1 finding 9 — was implicit in
 round 1; this revision makes it explicit).
 
-- **Si1.** `sinks::infer_defaults(grant: &GrantBundle, declared:
-  &Option<Vec<String>>) -> Vec<String>` returns the snapshotted
-  sink list for a tool whose manifest omits `sinks`. Defaults
-  per the security RFC table:
+- **Si1.** `sinks::infer_defaults(effective: &GrantBundle,
+  declared: &Option<Vec<String>>) -> Vec<String>` returns the
+  snapshotted sink list when the manifest omits `sinks`. The
+  `effective` parameter is the **per-tool effective grant**:
+  for tool `<n>`, that's `default ∪ <n>` per `decisions.md`
+  row 17 — pi review-3 finding 3 forced this commitment so
+  inference cannot miss capabilities that arrive only via the
+  tool-named bundle. Defaults per the security RFC table:
   - `network.mode != "deny"` → includes `"network"`,
   - `write_dirs` non-empty (excluding private state) →
     includes `"workspace_write"`,
   - both → both,
   - neither → `[]`.
   When `declared` is `Some(_)`, the declared list wins
-  verbatim.
-- **Si2.** The lock-level pass `validate::lock` (V3) calls
-  `sinks::infer_defaults` for every entry in
-  `bindings.tool_meta` whose `sinks` field is empty AND whose
-  manifest provenance was "no `sinks` declared" — m1 carries a
-  `bindings.tool_meta.<n>.sinks_inferred: bool` discriminator
-  in the lock so the install flow (m2+) can re-prompt if the
-  underlying capabilities change. Locks where `sinks_inferred =
-  true` AND the inferred set differs from the snapshotted set
-  are reported as `ValidationError::SinkInferenceDrift` so
-  hand-edited locks are caught.
+  verbatim (no inference).
+- **Si2.** The lock-level pass `validate::lock` (V3) runs the
+  drift check for every `bindings.tool_meta.<n>` with
+  `sinks_inferred = true` (regardless of whether the
+  snapshotted `sinks` list is empty — pi review-3 finding 3
+  fixed the round-3 contradiction): recompute
+  `sinks::infer_defaults(effective_for_<n>, &None)`, compare
+  byte-equal with the snapshotted `sinks`, and on mismatch
+  return `ValidationError::SinkInferenceDrift { tool, expected,
+  found }`. Locks with `sinks_inferred = false` are not drift-
+  checked — the manifest's explicit declaration won at install
+  time and stays authoritative.
 
 ### W — fittings `MethodNotFound` typed-method cutover (row 36)
 
@@ -895,7 +942,7 @@ exercised at least once.
 | `compile_default_bundle.rs` | Worked lock entry with `default` bundle compiles; resulting `CompiledPlugin` carries the expected `FilesystemPlan`, `NetworkPlan`, `EnvPlan`, `LimitsPlan` (post-default-fill), `entry_absolute`, `topic_id`, etc. Asserts on the structured plan, not on builder calls. |
 | `compile_scoped_bundle_union.rs` | Lock specifies `active_bundles = ["format"]`; resulting plan reflects the union of `default` + the `format` bundle (default's reads + format's writes); duplicate entries dedup; ordering deterministic per C4. |
 | `compile_placeholder_resolves_to_absolute.rs` | All paths in the compiled plan are absolute; `${...}` is fully expanded. |
-| `compile_private_state_grant.rs` | Compiled plan contains `${PROJECT_ROOT}/.rafaello-plugin-data/<canonical-id>/` (after expansion to absolute) in both `read_dirs` and `write_dirs` regardless of whether the lock requested it. |
+| `compile_private_state_grant.rs` | Compiled plan contains `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (after expansion to absolute) in both `read_dirs` and `write_dirs` regardless of whether the lock requested it. (**Topic-id form**, not raw canonical id — C5 + pi review-3 finding 5.) |
 | `compile_private_state_excluded_from_workspace_write.rs` | Trifecta evaluation against a lock whose only writes would be the private-state dir reports `has_workspace_write == false` (Tr4 — the structural exclusion). |
 | `compile_resource_limit_defaults.rs` | Lock omits `limits`; compiled plan carries `max_cpu_time = 300`, `max_open_files = 1024`. A lock that explicitly sets `max_cpu_time = 0` (provider plugin shape) preserves the `0` verbatim. |
 | `compile_network_proxy_plan.rs` | Lock specifies `network.mode = "proxy"`, `allow_hosts = ["api.example.com", "*.example.com"]`; compiled `NetworkPlan::Proxy { allow_hosts }` records the host list verbatim (m2 starts the outpost proxy and supplies the port; m1 only emits the plan). |
@@ -909,6 +956,8 @@ exercised at least once.
 | `trifecta_two_plugins_one_hop.rs` | Plugin A has workspace_write + reads_untrusted but `network.mode = "deny"`; plugin B subscribes to A's published topic and has `network.mode = "proxy"`. A's `has_outbound` evaluates true via the one-hop check; combined with A's other booleans, the trifecta refusal fires. |
 | `trifecta_iknowwhatimdoing_bypass.rs` | Same fixture; `flags.i_know_what_im_doing = true`; trifecta refusal suppressed; compile succeeds. |
 | `sinks_infer_defaults.rs` | Tools whose manifest omits `sinks` (`sinks: None` per M3): a write-only grant infers `["workspace_write"]`; a network-only grant infers `["network"]`; both → both classes; neither → `[]` (Si1). A second case where the manifest declares `sinks: Some(vec![])` (explicit empty) is preserved verbatim — no inference applied. |
+| `sinks_infer_from_named_bundle.rs` | A tool `format` whose `default` bundle has no network/write authority but whose `[capabilities.format.filesystem] write_dirs = ...` adds workspace_write authority: inference (Si1's `effective = default ∪ format`) yields `["workspace_write"]`. Pi review-3 finding 3 — covers the row 17 ∪ flatten path. |
+| `manifest_load_event_pattern_match.rs` | `bus.subscribes = ["core.session.**"]`, `[load] event = ["core.session.started"]`: V1 accepts (the subscribe pattern matches the trigger topic — pi review-3 finding 9). A second case where `event = ["unrelated.x"]` with the same subscribes is rejected. |
 | `sinks_inferred_flag_round_trips.rs` | A lock entry with `bindings.tool_meta.<n>.sinks_inferred = true` and a matching `sinks` snapshot round-trips through TOML serialise/parse byte-equal (L4). |
 | `manifest_grant_match_present.rs` | `validate_with_package` succeeds when every `[provides.tool.<name>]` table that sets `grant_match` resolves to an existing regular file inside the package dir (M10). |
 | `broker_acl_tool_owner_resolves_routing.rs` | Two-plugin lock both claiming `grep`; `[session].tool_owner.grep = "<plugin-A>"`. `broker_acl::compile`'s `tool_routes["grep"]` equals `<plugin-A>` and the losing plugin's `CompiledPlugin.tool_meta` does not contain `"grep"` (G1, C1 — pi review-2 finding 4). |
@@ -945,6 +994,13 @@ exercised at least once.
 | `lock_provider_active_not_provider.rs` | `[session].provider_active` references an installed plugin whose `bindings.provider == false` → `ValidationError::ProviderActiveNotProvider`. |
 | `lock_conflicting_tool_names.rs` | Two installed plugins both listing `"grep"` in `bindings.tools` without a `[session].tool_owner.grep` decision → `ValidationError::ConflictingToolName`. A second variant with `[session].tool_owner.grep = "<plugin-A>"` resolves the conflict; only the named plugin gets the routing. |
 | `lock_missing_entry.rs` | Lock entry without `entry` field → `LockError::MissingEntry` (per L2 — required for the compiler's `entry_absolute`). |
+| `lock_entry_traversal.rs` | Lock `.entry = "../evil"` rejected by `Lock::parse` (L2 + M11 `SafePath`); `.entry = "/abs/path"` rejected; `.entry = "ok//double-slash"` rejected. |
+| `lock_entry_not_found.rs` | Lock `.entry = "bin/missing"` against a fixture `plugin_dir` that contains no such file → `CompileError::EntryNotFound` (L2 — compile-time check on the lock snapshot, not just install-time M10). |
+| `lock_entry_escape_via_symlink.rs` | Lock `.entry = "bin/wat"` resolves through a symlink whose target is outside `plugin_dir` → `CompileError::EntryEscape` (L2). |
+| `lock_entry_is_directory.rs` | Lock `.entry = "bin"` points at a directory rather than a regular file → `CompileError::EntryNotFile` (L2). |
+| `manifest_invalid_name.rs` | Manifest `name = "Rust-Tools"` (uppercase), `name = "rust/tools"` (slash), `name = "rust.tools"` (dot), `name = ""` (empty): all rejected by V1 (M1's name grammar — pi review-3 finding 8). |
+| `manifest_missing_openrpc_provider.rs` | Provider plugin manifest (no `provides.tools`, has `provides.provider = "anthropic"`) but no `openrpc.json` next to it → `ManifestError::MissingOpenRpc` (M10 + pi review-3 finding 4: row 31 requires the sibling for every plugin, not just tool plugins). |
+| `digest_symlink_cycle.rs` | `package_dir` contains `loop -> .` (or `a -> b`, `b -> a`); `content_digest` returns `DigestError::SymlinkCycle` (D1 — pi review-3 finding 7). |
 | `lock_active_bundle_unknown.rs` | `active_bundles = ["nope"]` referencing a bundle absent from `grant.bundles` → `ValidationError::ActiveBundleUnknown`. |
 | `topic_id_collision_at_lock.rs` | Two distinct canonical ids whose pre-computed prefixes (passed via `collisions_with_prefixes`) match → `CollisionError`. |
 | `digest_content_mismatch.rs` | Lock's `digest` field doesn't match the recomputed `content_digest`; `compile::compile_plugin` returns `CompileError::ContentDigestMismatch`. |
@@ -998,15 +1054,19 @@ The driver runs and captures:
    shim, no upstream lockin patch. (Pi review-1 finding 1.)
 
 2. **Outpost proxy startup is m2's job.** m1's `NetworkPlan::Proxy
-   { allow_hosts }` does not start the proxy; m2 does. The risk
-   is that m1's `allow_hosts` is malformed in a way `outpost`
-   later rejects. Mitigation: m1 calls
+   { allow_hosts: Vec<String> }` does not start the proxy; m2
+   resolves the host list to a real `outpost::NetworkPolicy`,
+   starts the proxy, and pairs the loopback port with the
+   plan. The risk is that m1's `allow_hosts` is malformed in a
+   way `outpost` later rejects. Mitigation: m1 has `outpost`
+   as a **direct workspace dep** (S2) and calls
    `outpost::NetworkPolicy::from_allowed_hosts(...)` at compile
-   time **as a dry-run validation** and returns
+   time as a dry-run validation, returning
    `CompileError::InvalidAllowHosts` if the parse fails. The
-   parsed `NetworkPolicy` itself is discarded (m2 will recompute
-   it at spawn). This adds an `outpost` dep transitively (via
-   `lockin-config`); m1 does not import it directly.
+   parsed `NetworkPolicy` value itself is discarded (m2
+   recomputes it at spawn alongside the proxy startup). Pi
+   review-3 finding 1 corrected the round-3 wording that
+   claimed transitive access via `lockin-config`.
 
 3. **Deterministic content digest across hosts.** The algorithm
    in §D1 commits to a specific normalisation. The test
@@ -1016,16 +1076,15 @@ The driver runs and captures:
    bug to fix in the walker, not a test allowance.
 
 4. **Topic-id collision testing without a hash seam.** §T3
-   commits to a `collisions_with_prefixes(...)` helper that
-   takes pre-computed prefixes — production code is the same
-   helper, called from `collisions(...)` after computing
-   prefixes via `derive(...)`. No `#[cfg(test)]` boundary; the
-   public surface is `derive` + `collisions`, the internal
-   helper is `pub(crate)` and reachable from integration tests
-   via a small `pub fn collisions_with_prefixes` re-export
-   under the `topic_id` module. (Pi review-1 finding 7 wanted
-   the seam removed; this revision lets the helper be the
-   stable public surface.)
+   exposes `topic_id::collisions_with_prefixes(pairs)` as a
+   stable public API; production `collisions(plugins)`
+   computes prefixes via `derive(...)` and delegates to it.
+   Integration tests construct synthetic colliding-prefix
+   fixtures and call the public helper directly. No
+   `#[cfg(test)]` boundary, no `pub(crate)` re-export
+   sleight-of-hand. Pi review-3 finding 6 caught the round-3
+   wording that still said `pub(crate)`; this revision aligns
+   Risks §4 with T3.
 
 5. **Validation rule completeness vs. surface size.** The
    manifest validation surface is large (V1, V2, V3). The risk
@@ -1136,6 +1195,50 @@ m1 is done when:
   / external-attach drift).
 
 ## What changed from prior drafts
+
+Round-3 pi review (`pi-review-3.md`) prompted these revisions:
+
+- **Workspace dep paths corrected and `NetworkPlan` ownership
+  pinned** (pi-3 finding 1). S2 now uses
+  `../lockin/crates/sandbox`, `../outpost/crates/outpost`
+  (relative to `rafaello/Cargo.toml`); `lockin-config` dep
+  removed (`lockin_config::NetworkPlan` is a different shape
+  from m1's `NetworkPlan`); `outpost` is a direct workspace
+  dep used only for the dry-run `from_allowed_hosts`
+  validation. Risks §2 rewritten to match.
+- **Lock-side `.entry` is escape-safe** (pi-3 finding 2). L2
+  parses `.entry` through M11's `SafePath` rule; the compiler
+  re-validates the snapshot at compile time
+  (`EntryEscape`/`EntryNotFound`/`EntryNotFile`). New negative
+  tests `lock_entry_traversal.rs`, `lock_entry_not_found.rs`,
+  `lock_entry_escape_via_symlink.rs`, `lock_entry_is_directory.rs`.
+- **Sink inference fixed** (pi-3 finding 3). Si1 takes the
+  effective per-tool grant (`default ∪ <tool-name>` per row
+  17), not just one bundle. Si2's drift check runs
+  unconditionally for `sinks_inferred = true` entries
+  (regardless of snapshot list emptiness). New positive test
+  `sinks_infer_from_named_bundle.rs`.
+- **`openrpc.json` sibling required for every plugin** (pi-3
+  finding 4). M10's "if `provides.tools` non-empty" qualifier
+  dropped to match `decisions.md` row 31's unqualified text.
+  New negative test `manifest_missing_openrpc_provider.rs`.
+- **`compile_private_state_grant.rs` test description fixed
+  to `<topic-id>`** (pi-3 finding 5). Stale `<canonical-id>`
+  wording removed.
+- **Risks §4 rewritten to match T3** (pi-3 finding 6).
+  `pub(crate)` / re-export sleight-of-hand replaced with
+  "stable public API".
+- **`content_digest` cycle handling specified** (pi-3 finding
+  7). D1 adds canonical-target visited-set cycle detection;
+  new `DigestError::SymlinkCycle`. New negative test
+  `digest_symlink_cycle.rs`.
+- **Manifest `name` grammar pinned** (pi-3 finding 8). M1
+  validates `name` against the topic-segment grammar at parse
+  time. New negative test `manifest_invalid_name.rs`.
+- **`load.event` cross-validation uses subscribe-pattern
+  matching** (pi-3 finding 9). V1 spelled out: at least one
+  `bus.subscribes` pattern must match the trigger topic. New
+  positive test `manifest_load_event_pattern_match.rs`.
 
 Round-2 pi review (`pi-review-2.md`) prompted these revisions:
 
