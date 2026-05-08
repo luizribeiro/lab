@@ -1,9 +1,8 @@
 //! `Manifest` top-level type and `Manifest::parse` (scope §M1, §M2).
 //!
 //! Per the m1-manifest phase boundary, this commit decodes the
-//! top-level required + optional fields only. The `[provides]`,
-//! `[bus]`, `[capabilities]`, `[load]`, and `[[renderers]]` blocks
-//! land in c05–c09. Grammar checks on `name`, tool names, topic
+//! top-level required + optional fields only. The `[capabilities]`,
+//! `[load]`, and `[[renderers]]` blocks land in c07–c09. Grammar checks on `name`, tool names, topic
 //! segments, sink classes, and renderer kinds are deferred to V1
 //! (`validate::manifest_standalone` in c10).
 //!
@@ -15,6 +14,7 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ManifestError;
+use crate::manifest::bus::Bus;
 use crate::manifest::provides::Provides;
 use crate::manifest::safepath::SafePath;
 
@@ -36,6 +36,8 @@ pub struct Manifest {
     pub homepage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provides: Option<Provides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<Bus>,
 }
 
 const RESERVED_KEYS: [(&str, &str); 3] = [
