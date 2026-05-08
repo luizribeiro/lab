@@ -35,6 +35,17 @@ pub fn entry(tools: &[&str], provider: bool, provider_id: Option<&str>) -> Plugi
     }
 }
 
+pub fn entry_with_publishes(
+    tools: &[&str],
+    provider: bool,
+    provider_id: Option<&str>,
+    publishes: &[&str],
+) -> PluginEntry {
+    let mut e = entry(tools, provider, provider_id);
+    e.grant.publishes = publishes.iter().map(|s| s.to_string()).collect();
+    e
+}
+
 pub fn lock_with(plugins: Vec<(CanonicalId, PluginEntry)>, session: SessionTable) -> Lock {
     Lock {
         plugins: plugins.into_iter().collect(),

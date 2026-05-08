@@ -11,6 +11,7 @@ use rafaello_core::lock::{
     Grant, GrantBundle, GrantFilesystem, GrantNetwork, SessionTable,
 };
 use rafaello_core::manifest::capabilities::NetworkMode;
+use rafaello_core::topic_id;
 use rafaello_core::validate;
 
 use common::{canonical, ctx_for, entry, lock_with};
@@ -37,9 +38,10 @@ fn multi_plugin_fixture_passes_v3() {
             ..GrantBundle::default()
         },
     );
+    let writer_topic = topic_id::derive(&writer.to_string());
     writer_entry.grant = Grant {
         bundles: writer_bundles,
-        publishes: vec!["plugin.writer.update".to_owned()],
+        publishes: vec![format!("plugin.{writer_topic}.update")],
         subscribes: Vec::new(),
     };
 
@@ -92,9 +94,10 @@ fn trifecta_failing_plugin_is_refused() {
             ..GrantBundle::default()
         },
     );
+    let writer_topic = topic_id::derive(&writer.to_string());
     writer_entry.grant = Grant {
         bundles: writer_bundles,
-        publishes: vec!["plugin.writer.update".to_owned()],
+        publishes: vec![format!("plugin.{writer_topic}.update")],
         subscribes: Vec::new(),
     };
 
@@ -113,7 +116,7 @@ fn trifecta_failing_plugin_is_refused() {
     relay_entry.grant = Grant {
         bundles: relay_bundles,
         publishes: Vec::new(),
-        subscribes: vec!["plugin.writer.*".to_owned()],
+        subscribes: vec![format!("plugin.{writer_topic}.*")],
     };
 
     let lock = lock_with(

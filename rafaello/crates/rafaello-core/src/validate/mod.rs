@@ -140,6 +140,16 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
     }
 
     for (canonical, entry) in &lock.plugins {
+        let own_topic_id = topic_id::derive(&canonical.to_string());
+        for topic in &entry.grant.publishes {
+            check_lock_publish_topic(
+                topic,
+                &own_topic_id,
+                entry.bindings.provider,
+                entry.bindings.provider_id.as_deref(),
+            )?;
+        }
+
         let plugin_dir = ctx
             .plugin_dirs
             .get(canonical)
@@ -314,6 +324,40 @@ fn check_publish_topic(topic: &str) -> Result<(), ValidationError> {
         }),
         _ => Ok(()),
     }
+}
+
+fn check_lock_publish_topic(
+    topic: &str,
+    own_topic_id: &str,
+    is_provider: bool,
+    provider_id: Option<&str>,
+) -> Result<(), ValidationError> {
+    let mut segs = topic.split('.');
+    let Some(first) = segs.next() else {
+        return Ok(());
+    };
+    match first {
+        "core" => return Err(ValidationError::LockPublishOnReservedNamespace),
+        "frontend" => return Err(ValidationError::LockPublishOnFrontendNamespace),
+        "plugin" => {
+            let Some(second) = segs.next() else {
+                return Ok(());
+            };
+            if second != own_topic_id {
+                return Err(ValidationError::LockPublishOnForeignTopicId);
+            }
+        }
+        "provider" => {
+            let Some(second) = segs.next() else {
+                return Ok(());
+            };
+            if !is_provider || provider_id != Some(second) {
+                return Err(ValidationError::LockProviderNamespaceMismatch);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn check_renderers(renderers: &[Renderer]) -> Result<(), ValidationError> {
