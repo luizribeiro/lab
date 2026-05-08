@@ -41,9 +41,41 @@ impl ToolResponse {
     }
 }
 
+pub trait IntoToolResponse {
+    fn into_tool_response(self) -> ToolResponse;
+}
+
+impl IntoToolResponse for String {
+    fn into_tool_response(self) -> ToolResponse {
+        ToolResponse::success(self)
+    }
+}
+
+impl IntoToolResponse for &'static str {
+    fn into_tool_response(self) -> ToolResponse {
+        ToolResponse::success(self)
+    }
+}
+
+macro_rules! impl_into_tool_response_via_display {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl IntoToolResponse for $ty {
+                fn into_tool_response(self) -> ToolResponse {
+                    ToolResponse::success(self.to_string())
+                }
+            }
+        )*
+    };
+}
+
+impl_into_tool_response_via_display!(
+    bool, f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize,
+);
+
 #[cfg(test)]
 mod tests {
-    use super::ToolResponse;
+    use super::{IntoToolResponse, ToolResponse};
     use crate::content::ToolContent;
     use serde_json::{json, to_value};
 
@@ -85,6 +117,31 @@ mod tests {
                 "isError": false,
             })
         );
+    }
+
+    #[test]
+    fn string_converts_to_text_response() {
+        let response = String::from("hello").into_tool_response();
+        assert_eq!(response, ToolResponse::success("hello"));
+    }
+
+    #[test]
+    fn static_str_converts_to_text_response() {
+        let response = "hello".into_tool_response();
+        assert_eq!(response, ToolResponse::success("hello"));
+    }
+
+    #[test]
+    fn numeric_primitives_render_via_display() {
+        assert_eq!(42_i64.into_tool_response(), ToolResponse::success("42"));
+        assert_eq!(7_u8.into_tool_response(), ToolResponse::success("7"));
+        assert_eq!(1.5_f64.into_tool_response(), ToolResponse::success("1.5"));
+    }
+
+    #[test]
+    fn bool_renders_via_display() {
+        assert_eq!(true.into_tool_response(), ToolResponse::success("true"));
+        assert_eq!(false.into_tool_response(), ToolResponse::success("false"));
     }
 
     #[test]

@@ -12,7 +12,7 @@ pub use protocol::{
     ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolInfo,
     ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
-pub use response::ToolResponse;
+pub use response::{IntoToolResponse, ToolResponse};
 pub use structured::{Structured, StructuredObject};
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
