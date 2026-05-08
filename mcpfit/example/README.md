@@ -46,7 +46,7 @@ binary and exercises real MCP stdio sessions.
 ## Running the real-MCP-client compatibility check
 
 ```bash
-cd mcpfit/examples/mcp-server
+cd mcpfit/example
 npm install
 npm run check:real-client
 ```
