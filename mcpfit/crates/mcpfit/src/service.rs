@@ -10,7 +10,7 @@ use crate::context::{extract_progress_token, Cx, ProgressSink};
 use crate::error::McpfitError;
 use crate::protocol::{
     InitializeParams, InitializeResult, ProgressNotificationParams, ServerCapabilities, ServerInfo,
-    ToolsCallParams, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
+    ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 use crate::registry::ToolRegistry;
 use crate::response::ToolResponse;
@@ -129,9 +129,19 @@ impl McpService for McpServiceImpl {
             *lifecycle = SessionLifecycle::AwaitingInitializedNotification;
         }
 
+        let capabilities = if self.allow_runtime_registration {
+            ServerCapabilities {
+                tools: Some(ToolsCapability {
+                    list_changed: Some(true),
+                }),
+            }
+        } else {
+            ServerCapabilities::default()
+        };
+
         Ok(InitializeResult {
             protocol_version: params.protocol_version,
-            capabilities: ServerCapabilities::default(),
+            capabilities,
             server_info: self.server_info.clone(),
         })
     }
@@ -342,6 +352,40 @@ mod tests {
             svc.lifecycle_state(),
             SessionLifecycle::AwaitingInitializedNotification
         );
+    }
+
+    #[tokio::test]
+    async fn initialize_does_not_advertise_list_changed_by_default() {
+        let svc = service("demo", "0.1.0");
+        let result = svc
+            .initialize(InitializeParams {
+                protocol_version: "2025-01-01".into(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+
+        assert!(result.capabilities.tools.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_advertises_list_changed_when_runtime_registration_enabled() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        let result = svc
+            .initialize(InitializeParams {
+                protocol_version: "2025-01-01".into(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+
+        let tools = result
+            .capabilities
+            .tools
+            .expect("tools capability should be advertised");
+        assert_eq!(tools.list_changed, Some(true));
     }
 
     #[tokio::test]
