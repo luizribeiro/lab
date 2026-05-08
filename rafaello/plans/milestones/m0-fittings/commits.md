@@ -1,8 +1,11 @@
 # m0-fittings — commits
 
-> **Status:** revised by claude (orchestrator) after pi review 1
-> (`commits-pi-review-1.md`). Pi review 2 pending. Owner ratification
-> follows.
+> **Status:** converged after three pi review rounds
+> (`commits-pi-review-1.md`, `commits-pi-review-2.md`,
+> `commits-pi-review-3.md`). Pi recommended ratification after
+> the round-3 traceability fixes landed. Pending owner ratification
+> at commits granularity, after which Phase 3 per-commit agent work
+> begins on `rafaello-v0.1`.
 
 Ordered commit list for m0, derived from `scope.md`. Each commit is
 one logical idea **and leaves the workspace green** — pre-commit
@@ -79,10 +82,13 @@ Driver decides during implementation. Default: no split.
   marker round-trip can prove it. Pi review-2 finding 8: keep
   one-arg constructors compatible.
 - **Depends on.** baseline.
-- **Acceptance.** `tests/core_predefined_error_data.rs` table-driven
-  across all six variants (five predefined + Panic) asserts
-  construction + read of `data` and `message`. Existing one-arg
-  constructor call sites keep compiling unchanged.
+- **Acceptance.** `tests/core_predefined_error_data.rs` covers the
+  five predefined variants table-driven (construction + read of
+  `data` and `message`) and the new `Panic { message }` variant
+  (construction + read of `message`; `Panic` itself has no `data`
+  field — its wire-side `fittingsKind = "panic"` marker is produced
+  by the codec in c04). Existing one-arg constructor call sites
+  keep compiling unchanged.
 
 ### c03 — feat(fittings-wire): error_map preserves data field on outbound encode
 
@@ -108,11 +114,14 @@ Driver decides during implementation. Default: no split.
   of handler panics to `FittingsError::Panic` lives in c08.)
 - **Why.** scope §W4 + marker preservation.
 - **Depends on.** c02, c03.
-- **Acceptance.** `tests/wire_inbound_error_round_trip.rs`
-  table-driven across the five predefined variants + Transport +
-  Panic markers asserts byte-equal data and message round-trip via
-  `to_error_envelope` → `from_error_envelope`. Tests construct
-  `FittingsError::Panic` directly (no dispatcher needed yet).
+- **Acceptance.** Two test files implementing the scope demo bar:
+  - `tests/wire_inbound_error_round_trip.rs` covers the five
+    predefined variants byte-equal round-trip through
+    `to_error_envelope` → `from_error_envelope`.
+  - `tests/error_marker_round_trip.rs` (the scope-named test)
+    covers the Transport + Panic marker round-trip; constructs
+    `FittingsError::Panic` and `FittingsError::Transport` directly
+    (no dispatcher needed yet).
 
 ### c05 — feat(fittings-core): widen ServiceError code validation + invalidServiceCode marker
 
@@ -313,10 +322,20 @@ Driver decides during implementation. Default: no split.
   the c11 allocator (prefix `c_<n>`). Mirrors c12 in shape.
 - **Why.** scope §K1.
 - **Depends on.** c11, c12, c13.
-- **Acceptance.** `tests/peerhandle_bidirectional.rs`: server
-  initiates `peer.call`, client (with `with_service`) responds;
-  client initiates `peer.call`, server's registered `Service`
-  responds; both within one connection.
+- **Acceptance.** Three tests, all required by scope demo bar:
+  - `tests/peerhandle_bidirectional.rs`: server initiates
+    `peer.call`, client (with `with_service`) responds; client
+    initiates `peer.call`, server's registered `Service` responds;
+    both within one connection.
+  - `tests/id_namespace_isolation.rs`: 100 concurrent `peer.call`s
+    in each direction on one connection; all responses correlate;
+    no id collision between server-initiated (`s_<n>`) and
+    client-initiated (`c_<n>`) namespaces.
+  - Extends `tests/bounded_notify_drop.rs` (originally landed in
+    c09) with the scope-required post-flood assertion: after the
+    bounded notification sink has dropped frames, a subsequent
+    `peer.call` succeeds. This closes the scope row that was
+    deferred from c09 because `peer.call` didn't yet exist.
 
 ### c15 — feat(fittings-core): full ctx.peer() handler-side test
 
