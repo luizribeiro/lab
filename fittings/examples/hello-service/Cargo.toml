@@ -101,3 +101,7 @@ path = "../../tests/peerhandle_bidirectional.rs"
 [[test]]
 name = "id_namespace_isolation"
 path = "../../tests/id_namespace_isolation.rs"
+
+[[test]]
+name = "service_context_peer_call"
+path = "../../tests/service_context_peer_call.rs"
