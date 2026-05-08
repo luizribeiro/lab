@@ -21,6 +21,11 @@ pub struct WaitArgs {
     pub duration_ms: u64,
 }
 
+#[derive(JsonSchema, Deserialize)]
+pub struct ProgressArgs {
+    pub steps: u32,
+}
+
 #[derive(Debug, PartialEq, Serialize, JsonSchema, StructuredObject)]
 pub struct AddOut {
     pub a: f64,
@@ -68,12 +73,26 @@ pub async fn wait(args: WaitArgs, cx: Cx) -> Result<String> {
     Ok(format!("waited {} ms", args.duration_ms))
 }
 
+/// Reports progress for the requested number of steps, then returns.
+#[tool]
+pub async fn progress_demo(args: ProgressArgs, cx: Cx) -> Result<String> {
+    let total = f64::from(args.steps);
+    for step in 1..=args.steps {
+        cx.progress(f64::from(step))
+            .total(total)
+            .message(format!("step {step} of {}", args.steps))
+            .emit();
+    }
+    Ok(format!("completed {} steps", args.steps))
+}
+
 pub fn build_server() -> Server {
     Server::new("mcp-server", env!("CARGO_PKG_VERSION"))
         .tool(echo::TOOL)
         .tool(add::TOOL)
         .tool(add_with_details::TOOL)
         .tool(wait::TOOL)
+        .tool(progress_demo::TOOL)
 }
 
 #[cfg(test)]
@@ -91,7 +110,10 @@ mod tests {
             .into_iter()
             .map(|info| info.name)
             .collect();
-        assert_eq!(names, vec!["add", "add_with_details", "echo", "wait"]);
+        assert_eq!(
+            names,
+            vec!["add", "add_with_details", "echo", "progress_demo", "wait"]
+        );
     }
 
     #[tokio::test]
@@ -136,6 +158,17 @@ mod tests {
             .await
             .expect("add should succeed");
         assert_eq!(response, ToolResponse::success("5"));
+    }
+
+    #[tokio::test]
+    async fn mcpfit_progress_demo_returns_completion_text() {
+        let server = build_server();
+        let response = server
+            .registry()
+            .call("progress_demo", json!({"steps": 3}), Cx::default())
+            .await
+            .expect("progress_demo should succeed");
+        assert_eq!(response, ToolResponse::success("completed 3 steps"));
     }
 
     #[tokio::test]
