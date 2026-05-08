@@ -149,3 +149,7 @@ path = "../../tests/batch_cancellation_partial_suppression.rs"
 [[test]]
 name = "peer_gone_during_notify"
 path = "../../tests/peer_gone_during_notify.rs"
+
+[[test]]
+name = "transport_bidirectional_regression"
+path = "../../tests/transport_bidirectional_regression.rs"
