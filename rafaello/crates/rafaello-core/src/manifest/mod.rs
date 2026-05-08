@@ -6,9 +6,11 @@
 
 pub mod capability_path_template;
 pub mod placeholders;
+pub mod provides;
 pub mod safepath;
 pub mod top_level;
 
 pub use capability_path_template::CapabilityPathTemplate;
+pub use provides::{Provides, ToolMetaManifest};
 pub use safepath::SafePath;
 pub use top_level::Manifest;

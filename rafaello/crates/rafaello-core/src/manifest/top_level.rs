@@ -15,6 +15,7 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ManifestError;
+use crate::manifest::provides::Provides;
 use crate::manifest::safepath::SafePath;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -33,6 +34,8 @@ pub struct Manifest {
     pub license: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provides: Option<Provides>,
 }
 
 const RESERVED_KEYS: [(&str, &str); 3] = [
