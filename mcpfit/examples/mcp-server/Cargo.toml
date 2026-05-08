@@ -13,4 +13,4 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
-fittings = { path = "../../../fittings/crates/fittings" }
+serde_json = "1"

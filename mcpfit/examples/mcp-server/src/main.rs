@@ -74,7 +74,7 @@ pub async fn progress_demo(_args: (), cx: Cx) -> Result<String> {
 }
 
 pub fn build_server() -> Server {
-    Server::new("fittings-mcp-example", env!("CARGO_PKG_VERSION"))
+    Server::new("mcpfit-example", env!("CARGO_PKG_VERSION"))
         .allow_runtime_registration()
         .tool(echo::TOOL)
         .tool(add::TOOL)
@@ -98,7 +98,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::build_server;
-    use fittings::serde_json::json;
+    use serde_json::json;
     use mcpfit::{Cx, ToolContent, ToolResponse};
 
     #[test]

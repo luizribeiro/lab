@@ -27,7 +27,7 @@ async function main() {
 
   const client = new Client(
     {
-      name: "fittings-real-client-check",
+      name: "mcpfit-real-client-check",
       version: "0.1.0",
     },
     {
