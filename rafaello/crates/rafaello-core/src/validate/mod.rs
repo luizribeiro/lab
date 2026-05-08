@@ -15,7 +15,9 @@ pub use topic::{
 use std::collections::BTreeSet;
 
 use crate::error::ValidationError;
+use crate::lock::CanonicalId;
 use crate::manifest::{Bus, Capabilities, Load, Manifest, NetworkMode, Provides, Renderer};
+use crate::topic_id;
 
 const KNOWN_SINK_CLASSES: &[&str] = &["network", "vcs_push", "mail", "workspace_write", "exec"];
 
@@ -42,6 +44,39 @@ pub fn manifest_standalone(manifest: &Manifest) -> Result<(), ValidationError> {
         manifest.bus.as_ref(),
         &manifest.renderers,
     )?;
+    Ok(())
+}
+
+pub fn manifest_with_id(
+    manifest: &Manifest,
+    canonical: &CanonicalId,
+) -> Result<(), ValidationError> {
+    let own_topic_id = topic_id::derive(&canonical.to_string());
+    let provider = manifest
+        .provides
+        .as_ref()
+        .and_then(|p| p.provider.as_deref());
+    let Some(bus) = manifest.bus.as_ref() else {
+        return Ok(());
+    };
+    for topic in &bus.publishes {
+        let mut segs = topic.split('.');
+        let Some(first) = segs.next() else {
+            continue;
+        };
+        let Some(second) = segs.next() else {
+            continue;
+        };
+        match first {
+            "plugin" if second != own_topic_id => {
+                return Err(ValidationError::PublishOnForeignTopicId);
+            }
+            "provider" if provider != Some(second) => {
+                return Err(ValidationError::ProviderNamespaceMismatch);
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 
