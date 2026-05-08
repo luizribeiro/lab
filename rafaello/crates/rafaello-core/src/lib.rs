@@ -7,6 +7,7 @@ pub mod manifest;
 pub mod paths;
 pub mod sinks;
 pub mod topic_id;
+pub mod trifecta;
 pub mod validate;
 
 pub use error::{
