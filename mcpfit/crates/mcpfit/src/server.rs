@@ -1,12 +1,16 @@
 //! Top-level server builder.
 
+use crate::error::McpfitError;
 use crate::protocol::ServerInfo;
 use crate::registry::ToolRegistry;
+use crate::service::{McpService, McpServiceImpl};
 use crate::tool::{Tool, ToolSpec};
 use crate::Result;
 
 pub const MCP_CANCELLATION_METHOD: &str = "notifications/cancelled";
 pub const MCP_CANCELLATION_REQUEST_ID_FIELD: &str = "requestId";
+
+const STDIO_FRAME_LIMIT: usize = 1024 * 1024;
 
 /// Names the JSON-RPC method and `params` field that the transport reads to
 /// cancel an in-flight request.
@@ -69,6 +73,22 @@ impl Server {
     pub fn registry(&self) -> &ToolRegistry {
         &self.registry
     }
+
+    /// Serves the MCP service over the process stdio transport.
+    pub async fn serve_stdio(self) -> Result<()> {
+        self.serve_with_transport(fittings::from_process_stdio(STDIO_FRAME_LIMIT))
+            .await
+    }
+
+    pub(crate) async fn serve_with_transport<T>(self, transport: T) -> Result<()>
+    where
+        T: fittings::core::transport::Transport + Sync + 'static,
+    {
+        McpServiceImpl::new(self.info, self.registry)
+            .serve_transport(transport)
+            .await
+            .map_err(|err| McpfitError::Internal(err.to_string()))
+    }
 }
 
 /// Conversion into a [`Tool`] for registration on a [`Server`].
@@ -100,6 +120,7 @@ mod tests {
         CancellationConfig, Server, MCP_CANCELLATION_METHOD, MCP_CANCELLATION_REQUEST_ID_FIELD,
     };
     use crate::tool::{Tool, ToolSpec};
+    use fittings_testkit::memory_transport::MemoryTransport;
 
     #[test]
     fn cancellation_constants_match_mcp_wire_strings() {
@@ -155,5 +176,20 @@ mod tests {
         let _ = Server::new("demo", "0.1.0")
             .tool(Tool::new("dup"))
             .tool(Tool::new("dup"));
+    }
+
+    #[tokio::test]
+    async fn serve_with_transport_returns_when_client_disconnects() {
+        let (client, server_transport) = MemoryTransport::pair(8);
+        let handle = tokio::spawn(
+            Server::new("demo", "0.1.0")
+                .tool(Tool::new("noop"))
+                .serve_with_transport(server_transport),
+        );
+        drop(client);
+        handle
+            .await
+            .expect("serve task should join")
+            .expect("serve should end cleanly when input closes");
     }
 }
