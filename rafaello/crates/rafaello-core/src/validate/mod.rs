@@ -18,7 +18,9 @@ use std::path::PathBuf;
 use crate::carveout;
 use crate::error::{CompileError, ValidationError};
 use crate::lock::{CanonicalId, Lock};
-use crate::manifest::{Bus, Capabilities, Load, Manifest, NetworkMode, Provides, Renderer};
+use crate::manifest::{
+    Bus, Capabilities, CapabilityPathTemplate, Load, Manifest, NetworkMode, Provides, Renderer,
+};
 use crate::paths::PathContext;
 use crate::sinks;
 use crate::topic_id;
@@ -170,6 +172,36 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
                 has_outbound: state.has_outbound,
                 has_workspace_write: state.has_workspace_write,
             });
+        }
+
+        for (bundle_key, bundle) in &entry.grant.bundles {
+            if bundle_key != "default"
+                && !entry.bindings.tools.iter().any(|t| t == bundle_key)
+            {
+                return Err(ValidationError::LockUnknownBundleKey);
+            }
+            if let Some(net) = &bundle.network {
+                if !net.allow_hosts.is_empty() && net.mode != NetworkMode::Proxy {
+                    return Err(ValidationError::LockAllowHostsOutsideProxy);
+                }
+            }
+            if let Some(fs) = &bundle.filesystem {
+                let path_groups: [&[String]; 6] = [
+                    &fs.read_paths,
+                    &fs.read_dirs,
+                    &fs.write_paths,
+                    &fs.write_dirs,
+                    &fs.exec_paths,
+                    &fs.exec_dirs,
+                ];
+                for paths in path_groups {
+                    for p in paths {
+                        if CapabilityPathTemplate::parse(p).is_err() {
+                            return Err(ValidationError::LockCapabilityPathRelative);
+                        }
+                    }
+                }
+            }
         }
 
         for bundle in entry.grant.bundles.values() {
