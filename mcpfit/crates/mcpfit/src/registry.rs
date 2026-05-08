@@ -1,10 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::context::Cx;
 use crate::error::McpfitError;
 use crate::protocol::ToolInfo;
 use crate::response::ToolResponse;
-use crate::tool::Tool;
+use crate::tool::{BoxedHandler, Tool};
 use crate::Result;
 
 #[derive(Default)]
@@ -41,20 +41,16 @@ impl ToolRegistry {
     }
 
     pub fn list(&self) -> Vec<ToolInfo> {
-        let mut infos: Vec<ToolInfo> = self
-            .tools
-            .iter()
-            .map(|t| ToolInfo {
-                name: t.name().to_string(),
-                description: t.description_str().map(str::to_string),
-                input_schema: t
-                    .input_schema_value()
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type": "object"})),
-            })
-            .collect();
+        let mut infos: Vec<ToolInfo> = self.tools.iter().map(Tool::to_info).collect();
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
+    }
+
+    pub(crate) fn handler_for(&self, name: &str) -> Option<BoxedHandler> {
+        self.tools
+            .iter()
+            .find(|t| t.name() == name)
+            .and_then(Tool::cloned_handler)
     }
 
     /// Executes the named tool's handler. Returns `MethodNotFound` if no tool
