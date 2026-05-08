@@ -1,6 +1,6 @@
-use mcpfit::{tool, Result, Server};
+use mcpfit::{tool, Result, Server, Structured, StructuredObject};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(JsonSchema, Deserialize)]
 pub struct EchoArgs {
@@ -11,6 +11,13 @@ pub struct EchoArgs {
 pub struct AddArgs {
     pub a: f64,
     pub b: f64,
+}
+
+#[derive(Debug, PartialEq, Serialize, JsonSchema, StructuredObject)]
+pub struct AddOut {
+    pub a: f64,
+    pub b: f64,
+    pub sum: f64,
 }
 
 /// Echoes the provided message.
@@ -25,17 +32,31 @@ pub async fn add(args: AddArgs) -> Result<f64> {
     Ok(args.a + args.b)
 }
 
+/// Adds two numbers and returns both text and structured details.
+#[tool]
+pub async fn add_with_details(args: AddArgs) -> Result<Structured<AddOut>> {
+    let sum = args.a + args.b;
+    let text = format!("{} + {} = {}", args.a, args.b, sum);
+    Ok(Structured::new(AddOut {
+        a: args.a,
+        b: args.b,
+        sum,
+    })
+    .with_text(text))
+}
+
 pub fn build_server() -> Server {
     Server::new("mcp-server", env!("CARGO_PKG_VERSION"))
         .tool(echo::TOOL)
         .tool(add::TOOL)
+        .tool(add_with_details::TOOL)
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_server;
     use fittings::serde_json::json;
-    use mcpfit::{Cx, ToolResponse};
+    use mcpfit::{Cx, ToolContent, ToolResponse};
 
     #[test]
     fn mcpfit_server_lists_echo_and_add() {
@@ -46,7 +67,29 @@ mod tests {
             .into_iter()
             .map(|info| info.name)
             .collect();
-        assert_eq!(names, vec!["add", "echo"]);
+        assert_eq!(names, vec!["add", "add_with_details", "echo"]);
+    }
+
+    #[tokio::test]
+    async fn mcpfit_add_with_details_returns_structured_response() {
+        let server = build_server();
+        let response = server
+            .registry()
+            .call(
+                "add_with_details",
+                json!({"a": 2, "b": 3}),
+                Cx::default(),
+            )
+            .await
+            .expect("add_with_details should succeed");
+        assert_eq!(
+            response,
+            ToolResponse {
+                content: vec![ToolContent::text("2 + 3 = 5")],
+                structured_content: Some(json!({"a": 2.0, "b": 3.0, "sum": 5.0})),
+                is_error: false,
+            }
+        );
     }
 
     #[tokio::test]
