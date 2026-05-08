@@ -34,6 +34,20 @@ impl Tool {
         self
     }
 
+    /// Mutually exclusive with [`Tool::input`] and [`Tool::input_with_schema`];
+    /// the most recent call wins.
+    pub fn input_schema(mut self, schema: Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
+    /// Reserves `T` as the Rust type used for argument deserialization once
+    /// handlers are wired up, while advertising the supplied hand-tuned schema.
+    pub fn input_with_schema<T>(mut self, schema: Value) -> Self {
+        self.input_schema = Some(schema);
+        self
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -42,7 +56,7 @@ impl Tool {
         self.description.as_deref()
     }
 
-    pub fn input_schema(&self) -> Option<&Value> {
+    pub fn input_schema_value(&self) -> Option<&Value> {
         self.input_schema.as_ref()
     }
 }
@@ -64,7 +78,7 @@ mod tests {
         let tool = Tool::new("add");
         assert_eq!(tool.name(), "add");
         assert_eq!(tool.description_str(), None);
-        assert!(tool.input_schema().is_none());
+        assert!(tool.input_schema_value().is_none());
     }
 
     #[test]
@@ -97,11 +111,49 @@ mod tests {
         }
 
         let tool = Tool::new("t").input::<AddArgs>().input::<Other>();
-        let props = tool.input_schema().unwrap()["properties"]
+        let props = tool.input_schema_value().unwrap()["properties"]
             .as_object()
             .unwrap();
         assert!(props.contains_key("x"));
         assert!(!props.contains_key("a"));
+    }
+
+    #[test]
+    fn input_schema_sets_hand_written_schema() {
+        let raw = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "type": "number", "description": "first" } },
+            "required": ["a"],
+        });
+        let tool = Tool::new("t").input_schema(raw.clone());
+        assert_eq!(tool.input_schema_value(), Some(&raw));
+    }
+
+    #[test]
+    fn input_schema_overrides_previous_typed_schema() {
+        let raw = serde_json::json!({"type": "object"});
+        let tool = Tool::new("t").input::<AddArgs>().input_schema(raw.clone());
+        assert_eq!(tool.input_schema_value(), Some(&raw));
+    }
+
+    #[test]
+    fn input_with_schema_stores_hand_tuned_schema() {
+        let raw = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "type": "number", "description": "tuned" } },
+        });
+        let tool = Tool::new("t").input_with_schema::<AddArgs>(raw.clone());
+        assert_eq!(tool.input_schema_value(), Some(&raw));
+    }
+
+    #[test]
+    fn typed_input_overrides_hand_written_schema() {
+        let raw = serde_json::json!({"type": "object"});
+        let tool = Tool::new("t").input_schema(raw).input::<AddArgs>();
+        let props = tool.input_schema_value().unwrap()["properties"]
+            .as_object()
+            .unwrap();
+        assert!(props.contains_key("a"));
     }
 
     #[test]
@@ -111,6 +163,6 @@ mod tests {
             .input::<AddArgs>();
         assert_eq!(tool.name(), "add");
         assert_eq!(tool.description_str(), Some("Adds two numbers"));
-        assert!(tool.input_schema().is_some());
+        assert!(tool.input_schema_value().is_some());
     }
 }
