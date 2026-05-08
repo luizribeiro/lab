@@ -7,6 +7,7 @@
 pub mod bus;
 pub mod capabilities;
 pub mod capability_path_template;
+pub mod load;
 pub mod placeholders;
 pub mod provides;
 pub mod safepath;
@@ -18,6 +19,7 @@ pub use capabilities::{
     NetworkCapabilities, NetworkMode,
 };
 pub use capability_path_template::CapabilityPathTemplate;
+pub use load::Load;
 pub use provides::{Provides, ToolMetaManifest};
 pub use safepath::SafePath;
 pub use top_level::Manifest;

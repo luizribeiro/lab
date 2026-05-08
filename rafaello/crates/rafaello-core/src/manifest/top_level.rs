@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::ManifestError;
 use crate::manifest::bus::Bus;
 use crate::manifest::capabilities::Capabilities;
+use crate::manifest::load::Load;
 use crate::manifest::provides::Provides;
 use crate::manifest::safepath::SafePath;
 
@@ -41,6 +42,8 @@ pub struct Manifest {
     pub bus: Option<Bus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Capabilities>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<Load>,
 }
 
 const RESERVED_KEYS: [(&str, &str); 3] = [
