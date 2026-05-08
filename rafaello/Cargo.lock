@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "rafaello"
 version = "0.0.0"
+
+[[package]]
+name = "rafaello-core"
+version = "0.0.0"

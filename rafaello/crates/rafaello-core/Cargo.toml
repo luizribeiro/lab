@@ -1,0 +1,12 @@
+[package]
+name = "rafaello-core"
+version = "0.0.0"
+edition = "2021"
+description = "Core library for rafaello (manifest, lock, compiler; early scaffolding)."
+license = "MIT"
+repository = "https://github.com/luizribeiro/lab"
+homepage = "https://github.com/luizribeiro/lab/tree/main/rafaello"
+
+[dependencies]
+
+[dev-dependencies]
