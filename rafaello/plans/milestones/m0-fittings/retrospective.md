@@ -170,11 +170,26 @@ they are *known* drift, not undiscovered:
 
 Neither warrants an RFC patch.
 
-### 2.3 No drift against `overview.md` or `decisions.md`
+### 2.3 Drift against `overview.md` §3 (Client API surface)
 
-`overview.md` rows on fittings (§15.4 ServiceContext, §15.6
-PeerHandle, §15.4-equivalent table on cancellation) match the
-landed shape:
+> Updated 2026-05-08 in response to pi review of this
+> retrospective (finding #3). The original draft of this section
+> claimed "no drift against `overview.md`"; that was wrong.
+
+`overview.md:313-318` (in §3) described the client constructor
+as `Client::new(transport, service)`. The landed API is
+`Client::connect(connector)` for construction plus
+`Client::with_service(svc)` for inbound-service registration —
+verified in `fittings/crates/client/src/lib.rs:66` and `:122`,
+and consistent with `overview.md` §15.6 which already used the
+landed shape. The overview was internally inconsistent.
+
+**Fix.** A follow-up commit on this branch
+(`docs(rafaello): update overview §3 to match landed Client
+API`) rewrites the §3 paragraph to match §15.6 / the landed
+code.
+
+The rest of `overview.md` lines up against the landed shape:
 
 - §15.6 names `Server::peer() -> PeerHandle` and `Client::peer() ->
   PeerHandle` exposing notify+call+closed — matches the c10/c14/c16
@@ -187,33 +202,70 @@ landed shape:
   `request_id`, `peer`) matches `fittings/crates/core/src/context.rs`.
 
 `decisions.md` rows 18 and 22 are accurate against the landed
-implementation. No new decision row is required for fittings
-*architecture*; the only addition is the cancellation builder API
-note in §2.1 above, which is a tactical row, not an architectural
-one.
+implementation. No new architectural decision row is required;
+the additions are the tactical rows in §2.1 (cancellation
+builder shape) and §2.4 (`MethodNotFound` typed-method-field
+deferral).
 
-### 2.4 No drift against `rfc-fittings-errors.md`
+### 2.4 Drift against `rfc-fittings-errors.md` (`MethodNotFound` typed `method` field)
 
-The errors RFC (predefined data preservation, `Transport`/`Panic`
-markers, `invalidServiceCode` marker, code-range expansion)
-matches the implementation byte-for-byte. The
-`error_preservation_round_trip.rs`, `error_marker_round_trip.rs`,
-`service_code_ranges.rs`, and `invalid_service_code_marker.rs`
-tests are the empirical proof.
+> Updated 2026-05-08 in response to pi review of this
+> retrospective (finding #2). The original draft of this section
+> claimed the errors RFC "matches the implementation
+> byte-for-byte"; that was wrong.
 
-The one minor policy point worth flagging — not drift, but a
-choice — is that the implementation includes an `originalCode`
-diagnostic field alongside `fittingsKind: "invalidServiceCode"`
-in some paths. This is explicitly tolerated by scope §C5
-("Implementations MAY include extra diagnostic fields … the
-acceptance test only requires `fittingsKind == "invalidServiceCode"`")
-and is not load-bearing for v1.
+`rfc-fittings-errors.md:71-79` (the `FittingsError` struct
+definition), `:202` (the encoder table), and `:239-244` (the
+decoder match) all require `MethodNotFound` to carry a typed
+`method: Option<String>` and the codec to extract / synthesise
+`data.method` from it. The landed shape in
+`fittings/crates/core/src/error.rs:18-22` is
+
+```rust
+MethodNotFound { message: String, data: Option<Value> }
+```
+
+— same shape as the other four predefined variants, no typed
+`method` field, and `error_map.rs` has no
+`extract_method` / fallback path.
+
+**Origin of the gap.** `scope.md` §W2 lists the five predefined
+variants as carrying `data: Option<Value>` and `message: String`
+only. The typed `method` field on `MethodNotFound` was in the
+RFC but was not pulled into `scope.md`'s in-scope item set; the
+implementation followed the scope. Pi review of m0 caught the
+RFC↔scope inconsistency that was carried into the landed code.
+
+**Fix: defer to m1.** No v1 consumer needs the typed field
+(callers can read `data.method` directly when present), and
+adding it later is purely additive. A follow-up commit on this
+branch
+(`docs(rafaello): defer MethodNotFound method-field shape to
+m1`) appends `decisions.md` row 36 recording the deferral.
+
+The other four predefined variants (`Parse`, `InvalidRequest`,
+`InvalidParams`, `Internal`), the `Transport` / `Panic` /
+`invalidServiceCode` markers, and the code-range expansion all
+match the RFC byte-for-byte — proven empirically by
+`error_preservation_round_trip.rs`,
+`error_marker_round_trip.rs`, `service_code_ranges.rs`, and
+`invalid_service_code_marker.rs`. The drift is localised to the
+`MethodNotFound` variant shape.
 
 ### 2.5 Verdict
 
-The single piece of drift requiring action is §2.1 (cancellation
-builder API shape). Fix lands as a `decisions.md` row on this
-branch in a follow-up commit, **after** retrospective.md merges.
+Three pieces of drift require action, all landing as follow-up
+commits on this branch **after** retrospective.md:
+
+1. `decisions.md` row 35 — cancellation builder API shape (§2.1).
+2. `decisions.md` row 36 — `MethodNotFound` typed-method-field
+   deferral (§2.4).
+3. `overview.md` §3 — Client API surface (§2.3).
+
+No stream RFC patches required (per
+`plans/README.md` §"Authoring conventions" stream RFCs are not
+retroactively rewritten; drift gets resolved in `overview.md`
+plus `decisions.md` rows).
 
 ---
 
@@ -453,18 +505,22 @@ driver for whoever picks them up has the context here.
 
 ---
 
-## Follow-up commits planned on this branch
+## Follow-up commits on this branch
 
-Per the prompt: drift fixes land as separate commits **after**
-this retrospective lands.
+Drift fixes land as separate commits after this retrospective.
+Status as of 2026-05-08 (post pi review of the retrospective):
 
-1. `docs(rafaello): record cancellation builder API shape in
-   decisions.md` — appends a row recording the
-   `with_cancellation(method, id_field)` shape vs the RFC's
-   closure-form text. (§2.1 above.)
+1. ✅ `docs(rafaello): record fittings cancellation builder API
+   shape` (`ad22eee`) — `decisions.md` row 35. (§2.1.)
+2. ✅ `docs(rafaello): defer MethodNotFound method-field shape
+   to m1` (`0b61bdd`) — `decisions.md` row 36. (§2.4.)
+3. ✅ `docs(rafaello): update overview §3 to match landed
+   Client API` (`f1a070f`) — `overview.md` §3 rewrite. (§2.3.)
+4. ✅ `test(fittings-server): cover same-id type-mismatch in
+   malformed_cancellation` (`3380a28`) — addresses pi review
+   finding #1.
 
-That's the only RFC↔code drift m0 introduced. No
-`overview.md` or stream-RFC patches required.
+No stream RFC patches required.
 
 ---
 
@@ -473,11 +529,18 @@ That's the only RFC↔code drift m0 introduced. No
 `scope.md` §"Acceptance summary" requires:
 
 - ✅ Every named test in positive + negative matrices implemented
-  and passing. (§1 above; `manual-validation.md` §2.)
+  and passing. (§1 above; `manual-validation.md` §2; the
+  malformed-cancellation type-mismatch coverage gap caught by
+  pi review of this retrospective is closed by the follow-up
+  test commit listed above.)
 - ✅ `cargo test -p fittings -p fittings-{wire,core,server,client,
   transport,spawn,macros,testkit} -p mcp-server` green on Linux.
-  (`manual-validation.md` §2; macOS leg delegated to CI per
-  scope.)
+  (`manual-validation.md` §2.) The macOS leg is **delegated to CI
+  per scope** — the authoritative cross-platform signal is
+  `.github/workflows/fittings.yml` running on `macos-latest`,
+  not a local capture; nothing in this retrospective was
+  validated on a macOS host. If the CI run for the
+  `rafaello-v0.1` tip fails on macOS, m0's acceptance flips red.
 - ✅ JS-SDK interop check passes. (`manual-validation.md` §1a.)
 - ✅ `mcp-server/src/serve_stdio` no longer contains the manual
   notification-draining loop. (c26 — verified in
@@ -485,6 +548,7 @@ That's the only RFC↔code drift m0 introduced. No
 - ✅ `manual-validation.md` records the items in scope. (Landed
   c32 / `24c3438`.)
 - ✅ `retrospective.md` written, with drift surfaced as deltas.
-  (This file; one decisions.md row to follow.)
+  (This file; the three `decisions.md`/`overview.md` follow-up
+  commits listed above are landed.)
 
 m0 is done.
