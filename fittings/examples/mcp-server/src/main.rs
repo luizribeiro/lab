@@ -5,7 +5,11 @@ use std::time::Duration;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
-use mcp_server::mcp::{McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
+use mcp::{serve_stdio, McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
+
+mod mcp;
+#[allow(dead_code)]
+mod mcpfit_example;
 
 fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
     registry.register(
