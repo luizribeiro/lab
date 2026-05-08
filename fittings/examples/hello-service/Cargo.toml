@@ -85,3 +85,11 @@ path = "../../tests/peerhandle_outside_handler.rs"
 [[test]]
 name = "peerhandle_server_initiated_call"
 path = "../../tests/peerhandle_server_initiated_call.rs"
+
+[[test]]
+name = "inbound_request_no_service"
+path = "../../tests/inbound_request_no_service.rs"
+
+[[test]]
+name = "inbound_request_with_service"
+path = "../../tests/inbound_request_with_service.rs"
