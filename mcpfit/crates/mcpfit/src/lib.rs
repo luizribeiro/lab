@@ -1,5 +1,7 @@
 //! Macro-first MCP server framework. See `mcpfit/plans/m0.md`.
 
+use mcpfit_macros as _;
+
 mod content;
 mod context;
 mod error;
