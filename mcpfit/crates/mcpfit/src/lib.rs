@@ -9,7 +9,7 @@ pub use content::{EmbeddedResource, ToolContent};
 pub use error::McpfitError;
 pub use protocol::{
     ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolInfo,
-    ToolsCallParams, ToolsCapability, ToolsListResult,
+    ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 pub use response::ToolResponse;
 

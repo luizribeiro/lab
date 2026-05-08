@@ -76,11 +76,27 @@ fn empty_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsRegisterParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub response_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsRegisterResult {
+    pub tool: ToolInfo,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo,
-        ToolInfo, ToolsCallParams, ToolsCapability, ToolsListResult,
+        ToolInfo, ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams,
+        ToolsRegisterResult,
     };
     use serde_json::{json, to_value};
 
@@ -211,6 +227,37 @@ mod tests {
             })
         );
         let decoded: ToolsCallParams = serde_json::from_value(encoded).expect("deserialize");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn tools_register_params_serializes_in_camel_case_and_skips_none() {
+        let encoded = to_value(ToolsRegisterParams {
+            name: "ping".into(),
+            description: None,
+            response_text: "pong".into(),
+        })
+        .expect("serialize");
+        assert_eq!(
+            encoded,
+            json!({
+                "name": "ping",
+                "responseText": "pong",
+            })
+        );
+    }
+
+    #[test]
+    fn tools_register_result_round_trips_through_json() {
+        let original = ToolsRegisterResult {
+            tool: ToolInfo {
+                name: "ping".into(),
+                description: Some("Static responder.".into()),
+                input_schema: json!({"type": "object"}),
+            },
+        };
+        let encoded = serde_json::to_string(&original).expect("serialize");
+        let decoded: ToolsRegisterResult = serde_json::from_str(&encoded).expect("deserialize");
         assert_eq!(decoded, original);
     }
 
