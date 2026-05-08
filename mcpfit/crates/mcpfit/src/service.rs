@@ -80,9 +80,21 @@ impl McpService for McpServiceImpl {
     }
 
     async fn initialized(&self, _params: Value) -> Result<Value> {
-        Err(FittingsError::invalid_request(
-            "notifications/initialized lifecycle not yet implemented",
-        ))
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .expect("session lifecycle mutex should not be poisoned");
+        match *lifecycle {
+            SessionLifecycle::AwaitingInitialize => {
+                return Err(FittingsError::invalid_request(
+                    "notifications/initialized received before initialize",
+                ));
+            }
+            SessionLifecycle::AwaitingInitializedNotification | SessionLifecycle::Running => {
+                *lifecycle = SessionLifecycle::Running;
+            }
+        }
+        Ok(Value::Null)
     }
 
     async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
@@ -108,6 +120,7 @@ impl McpService for McpServiceImpl {
 mod tests {
     use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
     use crate::protocol::{InitializeParams, ServerInfo};
+    use fittings::serde_json::{json, Value};
 
     fn service(name: &str, version: &str) -> McpServiceImpl {
         McpServiceImpl::new(ServerInfo {
@@ -157,5 +170,53 @@ mod tests {
             svc.lifecycle_state(),
             SessionLifecycle::AwaitingInitializedNotification
         );
+    }
+
+    #[tokio::test]
+    async fn initialized_transitions_to_running() {
+        let svc = service("demo", "0.1.0");
+        svc.initialize(InitializeParams {
+            protocol_version: "2025-01-01".into(),
+            client_info: None,
+            capabilities: None,
+        })
+        .await
+        .expect("initialize should succeed");
+
+        let result = svc
+            .initialized(json!({}))
+            .await
+            .expect("initialized should succeed after initialize");
+
+        assert_eq!(result, Value::Null);
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::Running);
+    }
+
+    #[tokio::test]
+    async fn initialized_before_initialize_is_rejected() {
+        let svc = service("demo", "0.1.0");
+        let err = svc
+            .initialized(json!({}))
+            .await
+            .expect_err("initialized before initialize should be rejected");
+        assert!(err.to_string().contains("before initialize"));
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::AwaitingInitialize);
+    }
+
+    #[tokio::test]
+    async fn initialized_is_idempotent_when_running() {
+        let svc = service("demo", "0.1.0");
+        svc.initialize(InitializeParams {
+            protocol_version: "2025-01-01".into(),
+            client_info: None,
+            capabilities: None,
+        })
+        .await
+        .unwrap();
+        svc.initialized(json!({})).await.unwrap();
+        svc.initialized(json!({}))
+            .await
+            .expect("repeat initialized should be tolerated");
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::Running);
     }
 }
