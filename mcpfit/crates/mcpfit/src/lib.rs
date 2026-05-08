@@ -6,6 +6,7 @@ mod protocol;
 mod response;
 mod schema;
 mod structured;
+mod tool;
 
 pub use content::{EmbeddedResource, ToolContent};
 pub use error::McpfitError;
@@ -15,5 +16,6 @@ pub use protocol::{
 };
 pub use response::{IntoToolResponse, ToolResponse};
 pub use structured::{Structured, StructuredObject};
+pub use tool::Tool;
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
