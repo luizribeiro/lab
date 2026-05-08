@@ -180,8 +180,8 @@ impl McpService for McpServiceImpl {
     }
 
     async fn register_tool(&self, _params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
-        Err(FittingsError::invalid_request(
-            "tools/register not yet implemented",
+        Err(FittingsError::method_not_found(
+            "tools/register is disabled; enable runtime registration on the server to use it",
         ))
     }
 }
@@ -190,7 +190,7 @@ impl McpService for McpServiceImpl {
 mod tests {
     use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
     use crate::error::McpfitError;
-    use crate::protocol::{InitializeParams, ServerInfo, ToolsCallParams};
+    use crate::protocol::{InitializeParams, ServerInfo, ToolsCallParams, ToolsRegisterParams};
     use crate::registry::ToolRegistry;
     use crate::response::ToolResponse;
     use crate::tool::Tool;
@@ -483,6 +483,44 @@ mod tests {
         .expect("dispatch should succeed");
 
         assert!(svc.drain_notifications().is_empty());
+    }
+
+    fn register_params(name: &str) -> ToolsRegisterParams {
+        ToolsRegisterParams {
+            name: name.into(),
+            description: None,
+            response_text: "ok".into(),
+        }
+    }
+
+    fn assert_register_disabled(err: fittings::FittingsError) {
+        let msg = err.to_string();
+        assert!(msg.contains("method not found"), "unexpected: {msg}");
+        assert!(msg.contains("disabled"), "unexpected: {msg}");
+    }
+
+    #[tokio::test]
+    async fn register_tool_is_rejected_before_initialize() {
+        let svc = service("demo", "0.1.0");
+        let err = svc
+            .register_tool(register_params("late"))
+            .await
+            .expect_err("tools/register should be disabled by default");
+        assert_register_disabled(err);
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::AwaitingInitialize);
+    }
+
+    #[tokio::test]
+    async fn register_tool_is_rejected_when_running() {
+        let svc = service("demo", "0.1.0");
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        let err = svc
+            .register_tool(register_params("late"))
+            .await
+            .expect_err("tools/register should be disabled by default");
+        assert_register_disabled(err);
+        assert_eq!(svc.registry.list().len(), 0);
     }
 
     #[tokio::test]
