@@ -15,7 +15,7 @@ the only out-of-tree consumer touched is
 
 - `rafaello/plans/streams/b-fittings/rfc-fittings-notifications.md`
   (the bidirectional `PeerHandle`, `ServiceContext`, channel model,
-  cancellation, server-originated requests v1 cut).
+  cancellation).
 - `rafaello/plans/streams/b-fittings/rfc-fittings-errors.md`
   (predefined error preservation, `JsonRpcId` migration, code-range
   expansion, `Cancelled` variant, error-data round-trip).
@@ -58,9 +58,17 @@ the *Internal split* section below.
 - **C1.** `ServiceContext` struct accessible from handlers, exposing:
   - `notify(method, params) -> Result<(), FittingsError>` — fire-and-forget
     JSON-RPC notification on the same connection. Returns local
-    enqueue/encoding/channel-closed status only; **does not** prove
-    peer delivery (peer-gone is discovered later by the dispatcher,
-    surfaced via `peer.closed()` and pending-call drain — see S3, K3).
+    enqueue/encoding/channel-closed status only (channel-closed maps
+    to `FittingsError::Transport`); **does not** prove peer delivery.
+    Peer-gone is observed asynchronously via `peer.closed()` and
+    pending-call drain (S3, K1) — never via a `Cancelled` from
+    `notify`.
+  - `peer() -> &PeerHandle` (or equivalent field) — connection-scoped
+    handle so handlers can issue **outbound `peer.call`** requests
+    back to the peer (not just notifications). Per
+    `rfc-fittings-notifications.md:888-896`. Without this, `ctx.notify`
+    only enables one direction of bidirectionality from inside a
+    handler.
   - `cancelled() -> impl Future<Output = ()>` — resolves when the
     cancellation token fires.
   - `is_cancelled() -> bool` — non-blocking check.
@@ -68,13 +76,12 @@ the *Internal split* section below.
     handlers, `Some(JsonRpcId::Null)` for explicit-null-id requests,
     `Some(_)` otherwise.
   Cheap to clone (`Arc`-shared inner state). For connection-scoped
-  use (outside any inbound handler) callers obtain a `PeerHandle`
-  via `Server::peer()` / `Client::peer()` (S2/K1); `ServiceContext`
-  is per-request and does not subsume `PeerHandle`.
+  use **outside** any inbound handler (e.g. a startup task), callers
+  obtain a `PeerHandle` via `Server::peer()` / `Client::peer()` (S1/K1).
 - **C2.** `Service::call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError>`
   — breaking trait change. Old `call(&self, req: Request)` is gone.
 - **C3.** `FittingsError::Cancelled { reason: Option<String> }` variant.
-  No wire mapping (response is suppressed; see C7/C8).
+  No wire mapping (response is suppressed; see S6).
 - **C4.** `Middleware::handle` receives `ServiceContext` (so
   middleware can also `notify` and observe cancellation).
 - **C5.** `ServiceError.code: i32` validation accepts:
@@ -84,10 +91,12 @@ the *Internal split* section below.
     (`-32768..=-32000`).
   Truly invalid (reserved or pre-defined-conflicting) codes serialise
   to `-32603 Internal` with `data: { "fittingsKind":
-  "invalidServiceCode", "originalCode": <n> }` preserved per
-  `rfc-fittings-errors.md:198-209`. The previous draft's
-  `original_code` snake-case key is wrong; the RFC uses the
-  `fittingsKind` marker convention.
+  "invalidServiceCode" }` per `rfc-fittings-errors.md:198-209`.
+  Implementations MAY include extra diagnostic fields (e.g.
+  `originalCode`); the acceptance test only requires
+  `fittingsKind == "invalidServiceCode"` and tolerates additional
+  diagnostic keys. If `originalCode` becomes a v1 hard requirement
+  later, that's a Stream B RFC amendment, not a scope-only addition.
 
 ### Server layer — `fittings-server`
 
@@ -138,20 +147,22 @@ the *Internal split* section below.
     suppressed regardless of whether the token fired.
   Both paths are valid; handlers may "self-cancel" by returning
   `Err(Cancelled)` without the token firing (e.g. a deadline-exceeded
-  case the handler decides on its own). Earlier draft text rejecting
-  handler-initiated cancellation as `Internal` is removed.
-- **S7.** Cancellation method name and id-extractor are configurable
-  on `Server` (per `rfc-fittings-notifications.md` cancellation
-  configuration). Defaults align with the MCP convention (method
-  `notifications/cancelled`, id field `requestId`); LSP-style
-  callers can override (`$/cancelRequest`, id field `id`). m0's
-  `mcp-server` example uses MCP defaults; tests cover both
-  conventions where relevant.
-- **S7.1.** Malformed `notifications/cancelled` payload (non-object,
-  missing the configured id field, id-type mismatch — string id sent
-  for a numeric in-flight key or vice versa) is logged at WARN and
+  case the handler decides on its own).
+
+- **S7.** Cancellation method name and id-extractor are **configurable**
+  on `Server`. Library defaults are LSP-style (`$/cancelRequest`,
+  id field `id`) per `rfc-fittings-notifications.md:554-557` —
+  fittings is transport- and protocol-agnostic, so the default
+  cancellation shape is the LSP one. mcp-server explicitly
+  configures the MCP convention (`notifications/cancelled`,
+  id field `requestId`) at server-construction time. Tests cover
+  both configurations where relevant.
+- **S7.1.** Malformed cancellation payload (non-object, missing the
+  configured id field, id-type mismatch — string id sent for a
+  numeric in-flight key or vice versa) is logged at WARN and
   dropped. Does not kill the connection or affect other in-flight
-  requests.
+  requests. Behaviour is identical regardless of which extractor
+  (LSP `id` or MCP `requestId`) is configured.
 - **S8.** Batch cancellation per `rfc-fittings-notifications.md:628-671`:
   `notifications/cancelled` references *individual request IDs*, not
   batch container IDs. A batched request whose component is
@@ -159,11 +170,14 @@ the *Internal split* section below.
   response; remaining components proceed. If every component in a
   batch is suppressed (cancelled or notification-only), no batch
   response is emitted at all.
-- **S9.** Inbound peer-originated *request* (with `id`) when no
-  inbound service is registered → `-32601 Method not found`.
-  Registration goes via a new `Server::with_inbound_handler(svc)`
-  builder. v1 doesn't ship a populated handler — the registration
-  mechanism exists so v2 sampling/elicitation slot in cleanly.
+- **S9.** The server's existing `Service` (passed to
+  `Server::new(service, transport)`) **is** the inbound-request
+  handler — there is no separate registration. A method the server's
+  service does not implement returns `-32601 Method not found` per
+  the existing dispatcher. The optional registration mechanism for
+  inbound peer-originated requests lives only on the **client**
+  side (K3) — the server already has its own `Service`, the client
+  did not, hence the asymmetry.
 
 ### Client layer — `fittings-client`
 
@@ -173,9 +187,15 @@ the *Internal split* section below.
   side.) Acceptance criteria mirror S2: dropped-future cancellation,
   close-drain, simultaneous bidirectional calls.
 - **K2.** Inbound unsolicited *notifications* from server are
-  dispatched to a registered async handler, run via `tokio::spawn`
-  (not on the client read loop). If no handler registered, dropped
-  with a counter exposed at `Client::dropped_notifications()`.
+  dispatched to a registered handler `Fn(String, Value) + Send +
+  Sync + 'static`, wrapped in `tokio::spawn(async move {
+  handler(method, params); })` so handlers don't block the client
+  read loop. **Synchronous** handler shape per
+  `rfc-fittings-notifications.md:447-490`. If no handler registered,
+  the notification is dropped silently. (m0 may *additionally* expose
+  a `Client::dropped_notifications()` counter as an implementation
+  convenience; this is an m0 addition, not an RFC requirement, and
+  is not load-bearing for ratification.)
 - **K3.** `Client::with_service(svc)` registers a service for
   inbound peer-originated *requests* from server (server-side
   `PeerHandle::call`). Without it, the client returns `-32601 Method
@@ -265,9 +285,9 @@ the *Internal split* section below.
 |-----------|---------|
 | `malformed_cancellation.rs` | `notifications/cancelled` with non-object params; missing the configured id field (`requestId` for MCP-default, `id` for LSP-style); id-type mismatch (string sent for numeric in-flight key, or vice versa). None kill the connection; all logged and dropped. Includes both MCP-default and LSP-override extractor configurations. |
 | `notification_handler_panic.rs` | Client-side notification handler panics on receipt; subsequent notifications still delivered; response correlation unaffected. |
-| `inbound_request_no_service.rs` | Client receives a peer-originated request with no `with_service` registered; client returns `-32601`. Mirror on server (S9) covers `with_inbound_handler` not registered. |
+| `inbound_request_no_service.rs` | Client receives a peer-originated request with no `with_service` registered; client returns `-32601`. (Server-side mirror is covered by the existing dispatcher tests for unknown methods on `Server::new(service, ...)`.) |
 | `peer_gone_during_notify.rs` | Peer disconnects mid-stream of notifications; the dispatcher discovers the close, `peer.closed()` resolves, and pending `peer.call` futures resolve with `FittingsError::Transport`. **Does not** assert that a particular `ctx.notify` call synchronously fails — `notify` only reports local enqueue/encoding/channel-closed status (per `rfc-fittings-notifications.md:717-747`). |
-| `invalid_service_code_marker.rs` | Handler returns `ServiceError { code: -32700 }` (a reserved predefined code, not a valid service code); outbound serialisation falls back to `-32603 Internal` with `data: { "fittingsKind": "invalidServiceCode", "originalCode": -32700 }`. |
+| `invalid_service_code_marker.rs` | Handler returns `ServiceError { code: -32700 }` (a reserved predefined code, not a valid service code); outbound serialisation falls back to `-32603 Internal` with `data` containing `"fittingsKind": "invalidServiceCode"`. Test asserts the marker is present; additional diagnostic fields like `originalCode` are tolerated but not required (per `rfc-fittings-errors.md:198-209`). |
 
 ### MCP example interop
 
@@ -310,11 +330,14 @@ The driver runs and captures:
    request IDs. `commits.md` picks one strategy (likely a string
    prefix `s_` / `c_` at the wire layer, or a shared atomic counter
    with disjoint ranges) and documents the choice.
-3. **Cancellation race vs `ctx.notify`.** After `cancelled()` fires,
-   may the handler still call `notify`? Decision (subject to pi
-   review): yes, but the call can return `Err(Cancelled)` if the
-   transport has already torn down. `peer_gone_during_notify.rs`
-   covers the case.
+3. **Late notifications after `cancelled()` fires.** Handlers may
+   still call `ctx.notify` after `cancelled()` resolves; per the RFC
+   delivery contract, `notify` reports only local
+   enqueue/encoding/channel-closed status (`FittingsError::Transport`
+   on local-channel close). Peer-gone is observed asynchronously via
+   `peer.closed()` and pending `peer.call` resolving with `Transport`,
+   never via a `Cancelled` from `notify`. `peer_gone_during_notify.rs`
+   asserts this contract.
 4. **JS-SDK interop.** The MCP SDK has its own expectations; if the
    new `data` preservation breaks any string-equality tests on the SDK
    side, that's a real fix. m0 retrospective surfaces if this
@@ -343,7 +366,7 @@ as it becomes clear groups 1–3 cannot be kept independently green:
    server-initiated calls + client-side service registration +
    `peer.closed()` + dropped-future cancellation + close-drain;
    ~6–10 commits.
-4. **Cancellation** (C3, S5–S8.1): cancellation token, two-trigger
+4. **Cancellation** (C3, S5–S7.1): cancellation token, two-trigger
    suppression rules, semaphore routing, malformed-payload handling,
    configurable extractor, batch cancellation; ~6–10 commits.
 5. **`mcp-server` migration** (E1–E3): drops `serve_stdio` workaround,
@@ -362,12 +385,10 @@ for `commits.md` is the right place to make this call.
 
 m0 is done when:
 
-- All 16 positive integration tests pass (counts the round-1 review
-  additions: outside-handler, dropped-future, close-drain,
-  handler-cancel, table-driven error preservation, marker
-  round-trip, service-code ranges, explicit-null-id, concurrent-null,
-  batch cancellation).
-- All 5 negative integration tests pass.
+- Every named test in the *Positive integration tests* and *Negative
+  integration tests* matrices above is implemented and passes. Tests
+  may split or merge during `commits.md` drafting as long as the
+  named behaviours are all covered.
 - `cargo test -p fittings -p fittings-{wire,core,server,client,transport,spawn,macros,testkit} -p mcp-server`
   is green on Linux + macOS.
 - The JS-SDK interop check passes against the rebuilt server.
