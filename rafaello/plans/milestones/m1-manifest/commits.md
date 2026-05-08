@@ -71,10 +71,11 @@ broker ACL, fittings W). Default: ship one milestone.
   empty `[dependencies]` list (subsequent commits pull from
   workspace.dependencies as they need them) and an empty
   `[dev-dependencies]` block where `tempfile = { workspace =
-  true }` will land when c10's fixture tests first need it (pi-2
-  commits-minor: `[workspace.dependencies]` doesn't carry a
-  dev-only flag — the workspace declaration is just the version
-  pin; the dev-dep is added per-crate). `crates/rafaello-core/src/lib.rs`
+  true }` will land in **c11** (the validate-with-package
+  commit — first use of fixture trees under
+  `tests/fixtures/`). The `[workspace.dependencies]` table
+  declares the version pin; the dev-only flag is the per-crate
+  `[dev-dependencies]` entry. `crates/rafaello-core/src/lib.rs`
   contains only `// crate doc placeholder; modules land in
   subsequent m1 commits.` so the crate compiles.
 - **Why.** scope §S1, §S2.
@@ -161,22 +162,31 @@ broker ACL, fittings W). Default: ship one milestone.
 ### c04 — feat(rafaello-core): `Manifest` top-level + reserved-field pre-scan + `name` grammar
 
 - **What.** New `rafaello_core::manifest` module. Types:
-  `Manifest { schema, name, version, entry, rafaello,
+  `Manifest { schema, name: String, version, entry, rafaello,
   description?, authors?, license?, homepage? }` per §M1.
-  `entry` typed as `SafePath` (from c03). `name` validated
-  against the topic-segment grammar `[a-z0-9_][a-z0-9_-]*` per
-  §M1. `Manifest::parse(s) -> Result<Self, ManifestError>` runs
-  a `toml::Table` pre-scan first per §M2 rejecting `runtime` /
+  `entry` typed as `SafePath` (from c03). `name` decoded as
+  `String` only — topic-segment grammar checks defer to V1
+  (c10) per the phase-boundary restructure (pi-3
+  commits-finding 3 — round-2 wording about parse-time
+  grammar was inconsistent with V1 ownership).
+  `Manifest::parse(s) -> Result<Self, ManifestError>` runs a
+  `toml::Table` pre-scan first per §M2 rejecting `runtime` /
   `rpc` / `helper_for` with `ManifestError::ReservedField`,
   then deserialises with `#[serde(deny_unknown_fields)]`.
 - **Why.** scope §M1, §M2.
 - **Depends on.** c02, c03.
-- **Acceptance.** Positive: `tests/manifest_parse_minimal.rs`.
-  Negatives: `tests/manifest_unknown_field.rs`,
+- **Acceptance.** Positive: `tests/manifest_top_level_parse.rs`
+  (a top-level-only manifest — `[provides]` / `[bus]` / etc.
+  optional and absent — decodes via `Manifest::parse`; pi-3
+  commits-finding 3 — `manifest_parse_minimal.rs` lives at
+  c11 since it requires `canonical_bytes()`). Negatives:
   `tests/manifest_legacy_runtime_field.rs`,
   `tests/manifest_legacy_rpc_block.rs`,
-  `tests/manifest_helper_for_field.rs`,
-  `tests/manifest_invalid_name.rs`.
+  `tests/manifest_helper_for_field.rs`. The
+  `manifest_unknown_field.rs` test (which scope says covers
+  both top-level AND nested-under-`[provides]`) lives at c11
+  since the nested case requires `[provides]` to parse;
+  `manifest_invalid_name.rs` lives at c10 (V1 grammar).
 
 **Phase boundary** (pi-2 commits-finding 5 + 6): the parse
 commits c05–c09 below decode TOML into typed structures
@@ -234,7 +244,7 @@ but parser raises ManifestError" inconsistency.
   vs mode rule deferred to V1.
 - **Why.** scope §M5 (raw decode half).
 - **Depends on.** c05, c06.
-- **Acceptance.** Positive: parse covered by c12's worked
+- **Acceptance.** Positive: parse covered by c11's worked
   examples. Standalone:
   `tests/manifest_capabilities_parse.rs` (basic
   `[capabilities.default.filesystem]` decode).
@@ -314,7 +324,7 @@ but parser raises ManifestError" inconsistency.
   `tests/manifest_reserved_renderer_kind.rs`,
   `tests/manifest_unprefixed_renderer_kind.rs`.
 
-### c12 — feat(rafaello-core): manifest validate-with-package + canonical_bytes + worked examples + entry/grant_match resolution + openrpc + exec_paths inside-project refusal
+### c11 — feat(rafaello-core): manifest validate-with-package + canonical_bytes + worked examples + entry/grant_match resolution + openrpc + exec_paths inside-project refusal
 
 - **What.** Final manifest layer. Land:
   - `Manifest::canonical_bytes()` per §M9 (TOML re-emit with
@@ -487,7 +497,8 @@ but parser raises ManifestError" inconsistency.
   a canonical target contribute under both relative paths).
   `RecomputedDigests` helper struct per §D3.
 - **Why.** scope §D1, §D2.
-- **Depends on.** c01.
+- **Depends on.** c01, c02 (returns `DigestError` from c02's
+  error surface — pi-2 minor 1 / pi-3 finding 8).
 - **Acceptance.** Positives:
   `tests/digest_content_deterministic.rs`,
   `tests/digest_distinct_paths_same_target.rs`. Negatives:
@@ -606,7 +617,8 @@ but parser raises ManifestError" inconsistency.
   `RFL_PLUGIN` in either collection. Compiler calls into both
   in c33.
 - **Why.** scope §Sc1–Sc3, §C7.1.
-- **Depends on.** c01.
+- **Depends on.** c01, c02 (returns `CompileError` from
+  `reject_reserved` — pi-2 minor 2 / pi-3 finding 8).
 - **Acceptance.** Positives:
   `tests/env_scrubber_strips_known_secrets.rs`,
   `tests/env_scrubber_override.rs` (override-preserves-input —
@@ -731,22 +743,15 @@ but parser raises ManifestError" inconsistency.
 ### c27 — feat(rafaello-core): V3 lock-side exec_paths under ${project} refusal
 
 - **What.** Extend V3 with the §6.9 exec-under-project refusal
-  on the lock side (pi-6 finding 4). Uses the c31 path
-  resolver; this commit lands the V3 hook + the test.
+  on the lock side (pi-6 finding 4). Uses
+  `paths::resolve_under_root` from c03 (pi-3 commits-finding
+  2 — the resolver lives in c03's foundation module so c27
+  consumes it cleanly without back-edges; c31's compiler-side
+  use of the same helper is independent).
 - **Why.** scope §V3 exec_paths under project bullet.
-- **Depends on.** c22, c31 (path resolver). **Note ordering:**
-  this commit lands AFTER c31 since it consumes the resolver;
-  numbering keeps grouping coherence — see "Out-of-order land"
-  note below.
+- **Depends on.** c03 (resolver), c22 (V3 surface).
 - **Acceptance.** Negative:
   `tests/lock_exec_path_inside_project.rs`.
-
-> **Out-of-order land:** c27 follows c31 in commit order
-> despite its low number — the agent driver lands c28 → c31 →
-> c27 → c32 → ... Renumbering would shuffle the rest of the
-> doc; the depends-on chain captures the real order. (This is
-> the same pattern m0 used when c21 pre-empted c22; pi-1 round
-> 1 acceptable per scope's per-commit greenness rule.)
 
 ---
 
@@ -1098,7 +1103,7 @@ to make drift checks mechanical in later review rounds.)
 | `manifest_dotted_tool_name.rs` | c10 (V1) |
 | `manifest_unknown_tool_table.rs` | c11 (validate-with-package) |
 | `manifest_unknown_bundle_key.rs` | c10 (V1) |
-| `manifest_malformed_sinks.rs` | c10 (V1) |
+| `manifest_malformed_sinks.rs` | table-driven across two phases per pi-3 finding 6: the `sinks = [42]` (non-string) case lands at c05 as a serde type-mismatch `ManifestError`; the `sinks = ["Network"]` (uppercase fails sink-class grammar) case lands at c10 as `ValidationError`. Single test file, two assertion blocks. |
 | `manifest_reserved_renderer_kind.rs` | c10 (V1) |
 | `manifest_load_trigger_unknown_command.rs` | c10 (V1) |
 | `manifest_missing_openrpc_sibling.rs` | c11 |
@@ -1163,6 +1168,40 @@ Driver should reconcile this table against scope §"Demo bar"
 before c01 lands and flag any unplaced test.
 
 ## What changed from prior drafts
+
+Round-3 pi review (`commits-pi-review-3.md`) prompted these
+revisions:
+
+- **Numbering fixed** (pi-3 finding 1). The duplicate `c12`
+  collapsed: validate-with-package is `c11`; CanonicalId is
+  `c12`. Single monotonic sequence c01–c37.
+- **c27 numeric back-edge actually removed** (pi-3 finding 2).
+  c27 now consumes `paths::resolve_under_root` from c03;
+  the "out-of-order land" note is gone.
+- **c04 trimmed** (pi-3 finding 3). Top-level decode only.
+  `manifest_parse_minimal.rs` lives at c11 (canonical_bytes);
+  `manifest_unknown_field.rs` lives at c11 (covers nested
+  case); `manifest_invalid_name.rs` lives at c10 (V1
+  grammar). c04's positive test is `manifest_top_level_parse.rs`
+  exercising only top-level fields.
+- **`manifest_malformed_sinks.rs` split between phases**
+  (pi-3 finding 6). Type-mismatch case at c05; grammar case
+  at c10. Single file, two assertions.
+- **c17 / c21 deps include c02** (pi-3 finding 8 confirming
+  pi-2 minor 1+2). Both depend on the typed-error surface.
+- **`tempfile` dev-dep target updated to c11** (pi-3 minor 1).
+- **`exec_paths`-inside-project rule narrowed for the manifest
+  side** (pi-3 finding 4). `validate_with_package` rejects
+  syntactic `${project}/...` templates; full
+  resolve-against-project-root logic is V3's job (c27) where
+  the `LockValidationContext.project_root` is available.
+  Note added to c11's exec-paths bullet.
+- **Default/tool-meta tests two-part** (pi-3 finding 5).
+  `tool_table_omitted_uses_defaults.rs` covers the manifest
+  parse + V1 default-fill at c11 AND the lock-snapshot half
+  at c18 (sink inference). `tool_meta_always_confirm_round_trip.rs`
+  covers manifest-parse preservation at c11 and lock + compile
+  round-trip at c14/c34.
 
 Round-2 pi review (`commits-pi-review-2.md`) prompted these
 revisions:
