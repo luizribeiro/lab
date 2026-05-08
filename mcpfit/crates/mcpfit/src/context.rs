@@ -53,6 +53,24 @@ impl Cx {
             progress: Some((token, sink)),
         }
     }
+
+    pub(crate) fn with_external_cancellation(cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            cancelled,
+            progress: None,
+        }
+    }
+
+    pub(crate) fn with_progress_and_cancellation(
+        token: Value,
+        sink: ProgressSink,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            cancelled,
+            progress: Some((token, sink)),
+        }
+    }
 }
 
 pub(crate) fn extract_progress_token(meta: Option<&Value>) -> Option<Value> {

@@ -17,16 +17,6 @@ pub struct AddArgs {
     pub b: f64,
 }
 
-#[derive(JsonSchema, Deserialize)]
-pub struct WaitArgs {
-    pub duration_ms: u64,
-}
-
-#[derive(JsonSchema, Deserialize)]
-pub struct ProgressArgs {
-    pub steps: u32,
-}
-
 #[derive(Debug, PartialEq, Serialize, JsonSchema, StructuredObject)]
 pub struct AddOut {
     pub a: f64,
@@ -59,40 +49,37 @@ pub async fn add_with_details(args: AddArgs) -> Result<Structured<AddOut>> {
     .with_text(text))
 }
 
-/// Sleeps for the requested duration, honouring cancellation between steps.
+/// Sleeps in cancellable steps long enough that clients can request cancellation.
 #[tool]
-pub async fn wait(args: WaitArgs, cx: Cx) -> Result<String> {
-    const STEP_MS: u64 = 25;
-    let mut remaining = args.duration_ms;
-    while remaining > 0 {
+pub async fn long_running_demo(_args: (), cx: Cx) -> Result<String> {
+    for _ in 0..200 {
         cx.check_cancelled()?;
-        let step = remaining.min(STEP_MS);
-        sleep(Duration::from_millis(step)).await;
-        remaining -= step;
+        sleep(Duration::from_millis(25)).await;
     }
     cx.check_cancelled()?;
-    Ok(format!("waited {} ms", args.duration_ms))
+    Ok("long running demo completed".to_string())
 }
 
-/// Reports progress for the requested number of steps, then returns.
+/// Reports progress across three steps and then returns a completion message.
 #[tool]
-pub async fn progress_demo(args: ProgressArgs, cx: Cx) -> Result<String> {
-    let total = f64::from(args.steps);
-    for step in 1..=args.steps {
+pub async fn progress_demo(_args: (), cx: Cx) -> Result<String> {
+    let total = 3.0;
+    for step in 1..=3 {
         cx.progress(f64::from(step))
             .total(total)
-            .message(format!("step {step} of {}", args.steps))
+            .message(format!("step {step} of 3"))
             .emit();
     }
-    Ok(format!("completed {} steps", args.steps))
+    Ok("progress demo completed".to_string())
 }
 
 pub fn build_server() -> Server {
-    Server::new("mcp-server", env!("CARGO_PKG_VERSION"))
+    Server::new("fittings-mcp-example", env!("CARGO_PKG_VERSION"))
+        .allow_runtime_registration()
         .tool(echo::TOOL)
         .tool(add::TOOL)
         .tool(add_with_details::TOOL)
-        .tool(wait::TOOL)
+        .tool(long_running_demo::TOOL)
         .tool(progress_demo::TOOL)
 }
 
@@ -125,7 +112,13 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["add", "add_with_details", "echo", "progress_demo", "wait"]
+            vec![
+                "add",
+                "add_with_details",
+                "echo",
+                "long_running_demo",
+                "progress_demo",
+            ]
         );
     }
 
@@ -174,24 +167,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcpfit_wait_tool_returns_waited_text() {
-        let server = build_server();
-        let response = server
-            .registry()
-            .call("wait", json!({"duration_ms": 10}), Cx::default())
-            .await
-            .expect("wait should succeed");
-        assert_eq!(response, ToolResponse::success("waited 10 ms"));
-    }
-
-    #[tokio::test]
     async fn mcpfit_progress_demo_returns_completion_text() {
         let server = build_server();
         let response = server
             .registry()
-            .call("progress_demo", json!({"steps": 3}), Cx::default())
+            .call("progress_demo", json!({}), Cx::default())
             .await
             .expect("progress_demo should succeed");
-        assert_eq!(response, ToolResponse::success("completed 3 steps"));
+        assert_eq!(response, ToolResponse::success("progress demo completed"));
     }
 }

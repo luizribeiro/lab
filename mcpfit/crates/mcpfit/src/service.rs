@@ -1,6 +1,7 @@
 //! MCP service trait. Declares the JSON-RPC method surface implemented by
 //! the mcpfit server.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fittings::serde_json::{self, Value};
@@ -67,6 +68,7 @@ pub(crate) struct McpServiceImpl {
     pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
     allow_runtime_registration: bool,
     allow_dynamic_tools: bool,
+    progress_enabled: AtomicBool,
 }
 
 #[allow(dead_code)]
@@ -84,6 +86,7 @@ impl McpServiceImpl {
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             allow_runtime_registration,
             allow_dynamic_tools,
+            progress_enabled: AtomicBool::new(false),
         }
     }
 
@@ -102,12 +105,29 @@ impl McpServiceImpl {
             .collect()
     }
 
-    fn cx_for_call(&self, meta: Option<&Value>) -> Cx {
-        let Some(token) = extract_progress_token(meta) else {
-            return Cx::default();
+    fn cx_for_call_with_cancellation(
+        &self,
+        meta: Option<&Value>,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> Cx {
+        let token = if self.progress_enabled.load(Ordering::Acquire) {
+            extract_progress_token(meta)
+        } else {
+            None
         };
+        match (token, cancellation) {
+            (Some(token), Some(cancel)) => {
+                Cx::with_progress_and_cancellation(token, self.progress_sink(), cancel)
+            }
+            (Some(token), None) => Cx::with_progress(token, self.progress_sink()),
+            (None, Some(cancel)) => Cx::with_external_cancellation(cancel),
+            (None, None) => Cx::default(),
+        }
+    }
+
+    fn progress_sink(&self) -> ProgressSink {
         let pending = Arc::clone(&self.pending_notifications);
-        let sink: ProgressSink = Arc::new(move |params: ProgressNotificationParams| {
+        Arc::new(move |params: ProgressNotificationParams| {
             let serialized = serde_json::to_value(&params)
                 .expect("progress notification params should serialize");
             pending
@@ -117,9 +137,99 @@ impl McpServiceImpl {
                     method: "notifications/progress".to_string(),
                     params: serialized,
                 });
-        });
-        Cx::with_progress(token, sink)
+        })
     }
+
+    pub(crate) async fn dispatch(
+        &self,
+        method: &str,
+        params: Value,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<Value> {
+        match method {
+            "initialize" => {
+                let p: InitializeParams = serde_json::from_value(params)
+                    .map_err(|e| FittingsError::invalid_params(e.to_string()))?;
+                if client_progress_enabled(p.capabilities.as_ref()) {
+                    self.progress_enabled.store(true, Ordering::Release);
+                }
+                let result = self.initialize(p).await?;
+                serde_json::to_value(result)
+                    .map_err(|e| FittingsError::internal(e.to_string()))
+            }
+            "notifications/initialized" => self.initialized(params).await,
+            "tools/list" => {
+                let result = self.list_tools(params).await?;
+                serde_json::to_value(result)
+                    .map_err(|e| FittingsError::internal(e.to_string()))
+            }
+            "tools/call" => {
+                let p: ToolsCallParams = serde_json::from_value(params)
+                    .map_err(|e| FittingsError::invalid_params(e.to_string()))?;
+                let result = self.call_tool_with_cancellation(p, cancellation).await?;
+                serde_json::to_value(result)
+                    .map_err(|e| FittingsError::internal(e.to_string()))
+            }
+            "tools/register" => {
+                let p: ToolsRegisterParams = serde_json::from_value(params)
+                    .map_err(|e| FittingsError::invalid_params(e.to_string()))?;
+                let result = self.register_tool(p).await?;
+                serde_json::to_value(result)
+                    .map_err(|e| FittingsError::internal(e.to_string()))
+            }
+            other => Err(FittingsError::method_not_found(format!(
+                "unknown method: {other}"
+            ))),
+        }
+    }
+
+    async fn call_tool_with_cancellation(
+        &self,
+        params: ToolsCallParams,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<ToolResponse> {
+        match self.lifecycle_state() {
+            SessionLifecycle::AwaitingInitialize => {
+                return Err(FittingsError::invalid_request(
+                    "tools/call received before initialize",
+                ));
+            }
+            SessionLifecycle::AwaitingInitializedNotification => {
+                return Err(FittingsError::invalid_request(
+                    "tools/call received before notifications/initialized",
+                ));
+            }
+            SessionLifecycle::Running => {}
+        }
+        let cx = self.cx_for_call_with_cancellation(params.meta.as_ref(), cancellation);
+        let handler = self
+            .registry
+            .lock()
+            .expect("registry mutex should not be poisoned")
+            .handler_for(&params.name);
+        match handler {
+            Some(handler) => handler(params.arguments, cx).await.map_err(to_fittings_error),
+            None => Err(FittingsError::method_not_found(format!(
+                "unknown tool: {}",
+                params.name
+            ))),
+        }
+    }
+}
+
+fn client_progress_enabled(capabilities: Option<&Value>) -> bool {
+    let Some(capabilities) = capabilities else {
+        return false;
+    };
+    capabilities
+        .get("experimental")
+        .and_then(Value::as_object)
+        .and_then(|experimental| {
+            experimental
+                .get("progressNotifications")
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false)
 }
 
 impl McpService for McpServiceImpl {
@@ -182,32 +292,7 @@ impl McpService for McpServiceImpl {
     }
 
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolResponse> {
-        match self.lifecycle_state() {
-            SessionLifecycle::AwaitingInitialize => {
-                return Err(FittingsError::invalid_request(
-                    "tools/call received before initialize",
-                ));
-            }
-            SessionLifecycle::AwaitingInitializedNotification => {
-                return Err(FittingsError::invalid_request(
-                    "tools/call received before notifications/initialized",
-                ));
-            }
-            SessionLifecycle::Running => {}
-        }
-        let cx = self.cx_for_call(params.meta.as_ref());
-        let handler = self
-            .registry
-            .lock()
-            .expect("registry mutex should not be poisoned")
-            .handler_for(&params.name);
-        match handler {
-            Some(handler) => handler(params.arguments, cx).await.map_err(to_fittings_error),
-            None => Err(FittingsError::method_not_found(format!(
-                "unknown tool: {}",
-                params.name
-            ))),
-        }
+        self.call_tool_with_cancellation(params, None).await
     }
 
     async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
@@ -219,6 +304,11 @@ impl McpService for McpServiceImpl {
         if self.lifecycle_state() != SessionLifecycle::Running {
             return Err(FittingsError::invalid_request(
                 "tools/register requires an initialized session",
+            ));
+        }
+        if params.name.trim().is_empty() {
+            return Err(FittingsError::invalid_params(
+                "tools/register requires a non-empty `name`",
             ));
         }
         let tool = build_runtime_tool(&params);
@@ -253,7 +343,7 @@ fn build_runtime_tool(params: &ToolsRegisterParams) -> Tool {
 
 #[cfg(test)]
 mod tests {
-    use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
+    use super::{mcp_service_schema, McpService, McpServiceImpl, Ordering, SessionLifecycle};
     use crate::error::McpfitError;
     use crate::protocol::{InitializeParams, ServerInfo, ToolsCallParams, ToolsRegisterParams};
     use crate::registry::ToolRegistry;
@@ -330,6 +420,7 @@ mod tests {
         })
         .await
         .expect("initialize should succeed");
+        svc.progress_enabled.store(true, Ordering::Release);
     }
 
     #[test]

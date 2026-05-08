@@ -1,9 +1,20 @@
 //! Top-level server builder.
 
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+use fittings::serde_json::{self, Value};
+use fittings::tokio;
+use fittings::wire::types::JsonRpcId;
+use fittings::{
+    encode_response_line, to_error_envelope, FittingsError, RequestEnvelope, ResponseEnvelope,
+};
+
 use crate::error::McpfitError;
 use crate::protocol::ServerInfo;
 use crate::registry::ToolRegistry;
-use crate::service::{McpService, McpServiceImpl};
+use crate::service::{McpServiceImpl, ServerNotification};
 use crate::tool::{Tool, ToolSpec};
 use crate::Result;
 
@@ -129,15 +140,191 @@ impl Server {
     where
         T: fittings::core::transport::Transport + Sync + 'static,
     {
-        McpServiceImpl::new(
+        let service = Arc::new(McpServiceImpl::new(
             self.info,
             self.registry,
             self.allow_runtime_registration,
             self.allow_dynamic_tools,
-        )
-        .serve_transport(transport)
+        ));
+        run_mcp_loop(service, transport)
             .await
             .map_err(|err| McpfitError::Internal(err.to_string()))
+    }
+}
+
+async fn run_mcp_loop<T>(
+    service: Arc<McpServiceImpl>,
+    mut transport: T,
+) -> std::result::Result<(), FittingsError>
+where
+    T: fittings::core::transport::Transport + Sync + 'static,
+{
+    let mut workers = tokio::task::JoinSet::<(JsonRpcId, std::result::Result<Value, FittingsError>, Arc<AtomicBool>)>::new();
+    let mut in_flight: HashMap<JsonRpcId, Arc<AtomicBool>> = HashMap::new();
+    let mut input_closed = false;
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(25));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        if input_closed && workers.is_empty() {
+            flush_notifications(&mut transport, &service).await?;
+            return Ok(());
+        }
+
+        tokio::select! {
+            joined = workers.join_next(), if !workers.is_empty() => {
+                match joined {
+                    Some(Ok((id, result, cancellation))) => {
+                        in_flight.remove(&id);
+                        flush_notifications(&mut transport, &service).await?;
+                        if !cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                            let response = match result {
+                                Ok(value) => ResponseEnvelope::success(id, value),
+                                Err(error) => to_error_envelope(id, error),
+                            };
+                            send_response(&mut transport, &response).await?;
+                        }
+                        flush_notifications(&mut transport, &service).await?;
+                    }
+                    Some(Err(error)) => {
+                        return Err(FittingsError::internal(format!(
+                            "failed to join request worker: {error}"
+                        )));
+                    }
+                    None => {}
+                }
+            }
+            _ = tick.tick(), if !workers.is_empty() => {
+                flush_notifications(&mut transport, &service).await?;
+            }
+            recv = transport.recv(), if !input_closed => {
+                match recv {
+                    Ok(frame) => {
+                        let request = match fittings::decode_request_line(&frame) {
+                            Ok(r) => r,
+                            Err(err) => {
+                                let (id, ferr) = match err {
+                                    fittings::WireDecodeError::Parse(m) => {
+                                        (JsonRpcId::Null, FittingsError::parse_error(m))
+                                    }
+                                    fittings::WireDecodeError::InvalidRequest { message, id } => {
+                                        (id.unwrap_or(JsonRpcId::Null), FittingsError::invalid_request(message))
+                                    }
+                                };
+                                send_response(&mut transport, &to_error_envelope(id, ferr)).await?;
+                                continue;
+                            }
+                        };
+
+                        if request.method == "notifications/cancelled" && request.id.is_none() {
+                            handle_cancellation(request.params.unwrap_or(Value::Null), &in_flight);
+                            continue;
+                        }
+
+                        let params = request.params.unwrap_or(Value::Null);
+                        let method = request.method;
+
+                        if let Some(id) = request.id {
+                            if in_flight.contains_key(&id) {
+                                send_response(
+                                    &mut transport,
+                                    &to_error_envelope(
+                                        id,
+                                        FittingsError::invalid_request("duplicate in-flight request id"),
+                                    ),
+                                ).await?;
+                                continue;
+                            }
+
+                            if method == "tools/call" {
+                                let cancellation = Arc::new(AtomicBool::new(false));
+                                in_flight.insert(id.clone(), Arc::clone(&cancellation));
+                                let svc = Arc::clone(&service);
+                                let cancel_for_dispatch = Arc::clone(&cancellation);
+                                workers.spawn(async move {
+                                    let result = svc
+                                        .dispatch(&method, params, Some(cancel_for_dispatch))
+                                        .await;
+                                    (id, result, cancellation)
+                                });
+                                continue;
+                            }
+
+                            let result = service.dispatch(&method, params, None).await;
+                            flush_notifications(&mut transport, &service).await?;
+                            let response = match result {
+                                Ok(value) => ResponseEnvelope::success(id, value),
+                                Err(error) => to_error_envelope(id, error),
+                            };
+                            send_response(&mut transport, &response).await?;
+                            flush_notifications(&mut transport, &service).await?;
+                            continue;
+                        }
+
+                        let _ = service.dispatch(&method, params, None).await;
+                        flush_notifications(&mut transport, &service).await?;
+                    }
+                    Err(error) if is_graceful_eof(&error) => {
+                        input_closed = true;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+    }
+}
+
+fn handle_cancellation(params: Value, in_flight: &HashMap<JsonRpcId, Arc<AtomicBool>>) {
+    let Some(obj) = params.as_object() else {
+        return;
+    };
+    let Some(id_value) = obj.get("requestId") else {
+        return;
+    };
+    let id: JsonRpcId = match serde_json::from_value(id_value.clone()) {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+    if let Some(token) = in_flight.get(&id) {
+        token.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+async fn flush_notifications<T>(
+    transport: &mut T,
+    service: &McpServiceImpl,
+) -> std::result::Result<(), FittingsError>
+where
+    T: fittings::core::transport::Transport,
+{
+    for ServerNotification { method, params } in service.drain_notifications() {
+        let envelope = RequestEnvelope::notification(method, Some(params));
+        let mut encoded = serde_json::to_vec(&envelope)
+            .map_err(|e| FittingsError::internal(format!("encode notification: {e}")))?;
+        encoded.push(b'\n');
+        transport.send(&encoded).await?;
+    }
+    Ok(())
+}
+
+async fn send_response<T>(
+    transport: &mut T,
+    response: &ResponseEnvelope,
+) -> std::result::Result<(), FittingsError>
+where
+    T: fittings::core::transport::Transport,
+{
+    let encoded = encode_response_line(response)
+        .map_err(|e| FittingsError::internal(format!("encode response: {e}")))?;
+    transport.send(&encoded).await
+}
+
+fn is_graceful_eof(error: &FittingsError) -> bool {
+    match error {
+        FittingsError::Transport(message) => {
+            message == "end of input" || message.ends_with("input closed")
+        }
+        _ => false,
     }
 }
 
