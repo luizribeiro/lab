@@ -14,8 +14,9 @@ pub use content::{EmbeddedResource, ToolContent};
 pub use context::Cx;
 pub use error::McpfitError;
 pub use protocol::{
-    ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolInfo,
-    ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
+    ClientInfo, InitializeParams, InitializeResult, ProgressNotificationParams,
+    ServerCapabilities, ServerInfo, ToolInfo, ToolsCallParams, ToolsCapability, ToolsListResult,
+    ToolsRegisterParams, ToolsRegisterResult,
 };
 pub use registry::ToolRegistry;
 pub use response::{IntoToolResponse, ToolResponse};
