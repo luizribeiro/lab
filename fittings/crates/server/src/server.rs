@@ -471,6 +471,7 @@ async fn handle_frame<S>(
                         peer,
                         &null_in_flight,
                         &in_flight_tokens,
+                        None,
                     )
                     .await
                 }
@@ -485,6 +486,14 @@ async fn handle_frame<S>(
             }
         }
     }
+}
+
+enum BatchItemDecoded {
+    Ok {
+        envelope: RequestEnvelope,
+        token: Option<CancellationToken>,
+    },
+    Err(ResponseEnvelope),
 }
 
 async fn handle_batch_request<S>(
@@ -506,41 +515,67 @@ async fn handle_batch_request<S>(
         return;
     }
 
-    let mut responses = Vec::new();
-
+    // Pre-register cancellation tokens for every id-bearing item before
+    // processing begins, per rfc-fittings-notifications.md:639-643. A
+    // cancellation arriving for a later batch item must still fire that
+    // item's token even though execution has not reached it yet.
+    let mut decoded_items = Vec::with_capacity(batch.len());
+    let mut guards: Vec<InFlightTokenGuard> = Vec::new();
     for item in batch {
         let item_line = match serde_json::to_vec(&item) {
             Ok(item_line) => item_line,
             Err(_) => {
-                responses.push(to_error_envelope(
+                decoded_items.push(BatchItemDecoded::Err(to_error_envelope(
                     JsonRpcId::Null,
                     FittingsError::invalid_request("batch item must be valid JSON-RPC request"),
-                ));
+                )));
                 continue;
             }
         };
 
-        let response = match decode_request_line(&item_line) {
-            Ok(request_envelope) => {
+        match decode_request_line(&item_line) {
+            Ok(envelope) => {
+                let token = envelope.id.as_ref().map(|id| {
+                    let tok = CancellationToken::new();
+                    in_flight_tokens.insert(id.clone(), tok.clone());
+                    guards.push(InFlightTokenGuard {
+                        map: in_flight_tokens.clone(),
+                        id: id.clone(),
+                    });
+                    tok
+                });
+                decoded_items.push(BatchItemDecoded::Ok { envelope, token });
+            }
+            Err(error) => {
+                let (id, err) = map_decode_error(error);
+                decoded_items.push(BatchItemDecoded::Err(to_error_envelope(id, err)));
+            }
+        }
+    }
+
+    let mut responses = Vec::new();
+    for item in decoded_items {
+        let response = match item {
+            BatchItemDecoded::Ok { envelope, token } => {
                 execute_request(
-                    request_envelope,
+                    envelope,
                     Arc::clone(&service),
                     peer.clone(),
                     &null_in_flight,
                     &in_flight_tokens,
+                    token,
                 )
                 .await
             }
-            Err(error) => {
-                let (id, err) = map_decode_error(error);
-                Some(to_error_envelope(id, err))
-            }
+            BatchItemDecoded::Err(response) => Some(response),
         };
 
         if let Some(response) = response {
             responses.push(response);
         }
     }
+
+    drop(guards);
 
     if responses.is_empty() {
         return;
@@ -564,6 +599,7 @@ async fn execute_request<S>(
     peer: PeerHandle,
     null_in_flight: &Arc<AtomicBool>,
     in_flight_tokens: &InFlightTokens,
+    pre_registered_token: Option<CancellationToken>,
 ) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
@@ -577,14 +613,21 @@ where
     } else {
         None
     };
-    let cancellation_token = CancellationToken::new();
-    let _token_guard = request_id.as_ref().map(|id| {
-        in_flight_tokens.insert(id.clone(), cancellation_token.clone());
-        InFlightTokenGuard {
-            map: in_flight_tokens.clone(),
-            id: id.clone(),
+    let (cancellation_token, _token_guard) = match (request_id.as_ref(), pre_registered_token) {
+        (Some(_), Some(token)) => (token, None),
+        (Some(id), None) => {
+            let token = CancellationToken::new();
+            in_flight_tokens.insert(id.clone(), token.clone());
+            (
+                token,
+                Some(InFlightTokenGuard {
+                    map: in_flight_tokens.clone(),
+                    id: id.clone(),
+                }),
+            )
         }
-    });
+        (None, _) => (CancellationToken::new(), None),
+    };
     let token_for_check = cancellation_token.clone();
     let ctx = ServiceContext::new(request_id.clone(), cancellation_token, peer);
     let request = Request {
