@@ -53,3 +53,7 @@ path = "../../tests/service_code_ranges.rs"
 [[test]]
 name = "invalid_service_code_marker"
 path = "../../tests/invalid_service_code_marker.rs"
+
+[[test]]
+name = "cancelled_no_wire_mapping"
+path = "../../tests/cancelled_no_wire_mapping.rs"

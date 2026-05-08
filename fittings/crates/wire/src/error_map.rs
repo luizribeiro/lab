@@ -79,6 +79,13 @@ pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> Respon
                 FITTINGS_KIND_KEY: FITTINGS_KIND_INVALID_SERVICE_CODE,
             })),
         },
+        // Cancelled has no wire mapping: the server suppresses the response
+        // before encode (S6). Defensive fallback if it ever reaches the wire.
+        FittingsError::Cancelled { .. } => ErrorEnvelope {
+            code: INTERNAL_ERROR_CODE,
+            message: INTERNAL_ERROR_MESSAGE.to_string(),
+            data: None,
+        },
     };
 
     ResponseEnvelope::error(id, error)

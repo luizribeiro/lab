@@ -36,6 +36,8 @@ pub enum FittingsError {
     },
     #[error("handler panic: {message}")]
     Panic { message: String },
+    #[error("cancelled{}", .reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default())]
+    Cancelled { reason: Option<String> },
 }
 
 impl FittingsError {
@@ -122,6 +124,10 @@ impl FittingsError {
             message: message.into(),
         }
     }
+
+    pub fn cancelled(reason: Option<String>) -> Self {
+        Self::Cancelled { reason }
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +162,18 @@ mod tests {
         assert!(matches!(
             FittingsError::transport("broken pipe"),
             FittingsError::Transport(message) if message == "broken pipe"
+        ));
+    }
+
+    #[test]
+    fn cancelled_constructor_carries_optional_reason() {
+        assert!(matches!(
+            FittingsError::cancelled(None),
+            FittingsError::Cancelled { reason: None }
+        ));
+        assert!(matches!(
+            FittingsError::cancelled(Some("client aborted".to_string())),
+            FittingsError::Cancelled { reason: Some(r) } if r == "client aborted"
         ));
     }
 
