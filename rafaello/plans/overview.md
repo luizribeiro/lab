@@ -311,11 +311,15 @@ impl<T: Service> Server<T> {
 ```
 
 Symmetrically, the existing `Client` type gains the inbound
-side: a `Client::new(transport, service)` constructor binds
-an inbound `Service` impl that handles peer-originated
-requests (replacing the v1 cut's `-32601` reject path) and a
-`Client::peer() -> PeerHandle` that exposes outbound
-notify/call.
+side: `Client::connect(connector)` constructs the client and
+`Client::with_service(svc)` registers an inbound `Service`
+impl that handles peer-originated requests (replacing the v1
+cut's `-32601` reject path). `Client::peer() -> PeerHandle`
+exposes outbound notify/call. The two-step
+construct-then-register shape (rather than a single
+`Client::new(transport, service)` constructor) lets callers
+opt into inbound services without forcing every client to
+declare one. See §15.6 for the full landed surface.
 
 Authoritative spec: `streams/b-fittings/rfc-fittings-
 notifications.md` after the patch tracked in §15.6 of this
