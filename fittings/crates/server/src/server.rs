@@ -1,7 +1,7 @@
 use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use fittings_core::{
-    context::{OutboundNotification, PeerHandle, ServiceContext},
+    context::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext},
     error::FittingsError,
     message::{Request, Response},
     service::Service,
@@ -21,11 +21,14 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
+const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
 pub struct Server<S, T> {
     service: Arc<S>,
     transport: T,
     max_in_flight: usize,
+    notification_capacity: usize,
+    dropped_notifications: DroppedNotifications,
 }
 
 impl<S, T> Server<S, T>
@@ -38,6 +41,8 @@ where
             service: Arc::new(service),
             transport,
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
+            notification_capacity: DEFAULT_NOTIFICATION_CAPACITY,
+            dropped_notifications: DroppedNotifications::new(),
         }
     }
 
@@ -46,11 +51,21 @@ where
         self
     }
 
+    pub fn with_notification_capacity(mut self, n: usize) -> Self {
+        self.notification_capacity = n.max(1);
+        self
+    }
+
+    pub fn dropped_notifications(&self) -> DroppedNotifications {
+        self.dropped_notifications.clone()
+    }
+
     pub async fn serve(mut self) -> Result<(), FittingsError> {
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight));
         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (notify_tx, mut notify_rx) = mpsc::unbounded_channel::<OutboundNotification>();
-        let peer = PeerHandle::new(notify_tx);
+        let (notify_tx, mut notify_rx) =
+            mpsc::channel::<OutboundNotification>(self.notification_capacity);
+        let peer = PeerHandle::new(notify_tx, self.dropped_notifications.clone());
         let mut response_tx = Some(response_tx);
         let mut workers = JoinSet::new();
         let mut accepting = true;
@@ -79,13 +94,7 @@ where
             }
 
             tokio::select! {
-                Some(frame) = response_rx.recv() => {
-                    if let Err(error) = self.transport.send(&frame).await {
-                        workers.abort_all();
-                        while workers.join_next().await.is_some() {}
-                        return Err(error);
-                    }
-                }
+                biased;
                 Some(notification) = notify_rx.recv() => {
                     if let Some(frame) = encode_notification(notification) {
                         if let Err(error) = self.transport.send(&frame).await {
@@ -93,6 +102,13 @@ where
                             while workers.join_next().await.is_some() {}
                             return Err(error);
                         }
+                    }
+                }
+                Some(frame) = response_rx.recv() => {
+                    if let Err(error) = self.transport.send(&frame).await {
+                        workers.abort_all();
+                        while workers.join_next().await.is_some() {}
+                        return Err(error);
                     }
                 }
                 recv_result = self.transport.recv(), if accepting => {

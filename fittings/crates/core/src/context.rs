@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio_util::sync::CancellationToken;
 
 use crate::{error::FittingsError, message::JsonRpcId};
@@ -12,30 +15,68 @@ pub struct OutboundNotification {
     pub params: Value,
 }
 
+/// Cloneable handle exposing the count of notifications that the local
+/// peer dropped because the bounded outbound notification sink was full.
+#[derive(Clone, Debug, Default)]
+pub struct DroppedNotifications {
+    inner: Arc<AtomicU64>,
+}
+
+impl DroppedNotifications {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn count(&self) -> u64 {
+        self.inner.load(Ordering::Relaxed)
+    }
+
+    fn record_drop(&self) {
+        self.inner.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone)]
 pub struct PeerHandle {
     inner: Arc<PeerHandleInner>,
 }
 
 struct PeerHandleInner {
-    notify_tx: mpsc::UnboundedSender<OutboundNotification>,
+    notify_tx: mpsc::Sender<OutboundNotification>,
+    dropped: DroppedNotifications,
 }
 
 impl PeerHandle {
-    pub fn new(notify_tx: mpsc::UnboundedSender<OutboundNotification>) -> Self {
+    pub fn new(
+        notify_tx: mpsc::Sender<OutboundNotification>,
+        dropped: DroppedNotifications,
+    ) -> Self {
         Self {
-            inner: Arc::new(PeerHandleInner { notify_tx }),
+            inner: Arc::new(PeerHandleInner { notify_tx, dropped }),
         }
     }
 
     pub fn notify(&self, method: impl Into<String>, params: Value) -> Result<(), FittingsError> {
-        self.inner
-            .notify_tx
-            .send(OutboundNotification {
-                method: method.into(),
-                params,
-            })
-            .map_err(|_| FittingsError::transport("peer notification channel closed"))
+        let method = method.into();
+        let notification = OutboundNotification { method, params };
+        match self.inner.notify_tx.try_send(notification) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(notification)) => {
+                self.inner.dropped.record_drop();
+                tracing::warn!(
+                    method = %notification.method,
+                    "outbound notification dropped: bounded sink full",
+                );
+                Ok(())
+            }
+            Err(TrySendError::Closed(_)) => {
+                Err(FittingsError::transport("peer notification channel closed"))
+            }
+        }
+    }
+
+    pub fn dropped_notifications(&self) -> DroppedNotifications {
+        self.inner.dropped.clone()
     }
 }
 
@@ -90,11 +131,15 @@ impl ServiceContext {
     /// does not own a server connection. `notify` calls succeed locally but the
     /// notification is discarded.
     pub fn detached() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(1024);
         // Keep the receiver alive so peer.notify does not surface a Transport
         // error from a closed channel.
         std::mem::forget(rx);
-        Self::new(None, CancellationToken::new(), PeerHandle::new(tx))
+        Self::new(
+            None,
+            CancellationToken::new(),
+            PeerHandle::new(tx, DroppedNotifications::new()),
+        )
     }
 }
 
@@ -104,12 +149,12 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use super::{OutboundNotification, PeerHandle, ServiceContext};
+    use super::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext};
     use crate::{error::FittingsError, message::JsonRpcId};
 
-    fn fresh_peer() -> (PeerHandle, mpsc::UnboundedReceiver<OutboundNotification>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (PeerHandle::new(tx), rx)
+    fn fresh_peer() -> (PeerHandle, mpsc::Receiver<OutboundNotification>) {
+        let (tx, rx) = mpsc::channel(16);
+        (PeerHandle::new(tx, DroppedNotifications::new()), rx)
     }
 
     #[tokio::test]
@@ -175,8 +220,8 @@ mod tests {
     #[test]
     fn peer_notify_enqueues_outbound_notification() {
         let token = CancellationToken::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let peer = PeerHandle::new(tx);
+        let (tx, mut rx) = mpsc::channel(16);
+        let peer = PeerHandle::new(tx, DroppedNotifications::new());
         let ctx = ServiceContext::new(None, token, peer);
 
         ctx.notify("ping", json!({"x": 1}))
@@ -188,12 +233,28 @@ mod tests {
 
     #[test]
     fn peer_notify_returns_transport_when_channel_closed() {
-        let (tx, rx) = mpsc::unbounded_channel::<OutboundNotification>();
+        let (tx, rx) = mpsc::channel::<OutboundNotification>(1);
         drop(rx);
-        let peer = PeerHandle::new(tx);
+        let peer = PeerHandle::new(tx, DroppedNotifications::new());
         match peer.notify("ping", json!(null)) {
             Err(FittingsError::Transport(_)) => {}
             other => panic!("expected Transport error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn peer_notify_drops_when_bounded_sink_full() {
+        let (tx, _rx) = mpsc::channel::<OutboundNotification>(1);
+        let dropped = DroppedNotifications::new();
+        let peer = PeerHandle::new(tx, dropped.clone());
+
+        peer.notify("first", json!(null)).expect("first fits");
+        // Second send fills the slot but is silently dropped (Ok return).
+        peer.notify("second", json!(null))
+            .expect("drop-on-full reports Ok");
+        peer.notify("third", json!(null))
+            .expect("drop-on-full reports Ok");
+
+        assert_eq!(dropped.count(), 2);
     }
 }
