@@ -66,6 +66,7 @@ pub(crate) struct McpServiceImpl {
     lifecycle: Mutex<SessionLifecycle>,
     pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
     allow_runtime_registration: bool,
+    allow_dynamic_tools: bool,
 }
 
 #[allow(dead_code)]
@@ -74,6 +75,7 @@ impl McpServiceImpl {
         server_info: ServerInfo,
         registry: ToolRegistry,
         allow_runtime_registration: bool,
+        allow_dynamic_tools: bool,
     ) -> Self {
         Self {
             server_info,
@@ -81,6 +83,7 @@ impl McpServiceImpl {
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             allow_runtime_registration,
+            allow_dynamic_tools,
         }
     }
 
@@ -129,7 +132,7 @@ impl McpService for McpServiceImpl {
             *lifecycle = SessionLifecycle::AwaitingInitializedNotification;
         }
 
-        let capabilities = if self.allow_runtime_registration {
+        let capabilities = if self.allow_runtime_registration || self.allow_dynamic_tools {
             ServerCapabilities {
                 tools: Some(ToolsCapability {
                     list_changed: Some(true),
@@ -298,6 +301,16 @@ mod tests {
         registry: ToolRegistry,
         allow_runtime_registration: bool,
     ) -> McpServiceImpl {
+        service_with_flags(name, version, registry, allow_runtime_registration, false)
+    }
+
+    fn service_with_flags(
+        name: &str,
+        version: &str,
+        registry: ToolRegistry,
+        allow_runtime_registration: bool,
+        allow_dynamic_tools: bool,
+    ) -> McpServiceImpl {
         McpServiceImpl::new(
             ServerInfo {
                 name: name.into(),
@@ -305,6 +318,7 @@ mod tests {
             },
             registry,
             allow_runtime_registration,
+            allow_dynamic_tools,
         )
     }
 
@@ -393,6 +407,37 @@ mod tests {
             .tools
             .expect("tools capability should be advertised");
         assert_eq!(tools.list_changed, Some(true));
+    }
+
+    #[tokio::test]
+    async fn initialize_advertises_list_changed_for_dynamic_tools_knob() {
+        let svc = service_with_flags("demo", "0.1.0", ToolRegistry::new(), false, true);
+        let result = svc
+            .initialize(InitializeParams {
+                protocol_version: "2025-01-01".into(),
+                client_info: None,
+                capabilities: None,
+            })
+            .await
+            .expect("initialize should succeed");
+
+        let tools = result
+            .capabilities
+            .tools
+            .expect("tools capability should be advertised");
+        assert_eq!(tools.list_changed, Some(true));
+    }
+
+    #[tokio::test]
+    async fn dynamic_tools_knob_does_not_expose_register_method() {
+        let svc = service_with_flags("demo", "0.1.0", ToolRegistry::new(), false, true);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        let err = svc
+            .register_tool(register_params("ping"))
+            .await
+            .expect_err("dynamic-tools knob must not enable client tools/register");
+        assert_register_disabled(err);
     }
 
     #[tokio::test]
