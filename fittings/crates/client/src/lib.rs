@@ -41,6 +41,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 type ServiceSlot = Arc<RwLock<Option<Arc<dyn Service>>>>;
+type NotificationHandler = Arc<dyn Fn(String, Value) + Send + Sync + 'static>;
+type NotificationHandlerSlot = Arc<RwLock<Option<NotificationHandler>>>;
 
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
@@ -53,6 +55,7 @@ where
     worker: JoinHandle<()>,
     peer: PeerHandle,
     service: ServiceSlot,
+    notification_handler: NotificationHandlerSlot,
     _connector: PhantomData<C>,
 }
 
@@ -81,6 +84,7 @@ where
             closed_token.clone(),
         );
         let service: ServiceSlot = Arc::new(RwLock::new(None));
+        let notification_handler: NotificationHandlerSlot = Arc::new(RwLock::new(None));
         let worker = tokio::spawn(run_client_loop(
             transport,
             request_rx,
@@ -88,6 +92,7 @@ where
             outbound_request_rx,
             pending_outbound,
             service.clone(),
+            notification_handler.clone(),
             peer.clone(),
             closed_token,
         ));
@@ -98,6 +103,7 @@ where
             worker,
             peer,
             service,
+            notification_handler,
             _connector: PhantomData,
         })
     }
@@ -118,6 +124,23 @@ where
         S: Service + 'static,
     {
         *self.service.write().expect("service slot poisoned") = Some(Arc::new(svc));
+        self
+    }
+
+    /// Register a synchronous handler for inbound peer-originated
+    /// *notifications* (server-side `PeerHandle::notify`). The handler is
+    /// invoked inside a `tokio::spawn` so it does not block the client read
+    /// loop and a panic in one invocation cannot affect subsequent
+    /// notifications or response correlation. If no handler is registered,
+    /// inbound notifications are dropped silently (scope §K2).
+    pub fn with_notification_handler<F>(self, handler: F) -> Self
+    where
+        F: Fn(String, Value) + Send + Sync + 'static,
+    {
+        *self
+            .notification_handler
+            .write()
+            .expect("notification handler slot poisoned") = Some(Arc::new(handler));
         self
     }
 
@@ -193,6 +216,7 @@ async fn run_client_loop<T>(
     mut outbound_request_rx: mpsc::UnboundedReceiver<OutboundRequest>,
     pending_outbound: PendingOutbound,
     service: ServiceSlot,
+    notification_handler: NotificationHandlerSlot,
     peer: PeerHandle,
     closed_token: CancellationToken,
 ) where
@@ -270,6 +294,7 @@ async fn run_client_loop<T>(
                             frame,
                             &mut pending,
                             &service,
+                            &notification_handler,
                             &inbound_response_tx,
                             peer.clone(),
                         );
@@ -343,11 +368,18 @@ fn handle_inbound_frame(
     frame: Vec<u8>,
     pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
     service: &ServiceSlot,
+    notification_handler: &NotificationHandlerSlot,
     inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
 ) {
     if frame_looks_like_request(&frame) {
-        spawn_inbound_request(frame, service, inbound_response_tx, peer);
+        spawn_inbound_request(
+            frame,
+            service,
+            notification_handler,
+            inbound_response_tx,
+            peer,
+        );
         return;
     }
     handle_response_frame(frame, pending);
@@ -366,6 +398,7 @@ fn frame_looks_like_request(frame: &[u8]) -> bool {
 fn spawn_inbound_request(
     frame: Vec<u8>,
     service: &ServiceSlot,
+    notification_handler: &NotificationHandlerSlot,
     inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
 ) {
@@ -374,6 +407,18 @@ fn spawn_inbound_request(
         Err(_) => return,
     };
     let Some(id) = envelope.id.clone() else {
+        let handler = notification_handler
+            .read()
+            .expect("notification handler slot poisoned")
+            .as_ref()
+            .map(Arc::clone);
+        if let Some(handler) = handler {
+            let method = envelope.method;
+            let params = envelope.params.unwrap_or(Value::Null);
+            tokio::spawn(async move {
+                handler(method, params);
+            });
+        }
         return;
     };
     let svc = service
