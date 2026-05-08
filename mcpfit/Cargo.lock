@@ -285,8 +285,11 @@ dependencies = [
 name = "mcpfit-macros"
 version = "0.0.0"
 dependencies = [
+ "mcpfit",
  "proc-macro2",
  "quote",
+ "schemars",
+ "serde",
  "syn",
  "trybuild",
 ]

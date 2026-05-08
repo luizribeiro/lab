@@ -1,6 +1,7 @@
+use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{Attribute, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, PatType, Type, spanned::Spanned};
 
-#[allow(dead_code)]
 pub(crate) struct ParsedTool {
     pub(crate) name: syn::Ident,
     pub(crate) description: String,
@@ -9,7 +10,6 @@ pub(crate) struct ParsedTool {
     pub(crate) return_ty: Box<Type>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn parse(item: &ItemFn) -> syn::Result<ParsedTool> {
     if item.sig.asyncness.is_none() {
         return Err(syn::Error::new(
@@ -28,6 +28,52 @@ pub(crate) fn parse(item: &ItemFn) -> syn::Result<ParsedTool> {
         args_ty,
         cx_arg,
         return_ty,
+    })
+}
+
+pub(crate) fn expand(item: ItemFn) -> syn::Result<TokenStream> {
+    let parsed = parse(&item)?;
+    if let Some(cx) = &parsed.cx_arg {
+        return Err(syn::Error::new_spanned(
+            cx,
+            "#[tool] does not yet support a `cx: Cx` parameter",
+        ));
+    }
+
+    let vis = &item.vis;
+    let name = &parsed.name;
+    let name_str = name.to_string();
+    let description = &parsed.description;
+    let args_ty = &parsed.args_ty;
+    let return_ty = &parsed.return_ty;
+    let block = &item.block;
+    let attrs = item
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        #[allow(non_snake_case)]
+        #vis mod #name {
+            use super::*;
+
+            #(#attrs)*
+            pub async fn #name(args: #args_ty) -> #return_ty #block
+
+            fn __mcpfit_build() -> ::mcpfit::Tool {
+                ::mcpfit::Tool::new(#name_str)
+                    .description(#description)
+                    .input::<#args_ty>()
+                    .handler(|args: #args_ty, _cx: ::mcpfit::Cx| async move {
+                        #name(args).await
+                    })
+            }
+
+            pub const TOOL: ::mcpfit::ToolSpec =
+                ::mcpfit::ToolSpec::new(#name_str, __mcpfit_build)
+                    .with_description(#description);
+        }
     })
 }
 
