@@ -123,6 +123,7 @@ fn assert_error_response_envelope(response: &Value, expected_id: Value) {
 fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     let payload = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":\"list-1\",\"method\":\"tools/list\",\"params\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":\"call-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"add\",\"arguments\":{\"a\":2,\"b\":3}}}\n"
     );
@@ -168,18 +169,21 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
 
 #[test]
 fn stdio_e2e_structured_tool_call_returns_text_and_structured_content() {
-    let request = br#"{"jsonrpc":"2.0","id":"call-structured-1","method":"tools/call","params":{"name":"add_with_details","arguments":{"a":2,"b":3}}}
-"#;
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"call-structured-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"add_with_details\",\"arguments\":{\"a\":2,\"b\":3}}}\n"
+    );
 
-    let output = run_stdio_serve(request);
+    let output = run_stdio_serve(payload.as_bytes());
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
 
     let responses = parse_response_lines(&output.stdout);
-    assert_eq!(responses.len(), 1);
+    assert_eq!(responses.len(), 2);
 
-    let response = &responses[0];
+    let response = response_by_id(&responses, "call-structured-1");
     assert_success_response_envelope(response, json!("call-structured-1"));
     assert_eq!(response["result"]["content"][0]["type"], "text");
     assert_eq!(response["result"]["content"][0]["text"], "2 + 3 = 5");
@@ -192,18 +196,21 @@ fn stdio_e2e_structured_tool_call_returns_text_and_structured_content() {
 
 #[test]
 fn stdio_e2e_invalid_tool_arguments_return_error_envelope() {
-    let request = br#"{"jsonrpc":"2.0","id":"call-bad-1","method":"tools/call","params":{"name":"add","arguments":{"a":"x","b":1}}}
-"#;
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"call-bad-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"add\",\"arguments\":{\"a\":\"x\",\"b\":1}}}\n"
+    );
 
-    let output = run_stdio_serve(request);
+    let output = run_stdio_serve(payload.as_bytes());
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty(), "stderr must be empty");
 
     let responses = parse_response_lines(&output.stdout);
-    assert_eq!(responses.len(), 1);
+    assert_eq!(responses.len(), 2);
 
-    let response = &responses[0];
+    let response = response_by_id(&responses, "call-bad-1");
     assert_error_response_envelope(response, json!("call-bad-1"));
     assert_eq!(response["error"]["code"], -32602);
     assert_eq!(
@@ -315,6 +322,39 @@ fn stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list
 }
 
 #[test]
+fn stdio_e2e_long_running_tool_call_can_be_cancelled() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"long-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"long_running_demo\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"long-1\",\"reason\":\"client no longer needs this result\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"echo-after-cancel\",\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"still responsive\"}}}\n"
+    );
+
+    let started = Instant::now();
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "cancelled call should terminate quickly"
+    );
+
+    assert!(
+        frames.iter().all(|frame| frame["id"] != "long-1"),
+        "cancelled request should not produce a response"
+    );
+
+    let echo = response_by_id(&frames, "echo-after-cancel");
+    assert_success_response_envelope(echo, json!("echo-after-cancel"));
+    assert_eq!(echo["result"]["content"][0]["text"], "still responsive");
+}
+
+#[test]
 fn stdio_e2e_progress_notifications_are_emitted_before_final_response_when_enabled() {
     let payload = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"},\"capabilities\":{\"experimental\":{\"progressNotifications\":true}}}}\n",
@@ -387,6 +427,39 @@ fn stdio_e2e_progress_notifications_are_not_emitted_without_client_capability() 
     assert_eq!(
         response["result"]["content"][0]["text"],
         "progress demo completed"
+    );
+}
+
+#[test]
+fn stdio_e2e_duplicate_in_flight_request_ids_are_rejected() {
+    let payload = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-01-01\",\"clientInfo\":{\"name\":\"test-client\",\"version\":\"0.1.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"dup-1\",\"method\":\"tools/call\",\"params\":{\"name\":\"long_running_demo\",\"arguments\":{}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"dup-1\",\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":\"dup-1\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"echo-after-dup\",\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"ok\"}}}\n"
+    );
+
+    let output = run_stdio_serve(payload.as_bytes());
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "stderr must be empty");
+
+    let frames = parse_response_lines(&output.stdout);
+
+    let duplicate = response_by_id(&frames, "dup-1");
+    assert_error_response_envelope(duplicate, json!("dup-1"));
+    assert_eq!(duplicate["error"]["code"], -32600);
+
+    let echo = response_by_id(&frames, "echo-after-dup");
+    assert_success_response_envelope(echo, json!("echo-after-dup"));
+    assert_eq!(echo["result"]["content"][0]["text"], "ok");
+
+    assert_eq!(
+        frames.iter().filter(|frame| frame["id"] == "dup-1").count(),
+        1,
+        "request id should map to at most one response"
     );
 }
 
