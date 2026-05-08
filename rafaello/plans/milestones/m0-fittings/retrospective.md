@@ -144,7 +144,7 @@ itself does not name `with_cancellation_method` —
 overview text to fix; the `decisions.md` row is sufficient as the
 canonical record.
 
-A separate follow-up commit on this branch lands that row.
+Landed as commit `ad22eee` on this branch.
 
 ### 2.2 Drift the README pre-existing-knew-about
 
@@ -236,12 +236,21 @@ RFC but was not pulled into `scope.md`'s in-scope item set; the
 implementation followed the scope. Pi review of m0 caught the
 RFC↔scope inconsistency that was carried into the landed code.
 
-**Fix: defer to m1.** No v1 consumer needs the typed field
-(callers can read `data.method` directly when present), and
-adding it later is purely additive. A follow-up commit on this
-branch
-(`docs(rafaello): defer MethodNotFound method-field shape to
-m1`) appends `decisions.md` row 36 recording the deferral.
+**Fix: defer to m1.** No v1 consumer needs the typed field;
+producers that want to surface the unknown method name can
+populate `data.method` today (the existing
+`FittingsError::method_not_found(msg)` constructor leaves
+`data: None`, so this is opt-in, not automatic). The deferral
+landed as commit `0b61bdd` appending `decisions.md` row 36;
+pi round-2 review then corrected an earlier "purely additive"
+framing in row 36 — adding `method: Option<String>` to a
+public Rust enum struct variant is **source-breaking**
+(direct struct-literal constructors break unconditionally;
+exhaustive pattern matches that bind fields by name break
+depending on the bind list), not purely additive. The
+deferral is a deferred API-shape cutover acceptable before
+fittings hits a public v1 stability boundary, recorded as
+commit `b36e690` revising row 36's wording.
 
 The other four predefined variants (`Parse`, `InvalidRequest`,
 `InvalidParams`, `Internal`), the `Transport` / `Panic` /
