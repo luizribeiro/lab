@@ -81,3 +81,7 @@ path = "../../tests/bounded_notify_drop.rs"
 [[test]]
 name = "peerhandle_outside_handler"
 path = "../../tests/peerhandle_outside_handler.rs"
+
+[[test]]
+name = "peerhandle_server_initiated_call"
+path = "../../tests/peerhandle_server_initiated_call.rs"
