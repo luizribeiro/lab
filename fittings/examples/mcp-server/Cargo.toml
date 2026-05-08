@@ -7,12 +7,10 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-fittings = { path = "../../crates/fittings" }
 mcpfit = { path = "../../../mcpfit/crates/mcpfit" }
 schemars.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
-fittings-testkit = { path = "../../crates/testkit" }
-tokio-util.workspace = true
+fittings = { path = "../../crates/fittings" }
