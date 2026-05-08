@@ -1,13 +1,17 @@
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use serde_json::Value;
-use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    oneshot,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::FittingsError, message::JsonRpcId};
+use crate::{error::FittingsError, id_allocator::IdAllocator, message::JsonRpcId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboundNotification {
@@ -36,6 +40,57 @@ impl DroppedNotifications {
     }
 }
 
+/// Outbound request emitted by `PeerHandle::call`. The peer-side server loop
+/// drains a channel of these and writes them to the wire.
+#[derive(Debug)]
+pub struct OutboundRequest {
+    pub id: JsonRpcId,
+    pub method: String,
+    pub params: Value,
+}
+
+pub type PendingResponse = Result<Value, FittingsError>;
+
+/// In-flight outbound calls keyed by their prefixed id. Entries are inserted
+/// by `PeerHandle::call` and resolved by the connection's reader when it
+/// observes a matching response.
+#[derive(Clone, Default)]
+pub struct PendingOutbound {
+    inner: Arc<Mutex<HashMap<JsonRpcId, oneshot::Sender<PendingResponse>>>>,
+}
+
+impl PendingOutbound {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&self, id: JsonRpcId, tx: oneshot::Sender<PendingResponse>) {
+        self.inner
+            .lock()
+            .expect("pending map poisoned")
+            .insert(id, tx);
+    }
+
+    pub fn remove(&self, id: &JsonRpcId) -> Option<oneshot::Sender<PendingResponse>> {
+        self.inner.lock().expect("pending map poisoned").remove(id)
+    }
+
+    pub fn drain_all(&self) -> Vec<oneshot::Sender<PendingResponse>> {
+        self.inner
+            .lock()
+            .expect("pending map poisoned")
+            .drain()
+            .map(|(_, tx)| tx)
+            .collect()
+    }
+}
+
+struct OutboundCallChannel {
+    id_allocator: Arc<IdAllocator>,
+    request_tx: mpsc::UnboundedSender<OutboundRequest>,
+    pending: PendingOutbound,
+}
+
 #[derive(Clone)]
 pub struct PeerHandle {
     inner: Arc<PeerHandleInner>,
@@ -44,6 +99,7 @@ pub struct PeerHandle {
 struct PeerHandleInner {
     notify_tx: mpsc::Sender<OutboundNotification>,
     dropped: DroppedNotifications,
+    outbound_call: Option<OutboundCallChannel>,
 }
 
 impl PeerHandle {
@@ -52,7 +108,64 @@ impl PeerHandle {
         dropped: DroppedNotifications,
     ) -> Self {
         Self {
-            inner: Arc::new(PeerHandleInner { notify_tx, dropped }),
+            inner: Arc::new(PeerHandleInner {
+                notify_tx,
+                dropped,
+                outbound_call: None,
+            }),
+        }
+    }
+
+    /// Construct a `PeerHandle` capable of issuing outbound `peer.call`
+    /// requests. The caller (typically the connection's serve loop) owns the
+    /// receiver end of `request_tx` and the same `pending` map, and is
+    /// responsible for routing inbound responses back through the map.
+    pub fn with_outbound_calls(
+        notify_tx: mpsc::Sender<OutboundNotification>,
+        dropped: DroppedNotifications,
+        id_allocator: Arc<IdAllocator>,
+        request_tx: mpsc::UnboundedSender<OutboundRequest>,
+        pending: PendingOutbound,
+    ) -> Self {
+        Self {
+            inner: Arc::new(PeerHandleInner {
+                notify_tx,
+                dropped,
+                outbound_call: Some(OutboundCallChannel {
+                    id_allocator,
+                    request_tx,
+                    pending,
+                }),
+            }),
+        }
+    }
+
+    pub async fn call(
+        &self,
+        method: impl Into<String>,
+        params: Value,
+    ) -> Result<Value, FittingsError> {
+        let outbound = self.inner.outbound_call.as_ref().ok_or_else(|| {
+            FittingsError::transport("peer.call not available on this PeerHandle")
+        })?;
+
+        let id = outbound.id_allocator.next();
+        let (tx, rx) = oneshot::channel();
+        outbound.pending.insert(id.clone(), tx);
+
+        let request = OutboundRequest {
+            id: id.clone(),
+            method: method.into(),
+            params,
+        };
+        if outbound.request_tx.send(request).is_err() {
+            outbound.pending.remove(&id);
+            return Err(FittingsError::transport("peer call channel closed"));
+        }
+
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(FittingsError::transport("peer call channel closed")),
         }
     }
 

@@ -1,15 +1,19 @@
 use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use fittings_core::{
-    context::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext},
+    context::{
+        DroppedNotifications, OutboundNotification, OutboundRequest, PeerHandle, PendingOutbound,
+        ServiceContext,
+    },
     error::FittingsError,
+    id_allocator::IdAllocator,
     message::{Request, Response},
     service::Service,
     transport::Transport,
 };
 use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError},
-    error_map::to_error_envelope,
+    error_map::{from_error_envelope, to_error_envelope},
     types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use futures::FutureExt;
@@ -31,6 +35,9 @@ pub struct Server<S, T> {
     peer: PeerHandle,
     notify_rx: Option<mpsc::Receiver<OutboundNotification>>,
     dropped_notifications: DroppedNotifications,
+    outbound_request_rx: Option<mpsc::UnboundedReceiver<OutboundRequest>>,
+    pending_outbound: PendingOutbound,
+    id_allocator: Arc<IdAllocator>,
 }
 
 impl<S, T> Server<S, T>
@@ -42,7 +49,16 @@ where
         let dropped_notifications = DroppedNotifications::new();
         let (notify_tx, notify_rx) =
             mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
-        let peer = PeerHandle::new(notify_tx, dropped_notifications.clone());
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<OutboundRequest>();
+        let pending_outbound = PendingOutbound::new();
+        let id_allocator = Arc::new(IdAllocator::server());
+        let peer = PeerHandle::with_outbound_calls(
+            notify_tx,
+            dropped_notifications.clone(),
+            id_allocator.clone(),
+            request_tx,
+            pending_outbound.clone(),
+        );
         Self {
             service: Arc::new(service),
             transport,
@@ -51,6 +67,9 @@ where
             peer,
             notify_rx: Some(notify_rx),
             dropped_notifications,
+            outbound_request_rx: Some(request_rx),
+            pending_outbound,
+            id_allocator,
         }
     }
 
@@ -63,8 +82,16 @@ where
         self.notification_capacity = n.max(1);
         let (notify_tx, notify_rx) =
             mpsc::channel::<OutboundNotification>(self.notification_capacity);
-        self.peer = PeerHandle::new(notify_tx, self.dropped_notifications.clone());
+        let (request_tx, request_rx) = mpsc::unbounded_channel::<OutboundRequest>();
+        self.peer = PeerHandle::with_outbound_calls(
+            notify_tx,
+            self.dropped_notifications.clone(),
+            self.id_allocator.clone(),
+            request_tx,
+            self.pending_outbound.clone(),
+        );
         self.notify_rx = Some(notify_rx);
+        self.outbound_request_rx = Some(request_rx);
         self
     }
 
@@ -86,32 +113,44 @@ where
             .notify_rx
             .take()
             .expect("notify receiver should be present until serve is called");
+        let mut outbound_request_rx = self
+            .outbound_request_rx
+            .take()
+            .expect("outbound request receiver should be present until serve is called");
+        let pending_outbound = self.pending_outbound.clone();
         let peer = self.peer.clone();
         let mut response_tx = Some(response_tx);
         let mut workers = JoinSet::new();
         let mut accepting = true;
 
-        loop {
+        let result: Result<(), FittingsError> = 'serve: loop {
             if !accepting && workers.is_empty() {
                 if let Some(tx) = response_tx.take() {
                     drop(tx);
                 }
 
+                let mut drain_error: Option<FittingsError> = None;
                 while let Some(frame) = response_rx.recv().await {
                     if let Err(error) = self.transport.send(&frame).await {
                         workers.abort_all();
                         while workers.join_next().await.is_some() {}
-                        return Err(error);
+                        drain_error = Some(error);
+                        break;
                     }
+                }
+                if let Some(error) = drain_error {
+                    break 'serve Err(error);
                 }
 
                 while let Ok(notification) = notify_rx.try_recv() {
                     if let Some(frame) = encode_notification(notification) {
-                        self.transport.send(&frame).await?;
+                        if let Err(error) = self.transport.send(&frame).await {
+                            break 'serve Err(error);
+                        }
                     }
                 }
 
-                return Ok(());
+                break 'serve Ok(());
             }
 
             tokio::select! {
@@ -121,7 +160,16 @@ where
                         if let Err(error) = self.transport.send(&frame).await {
                             workers.abort_all();
                             while workers.join_next().await.is_some() {}
-                            return Err(error);
+                            break 'serve Err(error);
+                        }
+                    }
+                }
+                Some(request) = outbound_request_rx.recv() => {
+                    if let Some(frame) = encode_outbound_request(request) {
+                        if let Err(error) = self.transport.send(&frame).await {
+                            workers.abort_all();
+                            while workers.join_next().await.is_some() {}
+                            break 'serve Err(error);
                         }
                     }
                 }
@@ -129,12 +177,15 @@ where
                     if let Err(error) = self.transport.send(&frame).await {
                         workers.abort_all();
                         while workers.join_next().await.is_some() {}
-                        return Err(error);
+                        break 'serve Err(error);
                     }
                 }
                 recv_result = self.transport.recv(), if accepting => {
                     match recv_result {
                         Ok(frame) => {
+                            if route_inbound_response(&frame, &pending_outbound) {
+                                continue;
+                            }
                             self.spawn_frame_handler(
                                 frame,
                                 semaphore.clone(),
@@ -149,7 +200,7 @@ where
                         Err(error) => {
                             workers.abort_all();
                             while workers.join_next().await.is_some() {}
-                            return Err(error);
+                            break 'serve Err(error);
                         }
                     }
                 }
@@ -158,12 +209,20 @@ where
                         if join_error.is_panic() {
                             workers.abort_all();
                             while workers.join_next().await.is_some() {}
-                            return Err(FittingsError::internal("request worker panicked"));
+                            break Err(FittingsError::internal("request worker panicked"));
                         }
                     }
                 }
             }
+        };
+
+        // Wake any still-pending outbound callers with a transport error so
+        // their futures don't hang past the connection's lifetime.
+        for pending in pending_outbound.drain_all() {
+            let _ = pending.send(Err(FittingsError::transport("peer connection closed")));
         }
+
+        result
     }
 
     async fn spawn_frame_handler(
@@ -340,6 +399,45 @@ fn encode_notification(notification: OutboundNotification) -> Option<Vec<u8>> {
     let mut encoded = serde_json::to_vec(&envelope).ok()?;
     encoded.push(b'\n');
     Some(encoded)
+}
+
+fn encode_outbound_request(request: OutboundRequest) -> Option<Vec<u8>> {
+    let envelope = RequestEnvelope::new(request.id, request.method, Some(request.params));
+    let mut encoded = serde_json::to_vec(&envelope).ok()?;
+    encoded.push(b'\n');
+    Some(encoded)
+}
+
+/// If the inbound frame is a JSON-RPC response (has `result`/`error`) whose
+/// id matches a pending outbound call, deliver it to that call and return
+/// `true`. Otherwise return `false` so the caller dispatches the frame as a
+/// normal inbound request/notification.
+fn route_inbound_response(frame: &[u8], pending: &PendingOutbound) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(frame) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if !object.contains_key("result") && !object.contains_key("error") {
+        return false;
+    }
+    let envelope = match fittings_wire::codec::decode_response_line(frame) {
+        Ok(envelope) => envelope,
+        Err(_) => return false,
+    };
+    let Some(tx) = pending.remove(&envelope.id) else {
+        return false;
+    };
+    let result = match (envelope.result, envelope.error) {
+        (Some(value), None) => Ok(value),
+        (None, Some(error)) => Err(from_error_envelope(error)),
+        _ => Err(FittingsError::internal(
+            "response envelope must contain exactly one of `result` or `error`",
+        )),
+    };
+    let _ = tx.send(result);
+    true
 }
 
 fn map_decode_error(error: WireDecodeError) -> (JsonRpcId, FittingsError) {
