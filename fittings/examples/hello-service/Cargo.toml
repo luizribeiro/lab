@@ -141,3 +141,7 @@ path = "../../tests/service_context_cancelled_by_handler.rs"
 [[test]]
 name = "malformed_cancellation"
 path = "../../tests/malformed_cancellation.rs"
+
+[[test]]
+name = "batch_cancellation_partial_suppression"
+path = "../../tests/batch_cancellation_partial_suppression.rs"
