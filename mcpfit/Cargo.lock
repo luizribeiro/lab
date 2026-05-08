@@ -110,6 +110,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fittings-testkit"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fittings-core",
+ "fittings-wire",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "fittings-transport"
 version = "0.1.0"
 dependencies = [
@@ -233,6 +244,7 @@ name = "mcpfit"
 version = "0.0.0"
 dependencies = [
  "fittings",
+ "fittings-testkit",
  "schemars",
  "serde",
  "serde_json",
