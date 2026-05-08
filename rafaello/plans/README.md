@@ -72,7 +72,10 @@ After the milestone's commits all land:
   prior entries.
 - Stream RFCs in `streams/` are not retroactively rewritten when
   `overview.md` evolves. Drift gets resolved in `overview.md` and
-  called out in the next milestone retrospective.
+  called out in the next milestone retrospective. **If you catch
+  yourself wanting to edit a stream RFC mid-implementation, stop —
+  that's `decisions.md` territory.** The RFC stays as a historical
+  artefact of the ratification round.
 - Glossary entries are added when a new load-bearing term first lands
   in `overview.md` or a stream RFC.
 
@@ -167,6 +170,60 @@ phases. The milestone driver should be aware before starting:
   a raw grep matches before the agent has even started. Use
   `tmux-wait` on the busy pattern, or check for the file landing
   on disk.
+- **Retrospective worktrees need the same pre-commit symlink
+  workaround as agent worktrees.** When the milestone driver
+  creates a worktree for the retrospective phase
+  (e.g. `/home/luiz/lab-wt/m<N>-retro-claude`), the
+  `.pre-commit-config.yaml` symlink isn't there. Either symlink
+  it manually from the nix store, or use `PREK_ALLOW_NO_CONFIG=1`
+  for orchestrator commits in that worktree (same pattern as the
+  agent worktrees gotcha above). m0 retrospective §4.5.
+- **`nix develop` invocations need `--impure`.** Manual-validation
+  steps like `nix develop .#fittings --command cargo test
+  --workspace` fail without `--impure` due to a devenv "current
+  directory" assertion. Always invoke `nix develop` with
+  `--impure` for these flows. CI already does this. m0
+  retrospective §4.6 / `manual-validation.md` §4.
+
+## Patterns from prior milestones
+
+Lessons learned from m0 (`milestones/m0-fittings/retrospective.md`)
+that future milestone drivers should plan around:
+
+- **Workspace-wide cutover commits are unavoidable for breaking
+  trait changes.** If a stream RFC requires a breaking trait
+  change with multiple in-tree consumers, plan **one consolidated
+  cutover commit** in `commits.md` up front. Trying to stage it
+  across 2–3 commits fails the per-commit green-bar; pi will reject
+  it during `commits.md` review. Document the size in the commit
+  body so reviewers know it's intentional. m0 retrospective §4.1
+  (concrete example: m0 c08 `feat(fittings): API cutover`).
+- **Pi review iterations on `commits.md` are worth the wall-clock
+  — expect at least two rounds, plan for three.** m0's commit plan
+  went through three pi rounds before ratification: round 1 caught
+  the API-cutover-must-be-one-commit issue and a wire-vs-core
+  layering bug; round 2 caught a missing `Panic` variant and a
+  premature client-side test; round 3 was acceptance-traceability
+  cleanup. If `commits.md` looks obviously right after one pi
+  pass, that's suspicious. m0 retrospective §4.2.
+- **Two-stage tests are the right way to ladder API-surface
+  dependencies.** When a single scope-named test depends on
+  multiple commits, land the test exercising whatever surface
+  exists at the earlier commit, then *extend* it (not duplicate)
+  when the rest arrives. m0 examples:
+  `peerhandle_outside_handler.rs` (c10 server, c19 client),
+  `bounded_notify_drop.rs` (c09 base, c14 post-flood `peer.call`).
+  The trap to avoid: "punt the whole test to the last commit" —
+  that grows the late commit out of its size budget and makes the
+  early commits look untested. m0 retrospective §4.3.
+- **Retrospective drafts deserve the same adversarial review as
+  scope and commits.** m0's first-pass retrospective was
+  overconfident in three places ("no coverage gaps", "no overview
+  drift", an invented `originalCode` claim) and pi review-1 caught
+  all three. Always run `retrospective.md` through pi before owner
+  sign-off; the retrospective itself names the drift, and missing
+  drift there is exactly what pi catches. m0
+  `retrospective-pi-review.md` + `retrospective-pi-review-2.md`.
 
 ## Tooling notes
 
