@@ -426,11 +426,32 @@ name = "mcp-server"
 version = "0.1.0"
 dependencies = [
  "fittings",
- "fittings-testkit",
+ "mcpfit",
  "schemars",
  "serde",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "mcpfit"
+version = "0.0.0"
+dependencies = [
+ "fittings",
+ "mcpfit-macros",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "mcpfit-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
