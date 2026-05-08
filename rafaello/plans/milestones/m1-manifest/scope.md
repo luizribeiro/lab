@@ -1,11 +1,11 @@
 # m1 — manifest / lock / grant / compiler foundation — scope
 
-> **Status:** draft (round 5). Four pi review rounds so far
-> (`pi-review-1.md` 7+3; `pi-review-2.md` 4+5+4;
-> `pi-review-3.md` 4+4+1; `pi-review-4.md` 3+4+2 — all 9
-> pi-3 findings resolved). This revision resolves all pi-4
-> findings. The "What changed from prior drafts" section at
-> the end records the deltas. Owner ratification gate next.
+> **Status:** draft (round 6). Five pi review rounds so far;
+> findings counts: pi-1 7+3; pi-2 4+5+4; pi-3 4+4+1; pi-4
+> 3+4+2 (all 9 pi-3 resolved); pi-5 4+3+4 (all pi-4 blockers
+> resolved; remaining issues are lock-side counterparts of
+> manifest-side rules). This revision resolves all pi-5
+> findings.
 
 ## Goal
 
@@ -23,8 +23,8 @@ exercised primarily by `cargo test --manifest-path
 rafaello/Cargo.toml -p rafaello-core`. Plus a small Stream B
 fittings cutover (§W — `FittingsError::MethodNotFound` typed
 `method` field per `decisions.md` row 36 — exercised by
-`cargo test --manifest-path fittings/Cargo.toml --test
-method_not_found_typed_method_round_trip`). Nothing under
+`cargo test --manifest-path fittings/Cargo.toml --workspace`
+since the enum-shape change is source-breaking). Nothing under
 `rafaello/crates/rafaello/` (the `rfl` binary) gains any new
 behaviour in m1. Pi review-4 finding 3 forced the explicit
 two-deliverable acceptance gate.
@@ -52,8 +52,8 @@ two-deliverable acceptance gate.
   m1 dependency on it.
 - `rafaello/plans/glossary.md`.
 - Lockin's public Rust API for the v1 sandbox backend
-  (`/home/luiz/lab/lockin/crates/sandbox/src/lib.rs` and
-  `/home/luiz/lab/lockin/crates/config/src/lib.rs`):
+  (repo-relative paths: `lockin/crates/sandbox/src/lib.rs`
+  and `lockin/crates/config/src/lib.rs`):
   - `lockin::Sandbox::builder() -> SandboxBuilder` exposes
     `read_path` / `read_dir` / `write_path` / `write_dir` /
     `exec_path` / `exec_dir` / `network_*` / `inherit_fd` /
@@ -65,15 +65,15 @@ two-deliverable acceptance gate.
     returns the command. Env (`apply_env`) is then applied to
     `&mut SandboxedCommand`, not the builder. `allow_hosts`
     is **not** a builder method — it lives in
-    `lockin::config::resolve_network_plan` which uses
+    `lockin_config::resolve_network_plan` which uses
     `outpost::NetworkPolicy` and yields `NetworkPlan::Proxy
     { policy }`; the caller starts an `outpost` proxy and
     passes the resulting loopback port to
     `SandboxBuilder::network_proxy(port)`.
-  - `lockin::config::apply_config_to_builder(builder, config,
+  - `lockin_config::apply_config_to_builder(builder, config,
     config_dir) -> Result<SandboxBuilder>` is the existing
     file→builder bridge; m1's compiler is a structural mirror
-    that **does not depend on `lockin::config`** (config
+    that **does not depend on `lockin_config`** (config
     consumes a `lockin.toml`, which `decisions.md` row 32
     rules out for v1).
 
@@ -107,11 +107,14 @@ call when drafting `commits.md`.
   - `thiserror = "1"`
   - `semver = { version = "1", features = ["serde"] }`
   - `chrono = { version = "0.4", features = ["serde"] }`  (RFC 3339 parsing for `granted_at`; matches the workspace family default)
-  - `lockin = { path = "../lockin/crates/sandbox" }` — m2's
-    consumer needs the `SandboxBuilder` type publicly so the
-    `CompiledPlugin` plan can be applied; m1 itself doesn't
-    construct one but the type re-export is part of the
-    public m1 surface (`use lockin::SandboxBuilder`).
+  - **No `lockin` dep on `rafaello-core`** (pi review-5
+    medium 8). m1 emits a structured `CompiledPlugin` plan
+    using m1-owned plan types (`FilesystemPlan`,
+    `NetworkPlan`, `EnvPlan`, `LimitsPlan`); m1's public API
+    never takes or returns `lockin::SandboxBuilder`. m2
+    imports `lockin` separately and applies the plan at
+    spawn time. Keeping `rafaello-core` free of the sandbox
+    dep also helps the future capsa swap (decision row 2).
   - `outpost = { path = "../outpost/crates/outpost" }` —
     direct dep (pi review-2 finding 6 + pi review-3 finding 1:
     m1's `compile_invalid_allow_hosts.rs` calls
@@ -459,7 +462,10 @@ finding 4).
     `grep.*foo`) rejected.
   - **Topic grammar** segment-by-segment: only `[a-z0-9_-]+`
     per segment (and `*`/`**` permitted only in subscribe-pattern
-    positions).
+    positions). Topics and patterns require **at least two
+    segments** per security RFC §5.1's `topic := segment ("."
+    segment)+` (pi review-5 medium 10): single-segment topics
+    like `"core"` rejected as `ValidationError::TopicTooFewSegments`.
   - **Topic-ACL respect** in `bus.publishes` for the
     canonical-id-independent classes: rejects `core.*` and
     `frontend.*` outright.
@@ -503,16 +509,57 @@ finding 4).
   - **Provider namespace publish**: `provider.<id>.*` publishes
     are valid only when `<id>` matches `provides.provider`.
 - **V3.** `validate::lock(lock: &Lock, ctx: &PathContext) ->
-  Result<()>` — multi-plugin pass:
+  Result<()>` — multi-plugin pass. Pi review-5 expanded V3
+  to mirror every manifest-side security rule on the lock
+  side, since the lock is the runtime authority and a
+  hand-edited lock can otherwise bypass install-time checks.
   - **Topic-id collision detection** across the lock entries
     (T2).
   - **Conflicting tool name detection**: any tool name
     appearing in `bindings.tools` of two distinct plugins is a
     hard error unless `[session].tool_owner.<name>` resolves
     the conflict to one specific plugin.
+  - **`[session].tool_owner` target integrity** (pi review-5
+    finding 2): every entry `tool_owner.<n> = "<canonical>"`
+    must reference an installed plugin (parses + present in
+    the lock); the referenced plugin's `bindings.tools` must
+    contain `<n>`; redundant owner entries (no actual
+    conflict for `<n>`) are rejected as
+    `ValidationError::ToolOwnerRedundant` so dead state in
+    the lock is loud.
   - **Provider activeness consistency**: `[session].provider_active`,
     if present, must reference an installed plugin whose
     `bindings.provider == true` and whose `provider_id` is set.
+  - **Lock-side publish authority** (pi review-5 finding 1)
+    — mirror of V1's `core.*` / `frontend.*` / `provider.<x>`
+    rules, applied to the lock's `.grant.publishes` table:
+    `core.*` / `frontend.*` rejected; `plugin.<id>.*` must
+    match `topic_id::derive(canonical)` for the lock entry;
+    `provider.<id>.*` requires `bindings.provider == true`
+    and `bindings.provider_id == Some(id)`.
+    `ValidationError::Lock{PublishOnReservedNamespace,
+    PublishOnForeignTopicId, ProviderNamespaceMismatch}`.
+  - **Lock-side `network.allow_hosts` requires proxy mode**
+    (pi review-5 finding 3) — mirror of V1's rule, applied to
+    every grant bundle's `network`. Non-empty `allow_hosts`
+    with `mode = "deny"` or `"allow_all"` →
+    `ValidationError::LockAllowHostsOutsideProxy`.
+  - **Lock-side binding snapshot validation** (pi review-5
+    finding 6):
+    - `bindings.tool_meta.<n>.grant_match` (when set) is
+      parsed through the same `SafePath` rule as the
+      manifest-side field — no traversal in hand-edited
+      locks.
+    - `bindings.tool_meta` keys must all appear in
+      `bindings.tools` (no orphan tool_meta entries).
+    - `bindings.provider_id` must satisfy the provider-id
+      grammar (single segment) and is `Some(_)` iff
+      `bindings.provider == true`; mismatch →
+      `ValidationError::ProviderIdInconsistent`.
+    - `bindings.renderer_kinds` re-validated against the M7
+      grammar (built-ins rejected; plugin kinds prefixed)
+      so a hand-edited lock can't smuggle in a built-in
+      override even if v1 dispatch is inert.
   - **Trifecta refusal** per security RFC §7.1.1 — V3 calls into
     `trifecta::evaluate` per plugin (Tr below); the typed error
     is `ValidationError::TrifectaRefused` and it carries the
@@ -560,7 +607,7 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   the outpost proxy and pairs the resulting port with the
   plan's `allow_hosts` when materialising the
   `SandboxBuilder`. `EnvPlan` is populated post-scrubbing
-  (§Sc) and consumed by m2's call into `lockin::config::apply_env`
+  (§Sc) and consumed by m2's call into `lockin_config::apply_env`
   *after* `command(...)` produces the `SandboxedCommand`.
 - **C2.** Public entry point:
   ```rust
@@ -587,12 +634,18 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   `state_dir`. Unknown placeholders → `CompileError::UnknownPlaceholder`.
   Post-expansion **path-escape check** (per M11): for every
   placeholder of `${project}` / `${plugin}`, the resolved
-  absolute path must remain inside the substituted root after
-  canonicalisation. Failures →
-  `CompileError::PathEscape { field, after_expansion }`.
+  absolute path must remain inside the substituted root.
+  Resolver (pi review-5 finding 7 — non-existent leaf paths
+  are legitimate for `write_dirs` like `${project}/target`):
+  walk the post-expansion path component-by-component;
+  canonicalise the longest existing ancestor (with symlink
+  resolution + `SymlinkEscape` if the canonical target leaves
+  the root); lexically join the non-existent suffix; final
+  containment check on the resulting absolute path. Failures
+  → `CompileError::PathEscape { field, after_expansion }`.
   This catches `read_dirs = ["${project}/../../etc"]`-style
-  escapes the parser couldn't see (since `..` is in the
-  literal user-grant string, not in the placeholder).
+  escapes the parser couldn't see while still allowing
+  `write_dirs = ["${project}/target/non-existent-yet"]`.
 - **C4.** **Plan emission order is not a sequence of builder
   calls** (pi review-1 finding 1) — the plan is a value, m2
   picks the application order. The compiler does, however,
@@ -629,7 +682,7 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
     manifest is rejected.
   - **Spawn stage (m2 work, not in m1 scope):** m2 injects the
     core-owned `RFL_BUS_FD` / `RFL_PLUGIN` values onto the
-    `SandboxedCommand` *after* `lockin::config::apply_env`
+    `SandboxedCommand` *after* `lockin_config::apply_env`
     has applied the user `env` policy.
   m1's scrubber (Sc below) is a separate concern — it strips
   secret-pattern matches from `env.pass`. The env scrubber does
@@ -870,11 +923,21 @@ module; can land at any point in m1's commit sequence.
   ```
 - **W2.** `fittings_wire::error_map` extracts/synthesises
   `data.method` from the typed field on encode and recovers
-  the typed field from `data.method` on decode. When `data` is
-  absent or has no `method` key, decode produces
-  `method: None`. When the typed field is `Some`, encode
-  populates `data.method` (creating `data` as a JSON object if
-  it was `None`). Round-trip preserves the typed value.
+  the typed field from `data.method` on decode. Conflict
+  semantics (pi review-5 medium 11):
+  - **Encode** with `method = Some(name)`: synthesised
+    `data.method = name` always wins. If caller-supplied
+    `data` already had a `method` key, it is **overwritten**
+    (typed-field precedence). The `data` value's other keys
+    are preserved.
+  - **Encode** with `method = None`: no synthesis. If
+    caller-supplied `data` carries an opaque `method` key,
+    it is preserved verbatim (round-trip back through
+    decode produces `method: None` plus the `data` keys).
+  - **Decode**: extract `data.method` if it parses as a
+    string; otherwise `method = None`. The `data` field
+    keeps the rest of the JSON object verbatim.
+  Round-trip preserves the typed value.
 - **W3.** Existing one-arg constructor
   `FittingsError::method_not_found(message)` keeps working and
   sets `method: None`, `data: None` (no churn for current call
@@ -1040,6 +1103,22 @@ exercised at least once.
 | `manifest_invalid_name.rs` | Manifest `name = "Rust-Tools"` (uppercase), `name = "rust/tools"` (slash), `name = "rust.tools"` (dot), `name = ""` (empty): all rejected by V1 (M1's name grammar — pi review-3 finding 8). |
 | `manifest_unprefixed_renderer_kind.rs` | `[[renderers]] kind = "code.diff"` (no `<vendor>:` prefix) rejected as `ValidationError::UnprefixedRendererKind` per M7 / pi-4 finding 7. |
 | `manifest_allow_hosts_outside_proxy.rs` | `[capabilities.default.network] mode = "deny", allow_hosts = ["x.example"]` (or `mode = "allow_all"` with non-empty `allow_hosts`) rejected as `ValidationError::AllowHostsOutsideProxy` (pi-4 medium finding 8 — mirror of `lockin_config::resolve_network_plan`'s rule so a hand-edited manifest can't have a silently-ignored field). |
+| `manifest_topic_too_few_segments.rs` | `bus.publishes = ["core"]` (single segment) rejected as `ValidationError::TopicTooFewSegments` per security RFC §5.1 (pi-5 medium 10). |
+| `lock_publishes_core_topic.rs` | A lock with `.grant.publishes = ["core.session.tool_result"]` rejected by V3's lock-side publish ACL (pi-5 finding 1) — mirror of `manifest_publishes_core_topic.rs`. |
+| `lock_publishes_frontend_topic.rs` | Lock `.grant.publishes = ["frontend.tui.user_message"]` rejected by V3 (pi-5 finding 1). |
+| `lock_publishes_other_plugin_namespace.rs` | Lock `.grant.publishes = ["plugin.id_aaaa....foo"]` whose `<topic-id>` doesn't match the lock entry's derived topic-id rejected as `ValidationError::LockPublishOnForeignTopicId` (pi-5 finding 1). |
+| `lock_provider_namespace_mismatch.rs` | Lock entry with `bindings.provider_id = "anthropic"` but `.grant.publishes = ["provider.openai.tool_request"]` → `ValidationError::LockProviderNamespaceMismatch` (pi-5 finding 1). |
+| `lock_allow_hosts_outside_proxy.rs` | Lock grant bundle with `network.mode = "deny"` and `allow_hosts = ["x.example"]` → `ValidationError::LockAllowHostsOutsideProxy` (pi-5 finding 3). |
+| `lock_tool_owner_unknown_plugin.rs` | `[session].tool_owner.grep = "github:nope/unknown@1.0.0"` referencing an uninstalled plugin → `ValidationError::ToolOwnerUnknownPlugin` (pi-5 finding 2). |
+| `lock_tool_owner_plugin_does_not_declare_tool.rs` | `tool_owner.grep = "<plugin-A>"` but plugin A's `bindings.tools` does not contain `"grep"` → `ValidationError::ToolOwnerPluginDoesNotDeclareTool` (pi-5 finding 2). |
+| `lock_tool_owner_redundant.rs` | `tool_owner.grep = "<plugin-A>"` when only plugin A claims `"grep"` (no actual conflict) → `ValidationError::ToolOwnerRedundant` (pi-5 finding 2 — rejecting dead state in the lock). |
+| `lock_tool_meta_grant_match_traversal.rs` | Lock `bindings.tool_meta.<n>.grant_match = "../../escape.json"` rejected by V3's lock-side `SafePath` re-validation (pi-5 finding 6). |
+| `lock_tool_meta_orphan.rs` | `bindings.tool_meta.foo` exists but `bindings.tools` doesn't contain `"foo"` → `ValidationError::OrphanToolMeta` (pi-5 finding 6). |
+| `lock_provider_id_inconsistent.rs` | `bindings.provider = false` but `bindings.provider_id = Some("...")`, or `provider = true` with `provider_id = None` → `ValidationError::ProviderIdInconsistent` (pi-5 finding 6). |
+| `lock_renderer_kind_unprefixed.rs` | Lock `bindings.renderer_kinds = ["code.diff"]` (unprefixed plugin kind) rejected per V3's M7 mirror (pi-5 finding 6). |
+| `lock_renderer_kind_builtin.rs` | Lock `bindings.renderer_kinds = ["text"]` (built-in name) rejected per V3's M7 mirror (pi-5 finding 6). |
+| `compile_capability_path_nonexistent_write_leaf.rs` | A grant `write_dirs = ["${project}/target/new"]` where the `target` directory exists but `new` does not — compiles successfully (pi-5 finding 7 resolver: existing-ancestor canonicalisation + lexical join + containment). |
+| `compile_capability_path_symlink_ancestor_escape.rs` | A grant `read_dirs = ["${project}/symlinked"]` where `${project}/symlinked` is a symlink whose canonical target is outside `${project}` → `CompileError::SymlinkEscape` (pi-5 finding 7). |
 | `manifest_missing_openrpc_provider.rs` | Provider plugin manifest (no `provides.tools`, has `provides.provider = "anthropic"`) but no `openrpc.json` next to it → `ManifestError::MissingOpenRpc` (M10 + pi review-3 finding 4: row 31 requires the sibling for every plugin, not just tool plugins). |
 | `digest_symlink_cycle.rs` | `package_dir` contains `loop -> .` (or `a -> b`, `b -> a`); `content_digest` returns `DigestError::SymlinkCycle` (D1 — pi review-3 finding 7). |
 | `topic_id_collision_at_lock.rs` | Two distinct canonical ids whose pre-computed prefixes (passed via `collisions_with_prefixes`) match → `CollisionError`. |
@@ -1077,9 +1156,12 @@ The driver runs and captures:
   to CI per the m0 precedent). The repo has no root
   `Cargo.toml`, so `--manifest-path` is mandatory (pi
   review-4 finding 9).
-- `cargo test --manifest-path fittings/Cargo.toml --test
-  method_not_found_typed_method_round_trip` green (the §W
-  cutover — explicit second deliverable per pi-4 finding 3).
+- `cargo test --manifest-path fittings/Cargo.toml
+  --workspace` green (pi review-5 finding 5 — the §W
+  enum cutover is source-breaking for direct struct
+  literals; the full fittings workspace suite must compile
+  + pass to validate the blast radius, not just the new
+  targeted regression test).
 - `cargo doc --manifest-path rafaello/Cargo.toml -p
   rafaello-core --no-deps` clean — the m1 surface is the
   future m2 consumer's API; doc warnings would surface drift
@@ -1233,8 +1315,9 @@ m1 is done when:
 - `cargo test --manifest-path rafaello/Cargo.toml -p
   rafaello-core` is green on Linux; CI rerun is the
   authoritative cross-platform signal for macOS.
-- `cargo test --manifest-path fittings/Cargo.toml --test
-  method_not_found_typed_method_round_trip` is green (§W).
+- `cargo test --manifest-path fittings/Cargo.toml
+  --workspace` is green (§W — full fittings workspace
+  suite per pi-5 finding 5).
 - `cargo doc --manifest-path rafaello/Cargo.toml -p
   rafaello-core --no-deps` is warning-free.
 - `manual-validation.md` records the items in the *Manual
@@ -1258,6 +1341,59 @@ m1 is done when:
     landed in C5.
 
 ## What changed from prior drafts
+
+Round-5 pi review (`pi-review-5.md`) prompted these revisions:
+
+- **Lock-side publish authority validation added** (pi-5
+  finding 1). V3 mirrors V1/V2's namespace ACL on the lock's
+  `.grant.publishes`. Four new negative tests:
+  `lock_publishes_core_topic.rs`,
+  `lock_publishes_frontend_topic.rs`,
+  `lock_publishes_other_plugin_namespace.rs`,
+  `lock_provider_namespace_mismatch.rs`.
+- **`tool_owner` target integrity** (pi-5 finding 2). V3
+  validates every `[session].tool_owner.<n>` entry: target
+  installed, target's `bindings.tools` contains `<n>`, and
+  no redundant entries (no actual conflict). Three new
+  negative tests: `lock_tool_owner_unknown_plugin.rs`,
+  `lock_tool_owner_plugin_does_not_declare_tool.rs`,
+  `lock_tool_owner_redundant.rs`.
+- **Lock-side `allow_hosts` mode rule** (pi-5 finding 3).
+  V3 mirrors V1's rule on lock grant bundles. New negative
+  test `lock_allow_hosts_outside_proxy.rs`.
+- **`lockin::config::*` → `lockin_config::*`** (pi-5
+  finding 4). The current crate is `lockin-config` (separate
+  package), imported as `lockin_config`. Search/replace
+  across scope.md.
+- **W command broadened to fittings workspace suite** (pi-5
+  finding 5). Goal / Manual validation / Acceptance summary
+  now require `cargo test --manifest-path fittings/Cargo.toml
+  --workspace`, since `MethodNotFound`'s typed-field cutover
+  is source-breaking and the targeted regression test
+  doesn't compile every consumer.
+- **Lock-side binding snapshot validation expanded** (pi-5
+  finding 6). V3 re-validates `bindings.tool_meta.<n>.grant_match`
+  through `SafePath`, requires `tool_meta` keys to appear in
+  `tools`, asserts `provider_id` consistency with `provider`,
+  re-validates `renderer_kinds` against M7 grammar. Five new
+  negative tests covering each rule.
+- **Capability path resolver pinned for non-existent leaves**
+  (pi-5 finding 7). C3 specifies the
+  existing-ancestor-canonicalise-then-lexical-suffix rule.
+  Two new tests: `compile_capability_path_nonexistent_write_leaf.rs`
+  (positive), `compile_capability_path_symlink_ancestor_escape.rs`
+  (negative).
+- **`lockin` dep dropped from `rafaello-core`** (pi-5 medium
+  8). m1's plan types are m1-owned; the public API never
+  exposes `SandboxBuilder`. m2 imports `lockin` separately.
+- **Inputs paths normalised to repo-relative** (pi-5 medium
+  9). `/home/luiz/lab/lockin/...` → `lockin/...`.
+- **Topic minimum-segment rule pinned to security RFC §5.1**
+  (pi-5 medium 10). V1 adds `TopicTooFewSegments`. New
+  negative test `manifest_topic_too_few_segments.rs`.
+- **`MethodNotFound` data conflict semantics pinned** (pi-5
+  medium 11). W2 specifies typed-field-precedence on encode
+  and decode rules.
 
 Round-4 pi review (`pi-review-4.md`) prompted these revisions:
 
