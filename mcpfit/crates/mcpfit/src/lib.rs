@@ -4,6 +4,7 @@ mod content;
 mod error;
 mod protocol;
 mod response;
+mod schema;
 mod structured;
 
 pub use content::{EmbeddedResource, ToolContent};
