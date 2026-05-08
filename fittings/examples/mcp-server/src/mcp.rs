@@ -1,9 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use fittings::serde_json::{json, Value};
-use fittings::{FittingsError, Result, ServiceContext, Transport};
+use fittings::{FittingsError, Result, ServiceContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -94,15 +93,6 @@ pub struct ToolsRegisterResult {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CancelledNotificationParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<fittings::wire::types::JsonRpcId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ProgressNotificationParams {
     pub progress_token: Value,
     pub progress: f64,
@@ -156,86 +146,85 @@ impl ToolsCallResult {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
-    reason: Arc<Mutex<Option<String>>>,
-}
-
-impl CancellationToken {
-    pub fn cancel(&self, reason: Option<String>) {
-        self.cancelled.store(true, Ordering::Release);
-        let mut cancellation_reason = self
-            .reason
-            .lock()
-            .expect("cancellation reason mutex should not be poisoned");
-        if cancellation_reason.is_none() {
-            *cancellation_reason = reason;
-        }
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ProgressContext {
-    token: Value,
-    notifications: Arc<Mutex<Vec<ServerNotification>>>,
-}
-
-#[derive(Debug, Clone, Default)]
+/// Per-tool-call context handed to a registered tool handler. Wraps the
+/// handler's `ServiceContext` (so handlers can observe cancellation and
+/// emit `notifications/progress` via `ctx.notify`) plus the optional
+/// progress token negotiated for the call.
+#[derive(Clone)]
 pub struct ToolCallContext {
-    cancellation: CancellationToken,
-    progress: Option<ProgressContext>,
+    inner: ToolCallContextInner,
+    progress_token: Option<Value>,
+}
+
+#[derive(Clone)]
+enum ToolCallContextInner {
+    Live(ServiceContext),
+    Detached {
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    },
 }
 
 impl ToolCallContext {
-    pub fn new(cancellation: CancellationToken) -> Self {
+    pub fn from_service_context(ctx: ServiceContext) -> Self {
         Self {
-            cancellation,
-            progress: None,
+            inner: ToolCallContextInner::Live(ctx),
+            progress_token: None,
         }
     }
 
-    pub fn with_progress(
-        mut self,
-        progress_token: Option<Value>,
-        notifications: Arc<Mutex<Vec<ServerNotification>>>,
-    ) -> Self {
-        self.progress = progress_token.map(|token| ProgressContext {
-            token,
-            notifications,
-        });
+    pub fn detached() -> Self {
+        Self {
+            inner: ToolCallContextInner::Detached {
+                cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+            progress_token: None,
+        }
+    }
+
+    pub fn with_progress_token(mut self, progress_token: Option<Value>) -> Self {
+        self.progress_token = progress_token;
         self
     }
 
-    pub fn cancellation(&self) -> &CancellationToken {
-        &self.cancellation
+    pub fn is_cancelled(&self) -> bool {
+        match &self.inner {
+            ToolCallContextInner::Live(ctx) => ctx.is_cancelled(),
+            ToolCallContextInner::Detached { cancelled } => {
+                cancelled.load(std::sync::atomic::Ordering::Acquire)
+            }
+        }
     }
 
     pub fn emit_progress(&self, progress: f64, total: Option<f64>, message: Option<String>) {
-        let Some(progress_context) = &self.progress else {
+        let Some(token) = &self.progress_token else {
             return;
         };
-
+        let ToolCallContextInner::Live(ctx) = &self.inner else {
+            return;
+        };
         let params = fittings::serde_json::to_value(ProgressNotificationParams {
-            progress_token: progress_context.token.clone(),
+            progress_token: token.clone(),
             progress,
             total,
             message,
         })
         .expect("progress notification params should serialize");
+        let _ = ctx.notify("notifications/progress", params);
+    }
 
-        progress_context
-            .notifications
-            .lock()
-            .expect("pending notifications mutex should not be poisoned")
-            .push(ServerNotification {
-                method: "notifications/progress".to_string(),
-                params,
-            });
+    #[cfg(test)]
+    fn detached_cancelled() -> Self {
+        let detached = Self::detached();
+        if let ToolCallContextInner::Detached { cancelled } = &detached.inner {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+        }
+        detached
+    }
+}
+
+impl Default for ToolCallContext {
+    fn default() -> Self {
+        Self::detached()
     }
 }
 
@@ -348,12 +337,6 @@ impl ToolRegistry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerNotification {
-    pub method: String,
-    pub params: Value,
-}
-
 #[fittings::service]
 pub trait McpService {
     /// Minimal MCP initialize handshake (stdio-oriented baseline).
@@ -401,7 +384,6 @@ pub struct McpServiceImpl {
     lifecycle: Mutex<SessionLifecycle>,
     list_changed_enabled: bool,
     progress_notifications_enabled: Mutex<bool>,
-    pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
 }
 
 impl McpServiceImpl {
@@ -411,45 +393,12 @@ impl McpServiceImpl {
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
             list_changed_enabled: false,
             progress_notifications_enabled: Mutex::new(false),
-            pending_notifications: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn with_tools_list_changed(mut self, enabled: bool) -> Self {
         self.list_changed_enabled = enabled;
         self
-    }
-
-    pub fn drain_notifications(&self) -> Vec<ServerNotification> {
-        let mut notifications = self
-            .pending_notifications
-            .lock()
-            .expect("pending notifications mutex should not be poisoned");
-        notifications.drain(..).collect()
-    }
-
-    fn enqueue_tools_list_changed_notification(&self) {
-        if !self.list_changed_enabled {
-            return;
-        }
-
-        let lifecycle = self
-            .lifecycle
-            .lock()
-            .expect("session lifecycle mutex should not be poisoned");
-        if *lifecycle != SessionLifecycle::Running {
-            return;
-        }
-
-        drop(lifecycle);
-
-        self.pending_notifications
-            .lock()
-            .expect("pending notifications mutex should not be poisoned")
-            .push(ServerNotification {
-                method: "notifications/tools/list_changed".to_string(),
-                params: json!({}),
-            });
     }
 
     fn set_progress_notifications_enabled(&self, enabled: bool) {
@@ -465,36 +414,6 @@ impl McpServiceImpl {
             .progress_notifications_enabled
             .lock()
             .expect("progress notification capability mutex should not be poisoned")
-    }
-
-    async fn call_tool_with_context(
-        &self,
-        params: ToolsCallParams,
-        context: ToolCallContext,
-    ) -> Result<ToolsCallResult> {
-        if !params.arguments.is_object() {
-            return Err(FittingsError::invalid_params(
-                "`arguments` must be a JSON object",
-            ));
-        }
-
-        let progress_token = if self.progress_notifications_enabled() {
-            extract_progress_token(params.meta.as_ref())
-        } else {
-            None
-        };
-        let context =
-            context.with_progress(progress_token, Arc::clone(&self.pending_notifications));
-
-        let handler = {
-            let registry = self
-                .registry
-                .lock()
-                .expect("tool registry mutex should not be poisoned");
-            registry.handler_for(&params.name)?
-        };
-
-        handler(params.arguments, &context)
     }
 
     #[cfg(test)]
@@ -574,16 +493,37 @@ impl McpService for McpServiceImpl {
 
     async fn call_tool(
         &self,
-        _ctx: ServiceContext,
+        ctx: ServiceContext,
         params: ToolsCallParams,
     ) -> Result<ToolsCallResult> {
-        self.call_tool_with_context(params, ToolCallContext::default())
-            .await
+        if !params.arguments.is_object() {
+            return Err(FittingsError::invalid_params(
+                "`arguments` must be a JSON object",
+            ));
+        }
+
+        let progress_token = if self.progress_notifications_enabled() {
+            extract_progress_token(params.meta.as_ref())
+        } else {
+            None
+        };
+        let context =
+            ToolCallContext::from_service_context(ctx).with_progress_token(progress_token);
+
+        let handler = {
+            let registry = self
+                .registry
+                .lock()
+                .expect("tool registry mutex should not be poisoned");
+            registry.handler_for(&params.name)?
+        };
+
+        handler(params.arguments, &context)
     }
 
     async fn register_tool(
         &self,
-        _ctx: ServiceContext,
+        ctx: ServiceContext,
         params: ToolsRegisterParams,
     ) -> Result<ToolsRegisterResult> {
         if params.name.trim().is_empty() {
@@ -602,129 +542,11 @@ impl McpService for McpServiceImpl {
             )?
         };
 
-        self.enqueue_tools_list_changed_notification();
+        if self.list_changed_enabled {
+            let _ = ctx.notify("notifications/tools/list_changed", json!({}));
+        }
 
         Ok(ToolsRegisterResult { tool })
-    }
-}
-
-pub async fn serve_stdio(service: Arc<McpServiceImpl>) -> Result<()> {
-    let mut transport = fittings::from_process_stdio(1_048_576);
-    let mut input_closed = false;
-    let mut workers = tokio::task::JoinSet::<(
-        fittings::wire::types::JsonRpcId,
-        Result<Value>,
-        CancellationToken,
-    )>::new();
-    let mut in_flight = HashMap::<fittings::wire::types::JsonRpcId, CancellationToken>::new();
-    let mut notifications_tick = tokio::time::interval(std::time::Duration::from_millis(25));
-    notifications_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        if input_closed && workers.is_empty() {
-            return Ok(());
-        }
-
-        tokio::select! {
-            maybe_joined = workers.join_next(), if !workers.is_empty() => {
-                match maybe_joined {
-                    Some(Ok((id, result, cancellation))) => {
-                        in_flight.remove(&id);
-
-                        send_pending_notifications(&mut transport, &service).await?;
-
-                        if !cancellation.is_cancelled() {
-                            let response = match result {
-                                Ok(value) => fittings::ResponseEnvelope::success(id, value),
-                                Err(error) => fittings::to_error_envelope(id, error),
-                            };
-                            send_response(&mut transport, &response).await?;
-                        }
-
-                        send_pending_notifications(&mut transport, &service).await?;
-                    }
-                    Some(Err(error)) => {
-                        return Err(FittingsError::internal(format!(
-                            "failed to join request worker: {error}"
-                        )));
-                    }
-                    None => {}
-                }
-            }
-            _ = notifications_tick.tick(), if !workers.is_empty() => {
-                send_pending_notifications(&mut transport, &service).await?;
-            }
-            recv_result = transport.recv(), if !input_closed => {
-                match recv_result {
-                    Ok(frame) => {
-                        let request = match fittings::decode_request_line(&frame) {
-                            Ok(request) => request,
-                            Err(error) => {
-                                let (id, err) = map_decode_error(error);
-                                let response = fittings::to_error_envelope(id, err);
-                                send_response(&mut transport, &response).await?;
-                                continue;
-                            }
-                        };
-
-                        if request.method == "notifications/cancelled" && request.id.is_none() {
-                            handle_cancellation_notification(
-                                request.params.unwrap_or(Value::Null),
-                                &in_flight,
-                            );
-                            continue;
-                        }
-
-                        if let Some(id) = request.id {
-                            if in_flight.contains_key(&id) {
-                                let response = fittings::to_error_envelope(
-                                    id,
-                                    FittingsError::invalid_request("duplicate in-flight request id"),
-                                );
-                                send_response(&mut transport, &response).await?;
-                                continue;
-                            }
-
-                            if request.method == "tools/call" {
-                                let method = request.method;
-                                let params = request.params.unwrap_or(Value::Null);
-                                let cancellation = CancellationToken::default();
-                                in_flight.insert(id.clone(), cancellation.clone());
-
-                                let service = Arc::clone(&service);
-                                workers.spawn(async move {
-                                    let context = ToolCallContext::new(cancellation.clone());
-                                    let result = dispatch_method(&service, &method, params, context).await;
-                                    (id, result, cancellation)
-                                });
-                                continue;
-                            }
-
-                            let params = request.params.unwrap_or(Value::Null);
-                            let context = ToolCallContext::default();
-                            let result =
-                                dispatch_method(&service, &request.method, params, context).await;
-                            let response = match result {
-                                Ok(value) => fittings::ResponseEnvelope::success(id, value),
-                                Err(error) => fittings::to_error_envelope(id, error),
-                            };
-                            send_response(&mut transport, &response).await?;
-                            send_pending_notifications(&mut transport, &service).await?;
-                            continue;
-                        }
-
-                        let params = request.params.unwrap_or(Value::Null);
-                        let context = ToolCallContext::default();
-                        let _ = dispatch_method(&service, &request.method, params, context).await;
-                        send_pending_notifications(&mut transport, &service).await?;
-                    }
-                    Err(error) if is_graceful_eof(&error) => {
-                        input_closed = true;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        }
     }
 }
 
@@ -757,138 +579,6 @@ fn extract_progress_token(meta: Option<&Value>) -> Option<Value> {
     } else {
         None
     }
-}
-
-fn handle_cancellation_notification(
-    params: Value,
-    in_flight: &HashMap<fittings::wire::types::JsonRpcId, CancellationToken>,
-) {
-    let Ok(notification) = fittings::serde_json::from_value::<CancelledNotificationParams>(params)
-    else {
-        return;
-    };
-
-    let Some(request_id) = notification.request_id else {
-        return;
-    };
-
-    if let Some(token) = in_flight.get(&request_id) {
-        token.cancel(notification.reason);
-    }
-}
-
-async fn send_pending_notifications(
-    transport: &mut impl Transport,
-    service: &McpServiceImpl,
-) -> Result<()> {
-    for notification in service.drain_notifications() {
-        let frame =
-            fittings::RequestEnvelope::notification(notification.method, Some(notification.params));
-        let mut encoded = fittings::serde_json::to_vec(&frame).map_err(|error| {
-            FittingsError::internal(format!("failed to encode notification frame: {error}"))
-        })?;
-        encoded.push(b'\n');
-        transport.send(&encoded).await?;
-    }
-
-    Ok(())
-}
-
-async fn send_response(
-    transport: &mut impl Transport,
-    response: &fittings::ResponseEnvelope,
-) -> Result<()> {
-    let encoded = fittings::encode_response_line(response).map_err(|error| {
-        FittingsError::internal(format!("failed to encode response frame: {error}"))
-    })?;
-    transport.send(&encoded).await
-}
-
-async fn dispatch_method(
-    service: &McpServiceImpl,
-    method: &str,
-    params: Value,
-    context: ToolCallContext,
-) -> Result<Value> {
-    let ctx = ServiceContext::detached();
-    match method {
-        "initialize" => {
-            let decoded: InitializeParams = decode_params(method, params)?;
-            let result = service.initialize(ctx, decoded).await?;
-            fittings::serde_json::to_value(result).map_err(|error| {
-                FittingsError::internal(format!(
-                    "failed to encode result for method `{method}`: {error}"
-                ))
-            })
-        }
-        "notifications/initialized" => {
-            let decoded: Value = decode_params(method, params)?;
-            let result = service.initialized(ctx, decoded).await?;
-            fittings::serde_json::to_value(result).map_err(|error| {
-                FittingsError::internal(format!(
-                    "failed to encode result for method `{method}`: {error}"
-                ))
-            })
-        }
-        "tools/list" => {
-            let decoded: Value = decode_params(method, params)?;
-            let result = service.list_tools(ctx, decoded).await?;
-            fittings::serde_json::to_value(result).map_err(|error| {
-                FittingsError::internal(format!(
-                    "failed to encode result for method `{method}`: {error}"
-                ))
-            })
-        }
-        "tools/call" => {
-            let decoded: ToolsCallParams = decode_params(method, params)?;
-            let result = service.call_tool_with_context(decoded, context).await?;
-            fittings::serde_json::to_value(result).map_err(|error| {
-                FittingsError::internal(format!(
-                    "failed to encode result for method `{method}`: {error}"
-                ))
-            })
-        }
-        "tools/register" => {
-            let decoded: ToolsRegisterParams = decode_params(method, params)?;
-            let result = service.register_tool(ctx, decoded).await?;
-            fittings::serde_json::to_value(result).map_err(|error| {
-                FittingsError::internal(format!(
-                    "failed to encode result for method `{method}`: {error}"
-                ))
-            })
-        }
-        _ => Err(FittingsError::method_not_found(method.to_string())),
-    }
-}
-
-fn decode_params<T>(method: &str, params: Value) -> Result<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    fittings::serde_json::from_value(params).map_err(|error| {
-        FittingsError::invalid_params(format!(
-            "failed to decode params for method `{method}`: {error}"
-        ))
-    })
-}
-
-fn map_decode_error(
-    error: fittings::WireDecodeError,
-) -> (fittings::wire::types::JsonRpcId, FittingsError) {
-    match error {
-        fittings::WireDecodeError::Parse(message) => (
-            fittings::wire::types::JsonRpcId::Null,
-            FittingsError::parse_error(message),
-        ),
-        fittings::WireDecodeError::InvalidRequest { message, id } => (
-            id.unwrap_or(fittings::wire::types::JsonRpcId::Null),
-            FittingsError::invalid_request(message),
-        ),
-    }
-}
-
-fn is_graceful_eof(error: &FittingsError) -> bool {
-    matches!(error, FittingsError::Transport(message) if message == "end of input" || message.ends_with("input closed"))
 }
 
 fn empty_object() -> Value {
@@ -1034,7 +724,7 @@ mod tests {
                 "Observes cancellation",
                 json!({"type": "object"}),
                 |_arguments, context| {
-                    if context.cancellation().is_cancelled() {
+                    if context.is_cancelled() {
                         return Ok(ToolsCallResult::text("cancelled"));
                     }
                     Ok(ToolsCallResult::text("running"))
@@ -1042,9 +732,7 @@ mod tests {
             )
             .expect("register should succeed");
 
-        let token = CancellationToken::default();
-        token.cancel(Some("test".to_string()));
-        let context = ToolCallContext::new(token);
+        let context = ToolCallContext::detached_cancelled();
 
         let result = registry
             .execute(
@@ -1217,7 +905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_tool_registration_enqueues_list_changed_only_when_enabled_and_running() {
+    async fn runtime_tool_registration_succeeds_in_each_lifecycle_state() {
         let service = McpServiceImpl::default().with_tools_list_changed(true);
 
         service
@@ -1230,8 +918,7 @@ mod tests {
                 },
             )
             .await
-            .expect("register should succeed");
-        assert!(service.drain_notifications().is_empty());
+            .expect("register before initialize should succeed");
 
         service
             .initialize(
@@ -1249,7 +936,7 @@ mod tests {
             .await
             .expect("initialized should succeed");
 
-        service
+        let registered = service
             .register_tool(
                 ServiceContext::detached(),
                 ToolsRegisterParams {
@@ -1259,21 +946,12 @@ mod tests {
                 },
             )
             .await
-            .expect("register should succeed");
-
-        let notifications = service.drain_notifications();
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(
-            notifications[0],
-            ServerNotification {
-                method: "notifications/tools/list_changed".to_string(),
-                params: json!({})
-            }
-        );
+            .expect("register while running should succeed");
+        assert_eq!(registered.tool.name, "runtime-two");
     }
 
     #[tokio::test]
-    async fn runtime_tool_registration_rejects_invalid_or_duplicate_names_without_notification() {
+    async fn runtime_tool_registration_rejects_invalid_or_duplicate_names() {
         let service = McpServiceImpl::default().with_tools_list_changed(true);
 
         service
@@ -1306,7 +984,6 @@ mod tests {
             empty_name,
             Err(FittingsError::InvalidParams { .. })
         ));
-        assert!(service.drain_notifications().is_empty());
 
         service
             .register_tool(
@@ -1319,7 +996,6 @@ mod tests {
             )
             .await
             .expect("first registration should succeed");
-        assert_eq!(service.drain_notifications().len(), 1);
 
         let duplicate = service
             .register_tool(
@@ -1335,7 +1011,6 @@ mod tests {
             duplicate,
             Err(FittingsError::InvalidRequest { .. })
         ));
-        assert!(service.drain_notifications().is_empty());
 
         let listed = service
             .list_tools(ServiceContext::detached(), Value::Null)

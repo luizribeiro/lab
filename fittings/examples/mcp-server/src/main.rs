@@ -1,12 +1,11 @@
 use std::env;
 use std::process;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
-use mcp::{serve_stdio, McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
+use mcp::{McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
 
 mod mcp;
 
@@ -109,7 +108,7 @@ fn register_long_running_demo_tool(registry: &mut ToolRegistry) -> Result<()> {
         }),
         |_arguments, context| {
             for _ in 0..60 {
-                if context.cancellation().is_cancelled() {
+                if context.is_cancelled() {
                     return Err(FittingsError::invalid_request("tool call cancelled"));
                 }
                 thread::sleep(Duration::from_millis(50));
@@ -131,7 +130,7 @@ fn register_progress_demo_tool(registry: &mut ToolRegistry) -> Result<()> {
         |_arguments, context| {
             let total_steps = 3;
             for step in 1..=total_steps {
-                if context.cancellation().is_cancelled() {
+                if context.is_cancelled() {
                     return Err(FittingsError::invalid_request("tool call cancelled"));
                 }
 
@@ -167,8 +166,10 @@ async fn main() {
         env::var("FITTINGS").is_ok() && matches!(args.first(), Some(arg) if arg == "serve");
 
     if is_stdio_serve {
-        let service = Arc::new(build_service().with_tools_list_changed(true));
-        let exit_code = match serve_stdio(service).await {
+        let service = build_service().with_tools_list_changed(true);
+        let transport = fittings::from_process_stdio(1_048_576);
+        let server = fittings::Server::new(service.into_service(), transport);
+        let exit_code = match server.serve().await {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("mcp-server serve error: {error}");
