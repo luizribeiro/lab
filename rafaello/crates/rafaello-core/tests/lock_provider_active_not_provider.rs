@@ -26,6 +26,9 @@ fn provider_active_non_provider_is_rejected() {
 
 #[test]
 fn provider_active_provider_without_provider_id_is_rejected() {
+    // Per c26: a `provider = true` entry with `provider_id = None` is itself
+    // structurally invalid and surfaces as `ProviderIdInconsistent` before the
+    // session.provider_active check has a chance to run.
     let a = canonical("github.com/acme:alpha@1.0.0");
     let session = SessionTable {
         provider_active: Some("github.com/acme:alpha@1.0.0".into()),
@@ -35,7 +38,7 @@ fn provider_active_provider_without_provider_id_is_rejected() {
     let ctx = ctx_for(&[&a]);
     assert!(matches!(
         validate::lock(&lock, &ctx).unwrap_err(),
-        ValidationError::ProviderActiveNotProvider
+        ValidationError::ProviderIdInconsistent
     ));
 }
 

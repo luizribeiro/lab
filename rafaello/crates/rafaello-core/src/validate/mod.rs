@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::carveout;
 use crate::error::{CompileError, ValidationError};
-use crate::lock::{CanonicalId, Lock};
+use crate::lock::{Bindings, CanonicalId, Lock};
 use crate::manifest::{
     Bus, Capabilities, CapabilityPathTemplate, Load, Manifest, NetworkMode, Provides, Renderer,
 };
@@ -109,6 +109,17 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
         .map(|c| (c.clone(), topic_id::derive(&c.to_string())))
         .collect();
     topic_id::collisions_with_prefixes(&prefix_pairs)?;
+
+    for entry in lock.plugins.values() {
+        check_bindings_grammar(&entry.bindings)?;
+    }
+    for tool_name in lock.session.tool_owner.keys() {
+        if !is_tool_name(tool_name) {
+            return Err(ValidationError::IllegalToolName {
+                name: tool_name.clone(),
+            });
+        }
+    }
 
     let mut tool_claims: BTreeMap<&str, Vec<&CanonicalId>> = BTreeMap::new();
     for (canonical, entry) in &lock.plugins {
@@ -395,6 +406,40 @@ fn check_lock_publish_topic(
 fn check_renderers(renderers: &[Renderer]) -> Result<(), ValidationError> {
     for r in renderers {
         check_renderer_kind(&r.kind)?;
+    }
+    Ok(())
+}
+
+fn check_bindings_grammar(bindings: &Bindings) -> Result<(), ValidationError> {
+    for tool in &bindings.tools {
+        if !is_tool_name(tool) {
+            return Err(ValidationError::IllegalToolName { name: tool.clone() });
+        }
+    }
+    let declared: BTreeSet<&str> = bindings.tools.iter().map(String::as_str).collect();
+    for (name, meta) in &bindings.tool_meta {
+        if !declared.contains(name.as_str()) {
+            return Err(ValidationError::OrphanToolMeta);
+        }
+        for sink in &meta.sinks {
+            if !is_valid_sink_class(sink) {
+                return Err(ValidationError::IllegalSinkClass {
+                    class: sink.clone(),
+                });
+            }
+        }
+    }
+    match (bindings.provider, bindings.provider_id.as_deref()) {
+        (true, Some(id)) => {
+            if !is_tool_name(id) {
+                return Err(ValidationError::ProviderIdInconsistent);
+            }
+        }
+        (false, None) => {}
+        _ => return Err(ValidationError::ProviderIdInconsistent),
+    }
+    for kind in &bindings.renderer_kinds {
+        check_renderer_kind(kind)?;
     }
     Ok(())
 }
