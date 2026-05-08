@@ -263,13 +263,11 @@ the *Internal split* section below.
 
 | Test file | Asserts |
 |-----------|---------|
-| `malformed_cancellation.rs` | `notifications/cancelled` with non-object params; with no `id`; with id-type mismatch — none kill the connection; all logged and dropped. |
+| `malformed_cancellation.rs` | `notifications/cancelled` with non-object params; missing the configured id field (`requestId` for MCP-default, `id` for LSP-style); id-type mismatch (string sent for numeric in-flight key, or vice versa). None kill the connection; all logged and dropped. Includes both MCP-default and LSP-override extractor configurations. |
 | `notification_handler_panic.rs` | Client-side notification handler panics on receipt; subsequent notifications still delivered; response correlation unaffected. |
-| `cancelled_without_token.rs` | Handler returns `Err(Cancelled)` without the token having fired; dispatcher rejects with `Internal`. |
 | `inbound_request_no_service.rs` | Client receives a peer-originated request with no `with_service` registered; client returns `-32601`. Mirror on server (S9) covers `with_inbound_handler` not registered. |
-| `peer_gone_during_notify.rs` | Peer disconnects mid-stream of notifications; `ctx.notify` returns `Err`; `closed()` resolves; handler exits cleanly. |
-| `id_null_treated_as_notification.rs` | Inbound request with `"id": null` is treated as a notification per JSON-RPC 2.0 (no response). |
-| `out_of_range_code_preserves_original.rs` | Handler returns `ServiceError { code: 10_000 }`; outbound serialisation falls back to `-32603 Internal` with `data: { original_code: 10000 }`. |
+| `peer_gone_during_notify.rs` | Peer disconnects mid-stream of notifications; the dispatcher discovers the close, `peer.closed()` resolves, and pending `peer.call` futures resolve with `FittingsError::Transport`. **Does not** assert that a particular `ctx.notify` call synchronously fails — `notify` only reports local enqueue/encoding/channel-closed status (per `rfc-fittings-notifications.md:717-747`). |
+| `invalid_service_code_marker.rs` | Handler returns `ServiceError { code: -32700 }` (a reserved predefined code, not a valid service code); outbound serialisation falls back to `-32603 Internal` with `data: { "fittingsKind": "invalidServiceCode", "originalCode": -32700 }`. |
 
 ### MCP example interop
 
@@ -329,29 +327,36 @@ The driver runs and captures:
 
 Per `milestones/README.md`, m0 may split internally by RFC area.
 Suggested grouping for `commits.md`; the driver picks final
-granularity:
+granularity and surfaces an m0a/m0b split for owner approval as soon
+as it becomes clear groups 1–3 cannot be kept independently green:
 
-1. **Wire-layer ground work** (W1–W4, C5): `JsonRpcId` migration +
-   error-data preservation + code-range expansion. No behavioural
-   change for handlers; isolated; ~5–8 commits.
+1. **Wire-layer ground work** (W1–W4, C5): `Request.id` /
+   `Response.id` migration + error-data preservation +
+   valid-code-range expansion + `invalidServiceCode` marker. No
+   behavioural change for handlers; isolated; ~6–10 commits.
 2. **`ServiceContext` + bounded notify + Service trait + macros**
-   (C1–C4, S1, S4, M1–M2): the new primitive plus the breaking trait
-   and macro change. Lands together because everything compiles
-   against the new shape; ~6–10 commits.
-3. **Bidirectional `PeerHandle`** (S2–S3, K1, K3, S9): server-initiated
-   calls + client-side service registration; ~4–6 commits.
-4. **Cancellation** (C3, S5–S8, K2): cancellation token, suppression
-   rules, semaphore routing, malformed-payload handling, batch
-   cancellation. Ties everything together; ~5–8 commits.
+   (C1–C4, S4, M1–M2, plus the connection-scoped accessors S1/K1):
+   the new primitive plus the breaking trait and macro change. Lands
+   together because everything compiles against the new shape;
+   ~8–12 commits.
+3. **Bidirectional `PeerHandle`** (S2–S3, S9, K1–K3 inbound services):
+   server-initiated calls + client-side service registration +
+   `peer.closed()` + dropped-future cancellation + close-drain;
+   ~6–10 commits.
+4. **Cancellation** (C3, S5–S8.1): cancellation token, two-trigger
+   suppression rules, semaphore routing, malformed-payload handling,
+   configurable extractor, batch cancellation; ~6–10 commits.
 5. **`mcp-server` migration** (E1–E3): drops `serve_stdio` workaround,
    threads `ctx`, retains JS-SDK interop; ~3–5 commits.
 6. **Transport regression + spawn verification** (T1, P1): tests
    only; ~2 commits.
 
-Total range: ~25–40 commits, sequential. If `commits.md` finds the
-total >40 commits, m0 splits into m0a (groups 1–2) and m0b (groups
-3–6). The driver decides during `commits.md` drafting and surfaces
-the call to the owner before pi review.
+Realistic total range after the round-1 review additions: **~30–50
+commits, sequential**. The driver should surface an m0a (groups 1–2)
+/ m0b (groups 3–6) split for owner approval **as soon as group 3
+looks like it cannot land green on top of group 2 alone**, rather
+than waiting for a fixed >40 threshold. The owner-ratification gate
+for `commits.md` is the right place to make this call.
 
 ## Acceptance summary
 
