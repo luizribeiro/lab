@@ -52,6 +52,12 @@ pub enum ManifestError {
     GrantMatchNotFound,
     #[error("grant_match path is not a regular file")]
     GrantMatchNotFile,
+    #[error("exec_path resolves inside ${{project}}")]
+    ExecPathInsideProject,
+    #[error(transparent)]
+    Validation(ValidationError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("toml parse error: {0}")]
     Toml(#[from] toml::de::Error),
     #[error("serde error: {0}")]

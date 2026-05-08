@@ -13,6 +13,7 @@ pub mod provides;
 pub mod renderers;
 pub mod safepath;
 pub mod top_level;
+pub mod validate_with_package;
 
 pub use bus::Bus;
 pub use capabilities::{
@@ -25,3 +26,4 @@ pub use provides::{Provides, ToolMetaManifest};
 pub use renderers::Renderer;
 pub use safepath::SafePath;
 pub use top_level::Manifest;
+pub use validate_with_package::validate_with_package;

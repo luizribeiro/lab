@@ -32,7 +32,10 @@ homepage = "https://example.com/rust-tools"
         Some(&["Alice <alice@example.com>".to_string(), "Bob".to_string()][..])
     );
     assert_eq!(m.license.as_deref(), Some("MIT"));
-    assert_eq!(m.homepage.as_deref(), Some("https://example.com/rust-tools"));
+    assert_eq!(
+        m.homepage.as_deref(),
+        Some("https://example.com/rust-tools")
+    );
 }
 
 #[test]

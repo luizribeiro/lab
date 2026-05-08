@@ -64,10 +64,7 @@ kind = ["mermaid:diagram"]
     assert_eq!(
         m.load,
         Some(Load::Lazy {
-            event: vec![
-                "chat.message.received".to_string(),
-                "tool.*".to_string(),
-            ],
+            event: vec!["chat.message.received".to_string(), "tool.*".to_string(),],
             command: vec!["grep".to_string(), "find".to_string()],
             kind: vec!["mermaid:diagram".to_string()],
         })
@@ -106,8 +103,6 @@ fn load_unknown_string_rejected() {
 
 #[test]
 fn load_unknown_field_rejected() {
-    let src = format!(
-        "{HEADER}\n[load]\nevent = []\nbogus = []\n"
-    );
+    let src = format!("{HEADER}\n[load]\nevent = []\nbogus = []\n");
     assert!(Manifest::parse(&src).is_err());
 }

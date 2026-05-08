@@ -60,9 +60,7 @@ fn check_provides(provides: Option<&Provides>) -> Result<(), ValidationError> {
     };
     for tool in &p.tools {
         if !is_tool_name(tool) {
-            return Err(ValidationError::IllegalToolName {
-                name: tool.clone(),
-            });
+            return Err(ValidationError::IllegalToolName { name: tool.clone() });
         }
     }
     if let Some(provider) = &p.provider {
@@ -185,7 +183,12 @@ fn check_load(
     bus: Option<&Bus>,
     renderers: &[Renderer],
 ) -> Result<(), ValidationError> {
-    let Some(Load::Lazy { event, command, kind }) = load else {
+    let Some(Load::Lazy {
+        event,
+        command,
+        kind,
+    }) = load
+    else {
         return Ok(());
     };
     let tools: BTreeSet<&str> = provides
@@ -201,9 +204,7 @@ fn check_load(
     let subscribes: &[String] = bus.map(|b| b.subscribes.as_slice()).unwrap_or(&[]);
     for ev in event {
         validate_topic(ev)?;
-        let matched = subscribes
-            .iter()
-            .any(|p| pattern_matches_topic(p, ev));
+        let matched = subscribes.iter().any(|p| pattern_matches_topic(p, ev));
         if !matched {
             return Err(ValidationError::LoadTriggerUnmatchedEvent { event: ev.clone() });
         }

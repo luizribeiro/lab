@@ -32,8 +32,14 @@ sinks = []
     assert!(p.provider.is_none());
 
     let grep = p.tool.get("grep").expect("grep table");
-    assert_eq!(grep.sinks.as_deref(), Some(&["workspace_write".to_string()][..]));
-    assert_eq!(grep.grant_match.as_ref().map(|s| s.as_str()), Some("schemas/grep.json"));
+    assert_eq!(
+        grep.sinks.as_deref(),
+        Some(&["workspace_write".to_string()][..])
+    );
+    assert_eq!(
+        grep.grant_match.as_ref().map(|s| s.as_str()),
+        Some("schemas/grep.json")
+    );
     assert!(grep.always_confirm);
 
     let format = p.tool.get("format").expect("format table");

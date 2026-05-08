@@ -69,8 +69,6 @@ kind = "mermaid:diagram"
 
 #[test]
 fn renderers_unknown_field_rejected() {
-    let src = format!(
-        "{HEADER}\n[[renderers]]\nkind = \"mermaid:diagram\"\nbogus = true\n"
-    );
+    let src = format!("{HEADER}\n[[renderers]]\nkind = \"mermaid:diagram\"\nbogus = true\n");
     assert!(Manifest::parse(&src).is_err());
 }

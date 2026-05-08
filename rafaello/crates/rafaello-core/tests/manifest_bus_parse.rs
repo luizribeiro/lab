@@ -31,10 +31,7 @@ publishes = ["chat.message.sent", "tool.invoked"]
     );
     assert_eq!(
         b.publishes,
-        vec![
-            "chat.message.sent".to_string(),
-            "tool.invoked".to_string(),
-        ]
+        vec!["chat.message.sent".to_string(), "tool.invoked".to_string(),]
     );
 }
 

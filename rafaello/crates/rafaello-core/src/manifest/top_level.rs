@@ -78,4 +78,41 @@ impl Manifest {
         let manifest: Manifest = toml::from_str(s)?;
         Ok(manifest)
     }
+
+    /// Deterministic byte representation for hashing the manifest
+    /// snapshot at install time (scope §M9). Re-emits the parsed
+    /// manifest as TOML with every table's keys lexicographically
+    /// sorted; arrays preserve their parsed order.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let value =
+            toml::Value::try_from(self).expect("Manifest is structurally serialisable to TOML");
+        let toml::Value::Table(table) = value else {
+            unreachable!("Manifest serialises as a TOML table");
+        };
+        let sorted = sort_table(table);
+        toml::to_string(&toml::Value::Table(sorted))
+            .expect("sorted TOML table re-emits without error")
+            .into_bytes()
+    }
+}
+
+fn sort_value(v: toml::Value) -> toml::Value {
+    match v {
+        toml::Value::Table(t) => toml::Value::Table(sort_table(t)),
+        toml::Value::Array(arr) => toml::Value::Array(arr.into_iter().map(sort_value).collect()),
+        other => other,
+    }
+}
+
+fn sort_table(t: toml::Table) -> toml::Table {
+    let mut sorted: std::collections::BTreeMap<String, toml::Value> =
+        std::collections::BTreeMap::new();
+    for (k, v) in t {
+        sorted.insert(k, sort_value(v));
+    }
+    let mut out = toml::Table::new();
+    for (k, v) in sorted {
+        out.insert(k, v);
+    }
+    out
 }
