@@ -1,7 +1,9 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
+use crate::context::Cx;
 use crate::error::McpfitError;
 use crate::protocol::ToolInfo;
+use crate::response::ToolResponse;
 use crate::tool::Tool;
 use crate::Result;
 
@@ -54,12 +56,25 @@ impl ToolRegistry {
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
     }
+
+    /// Executes the named tool's handler. Returns `MethodNotFound` if no tool
+    /// with `name` is registered.
+    pub async fn call(&self, name: &str, args: Value, cx: Cx) -> Result<ToolResponse> {
+        match self.tools.iter().find(|t| t.name() == name) {
+            Some(tool) => tool.call(args, cx).await,
+            None => Err(McpfitError::method_not_found(format!(
+                "unknown tool: {name}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ToolRegistry;
+    use crate::context::Cx;
     use crate::error::McpfitError;
+    use crate::response::ToolResponse;
     use crate::tool::Tool;
     use schemars::JsonSchema;
     use serde::Deserialize;
@@ -124,6 +139,46 @@ mod tests {
         assert_eq!(info.description.as_deref(), Some("Adds two numbers"));
         let props = info.input_schema["properties"].as_object().unwrap();
         assert!(props.contains_key("a"));
+    }
+
+    #[tokio::test]
+    async fn call_dispatches_to_named_tool() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("add").input::<AddArgs>().handler(
+                |args: AddArgs, _cx| async move { Ok::<_, McpfitError>(args.a + args.b) },
+            ))
+            .unwrap();
+        let response = registry
+            .call("add", json!({"a": 2.0, "b": 3.0}), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("5"));
+    }
+
+    #[tokio::test]
+    async fn call_unknown_tool_returns_method_not_found() {
+        let registry = ToolRegistry::new();
+        let err = registry
+            .call("missing", json!({}), Cx::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpfitError::MethodNotFound(m) if m.contains("missing")));
+    }
+
+    #[tokio::test]
+    async fn call_propagates_invalid_params_from_handler() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("add").input::<AddArgs>().handler(
+                |args: AddArgs, _cx| async move { Ok::<_, McpfitError>(args.a + args.b) },
+            ))
+            .unwrap();
+        let err = registry
+            .call("add", json!({"a": "nope", "b": 1.0}), Cx::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpfitError::InvalidParams(_)));
     }
 
     #[test]
