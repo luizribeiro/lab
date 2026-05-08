@@ -207,6 +207,8 @@ pub enum CompileError {
     CarveOutRefused,
     #[error("carve-out decomposition exceeds cap")]
     CarveOutTooLarge,
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Error)]
