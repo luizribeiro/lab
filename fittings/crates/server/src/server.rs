@@ -1,9 +1,11 @@
 use std::{panic::AssertUnwindSafe, sync::Arc};
 
+use std::sync::RwLock;
+
 use fittings_core::{
     context::{
-        DroppedNotifications, OutboundNotification, OutboundRequest, PeerHandle, PendingOutbound,
-        ServiceContext,
+        CancellationConfig, DroppedNotifications, OutboundNotification, OutboundRequest,
+        PeerHandle, PendingOutbound, ServiceContext, SharedCancellationConfig,
     },
     error::FittingsError,
     id_allocator::IdAllocator,
@@ -26,16 +28,13 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
-const DEFAULT_CANCELLATION_METHOD: &str = "$/cancelRequest";
-const DEFAULT_CANCELLATION_ID_FIELD: &str = "id";
 
 pub struct Server<S, T> {
     service: Arc<S>,
     transport: T,
     max_in_flight: usize,
     notification_capacity: usize,
-    cancellation_method: String,
-    cancellation_id_field: String,
+    cancellation: SharedCancellationConfig,
     peer: PeerHandle,
     notify_rx: Option<mpsc::Receiver<OutboundNotification>>,
     dropped_notifications: DroppedNotifications,
@@ -58,12 +57,15 @@ where
         let pending_outbound = PendingOutbound::new();
         let id_allocator = Arc::new(IdAllocator::server());
         let closed_token = CancellationToken::new();
+        let cancellation: SharedCancellationConfig =
+            Arc::new(RwLock::new(CancellationConfig::lsp_default()));
         let peer = PeerHandle::with_outbound_calls(
             notify_tx,
             dropped_notifications.clone(),
             id_allocator.clone(),
             request_tx,
             pending_outbound.clone(),
+            cancellation.clone(),
             closed_token.clone(),
         );
         Self {
@@ -71,8 +73,7 @@ where
             transport,
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             notification_capacity: DEFAULT_NOTIFICATION_CAPACITY,
-            cancellation_method: DEFAULT_CANCELLATION_METHOD.to_string(),
-            cancellation_id_field: DEFAULT_CANCELLATION_ID_FIELD.to_string(),
+            cancellation,
             peer,
             notify_rx: Some(notify_rx),
             dropped_notifications,
@@ -99,6 +100,7 @@ where
             self.id_allocator.clone(),
             request_tx,
             self.pending_outbound.clone(),
+            self.cancellation.clone(),
             self.closed_token.clone(),
         );
         self.notify_rx = Some(notify_rx);
@@ -113,18 +115,29 @@ where
     ///
     /// This commit only stores the configuration; the dispatcher's
     /// token-firing logic that consumes it lands in c21.
-    pub fn with_cancellation(mut self, method: &str, id_field: &str) -> Self {
-        self.cancellation_method = method.to_string();
-        self.cancellation_id_field = id_field.to_string();
+    pub fn with_cancellation(self, method: &str, id_field: &str) -> Self {
+        {
+            let mut cfg = self.cancellation.write().expect("cancellation poisoned");
+            cfg.method = method.to_string();
+            cfg.id_field = id_field.to_string();
+        }
         self
     }
 
-    pub fn cancellation_method(&self) -> &str {
-        &self.cancellation_method
+    pub fn cancellation_method(&self) -> String {
+        self.cancellation
+            .read()
+            .expect("cancellation poisoned")
+            .method
+            .clone()
     }
 
-    pub fn cancellation_id_field(&self) -> &str {
-        &self.cancellation_id_field
+    pub fn cancellation_id_field(&self) -> String {
+        self.cancellation
+            .read()
+            .expect("cancellation poisoned")
+            .id_field
+            .clone()
     }
 
     pub fn dropped_notifications(&self) -> DroppedNotifications {

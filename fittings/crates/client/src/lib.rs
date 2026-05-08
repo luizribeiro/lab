@@ -19,8 +19,8 @@ use std::{
 
 use fittings_core::{
     context::{
-        DroppedNotifications, OutboundNotification, OutboundRequest, PeerHandle, PendingOutbound,
-        ServiceContext,
+        CancellationConfig, DroppedNotifications, OutboundNotification, OutboundRequest,
+        PeerHandle, PendingOutbound, ServiceContext,
     },
     error::FittingsError,
     id_allocator::IdAllocator,
@@ -70,12 +70,14 @@ where
         let pending_outbound = PendingOutbound::new();
         let id_allocator = Arc::new(IdAllocator::client());
         let closed_token = CancellationToken::new();
+        let cancellation = Arc::new(RwLock::new(CancellationConfig::lsp_default()));
         let peer = PeerHandle::with_outbound_calls(
             notify_tx,
             DroppedNotifications::new(),
             id_allocator,
             outbound_request_tx,
             pending_outbound.clone(),
+            cancellation,
             closed_token.clone(),
         );
         let service: ServiceSlot = Arc::new(RwLock::new(None));

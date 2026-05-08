@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 
 use serde_json::Value;
@@ -12,6 +12,33 @@ use tokio::sync::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{error::FittingsError, id_allocator::IdAllocator, message::JsonRpcId};
+
+/// Wire-method + id-field pair describing how a peer signals cancellation
+/// of an in-flight request. Default is the LSP shape (`$/cancelRequest`,
+/// id field `id`); MCP callers override to `notifications/cancelled` +
+/// `requestId`.
+#[derive(Debug, Clone)]
+pub struct CancellationConfig {
+    pub method: String,
+    pub id_field: String,
+}
+
+impl CancellationConfig {
+    pub fn lsp_default() -> Self {
+        Self {
+            method: "$/cancelRequest".to_string(),
+            id_field: "id".to_string(),
+        }
+    }
+}
+
+impl Default for CancellationConfig {
+    fn default() -> Self {
+        Self::lsp_default()
+    }
+}
+
+pub type SharedCancellationConfig = Arc<RwLock<CancellationConfig>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboundNotification {
@@ -89,6 +116,7 @@ struct OutboundCallChannel {
     id_allocator: Arc<IdAllocator>,
     request_tx: mpsc::UnboundedSender<OutboundRequest>,
     pending: PendingOutbound,
+    cancellation: SharedCancellationConfig,
 }
 
 #[derive(Clone)]
@@ -129,6 +157,7 @@ impl PeerHandle {
         id_allocator: Arc<IdAllocator>,
         request_tx: mpsc::UnboundedSender<OutboundRequest>,
         pending: PendingOutbound,
+        cancellation: SharedCancellationConfig,
         closed_token: CancellationToken,
     ) -> Self {
         Self {
@@ -139,6 +168,7 @@ impl PeerHandle {
                     id_allocator,
                     request_tx,
                     pending,
+                    cancellation,
                 }),
                 closed_token,
             }),
@@ -175,10 +205,19 @@ impl PeerHandle {
             return Err(FittingsError::transport("peer call channel closed"));
         }
 
-        match rx.await {
+        let mut guard = DropCancelGuard {
+            id: Some(id),
+            pending: outbound.pending.clone(),
+            cancellation: outbound.cancellation.clone(),
+            notify_tx: self.inner.notify_tx.clone(),
+        };
+
+        let result = match rx.await {
             Ok(result) => result,
             Err(_) => Err(FittingsError::transport("peer call channel closed")),
-        }
+        };
+        guard.disarm();
+        result
     }
 
     pub fn notify(&self, method: impl Into<String>, params: Value) -> Result<(), FittingsError> {
@@ -202,6 +241,46 @@ impl PeerHandle {
 
     pub fn dropped_notifications(&self) -> DroppedNotifications {
         self.inner.dropped.clone()
+    }
+}
+
+/// Drop-armed guard for an in-flight `peer.call`. If the call's future is
+/// dropped before `disarm()` runs (i.e. before the response is received),
+/// the guard removes the pending slot and emits the configured cancellation
+/// notification on the peer's notify channel.
+struct DropCancelGuard {
+    id: Option<JsonRpcId>,
+    pending: PendingOutbound,
+    cancellation: SharedCancellationConfig,
+    notify_tx: mpsc::Sender<OutboundNotification>,
+}
+
+impl DropCancelGuard {
+    fn disarm(&mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for DropCancelGuard {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        if self.pending.remove(&id).is_none() {
+            return;
+        }
+        let cfg = self
+            .cancellation
+            .read()
+            .expect("cancellation config poisoned")
+            .clone();
+        let id_value = serde_json::to_value(&id).unwrap_or(Value::Null);
+        let mut params = serde_json::Map::new();
+        params.insert(cfg.id_field, id_value);
+        let _ = self.notify_tx.try_send(OutboundNotification {
+            method: cfg.method,
+            params: Value::Object(params),
+        });
     }
 }
 
