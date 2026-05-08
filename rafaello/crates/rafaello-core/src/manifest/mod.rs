@@ -5,6 +5,7 @@
 //! and table parsers land in later commits in Group 1.
 
 pub mod bus;
+pub mod capabilities;
 pub mod capability_path_template;
 pub mod placeholders;
 pub mod provides;
@@ -12,6 +13,10 @@ pub mod safepath;
 pub mod top_level;
 
 pub use bus::Bus;
+pub use capabilities::{
+    Capabilities, CapabilityBundle, EnvCapabilities, FilesystemCapabilities, LimitsCapabilities,
+    NetworkCapabilities, NetworkMode,
+};
 pub use capability_path_template::CapabilityPathTemplate;
 pub use provides::{Provides, ToolMetaManifest};
 pub use safepath::SafePath;
