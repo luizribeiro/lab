@@ -136,9 +136,10 @@ the *Internal split* section below.
   - The split prevents the dispatcher from blocking on the
     notification sink while responses are still in-flight.
 - **S5.** Cancellation routed *outside* the request-worker semaphore:
-  a dedicated `notifications/cancelled` reader fires the per-request
-  token without competing for handler permits. Tested in S5's negative
-  case (semaphore saturated, cancellation still observed).
+  a dedicated reader for the configured cancellation method fires
+  the per-request token without competing for handler permits.
+  Tested in S5's negative case (semaphore saturated, cancellation
+  still observed).
 - **S6.** Cancellation suppression has **two independent triggers**
   per `rfc-fittings-notifications.md:563-575` and `:591-593`:
   - Token-fired ⇒ response suppressed when the handler returns,
@@ -164,12 +165,12 @@ the *Internal split* section below.
   requests. Behaviour is identical regardless of which extractor
   (LSP `id` or MCP `requestId`) is configured.
 - **S8.** Batch cancellation per `rfc-fittings-notifications.md:628-671`:
-  `notifications/cancelled` references *individual request IDs*, not
-  batch container IDs. A batched request whose component is
-  cancelled has that component's response suppressed in the batch
-  response; remaining components proceed. If every component in a
-  batch is suppressed (cancelled or notification-only), no batch
-  response is emitted at all.
+  the configured cancellation method references *individual request
+  IDs*, not batch container IDs. A batched request whose component
+  is cancelled has that component's response suppressed in the
+  batch response; remaining components proceed. If every component
+  in a batch is suppressed (cancelled or notification-only), no
+  batch response is emitted at all.
 - **S9.** The server's existing `Service` (passed to
   `Server::new(service, transport)`) **is** the inbound-request
   handler — there is no separate registration. A method the server's
@@ -264,6 +265,7 @@ the *Internal split* section below.
 |-----------|-----------|
 | `peerhandle_bidirectional.rs` | Server-initiated `peer.call` → client responds; client-initiated `peer.call` → server responds; both within one connection. |
 | `peerhandle_outside_handler.rs` | `Server::peer()` (S1) used by a startup task to call/notify the peer proactively, with no inbound request in flight. Mirror via `Client::peer()`. |
+| `service_context_peer_call.rs` | Handler receives an inbound request, calls `ctx.peer().call(...)` to the peer while its own request is in flight, receives the peer response, and then returns its own response. Asserts that C1's in-handler peer access is load-bearing for bidirectionality, not just the outside-handler path. |
 | `peerhandle_dropped_future_cancels.rs` | Dropping a `peer.call` future emits the configured cancellation notification on the wire and removes the slot in `pending_outbound`. |
 | `peerhandle_close_drain.rs` | Closing the underlying transport resolves all pending `peer.call` futures with `FittingsError::Transport` and resolves `peer.closed()`. |
 | `service_context_notify.rs` | Handler emits 5 notifications mid-request; client receives all 5 *before* the response. |
@@ -283,7 +285,7 @@ the *Internal split* section below.
 
 | Test file | Asserts |
 |-----------|---------|
-| `malformed_cancellation.rs` | `notifications/cancelled` with non-object params; missing the configured id field (`requestId` for MCP-default, `id` for LSP-style); id-type mismatch (string sent for numeric in-flight key, or vice versa). None kill the connection; all logged and dropped. Includes both MCP-default and LSP-override extractor configurations. |
+| `malformed_cancellation.rs` | The configured cancellation method (LSP `$/cancelRequest` for the library default, MCP `notifications/cancelled` for the mcp-server configuration) with non-object params; missing the configured id field (`id` for LSP, `requestId` for MCP); id-type mismatch (string sent for numeric in-flight key, or vice versa). None kill the connection; all logged and dropped. Test runs against both extractor configurations. |
 | `notification_handler_panic.rs` | Client-side notification handler panics on receipt; subsequent notifications still delivered; response correlation unaffected. |
 | `inbound_request_no_service.rs` | Client receives a peer-originated request with no `with_service` registered; client returns `-32601`. (Server-side mirror is covered by the existing dispatcher tests for unknown methods on `Server::new(service, ...)`.) |
 | `peer_gone_during_notify.rs` | Peer disconnects mid-stream of notifications; the dispatcher discovers the close, `peer.closed()` resolves, and pending `peer.call` futures resolve with `FittingsError::Transport`. **Does not** assert that a particular `ctx.notify` call synchronously fails — `notify` only reports local enqueue/encoding/channel-closed status (per `rfc-fittings-notifications.md:717-747`). |
