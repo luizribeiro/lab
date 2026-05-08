@@ -111,11 +111,18 @@ impl std::fmt::Display for ServiceError {
 }
 
 impl ServiceError {
-    pub const MIN_CODE: i32 = 1;
-    pub const MAX_CODE: i32 = 999;
+    pub const SERVER_BAND: std::ops::RangeInclusive<i32> = -32099..=-32000;
+    pub const RESERVED_CLUSTER: std::ops::RangeInclusive<i32> = -32768..=-32000;
 
     pub fn is_valid_code_value(code: i32) -> bool {
-        (Self::MIN_CODE..=Self::MAX_CODE).contains(&code)
+        match code {
+            0 => false,
+            1..=i32::MAX => true,
+            -31999..=-1 => true,
+            -32099..=-32000 => true,
+            -32768..=-32100 => false,
+            i32::MIN..=-32769 => true,
+        }
     }
 
     pub fn has_valid_code(&self) -> bool {
@@ -183,23 +190,37 @@ mod tests {
     }
 
     #[test]
-    fn service_error_code_helper_accepts_only_rfc_pass_through_range() {
+    fn service_error_code_helper_accepts_widened_ranges() {
         assert!(ServiceError::is_valid_code_value(1));
-        assert!(ServiceError::is_valid_code_value(500));
+        assert!(ServiceError::is_valid_code_value(42));
         assert!(ServiceError::is_valid_code_value(999));
+        assert!(ServiceError::is_valid_code_value(1_000));
+        assert!(ServiceError::is_valid_code_value(i32::MAX));
+
+        assert!(ServiceError::is_valid_code_value(-1));
+        assert!(ServiceError::is_valid_code_value(-31_999));
+        assert!(ServiceError::is_valid_code_value(-32_000));
+        assert!(ServiceError::is_valid_code_value(-32_050));
+        assert!(ServiceError::is_valid_code_value(-32_099));
+        assert!(ServiceError::is_valid_code_value(-32_769));
+        assert!(ServiceError::is_valid_code_value(-40_000));
+        assert!(ServiceError::is_valid_code_value(i32::MIN));
 
         assert!(!ServiceError::is_valid_code_value(0));
-        assert!(!ServiceError::is_valid_code_value(-1));
-        assert!(!ServiceError::is_valid_code_value(1_000));
+        assert!(!ServiceError::is_valid_code_value(-32_100));
+        assert!(!ServiceError::is_valid_code_value(-32_600));
+        assert!(!ServiceError::is_valid_code_value(-32_603));
+        assert!(!ServiceError::is_valid_code_value(-32_700));
+        assert!(!ServiceError::is_valid_code_value(-32_768));
 
         let valid = ServiceError {
-            code: 123,
-            message: "ok".into(),
+            code: -31_999,
+            message: "above reserved negative".into(),
             data: None,
         };
         let invalid = ServiceError {
-            code: 1_001,
-            message: "too large".into(),
+            code: 0,
+            message: "zero is reserved by JSON-RPC".into(),
             data: None,
         };
 
