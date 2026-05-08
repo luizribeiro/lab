@@ -20,6 +20,7 @@ struct MissingNameParams {}
 trait SpawnHelloInvalidParamsClientService {
     async fn hello(
         &self,
+        ctx: fittings::ServiceContext,
         params: MissingNameParams,
     ) -> Result<HelloResult, fittings::FittingsError>;
 }
@@ -36,6 +37,7 @@ struct MissingMethodResult {
 trait SpawnHelloUnknownMethodClientService {
     async fn missing(
         &self,
+        ctx: fittings::ServiceContext,
         params: MissingMethodParams,
     ) -> Result<MissingMethodResult, fittings::FittingsError>;
 }

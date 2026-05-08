@@ -3,3 +3,9 @@ error: service traits cannot declare associated consts
   |
 3 |     const VERSION: &'static str;
   |     ^^^^^
+
+error: service methods must have signature `async fn name(&self, ctx: ServiceContext, params: P) -> Result<R, FittingsError>`
+ --> tests/ui/fail/associated_const.rs:5:20
+  |
+5 |     async fn hello(&self, params: ()) -> Result<(), fittings::FittingsError>;
+  |                    ^

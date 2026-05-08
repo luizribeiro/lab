@@ -1,4 +1,4 @@
-use fittings::{FittingsError, MethodRouter};
+use fittings::{FittingsError, MethodRouter, ServiceContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -15,13 +15,21 @@ struct DoubleResult {
 #[fittings::service]
 trait CalculatorService {
     #[fittings::method(name = "math/double")]
-    async fn double(&self, params: DoubleParams) -> Result<DoubleResult, FittingsError>;
+    async fn double(
+        &self,
+        _ctx: ServiceContext,
+        params: DoubleParams,
+    ) -> Result<DoubleResult, FittingsError>;
 }
 
 struct Calculator;
 
 impl CalculatorService for Calculator {
-    async fn double(&self, params: DoubleParams) -> Result<DoubleResult, FittingsError> {
+    async fn double(
+        &self,
+        _ctx: ServiceContext,
+        params: DoubleParams,
+    ) -> Result<DoubleResult, FittingsError> {
         Ok(DoubleResult {
             doubled: params.value * 2,
         })
@@ -36,6 +44,7 @@ async fn generated_router_dispatches_known_method() {
         .route(
             "math/double",
             fittings::serde_json::json!({"value": 21}),
+            ServiceContext::detached(),
             fittings::Metadata::default(),
         )
         .await
@@ -52,6 +61,7 @@ async fn generated_router_rejects_unknown_method() {
         .route(
             "double",
             fittings::serde_json::json!({}),
+            ServiceContext::detached(),
             fittings::Metadata::default(),
         )
         .await
@@ -71,6 +81,7 @@ async fn generated_router_maps_decode_errors_to_invalid_params() {
         .route(
             "math/double",
             fittings::serde_json::json!({"value": "oops"}),
+            ServiceContext::detached(),
             fittings::Metadata::default(),
         )
         .await
@@ -101,18 +112,34 @@ impl Serialize for UnserializableResult {
 
 #[fittings::service]
 trait FailureService {
-    async fn fail(&self, params: UnitParams) -> Result<AckResult, FittingsError>;
-    async fn nan(&self, params: UnitParams) -> Result<UnserializableResult, FittingsError>;
+    async fn fail(
+        &self,
+        _ctx: ServiceContext,
+        params: UnitParams,
+    ) -> Result<AckResult, FittingsError>;
+    async fn nan(
+        &self,
+        _ctx: ServiceContext,
+        params: UnitParams,
+    ) -> Result<UnserializableResult, FittingsError>;
 }
 
 struct FailureExample;
 
 impl FailureService for FailureExample {
-    async fn fail(&self, _params: UnitParams) -> Result<AckResult, FittingsError> {
+    async fn fail(
+        &self,
+        _ctx: ServiceContext,
+        _params: UnitParams,
+    ) -> Result<AckResult, FittingsError> {
         Err(FittingsError::internal("service failed"))
     }
 
-    async fn nan(&self, _params: UnitParams) -> Result<UnserializableResult, FittingsError> {
+    async fn nan(
+        &self,
+        _ctx: ServiceContext,
+        _params: UnitParams,
+    ) -> Result<UnserializableResult, FittingsError> {
         Ok(UnserializableResult)
     }
 }
@@ -125,6 +152,7 @@ async fn generated_router_propagates_service_errors() {
         .route(
             "fail",
             fittings::serde_json::json!(null),
+            ServiceContext::detached(),
             fittings::Metadata::default(),
         )
         .await
@@ -144,6 +172,7 @@ async fn generated_router_maps_result_encoding_errors_to_internal_error() {
         .route(
             "nan",
             fittings::serde_json::json!(null),
+            ServiceContext::detached(),
             fittings::Metadata::default(),
         )
         .await

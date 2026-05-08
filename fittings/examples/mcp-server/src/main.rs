@@ -186,14 +186,17 @@ mod tests {
     use super::build_service;
     use crate::mcp::{McpService, ToolContent, ToolsCallParams};
     use fittings::serde_json::json;
-    use fittings::FittingsError;
+    use fittings::{FittingsError, ServiceContext};
 
     #[tokio::test]
     async fn example_binary_service_registers_echo_and_add_tools() {
         let service = build_service();
 
         let listed = service
-            .list_tools(fittings::serde_json::Value::Null)
+            .list_tools(
+                ServiceContext::detached(),
+                fittings::serde_json::Value::Null,
+            )
             .await
             .expect("tools/list should succeed");
 
@@ -215,11 +218,14 @@ mod tests {
         let service = build_service();
 
         let called = service
-            .call_tool(ToolsCallParams {
-                name: "add".to_string(),
-                arguments: json!({"a": 2, "b": 3}),
-                meta: None,
-            })
+            .call_tool(
+                ServiceContext::detached(),
+                ToolsCallParams {
+                    name: "add".to_string(),
+                    arguments: json!({"a": 2, "b": 3}),
+                    meta: None,
+                },
+            )
             .await
             .expect("tools/call should succeed");
 
@@ -234,11 +240,14 @@ mod tests {
         let service = build_service();
 
         let called = service
-            .call_tool(ToolsCallParams {
-                name: "add_with_details".to_string(),
-                arguments: json!({"a": 2, "b": 3}),
-                meta: None,
-            })
+            .call_tool(
+                ServiceContext::detached(),
+                ToolsCallParams {
+                    name: "add_with_details".to_string(),
+                    arguments: json!({"a": 2, "b": 3}),
+                    meta: None,
+                },
+            )
             .await
             .expect("tools/call should succeed");
 
@@ -261,11 +270,14 @@ mod tests {
         let service = build_service();
 
         let invalid = service
-            .call_tool(ToolsCallParams {
-                name: "add".to_string(),
-                arguments: json!({"a": "x", "b": 1}),
-                meta: None,
-            })
+            .call_tool(
+                ServiceContext::detached(),
+                ToolsCallParams {
+                    name: "add".to_string(),
+                    arguments: json!({"a": "x", "b": 1}),
+                    meta: None,
+                },
+            )
             .await;
 
         assert!(matches!(invalid, Err(FittingsError::InvalidParams { .. })));

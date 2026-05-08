@@ -13,6 +13,7 @@ fittings-wire = { path = "../wire" }
 futures.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio-util.workspace = true
 
 [dev-dependencies]
 fittings-testkit = { path = "../testkit" }

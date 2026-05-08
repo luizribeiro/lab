@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use fittings_core::{
+    context::ServiceContext,
     error::FittingsError,
     message::{Metadata, Request, Response},
     service::Service,
@@ -12,6 +13,7 @@ pub trait MethodRouter: Send + Sync {
         &self,
         method: &str,
         params: Value,
+        ctx: ServiceContext,
         metadata: Metadata,
     ) -> Result<Value, FittingsError>;
 }
@@ -31,10 +33,10 @@ impl<R> Service for RouterService<R>
 where
     R: MethodRouter,
 {
-    async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+    async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError> {
         let result = self
             .router
-            .route(&req.method, req.params, req.metadata.clone())
+            .route(&req.method, req.params, ctx, req.metadata.clone())
             .await?;
 
         Ok(Response {
@@ -51,6 +53,7 @@ mod tests {
     use serde_json::json;
 
     use fittings_core::{
+        context::ServiceContext,
         error::FittingsError,
         message::{JsonRpcId, Request},
         service::Service,
@@ -66,6 +69,7 @@ mod tests {
             &self,
             method: &str,
             params: serde_json::Value,
+            _ctx: ServiceContext,
             _metadata: fittings_core::message::Metadata,
         ) -> Result<serde_json::Value, FittingsError> {
             if method != "echo" {
@@ -86,7 +90,10 @@ mod tests {
             metadata: Default::default(),
         };
 
-        let response = service.call(request).await.expect("call should succeed");
+        let response = service
+            .call(request, ServiceContext::detached())
+            .await
+            .expect("call should succeed");
 
         assert_eq!(response.id, "r-1");
         assert_eq!(response.result, json!({"x": 1}));
@@ -102,7 +109,10 @@ mod tests {
             metadata: Default::default(),
         };
 
-        let error = service.call(request).await.expect_err("call should fail");
+        let error = service
+            .call(request, ServiceContext::detached())
+            .await
+            .expect_err("call should fail");
         assert!(matches!(
             error,
             FittingsError::MethodNotFound { message, .. } if message == "unknown"

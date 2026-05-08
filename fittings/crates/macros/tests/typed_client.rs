@@ -22,7 +22,11 @@ struct AddResult {
 #[fittings::service]
 trait MathClientService {
     #[fittings::method(name = "math/add")]
-    async fn add(&self, params: AddParams) -> Result<AddResult, FittingsError>;
+    async fn add(
+        &self,
+        _ctx: fittings::ServiceContext,
+        params: AddParams,
+    ) -> Result<AddResult, FittingsError>;
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -44,7 +48,11 @@ struct AckResult {
 
 #[fittings::service]
 trait EncodeFailureService {
-    async fn fail_encode(&self, params: FailingParams) -> Result<AckResult, FittingsError>;
+    async fn fail_encode(
+        &self,
+        _ctx: fittings::ServiceContext,
+        params: FailingParams,
+    ) -> Result<AckResult, FittingsError>;
 }
 
 struct OneShotConnector {
