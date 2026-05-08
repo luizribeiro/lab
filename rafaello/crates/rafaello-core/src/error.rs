@@ -250,6 +250,13 @@ pub enum TrifectaError {}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
+pub enum CollisionError {
+    #[error("topic-id collision between `{a}` and `{b}` on prefix `{prefix}`")]
+    TopicIdCollision { a: String, b: String, prefix: String },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error(transparent)]
     Manifest(#[from] ManifestError),
@@ -267,4 +274,6 @@ pub enum Error {
     Trifecta(#[from] TrifectaError),
     #[error(transparent)]
     Path(#[from] PathError),
+    #[error(transparent)]
+    Collision(#[from] CollisionError),
 }
