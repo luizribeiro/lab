@@ -50,9 +50,9 @@ choice (row 33) settled at the same time.
 | m0 | fittings v1 | Land the fittings RFCs (PeerHandle, ServiceContext, error preservation, JsonRpcId migration, cancellation semantics, bounded notify). Self-contained — modifies `fittings/`, no rafaello-core yet. May split internally by RFC area if scoping finds more than a small PR series. | `examples/mcp-server` exercises outbound notifications + bidirectional `PeerHandle::call` + cancellation; JS-SDK interop test passes; new tests in `fittings/tests/` cover each RFC bullet (positive + malformed/edge-case negatives). |
 | m1 | manifest / lock / grant / compiler foundation | Manifest parser (post-simplifications: no `runtime`, no `[rpc]`, `openrpc.json` sibling required at install time). `rafaello.lock` schema: digest-pinned per-plugin entries with bindings (granted capabilities, manifest-snapshot digest, content digest). Grant compiler that produces lockin builder calls from a granted lock entry. Topic-id derivation (sha256, base32, collision detection). No runtime yet — pure data transformation, easy to test. | `cargo test -p rafaello-core` integration covers: a fixture manifest+lock pair compiles to the expected lockin policy; an invalid manifest (unknown field, conflicting tool names, malformed sinks) is rejected with a typed error; a digest mismatch refuses to compile; carve-out decomposition produces the expected grant-shape under pathological project layouts. |
 | m2 | rafaello-core broker + locked plugin spawn | Minimal `rafaello-core` crate. Bus broker registers subscribers, publishes events on the four namespaces (`core.*`, `provider.*`, `plugin.<topic-id>.*`, `frontend.<attach-id>.*` reserved), enforces topic-namespace ACL. PluginSupervisor spawns subprocess plugins **only from a granted lock entry** (no hardcoded bypass). Inherited socketpair fd via `RFL_BUS_FD`. Lockin enforcement via the Rust API (no `lockin.toml`). One built-in test fixture plugin exercises the path. | Spawn the fixture plugin from a fixture-locked entry; observe one `peer.call` round-trip each direction; observe one `bus.publish` reaching a test subscriber. **Negatives**: plugin publishing on `core.*` is rejected; plugin publishing on another plugin's namespace rejected; plugin opening a file outside its grant denied by lockin; spawn without a matching lock entry refused; topic with invalid grammar rejected. |
-| m3 | sessions, daemon, local-spawned TUI, built-in rendering | `rfl serve` daemon. Session entry persistence (SQLite under `${PROJECT_ROOT}/.rafaello/state/`). `rafaello-tui` as a separate crate; local-spawned by `rfl chat` (no external attach in v1). Built-in in-process Rust renderers for `text`, `code_block`, `tool_call`, `tool_result`, `error`, `heading`, `thinking`, `image`. Server-side downgrade of unknown kinds to `Unknown { fallback }`. Turn-by-turn entries (`stream_state: "final"` only). No agent loop, no tool dispatch, no provider — TUI renders manually-published or test-injected entries. | `rfl chat` spawns daemon + TUI; static fixture entries publish on `core.session.entry.*`; TUI renders all built-in kinds + an unknown kind via fallback. **Negatives**: daemon refuses second `rfl serve` for the same project; TUI publishing on `core.*` is rejected; renderer crash for one kind doesn't crash the TUI; entry persisted to SQLite is replayed on restart. |
-| m4 | provider fixture + secure agent loop + one read-only tool | A bundled deterministic mock provider as a **subprocess plugin** (locked through the m1/m2 path), publishing `provider.<provider-id>.tool_request` and `assistant_message`. Core re-emits canonical `core.session.tool_request` / `tool_result`. `in_reply_to` enforcement on tool_result, RPC reply, provider events. One read-only tool plugin (`read-file`) with no sink declarations — sink confirmation is not required for non-sink tools, so this milestone exercises the dispatch path without yet needing the confirmation UI. Agent loop reads provider events, dispatches tool calls, returns results to the provider. | `rfl chat` against the mock provider; user prompt "what's in README.md" emits a `tool_call` for `read-file`; tool runs, result rendered. **Negatives**: `tool_result` missing `in_reply_to` rejected; provider tool_request with stale/unknown id fails closed; tool plugin called directly by another plugin (not via core re-emission) doesn't reach the dispatch path; tool requested outside its grant denied at lockin. |
-| m5 | LiteLLM provider + sinks + confirmation protocol + taint + user_grants + exfil demo | Bundled `rfl-litellm` subprocess plugin (default `vllm/qwen3.6-27b`, key from `LITELLM_API_KEY`). Manifest sink classes (`network`, `vcs_push`, `mail`, `workspace_write`). Confirmation protocol on the bus (`core.session.confirm_request` / `frontend.<id>.confirm_answer` / `core.session.confirm_reply`). TUI confirmation UI (modal, blocks input). Taint propagation (`{source, detail}`) on `tool_request` / `tool_result`. `user_grants` table — slash commands (`/grant`, `/grants list`, `/revoke`) + `always_allow_session`. One-hop trifecta guardrail at install time. May split into m5a (sinks + confirmation + user_grants) and m5b (taint + exfil) if scoping finds it too big. | Real model call against litellm; model proposes a sink-declaring tool; confirmation prompt fires; user accepts → tool runs; user denies → tool refused. **Negatives**: confirmation timeout denies; `always_allow_session` clears on daemon restart; verbatim tool-result-to-sink flow blocked at the broker; one-hop-only guardrail (transitive flows are NOT caught — explicitly out of v1 per `decisions.md` row 11). |
+| m3 | sessions, local-spawned TUI, built-in rendering | `rfl chat` spawns core + the bundled `rafaello-tui` (separate crate) in one process tree — no daemon, no attach socket in v1 (`decisions.md` rows 27, 34). Local TUI is the only frontend principal, identified as `frontend.tui.*`. Session entry persistence (SQLite under `${PROJECT_ROOT}/.rafaello/state/`). Built-in in-process Rust renderers for `text`, `code_block`, `tool_call`, `tool_result`, `error`, `heading`, `thinking`, `image`, with explicit panic isolation (renderer panics caught and rendered as `Unknown { fallback }`). Server-side downgrade of unknown kinds. Turn-by-turn `stream_state: "final"` only — no patch ops. No agent loop, no tool dispatch, no provider yet. The TUI subscribes via inherited socketpair; static fixture entries are injected by an in-process test harness (used in m3 only; m4 onward use the real provider path). | `rfl chat` opens the TUI; in-test harness publishes one entry per built-in kind plus one unknown kind; TUI renders all of them with the unknown kind falling back. **Negatives**: TUI publishing on `core.*` rejected; in-process renderer panic doesn't crash the TUI (a `Callout { kind: warn }` is shown instead); entry persisted to SQLite is replayed on TUI restart; second `rfl chat` against the same project errors instead of fighting for SQLite. |
+| m4 | provider fixture + secure agent loop + one read-only tool + taint envelope | A bundled deterministic mock provider as a **subprocess plugin** (locked through the m1/m2 path), publishing `provider.<provider-id>.tool_request` and `assistant_message`. Core re-emits canonical `core.session.tool_request` / `tool_result` with the canonical `taint` envelope (`{source, detail}`) populated from the publishing plugin's id. **`in_reply_to` enforcement** on tool_result, RPC reply, provider events. **Taint validation** on `tool_request`/`tool_result` even though no gating layer consumes it yet — the envelope must be present, structurally valid, and produced by core (not the publishing plugin). One read-only tool plugin (`read-file`) with no sink declarations — sink confirmation is not required for non-sink tools, so this milestone exercises the dispatch path without yet needing the confirmation UI. Agent loop reads provider events, dispatches tool calls, returns results to the provider. | `rfl chat` against the mock provider; user prompt "what's in README.md" emits a `tool_call` for `read-file`; tool runs, result rendered. **Negatives**: `tool_result` missing `in_reply_to` rejected; provider tool_request with stale/unknown id fails closed; tool plugin called directly by another plugin (not via core re-emission) doesn't reach the dispatch path; tool requested outside its grant denied at lockin; bus event missing the `taint` envelope rejected; plugin-supplied (rather than core-supplied) taint rejected. |
+| m5 | LiteLLM provider + sinks + confirmation protocol + user_grants + exfil demo | Bundled `rfl-litellm` subprocess plugin (default `vllm/qwen3.6-27b`, key from `LITELLM_API_KEY`). Manifest sink classes (`network`, `vcs_push`, `mail`, `workspace_write`). Confirmation protocol on the bus (`core.session.confirm_request` / `frontend.tui.confirm_answer` / `core.session.confirm_reply`). TUI confirmation UI (modal, blocks input). `user_grants` table — slash commands (`/grant`, `/grants list`, `/revoke`) + `always_allow_session`. One-hop trifecta guardrail at install time. **Taint envelope already exists from m4**; m5 adds the matching/propagation rules and the broker-side gate that consumes the envelope on sink calls. May split into m5a (sinks + confirmation + user_grants) and m5b (taint matching + exfil tests) if scoping finds it too big. | Real model call against litellm; model proposes a sink-declaring tool; confirmation prompt fires; user accepts → tool runs; user denies → tool refused. **Negatives**: confirmation timeout denies; `always_allow_session` clears on `rfl chat` restart; verbatim tool-result-to-sink flow blocked at the broker; one-hop-only guardrail (transitive flows are NOT caught — explicitly out of v1 per `decisions.md` row 11). |
 | m6 | v1 polish + release readiness | Test coverage gaps closed (per coverage report). Documentation pass on `rafaello/README.md` + `CONTRIBUTING.md`. Homebrew formula matching scope/tempo. `nix build .#rafaello` green on Linux + macOS. No opportunistic new tools — every shipped tool is owner-ratified in this milestone's `scope.md`. | `nix build .#rafaello` produces a binary that runs on both supported platforms. A manual end-to-end session against litellm captures the full happy path (init → install rfl-litellm → install one tool → chat → tool call with confirmation → response render → session persist) in `manual-validation.md`. |
 
 ## Dependency graph
@@ -94,10 +94,37 @@ Each milestone subdirectory under `milestones/m<N>-<name>/` has:
   `overview.md`, `decisions.md`, or stream RFCs that the milestone's
   implementation surfaced; coverage report.
 
+## Stream RFC drift (tracked, patched in milestone retrospectives)
+
+Per `plans/README.md`'s authoring conventions, stream RFCs in
+`streams/` are not retroactively rewritten when `overview.md` evolves
+— `overview.md` wins, drift gets called out and patched in the next
+milestone retrospective. Known drift after the design-phase
+deferrals (rows 26–32):
+
+- **`streams/a-security/rfc-security-model.md`** still describes
+  helper plugins (§7.4.1, §9), `frontend.<attach-id>.*` external
+  attach (§5.7), and uses `requires_confirmation` field name where
+  overview now has `always_confirm`. Patched in the m1
+  retrospective (Stream F is m1's territory and Stream A's manifest
+  field names sit alongside it).
+- **`streams/e-renderer/rfc-renderer-model.md`** §7 describes patch
+  ops (`stream_state: "open"` / `"patch"`) which v1 doesn't ship,
+  and §11.5 / §11.6 describe subprocess `renderer.render`. Patched
+  in the m3 retrospective.
+- **`streams/f-manifest/rfc-manifest-schema.md`** §3 / §6 describe
+  the `runtime` field and the `[rpc]` block which v1 omits, and
+  doesn't yet describe the `openrpc.json` sibling requirement.
+  Patched in the m1 retrospective (m1 implements this schema).
+- **`streams/b-fittings/`** drift was already cleaned up during the
+  overview iteration (rounds 2/3); no outstanding items.
+
+If the m0/m1 driver discovers more drift while implementing, list
+it in the milestone's `retrospective.md`.
+
 ## What changed from the first draft
 
-Round-1 pi review (`pi-review-1.md`) prompted the following revisions
-to the first milestones draft:
+Round-1 pi review (`pi-review-1.md`) prompted these revisions:
 
 - Reordered m1 ↔ m2 so manifest/lock/compiler land before any plugin
   spawning (no hardcoded bypass path that retrofits later).
@@ -107,8 +134,8 @@ to the first milestones draft:
   built-in core code.
 - m4's first tool is read-only (no sinks), so the dispatch path
   exists before the confirmation UI does.
-- m5 keeps sinks + confirmation + taint + `user_grants` together
-  because they're tightly coupled architecturally.
+- m5 keeps sinks + confirmation + `user_grants` together because
+  they're tightly coupled architecturally.
 - The "v1 deferrals" section now points at `decisions.md` rows
   rather than re-asserting deferrals here (the scope-drift problem
   pi flagged in finding 1).
@@ -116,3 +143,23 @@ to the first milestones draft:
   happy paths.
 - Branch model conflict with `plans/README.md` resolved by patching
   `plans/README.md` to match (`decisions.md` row 33).
+
+Round-2 pi review (`pi-review-2.md`) prompted these further revisions:
+
+- m3 drops daemon mode entirely; `rfl chat` runs core + TUI in one
+  process tree (`decisions.md` row 34). Public `rfl serve` is v2.
+- m3 explicitly calls out **panic isolation** as the mechanism for
+  "renderer crash doesn't crash TUI" (clarifies what isolation looks
+  like with subprocess renderers deferred).
+- m3 fixture-entry mechanism is an in-test harness, not external
+  attach — clarifies how m3 demos exercise the renderer path
+  without a provider.
+- The **mandatory taint envelope on `tool_request`/`tool_result` is
+  in m4**, not m5. m4 enforces presence + core-supplied origin even
+  though m4 has no sinks/gating yet. m5 layers matching, propagation
+  rules, and the broker gate on top.
+- TUI principal id clarified as `frontend.tui` (the
+  `frontend.<attach-id>.*` namespace is "reserved" only in the
+  external-attach sense; the TUI itself uses it in v1).
+- Stream RFC drift section added above to track items the
+  architecture-doc patches don't fix retroactively.
