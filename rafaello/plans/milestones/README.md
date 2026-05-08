@@ -1,7 +1,11 @@
 # Milestones
 
-> **Status:** revised by claude (orchestrator) after pi review 1
-> (`pi-review-1.md`). Pi review 2 pending. Owner ratification follows.
+> **Status:** converged after three pi review rounds
+> (`pi-review-1.md`, `pi-review-2.md`, `pi-review-3.md`). Pi's
+> round-3 verdict was conditional sign-off pending the §16
+> `rfl serve` cleanup in `overview.md`, which has landed.
+> Pending owner ratification at roadmap granularity. The 7
+> milestones below are the intended v1 path.
 
 Bottom-up roadmap from m0 to rafaello v1, accumulating on the
 long-running `rafaello-v0.1` integration branch and merging to

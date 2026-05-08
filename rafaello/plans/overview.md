@@ -176,8 +176,10 @@ A running rafaello session is a small, fixed cast of OS processes:
 - **Core** is one Rust binary (`rfl`). It links the bus broker,
   the supervisor, the tool router, and the session store as
   in-process modules. There is no out-of-process "daemon"
-  separate from "agent" in v1; `rfl serve` is the same binary
-  with the attach socket exposed.
+  separate from "agent" in v1; v1's only entrypoint is `rfl
+  chat`, which runs core + the local TUI in one process tree.
+  Public `rfl serve` (and the attach socket it would expose)
+  is **deferred to v2** per `decisions.md` row 34.
 - **Plugins** are subprocesses spawned by core under lockin.
   Every plugin gets exactly one bus handle (an inherited
   `AF_UNIX SOCK_STREAM` socketpair fd, advertised via
@@ -1014,11 +1016,11 @@ The architectural calls this overview makes that pi or the
 project owner should review before m1.
 
 > **Note:** `decisions.md` rows 26–34 record post-design-phase
-> deferrals and refinements. Items 9 (helper plugins), 14
-> (frontend principals beyond TUI), 15 (RenderTree subprocess
-> renderers), and 16 (streaming patch ops) below are partially
-> or fully reversed by those rows for v1 scope. The full v1
-> picture lives in §16.
+> deferrals and refinements. Items 14 (helper plugins), 15
+> (frontend principals beyond TUI), 19 (subprocess renderers),
+> and 20 (streaming patch ops) below are partially or fully
+> reversed by those rows for v1 scope. The full v1 picture
+> lives in §16.
 
 1. **No embedded scripting language in v1.** Customisation is
    declarative TOML + Markdown plus subprocess plugins. Source:
@@ -1404,17 +1406,17 @@ core-mediated sink confirmation with `user_grants`; carve-out
 by decomposition with loud override; default ratatui TUI as a
 local-spawned bus principal (single frontend, no external
 attach); CLI subcommands `rfl init / install / grant / revoke
-/ update / provider use / status / serve`; bundled
-`rfl-litellm` default provider plugin (§8.1); renderer model
-with semantic render-tree and server-side downgrade,
-**built-in Rust renderers only** (no subprocess plugin
-renderers in v1); turn-by-turn entries (`stream_state:
-"final"` only — patch ops deferred); entry persistence in
-SQLite; lazy loading with five triggers + manual; declarative
-config (TOML+Markdown); fittings v1 with `ServiceContext`,
-bidirectional `PeerHandle` (notify + call in both directions,
-§15.6), cancellation, two-channel server loop, predefined
-error preservation.
+/ update / provider use / status / chat` (no `rfl serve` in
+v1 — see `decisions.md` row 34); bundled `rfl-litellm` default
+provider plugin (§8.1); renderer model with semantic
+render-tree and server-side downgrade, **built-in Rust
+renderers only** (no subprocess plugin renderers in v1);
+turn-by-turn entries (`stream_state: "final"` only — patch ops
+deferred); entry persistence in SQLite; lazy loading with five
+triggers + manual; declarative config (TOML+Markdown); fittings
+v1 with `ServiceContext`, bidirectional `PeerHandle` (notify +
+call in both directions, §15.6), cancellation, two-channel
+server loop, predefined error preservation.
 
 **Deferred to v2.**
 
@@ -1429,9 +1431,10 @@ error preservation.
 | Plugin signing / reproducibility              | Adds infra (key management, build tooling) without changing the threat model in v1 |
 | Embedded scripting (Luau or other)            | See §1.2; can be added later, removing later is hard |
 | Branching sessions                            | Linear sessions cover demos; branching needs UX work |
-| Multi-session daemon                          | Single-session `rfl serve` is the v1 shape           |
+| **Public `rfl serve` (any flavour)**          | With external attach deferred (row 27), no v1 consumer for an attach socket. v1's only entrypoint is `rfl chat`. See `decisions.md` row 34. |
+| Multi-session daemon                          | Re-opens once `rfl serve` returns in v2.             |
 | Project-type lazy-load triggers (`ft` analog) | Needs "project kind" abstraction in core             |
-| Network-attached frontends (TCP)              | UDS-only is the v1 attach surface                    |
+| Network-attached frontends (TCP, `--bind-tcp`)| All external attach is v2; TCP is the second step.   |
 | Dynamic capability scoping in the sandbox     | lockin can't switch policies live; core enforces above the sandbox in v1 |
 | Per-method spawn-time policies                | Same — flatten in v1, revisit on lockin feature      |
 | `decisions.md` and `glossary.md` ratification | Pi review pending                                    |
