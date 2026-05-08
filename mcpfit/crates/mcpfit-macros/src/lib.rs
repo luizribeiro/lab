@@ -4,6 +4,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, parse_macro_input};
 
+mod tool;
+
 /// Derives [`mcpfit::StructuredObject`] for structs.
 ///
 /// Performs no validation of the runtime JSON shape.
