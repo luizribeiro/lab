@@ -45,3 +45,11 @@ path = "../../tests/wire_inbound_error_round_trip.rs"
 [[test]]
 name = "error_marker_round_trip"
 path = "../../tests/error_marker_round_trip.rs"
+
+[[test]]
+name = "service_code_ranges"
+path = "../../tests/service_code_ranges.rs"
+
+[[test]]
+name = "invalid_service_code_marker"
+path = "../../tests/invalid_service_code_marker.rs"

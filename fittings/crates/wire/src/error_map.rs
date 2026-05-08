@@ -16,6 +16,7 @@ const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
 const FITTINGS_KIND_KEY: &str = "fittingsKind";
 const FITTINGS_KIND_TRANSPORT: &str = "transport";
 const FITTINGS_KIND_PANIC: &str = "panic";
+const FITTINGS_KIND_INVALID_SERVICE_CODE: &str = "invalidServiceCode";
 const FITTINGS_DETAIL_KEY: &str = "detail";
 
 pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
@@ -74,7 +75,9 @@ pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> Respon
         FittingsError::Service(_) => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
             message: INTERNAL_ERROR_MESSAGE.to_string(),
-            data: None,
+            data: Some(json!({
+                FITTINGS_KIND_KEY: FITTINGS_KIND_INVALID_SERVICE_CODE,
+            })),
         },
     };
 
@@ -201,9 +204,9 @@ mod tests {
     }
 
     #[test]
-    fn maps_out_of_range_service_code_to_internal_error() {
+    fn maps_invalid_service_code_to_internal_with_marker() {
         let err = FittingsError::service(ServiceError {
-            code: 1_000,
+            code: -32_700,
             message: "domain error".to_string(),
             data: Some(json!({"detail": "x"})),
         });
@@ -213,7 +216,10 @@ mod tests {
 
         assert_eq!(error.code, -32603);
         assert_eq!(error.message, "Internal error");
-        assert_eq!(error.data, None);
+        assert_eq!(
+            error.data,
+            Some(json!({"fittingsKind": "invalidServiceCode"})),
+        );
     }
 
     #[test]
@@ -298,23 +304,35 @@ mod tests {
                 if message == "domain" && data == Some(json!({"detail": "x"}))
         ));
 
-        let unknown_negative = from_error_envelope(ErrorEnvelope {
+        let server_band = from_error_envelope(ErrorEnvelope {
             code: -32000,
-            message: "unknown negative".to_string(),
+            message: "server-band".to_string(),
             data: None,
         });
         assert!(matches!(
-            unknown_negative,
-            FittingsError::Internal { message, .. } if message == "Internal error"
+            server_band,
+            FittingsError::Service(ServiceError { code: -32000, message, data: None })
+                if message == "server-band"
         ));
 
-        let unknown_positive = from_error_envelope(ErrorEnvelope {
+        let widened_positive = from_error_envelope(ErrorEnvelope {
             code: 1000,
-            message: "unknown positive".to_string(),
-            data: Some(json!({"ignored": true})),
+            message: "widened positive".to_string(),
+            data: Some(json!({"detail": "x"})),
         });
         assert!(matches!(
-            unknown_positive,
+            widened_positive,
+            FittingsError::Service(ServiceError { code: 1000, message, data })
+                if message == "widened positive" && data == Some(json!({"detail": "x"}))
+        ));
+
+        let reserved_invalid = from_error_envelope(ErrorEnvelope {
+            code: -32_500,
+            message: "reserved-but-not-server-band".to_string(),
+            data: None,
+        });
+        assert!(matches!(
+            reserved_invalid,
             FittingsError::Internal { message, .. } if message == "Internal error"
         ));
     }
