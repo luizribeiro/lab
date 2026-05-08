@@ -1,19 +1,25 @@
 //! MCP service trait. Declares the JSON-RPC method surface implemented by
 //! the mcpfit server.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use fittings::serde_json::Value;
+use fittings::serde_json::{self, Value};
 use fittings::{FittingsError, Result};
 
-use crate::context::Cx;
+use crate::context::{extract_progress_token, Cx, ProgressSink};
 use crate::error::McpfitError;
 use crate::protocol::{
-    InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolsCallParams,
-    ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
+    InitializeParams, InitializeResult, ProgressNotificationParams, ServerCapabilities, ServerInfo,
+    ToolsCallParams, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 use crate::registry::ToolRegistry;
 use crate::response::ToolResponse;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerNotification {
+    pub method: String,
+    pub params: Value,
+}
 
 fn to_fittings_error(err: McpfitError) -> FittingsError {
     match err {
@@ -57,6 +63,7 @@ pub(crate) struct McpServiceImpl {
     server_info: ServerInfo,
     registry: ToolRegistry,
     lifecycle: Mutex<SessionLifecycle>,
+    pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
 }
 
 #[allow(dead_code)]
@@ -66,6 +73,7 @@ impl McpServiceImpl {
             server_info,
             registry,
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
+            pending_notifications: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -74,6 +82,33 @@ impl McpServiceImpl {
             .lifecycle
             .lock()
             .expect("session lifecycle mutex should not be poisoned")
+    }
+
+    pub(crate) fn drain_notifications(&self) -> Vec<ServerNotification> {
+        self.pending_notifications
+            .lock()
+            .expect("pending notifications mutex should not be poisoned")
+            .drain(..)
+            .collect()
+    }
+
+    fn cx_for_call(&self, meta: Option<&Value>) -> Cx {
+        let Some(token) = extract_progress_token(meta) else {
+            return Cx::default();
+        };
+        let pending = Arc::clone(&self.pending_notifications);
+        let sink: ProgressSink = Arc::new(move |params: ProgressNotificationParams| {
+            let serialized = serde_json::to_value(&params)
+                .expect("progress notification params should serialize");
+            pending
+                .lock()
+                .expect("pending notifications mutex should not be poisoned")
+                .push(ServerNotification {
+                    method: "notifications/progress".to_string(),
+                    params: serialized,
+                });
+        });
+        Cx::with_progress(token, sink)
     }
 }
 
@@ -137,8 +172,9 @@ impl McpService for McpServiceImpl {
             }
             SessionLifecycle::Running => {}
         }
+        let cx = self.cx_for_call(params.meta.as_ref());
         self.registry
-            .call(&params.name, params.arguments, Cx::default())
+            .call(&params.name, params.arguments, cx)
             .await
             .map_err(to_fittings_error)
     }
@@ -388,6 +424,65 @@ mod tests {
             .await
             .expect_err("bad args should error");
         assert!(err.to_string().contains("invalid params"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_threads_progress_token_into_cx() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("ping").handler(|_args: Value, cx| async move {
+                cx.progress(0.5).total(1.0).message("half").emit();
+                Ok::<_, McpfitError>("ok".to_string())
+            }))
+            .unwrap();
+        let svc = service_with_registry("demo", "0.1.0", registry);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+
+        svc.call_tool(ToolsCallParams {
+            name: "ping".into(),
+            arguments: json!({}),
+            meta: Some(json!({"progressToken": "tok"})),
+        })
+        .await
+        .expect("dispatch should succeed");
+
+        let notifications = svc.drain_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].method, "notifications/progress");
+        assert_eq!(
+            notifications[0].params,
+            json!({
+                "progressToken": "tok",
+                "progress": 0.5,
+                "total": 1.0,
+                "message": "half",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_without_progress_token_emits_no_notifications() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("ping").handler(|_args: Value, cx| async move {
+                cx.progress(0.5).emit();
+                Ok::<_, McpfitError>("ok".to_string())
+            }))
+            .unwrap();
+        let svc = service_with_registry("demo", "0.1.0", registry);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+
+        svc.call_tool(ToolsCallParams {
+            name: "ping".into(),
+            arguments: json!({}),
+            meta: None,
+        })
+        .await
+        .expect("dispatch should succeed");
+
+        assert!(svc.drain_notifications().is_empty());
     }
 
     #[tokio::test]
