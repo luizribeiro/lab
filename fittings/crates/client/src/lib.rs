@@ -11,24 +11,32 @@ pub type ProcessTransport = SubprocessTransport;
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
 };
 
 use fittings_core::{
-    context::{DroppedNotifications, OutboundNotification, PeerHandle},
+    context::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext},
     error::FittingsError,
+    message::Request,
+    service::Service,
     transport::Connector,
 };
 use fittings_wire::{
-    codec::{decode_response_line, WireDecodeError},
-    error_map::from_error_envelope,
-    types::{JsonRpcId, RequestEnvelope},
+    codec::{decode_request_line, decode_response_line, encode_response_line, WireDecodeError},
+    error_map::{from_error_envelope, to_error_envelope},
+    types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use serde_json::Value;
 use tokio::{
     sync::{mpsc, mpsc::error::TryRecvError, oneshot},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
+
+type ServiceSlot = Arc<RwLock<Option<Arc<dyn Service>>>>;
 
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
@@ -40,6 +48,7 @@ where
     next_id: AtomicU64,
     worker: JoinHandle<()>,
     peer: PeerHandle,
+    service: ServiceSlot,
     _connector: PhantomData<C>,
 }
 
@@ -53,13 +62,21 @@ where
         let (notify_tx, notify_rx) =
             mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
         let peer = PeerHandle::new(notify_tx, DroppedNotifications::new());
-        let worker = tokio::spawn(run_client_loop(transport, request_rx, notify_rx));
+        let service: ServiceSlot = Arc::new(RwLock::new(None));
+        let worker = tokio::spawn(run_client_loop(
+            transport,
+            request_rx,
+            notify_rx,
+            service.clone(),
+            peer.clone(),
+        ));
 
         Ok(Self {
             request_tx,
             next_id: AtomicU64::new(1),
             worker,
             peer,
+            service,
             _connector: PhantomData,
         })
     }
@@ -68,6 +85,19 @@ where
     /// path (e.g. background tasks). Mirrors `Server::peer()`.
     pub fn peer(&self) -> PeerHandle {
         self.peer.clone()
+    }
+
+    /// Register a `Service` to handle inbound peer-originated requests
+    /// (i.e. requests the server issues via `PeerHandle::call`). Without a
+    /// registered service, inbound requests are answered with
+    /// `-32601 Method not found`. Mirrors the server's `Server::new(service, _)`
+    /// inbound dispatch (scope §S9 / §K3).
+    pub fn with_service<S>(self, svc: S) -> Self
+    where
+        S: Service + 'static,
+    {
+        *self.service.write().expect("service slot poisoned") = Some(Arc::new(svc));
+        self
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
@@ -130,11 +160,14 @@ async fn run_client_loop<T>(
     mut transport: T,
     mut request_rx: mpsc::UnboundedReceiver<ClientCommand>,
     mut notify_rx: mpsc::Receiver<OutboundNotification>,
+    service: ServiceSlot,
+    peer: PeerHandle,
 ) where
     T: fittings_core::transport::Transport + Send + 'static,
 {
     let mut pending: HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>> =
         HashMap::new();
+    let (inbound_response_tx, mut inbound_response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     loop {
         pending.retain(|_, sender| !sender.is_closed());
@@ -142,6 +175,13 @@ async fn run_client_loop<T>(
         tokio::select! {
             Some(notification) = notify_rx.recv() => {
                 if let Err(error) = send_request(&mut transport, None, &notification.method, notification.params).await {
+                    fail_pending(&mut pending, error.clone());
+                    fail_queued_calls(&mut request_rx, error);
+                    return;
+                }
+            }
+            Some(frame) = inbound_response_rx.recv() => {
+                if let Err(error) = transport.send(&frame).await {
                     fail_pending(&mut pending, error.clone());
                     fail_queued_calls(&mut request_rx, error);
                     return;
@@ -172,9 +212,15 @@ async fn run_client_loop<T>(
                     }
                 }
             }
-            recv_result = transport.recv(), if !pending.is_empty() => {
+            recv_result = transport.recv() => {
                 match recv_result {
-                    Ok(frame) => handle_response_frame(frame, &mut pending),
+                    Ok(frame) => handle_inbound_frame(
+                        frame,
+                        &mut pending,
+                        &service,
+                        &inbound_response_tx,
+                        peer.clone(),
+                    ),
                     Err(error) => {
                         fail_pending(&mut pending, error.clone());
                         fail_queued_calls(&mut request_rx, error);
@@ -205,6 +251,79 @@ where
     encoded.push(b'\n');
 
     transport.send(&encoded).await
+}
+
+fn handle_inbound_frame(
+    frame: Vec<u8>,
+    pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
+    service: &ServiceSlot,
+    inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    peer: PeerHandle,
+) {
+    if frame_looks_like_request(&frame) {
+        spawn_inbound_request(frame, service, inbound_response_tx, peer);
+        return;
+    }
+    handle_response_frame(frame, pending);
+}
+
+fn frame_looks_like_request(frame: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.contains_key("method")
+}
+
+fn spawn_inbound_request(
+    frame: Vec<u8>,
+    service: &ServiceSlot,
+    inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    peer: PeerHandle,
+) {
+    let envelope = match decode_request_line(&frame) {
+        Ok(envelope) => envelope,
+        Err(_) => return,
+    };
+    let Some(id) = envelope.id.clone() else {
+        return;
+    };
+    let svc = service
+        .read()
+        .expect("service slot poisoned")
+        .as_ref()
+        .map(Arc::clone);
+    let inbound_response_tx = inbound_response_tx.clone();
+    tokio::spawn(async move {
+        let response = build_inbound_response(envelope, id, svc, peer).await;
+        if let Ok(encoded) = encode_response_line(&response) {
+            let _ = inbound_response_tx.send(encoded);
+        }
+    });
+}
+
+async fn build_inbound_response(
+    envelope: RequestEnvelope,
+    id: JsonRpcId,
+    service: Option<Arc<dyn Service>>,
+    peer: PeerHandle,
+) -> ResponseEnvelope {
+    let Some(service) = service else {
+        return to_error_envelope(id, FittingsError::method_not_found(envelope.method));
+    };
+    let request = Request {
+        id: Some(id.clone()),
+        method: envelope.method,
+        params: envelope.params.unwrap_or(Value::Null),
+        metadata: Default::default(),
+    };
+    let ctx = ServiceContext::new(Some(id.clone()), CancellationToken::new(), peer);
+    match service.call(request, ctx).await {
+        Ok(response) => ResponseEnvelope::success(id, response.result),
+        Err(error) => to_error_envelope(id, error),
+    }
 }
 
 fn handle_response_frame(
