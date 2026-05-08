@@ -41,6 +41,7 @@ pub struct Server {
     info: ServerInfo,
     registry: ToolRegistry,
     allow_runtime_registration: bool,
+    allow_dynamic_tools: bool,
 }
 
 impl Server {
@@ -52,6 +53,7 @@ impl Server {
             },
             registry: ToolRegistry::new(),
             allow_runtime_registration: false,
+            allow_dynamic_tools: false,
         }
     }
 
@@ -64,6 +66,19 @@ impl Server {
 
     pub fn runtime_registration_allowed(&self) -> bool {
         self.allow_runtime_registration
+    }
+
+    /// Advertises `tools.listChanged` without exposing the client-callable
+    /// `tools/register` method. Use when the server mutates its own tool list
+    /// at runtime (e.g. via embedder-side registration) and clients should
+    /// re-fetch on `notifications/tools/list_changed`.
+    pub fn allow_dynamic_tools(mut self) -> Self {
+        self.allow_dynamic_tools = true;
+        self
+    }
+
+    pub fn dynamic_tools_allowed(&self) -> bool {
+        self.allow_dynamic_tools
     }
 
     /// Registers a tool. Panics on duplicate names — duplicate registration is
@@ -114,8 +129,13 @@ impl Server {
     where
         T: fittings::core::transport::Transport + Sync + 'static,
     {
-        McpServiceImpl::new(self.info, self.registry, self.allow_runtime_registration)
-            .serve_transport(transport)
+        McpServiceImpl::new(
+            self.info,
+            self.registry,
+            self.allow_runtime_registration,
+            self.allow_dynamic_tools,
+        )
+        .serve_transport(transport)
             .await
             .map_err(|err| McpfitError::Internal(err.to_string()))
     }
@@ -198,6 +218,19 @@ mod tests {
     fn allow_runtime_registration_sets_flag() {
         let server = Server::new("demo", "0.1.0").allow_runtime_registration();
         assert!(server.runtime_registration_allowed());
+    }
+
+    #[test]
+    fn dynamic_tools_disabled_by_default() {
+        let server = Server::new("demo", "0.1.0");
+        assert!(!server.dynamic_tools_allowed());
+    }
+
+    #[test]
+    fn allow_dynamic_tools_sets_flag_independently() {
+        let server = Server::new("demo", "0.1.0").allow_dynamic_tools();
+        assert!(server.dynamic_tools_allowed());
+        assert!(!server.runtime_registration_allowed());
     }
 
     #[test]
