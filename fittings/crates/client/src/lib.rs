@@ -14,7 +14,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use fittings_core::{error::FittingsError, transport::Connector};
+use fittings_core::{
+    context::{DroppedNotifications, OutboundNotification, PeerHandle},
+    error::FittingsError,
+    transport::Connector,
+};
 use fittings_wire::{
     codec::{decode_response_line, WireDecodeError},
     error_map::from_error_envelope,
@@ -26,6 +30,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
+
 pub struct Client<C>
 where
     C: Connector + Send + Sync + 'static,
@@ -33,6 +39,7 @@ where
     request_tx: mpsc::UnboundedSender<ClientCommand>,
     next_id: AtomicU64,
     worker: JoinHandle<()>,
+    peer: PeerHandle,
     _connector: PhantomData<C>,
 }
 
@@ -43,14 +50,24 @@ where
     pub async fn connect(connector: C) -> Result<Self, FittingsError> {
         let transport = connector.connect().await?;
         let (request_tx, request_rx) = mpsc::unbounded_channel();
-        let worker = tokio::spawn(run_client_loop(transport, request_rx));
+        let (notify_tx, notify_rx) =
+            mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
+        let peer = PeerHandle::new(notify_tx, DroppedNotifications::new());
+        let worker = tokio::spawn(run_client_loop(transport, request_rx, notify_rx));
 
         Ok(Self {
             request_tx,
             next_id: AtomicU64::new(1),
             worker,
+            peer,
             _connector: PhantomData,
         })
+    }
+
+    /// Connection-scoped peer handle for code that lives outside the request
+    /// path (e.g. background tasks). Mirrors `Server::peer()`.
+    pub fn peer(&self) -> PeerHandle {
+        self.peer.clone()
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
@@ -112,6 +129,7 @@ enum ClientCommand {
 async fn run_client_loop<T>(
     mut transport: T,
     mut request_rx: mpsc::UnboundedReceiver<ClientCommand>,
+    mut notify_rx: mpsc::Receiver<OutboundNotification>,
 ) where
     T: fittings_core::transport::Transport + Send + 'static,
 {
@@ -122,6 +140,13 @@ async fn run_client_loop<T>(
         pending.retain(|_, sender| !sender.is_closed());
 
         tokio::select! {
+            Some(notification) = notify_rx.recv() => {
+                if let Err(error) = send_request(&mut transport, None, &notification.method, notification.params).await {
+                    fail_pending(&mut pending, error.clone());
+                    fail_queued_calls(&mut request_rx, error);
+                    return;
+                }
+            }
             command = request_rx.recv() => {
                 match command {
                     Some(ClientCommand::Call { id, method, params, response_tx }) => {
