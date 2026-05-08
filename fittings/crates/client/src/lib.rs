@@ -10,7 +10,9 @@ pub type ProcessTransport = SubprocessTransport;
 
 use std::{
     collections::HashMap,
+    future::{Future, IntoFuture},
     marker::PhantomData,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -162,6 +164,37 @@ where
 
     fn next_request_id(&self) -> JsonRpcId {
         JsonRpcId::from(self.next_id.fetch_add(1, Ordering::Relaxed).to_string())
+    }
+}
+
+pub struct PendingCall {
+    id: JsonRpcId,
+    rx: oneshot::Receiver<Result<Value, FittingsError>>,
+}
+
+impl PendingCall {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn new(id: JsonRpcId, rx: oneshot::Receiver<Result<Value, FittingsError>>) -> Self {
+        Self { id, rx }
+    }
+
+    pub fn id(&self) -> &JsonRpcId {
+        &self.id
+    }
+
+    pub async fn result(self) -> Result<Value, FittingsError> {
+        self.rx
+            .await
+            .map_err(|_| FittingsError::internal("client request canceled"))?
+    }
+}
+
+impl IntoFuture for PendingCall {
+    type Output = Result<Value, FittingsError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.result())
     }
 }
 
@@ -421,7 +454,7 @@ mod tests {
         error_response_line, parse_request_fixture, success_response_line,
     };
     use fittings_testkit::memory_transport::MemoryTransport;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use tokio::sync::{broadcast::error::RecvError, mpsc, Mutex};
 
     use super::Client;
@@ -917,6 +950,57 @@ mod tests {
         assert_eq!(params, json!({"n": 7}));
 
         drop(client);
+    }
+
+    #[tokio::test]
+    async fn pending_call_exposes_id_before_result_resolves() {
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-7".to_string());
+        let pending = super::PendingCall::new(id.clone(), rx);
+        assert_eq!(pending.id(), &id);
+    }
+
+    #[tokio::test]
+    async fn pending_call_result_resolves_when_sender_completes() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-1".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        tx.send(Ok(json!({"ok": true}))).expect("send response");
+
+        let result = pending.result().await.expect("pending call should resolve");
+        assert_eq!(result, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn pending_call_into_future_awaits_via_dot_await() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-await".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        tx.send(Ok(json!({"awaited": true})))
+            .expect("send response");
+
+        let result = pending.await.expect("await should resolve");
+        assert_eq!(result, json!({"awaited": true}));
+    }
+
+    #[tokio::test]
+    async fn pending_call_result_reports_cancellation_when_sender_dropped() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Value, FittingsError>>();
+        let id = fittings_wire::types::JsonRpcId::from("req-drop".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        drop(tx);
+
+        let error = pending
+            .result()
+            .await
+            .expect_err("dropping the sender should surface a cancellation error");
+        assert!(matches!(
+            error,
+            FittingsError::Internal(message) if message == "client request canceled"
+        ));
     }
 
     #[tokio::test]
