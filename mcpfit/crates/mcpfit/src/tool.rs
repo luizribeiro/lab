@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::context::Cx;
@@ -72,15 +73,24 @@ impl Tool {
         self.input_schema.as_ref()
     }
 
-    pub fn handler<F, Fut, R>(mut self, f: F) -> Self
+    pub fn handler<F, Fut, A, R>(mut self, f: F) -> Self
     where
-        F: Fn(Value, Cx) -> Fut + Send + Sync + 'static,
+        F: Fn(A, Cx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R>> + Send + 'static,
+        A: DeserializeOwned + Send + 'static,
         R: IntoToolResponse + Send + 'static,
     {
         self.handler = Some(Arc::new(move |args, cx| {
-            let fut = f(args, cx);
-            Box::pin(async move { fut.await.map(IntoToolResponse::into_tool_response) })
+            match serde_json::from_value::<A>(args) {
+                Ok(typed) => {
+                    let fut = f(typed, cx);
+                    Box::pin(async move { fut.await.map(IntoToolResponse::into_tool_response) })
+                }
+                Err(e) => {
+                    let err = McpfitError::invalid_params(format!("invalid arguments: {e}"));
+                    Box::pin(async move { Err(err) })
+                }
+            }
         }));
         self
     }
@@ -105,9 +115,10 @@ mod tests {
     use crate::error::McpfitError;
     use crate::response::ToolResponse;
     use schemars::JsonSchema;
+    use serde::Deserialize;
     use serde_json::json;
 
-    #[derive(JsonSchema)]
+    #[derive(JsonSchema, Deserialize)]
     #[allow(dead_code)]
     struct AddArgs {
         a: f64,
@@ -199,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_runs_stored_handler_with_args() {
-        let tool = Tool::new("echo").handler(|args, _cx| async move {
+        let tool = Tool::new("echo").handler(|args: serde_json::Value, _cx| async move {
             Ok::<_, McpfitError>(args["msg"].as_str().expect("msg key").to_string())
         });
         let response = tool
@@ -211,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_propagates_handler_errors() {
-        let tool = Tool::new("boom").handler(|_args, _cx| async move {
+        let tool = Tool::new("boom").handler(|_args: serde_json::Value, _cx| async move {
             Err::<String, _>(McpfitError::invalid_params("bad"))
         });
         let err = tool.call(json!({}), Cx::default()).await.unwrap_err();
@@ -223,6 +234,53 @@ mod tests {
         let tool = Tool::new("noop");
         let err = tool.call(json!({}), Cx::default()).await.unwrap_err();
         assert!(matches!(err, McpfitError::Internal(m) if m.contains("noop")));
+    }
+
+    #[tokio::test]
+    async fn call_deserializes_typed_args() {
+        let tool = Tool::new("add").handler(|args: AddArgs, _cx| async move {
+            Ok::<_, McpfitError>(args.a + args.b)
+        });
+        let response = tool
+            .call(json!({"a": 2.0, "b": 3.0}), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("5"));
+    }
+
+    #[tokio::test]
+    async fn call_returns_invalid_params_for_bad_args() {
+        let tool = Tool::new("add").handler(|args: AddArgs, _cx| async move {
+            Ok::<_, McpfitError>(args.a + args.b)
+        });
+        let err = tool
+            .call(json!({"a": "not a number", "b": 3.0}), Cx::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpfitError::InvalidParams(m) if m.contains("invalid arguments")));
+    }
+
+    #[tokio::test]
+    async fn call_returns_invalid_params_for_missing_field() {
+        let tool = Tool::new("add").handler(|args: AddArgs, _cx| async move {
+            Ok::<_, McpfitError>(args.a + args.b)
+        });
+        let err = tool
+            .call(json!({"a": 1.0}), Cx::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, McpfitError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn call_supports_unit_args() {
+        let tool = Tool::new("ping")
+            .handler(|_args: (), _cx| async move { Ok::<_, McpfitError>("pong".to_string()) });
+        let response = tool
+            .call(json!(null), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("pong"));
     }
 
     #[test]
