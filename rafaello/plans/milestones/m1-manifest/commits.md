@@ -1,10 +1,12 @@
 # m1-manifest — commits
 
-> **Status:** draft (round 2). Round-1 pi review
-> (`commits-pi-review-1.md`) found 6 blocking + 4 high + 4 minor;
-> all addressed here. The "What changed from prior drafts" section
-> at the bottom maps each finding to its resolution. Pi review-2
-> pending.
+> **Status:** draft (round 3). Two pi rounds:
+> `commits-pi-review-1.md` (6 blocking + 4 high + 4 minor, all
+> resolved at round 2); `commits-pi-review-2.md` (6 blocking + 3
+> high + 3 minor). This revision resolves all pi-2 findings,
+> including a phase-boundary restructure (parse decodes raw,
+> V1/V2/V3 own grammar + ACL refusals so `ValidationError`
+> variants land at the right phase per scope's negative matrix).
 
 Ordered commit list for m1, derived from `scope.md` (round 7).
 Each commit is one logical idea **and leaves the workspace green**
@@ -39,12 +41,12 @@ Tests land with the code that exercises them per
 ## m1a / m1b checkpoint
 
 Per scope §"Internal split" + pi review-2 finding 12: an explicit
-go/no-go checkpoint sits **after c17** (parsers + lock schema +
+go/no-go checkpoint sits **after c18** (parsers + lock schema +
 canonical id + topic-id + digest + sink-default inference all
 landed; no validation-as-orchestration / trifecta / carve-out /
 compiler / broker ACL yet). The driver stops, re-evaluates, and
-either continues with one milestone or opens an m1a (c01–c17) /
-m1b (c18–c40) owner-ratification request.
+either continues with one milestone or opens an m1a (c01–c18) /
+m1b (c19–c40) owner-ratification request.
 
 The boundary matches the scope's natural data-vs-policy split:
 m1a = "data layer" (parsers, schemas, derivations,
@@ -66,11 +68,15 @@ broker ACL, fittings W). Default: ship one milestone.
   "../outpost/crates/outpost" }`, `tempfile` as a dev-dep). Add
   `crates/rafaello-core/` to `[workspace.members]`. Create
   `crates/rafaello-core/Cargo.toml` with `name = "rafaello-core"`,
-  empty deps list (subsequent commits pull from
-  workspace.dependencies as they need them), and
-  `crates/rafaello-core/src/lib.rs` with only `// crate doc
-  placeholder; modules land in subsequent m1 commits.` so the
-  crate compiles.
+  empty `[dependencies]` list (subsequent commits pull from
+  workspace.dependencies as they need them) and an empty
+  `[dev-dependencies]` block where `tempfile = { workspace =
+  true }` will land when c10's fixture tests first need it (pi-2
+  commits-minor: `[workspace.dependencies]` doesn't carry a
+  dev-only flag — the workspace declaration is just the version
+  pin; the dev-dep is added per-crate). `crates/rafaello-core/src/lib.rs`
+  contains only `// crate doc placeholder; modules land in
+  subsequent m1 commits.` so the crate compiles.
 - **Why.** scope §S1, §S2.
 - **Depends on.** baseline.
 - **Acceptance.** `cargo test --manifest-path rafaello/Cargo.toml
@@ -111,7 +117,7 @@ broker ACL, fittings W). Default: ship one milestone.
   commits (manifest validate-with-package, trifecta, carve-out,
   V3, compile) depend on. Scope §M11's two vocabularies land
   here (pi-1 commits-finding 4 — earlier draft introduced these
-  inside c08/c28 and forced fragile dependency bullets):
+  inside c08/c29 and forced fragile dependency bullets):
   - `PathContext { project_root, home, plugin_dir, cache_dir,
     state_dir }` — the per-plugin context.
   - `manifest::SafePath::parse(s) -> Result<Self, ManifestError>`
@@ -121,12 +127,23 @@ broker ACL, fittings W). Default: ship one milestone.
     closed M8 placeholder set as a prefix OR an absolute host
     path; rejects bare relative paths, control chars,
     non-UTF-8, `\`. `..` parser-allowed (compile-time
-    containment check is c30's resolver).
+    containment check is c31's resolver).
   - `manifest::placeholders::expand(input, ctx) -> Result<String,
     ManifestError>` — the closed `${project}` / `${home}` /
     `${plugin}` / `${cache}` / `${state}` substitution.
-- **Why.** scope §M8, §M11 (pi-1 commits-finding 4 — moved
-  earlier so dependents can declare a clean dep).
+  - `paths::resolve_under_root(template, ctx, root_kind) ->
+    Result<PathBuf, PathError>` — pi-2 commits-finding 1 + 4
+    pulled this resolver up from the round-2 c31: walk the
+    post-expansion path component-by-component, canonicalise
+    the longest existing ancestor (with symlink + escape
+    checks), lexically join the non-existent suffix, final
+    containment check against the named root (`Project` or
+    `Plugin`). Used by V3's exec-path refusal (c27),
+    `validate_with_package`'s exec-path refusal (c11), and
+    the compiler (c31). Centralising the resolver here
+    removes the round-2 c27-depends-on-c31 numeric back-edge.
+- **Why.** scope §M8, §M11, §C3 resolver (pi-1 commits-finding
+  4 + pi-2 commits-finding 1).
 - **Depends on.** c01, c02.
 - **Acceptance.** `tests/safepath_parse.rs` (positive +
   negatives: `..`, leading `/`, empty segment, `\`, control
@@ -161,114 +178,143 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/manifest_helper_for_field.rs`,
   `tests/manifest_invalid_name.rs`.
 
-### c05 — feat(rafaello-core): manifest `[provides]` block + tool-name + sink + grant_match grammars
+**Phase boundary** (pi-2 commits-finding 5 + 6): the parse
+commits c05–c09 below decode TOML into typed structures
+**without grammar enforcement on string fields** — tool names,
+topic/pattern segments, sink classes, renderer kinds are
+stored as raw `String` (or typed newtypes whose `try_from`
+runs in V1). Parse-time errors are reserved for `ManifestError`:
+TOML schema, `deny_unknown_fields`, `ReservedField`, M11 path
+shape (`SafePath` / `CapabilityPathTemplate`), and serde
+type-mismatch. **All grammar / cross-ref / namespace ACL
+checks land in c10's `validate::manifest_standalone` (V1)
+with the `ValidationError` variants scope's negative matrix
+names.** This avoids the round-2 "scope says ValidationError
+but parser raises ManifestError" inconsistency.
+
+### c05 — feat(rafaello-core): manifest `[provides]` block raw decode
 
 - **What.** Extend `manifest` with `Provides` typed struct:
-  `tools: Vec<String>` (validated against tool-name grammar
-  per §M3), `provider: Option<String>` (same grammar), and
+  `tools: Vec<String>`, `provider: Option<String>`, and
   `tool: BTreeMap<String, ToolMetaManifest>` where
   `ToolMetaManifest = { sinks: Option<Vec<String>>,
   grant_match: Option<SafePath>, always_confirm: bool (default
-  false) }`. Sink-class grammar enforced at parse time per §M3.
-  Tool-table presence rule deferred to validate-with-package
-  in c10 (pi-6 finding 5: missing tables get §15.1 defaults;
-  orphan tables rejected — both happen at validation, not
-  parse).
-- **Why.** scope §M3.
+  false) }`. SafePath does run at parse (path shape =
+  `ManifestError`); tool-name and sink-class grammar checks
+  are deferred to V1 (c10).
+- **Why.** scope §M3 (raw decode half).
 - **Depends on.** c04.
-- **Acceptance.** Positive coverage via the worked-example
-  parse test in c10 (since validation defaults need
-  validate-with-package). This commit's standalone acceptance
-  is `tests/manifest_provides_parse.rs` asserting basic
-  decode of a minimal `[provides]` block. Negatives:
-  `tests/manifest_dotted_tool_name.rs`,
-  `tests/manifest_malformed_sinks.rs`,
-  `tests/manifest_grant_match_traversal.rs`.
+- **Acceptance.** Positive: `tests/manifest_provides_parse.rs`
+  (basic decode of minimal `[provides]`). Negative:
+  `tests/manifest_grant_match_traversal.rs` (this stays
+  parse-time since `SafePath::parse` raises `ManifestError`).
 
-### c06 — feat(rafaello-core): manifest `[bus]` block + topic / pattern grammar + canonical-id-independent ACL
+### c06 — feat(rafaello-core): manifest `[bus]` block raw decode
 
 - **What.** Extend `manifest` with `Bus { subscribes:
-  Vec<SubscribePattern>, publishes: Vec<Topic> }`. `Topic` and
-  `SubscribePattern` parsed at decode time per §M4: at least
-  two segments per security RFC §5.1 (pi-5 medium 10), segment
-  grammar `[a-z0-9_-]+`, `*` / `**` only in subscribe
-  positions (`**` final-only). Publishes on `core.*` /
-  `frontend.*` rejected at parse time (V1's
-  canonical-id-independent class). Pattern-vs-topic discipline
-  enforced (publish-position wildcards rejected). The public
-  `validate::manifest_standalone(manifest: &Manifest) ->
-  Result<()>` API entry point lands here so c06 onward can
-  call it (pi-1 commits-finding 2 — surface introduced at
-  first use, not consolidated late).
-- **Why.** scope §M4, §V1 (publish ACL canonical-id-independent
-  half).
+  Vec<String>, publishes: Vec<String> }` — strings only at
+  parse time. Topic / pattern grammars + namespace ACL +
+  pattern-vs-topic discipline checks land in V1 (c10).
+- **Why.** scope §M4 (raw decode half).
 - **Depends on.** c05.
 - **Acceptance.** Positive: `tests/manifest_bus_parse.rs`
-  (basic decode). Negatives:
-  `tests/manifest_publishes_core_topic.rs`,
-  `tests/manifest_publishes_frontend_topic.rs`,
-  `tests/manifest_publish_with_wildcard.rs`,
-  `tests/manifest_subscribe_invalid_pattern.rs`,
-  `tests/manifest_topic_segment_grammar.rs`,
-  `tests/manifest_topic_too_few_segments.rs`.
+  (basic decode of a `[bus]` table). All bus-related
+  ValidationError negatives move to c10.
 
-### c07 — feat(rafaello-core): manifest `[capabilities]` block + bundle keys + allow_hosts mode rule
+### c07 — feat(rafaello-core): manifest `[capabilities]` block raw decode
 
 - **What.** Extend `manifest` with `Capabilities` map:
-  `BTreeMap<BundleKey, CapabilityBundle>` where `BundleKey` is
-  `Default | Named(String)`. `CapabilityBundle` has
+  `BTreeMap<String, CapabilityBundle>` (bundle keys stored as
+  `String`; `Default | Named(<n>)` resolution + tool-name
+  cross-ref happens in V1). `CapabilityBundle` has
   `filesystem`, `network`, `env`, `limits` sub-tables. Path
   fields in `filesystem` typed as `CapabilityPathTemplate`
-  (from c03). `network.allow_hosts` requires `mode = "proxy"`
-  per §V1 (pi-4 finding 8) — checked in
-  `validate::manifest_standalone`. Bundle-key consistency
-  with `provides.tools` checked in
-  `validate::manifest_standalone` (`Default | Named(<n>)`
-  where `<n>` ∈ `provides.tools`).
-- **Why.** scope §M5, §V1 (allow_hosts + bundle keys).
+  (from c03 — that newtype's parse runs at decode, raising
+  `ManifestError` for shape errors only). `network.allow_hosts`
+  vs mode rule deferred to V1.
+- **Why.** scope §M5 (raw decode half).
 - **Depends on.** c05, c06.
-- **Acceptance.** Positive: parse covered by c10's worked
-  example. Negatives:
-  `tests/manifest_unknown_bundle_key.rs`,
-  `tests/manifest_allow_hosts_outside_proxy.rs`.
+- **Acceptance.** Positive: parse covered by c12's worked
+  examples. Standalone:
+  `tests/manifest_capabilities_parse.rs` (basic
+  `[capabilities.default.filesystem]` decode).
 
-### c08 — feat(rafaello-core): manifest `[load]` block + load-trigger pattern matching
+### c08 — feat(rafaello-core): manifest `[load]` block raw decode
 
 - **What.** Extend `manifest` with `Load` enum: `Eager | Boot |
   Manual | Lazy { event: Vec<String>, command: Vec<String>,
   kind: Vec<String> }`. Parser handles string-shorthand and
-  table forms per §M6. `validate::manifest_standalone`
-  cross-validates: `command` triggers against
-  `provides.tools`; `event` triggers against `bus.subscribes`
-  patterns (pattern-match per pi-3 finding 9 — the load topic
-  must be matched by at least one subscribe pattern, not
-  literal-equality); `kind` triggers against renderer kinds.
-- **Why.** scope §M6, §V1 (load-trigger cross-refs).
+  table forms per §M6. Cross-ref checks against
+  `provides.tools` / `bus.subscribes` patterns / renderer
+  kinds defer to V1.
+- **Why.** scope §M6 (raw decode half).
 - **Depends on.** c06, c07.
+- **Acceptance.** Positive: `tests/manifest_load_parse.rs`
+  (string-shorthand `"eager"` and table-form `{ event = [...],
+  command = [...], kind = [...] }` both decode).
+
+### c09 — feat(rafaello-core): manifest `[[renderers]]` array raw decode
+
+- **What.** Extend `manifest` with `Renderer { kind: String,
+  priority: u32 (default 100), method: Option<String> }`.
+  Built-in / prefixed kind grammar deferred to V1.
+- **Why.** scope §M7 (raw decode half).
+- **Depends on.** c08.
+- **Acceptance.** Positive: `tests/manifest_renderers_parse.rs`
+  (array-of-tables decodes; default priority).
+
+### c10 — feat(rafaello-core): validate::manifest_standalone (V1) — grammar + cross-refs + namespace ACL + bundle keys + allow_hosts
+
+- **What.** Land the public `validate::manifest_standalone(manifest:
+  &Manifest) -> Result<(), ValidationError>` API per scope §V1.
+  Performs every check the parse commits deferred:
+  - tool-name grammar (`[a-z0-9_][a-z0-9_-]*`),
+  - sink-class grammar (known classes + `[a-z0-9_]+` custom),
+  - `manifest.name` topic-segment grammar (M1; lifted to V1
+    so the test surface is uniform),
+  - topic / pattern segment grammar + minimum two segments
+    (security RFC §5.1, pi-5 medium 10),
+  - pattern-vs-topic discipline (publishes are topics; no
+    `*` / `**` in publish position; subscribes are patterns,
+    `**` final-only),
+  - canonical-id-independent publish ACL (`core.*` /
+    `frontend.*` rejected),
+  - bundle-key consistency (`Default | Named(<n>)` where
+    `<n>` ∈ `provides.tools`),
+  - `network.allow_hosts` requires `mode = "proxy"`,
+  - tool-table presence: missing `[provides.tool.<n>]` for
+    declared tools gets §15.1 defaults; orphan tables
+    rejected as `UnknownToolTable`,
+  - load-trigger cross-refs (`command` ∈ `provides.tools`,
+    `event` matched by some `bus.subscribes` pattern,
+    `kind` ∈ declared renderer kinds),
+  - renderer kind grammar (built-ins reserved; plugin kinds
+    require `<vendor>:<kind>` prefix per Stream E §8).
+- **Why.** scope §V1 + §M1 name grammar + tool-table-defaults
+  alignment with overview §15.1.
+- **Depends on.** c05, c06, c07, c08, c09.
 - **Acceptance.** Positives:
   `tests/manifest_validate_load_trigger_cross_refs.rs`,
   `tests/manifest_load_event_pattern_match.rs` (table-driven:
   positive subscribe-pattern match AND negative unrelated-event
   rejection per pi-1 commits-finding 8).
-  Negative: `tests/manifest_load_trigger_unknown_command.rs`.
-
-### c09 — feat(rafaello-core): manifest `[[renderers]]` array + Stream E prefix grammar + built-in reservation
-
-- **What.** Extend `manifest` with `Renderer { kind:
-  RendererKind, priority: u32 (default 100), method:
-  Option<String> }`. `RendererKind` parser rejects built-in
-  names per §M7 AND requires plugin kinds match the prefix
-  grammar `<vendor-prefix>:<kind-name>` per Stream E §8 (pi-4
-  finding 7). c08's `kind` cross-ref now resolves against the
-  declared renderer set.
-- **Why.** scope §M7.
-- **Depends on.** c08.
-- **Acceptance.** Positive (final shape): worked example
-  lands in c10. Negatives:
+  Negatives:
+  `tests/manifest_invalid_name.rs`,
+  `tests/manifest_dotted_tool_name.rs`,
+  `tests/manifest_malformed_sinks.rs`,
+  `tests/manifest_publishes_core_topic.rs`,
+  `tests/manifest_publishes_frontend_topic.rs`,
+  `tests/manifest_publish_with_wildcard.rs`,
+  `tests/manifest_subscribe_invalid_pattern.rs`,
+  `tests/manifest_topic_segment_grammar.rs`,
+  `tests/manifest_topic_too_few_segments.rs`,
+  `tests/manifest_unknown_bundle_key.rs`,
+  `tests/manifest_allow_hosts_outside_proxy.rs`,
+  `tests/manifest_load_trigger_unknown_command.rs`,
   `tests/manifest_reserved_renderer_kind.rs`,
   `tests/manifest_unprefixed_renderer_kind.rs`.
 
-### c10 — feat(rafaello-core): manifest validate-with-package + canonical bytes + worked examples + entry/grant_match resolution + openrpc + exec_paths inside-project refusal
+### c12 — feat(rafaello-core): manifest validate-with-package + canonical_bytes + worked examples + entry/grant_match resolution + openrpc + exec_paths inside-project refusal
 
 - **What.** Final manifest layer. Land:
   - `Manifest::canonical_bytes()` per §M9 (TOML re-emit with
@@ -277,35 +323,36 @@ broker ACL, fittings W). Default: ship one milestone.
     package_dir, manifest)` per §M10:
     - `entry` resolution + escape + file-vs-dir checks,
     - `grant_match` resolution + escape + presence,
-    - **openrpc.json sibling required for every plugin** per
-      `decisions.md` row 31 (pi-3 finding 4 — no
-      `provides.tools` qualifier),
+    - **openrpc.json sibling required for every plugin**
+      per `decisions.md` row 31 (pi-3 finding 4),
     - **`exec_paths` / `exec_dirs` resolving inside
       `${project}` refused** per §V1 + security RFC §6.9
-      (pi-6 finding 4),
-  - tool-table presence rule per pi-6 finding 5: missing
-    `[provides.tool.<n>]` tables get the §15.1 defaults
-    (`{ sinks: None, grant_match: None, always_confirm: false }`);
-    orphan tables (name not in `provides.tools`) rejected as
-    `UnknownToolTable`.
+      (pi-6 finding 4) — uses `paths::resolve_under_root`
+      from c03.
 - **Why.** scope §M9, §M10, §V1 exec_paths bullet.
-- **Depends on.** c03, c07, c09.
+- **Depends on.** c03 (resolver), c10 (V1 surface; this commit
+  adds package-level checks layered on top).
 - **Acceptance.** Positives:
+  `tests/manifest_parse_minimal.rs` (lifted from c04 per
+  pi-2 commits-finding 2 — needs `canonical_bytes()`),
   `tests/manifest_canonical_bytes_stable.rs`,
   `tests/manifest_parse_tool_example.rs`,
   `tests/manifest_parse_provider_example.rs`,
   `tests/manifest_parse_renderer_example.rs`,
   `tests/manifest_openrpc_sibling_present.rs`,
-  `tests/manifest_grant_match_present.rs`. Negatives:
+  `tests/manifest_grant_match_present.rs`. (The
+  `tool_table_omitted_uses_defaults.rs` test lives in c18
+  alongside sink-default inference — its scoped assertion
+  mentions `sinks_inferred: true` per Si1.) Negatives:
   `tests/manifest_missing_openrpc_sibling.rs`,
   `tests/manifest_missing_openrpc_provider.rs`,
   `tests/manifest_entry_traversal.rs`,
   `tests/manifest_entry_not_found.rs`,
   `tests/manifest_entry_escape_via_symlink.rs`,
   `tests/manifest_grant_match_missing.rs`,
-  `tests/manifest_unknown_tool_table.rs` (orphan-table
-  rejection — replaces the round-1 "missing tables also
-  rejected" wording),
+  `tests/manifest_unknown_tool_table.rs` (orphan tables — V1
+  surface; lives here because the test's worked-example
+  fixture is the validate-with-package one),
   `tests/manifest_exec_path_inside_project.rs`. Fixture trees
   under `tests/fixtures/`.
 
@@ -313,12 +360,14 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 2 — Lock schema + canonical id (L1–L9 minus L6)
 
-### c11 — feat(rafaello-core): `CanonicalId` parser/formatter + path-traversal hardening
+### c12 — feat(rafaello-core): `CanonicalId` parser/formatter + path-traversal hardening
 
 - **What.** New `rafaello_core::lock::CanonicalId` per §L8 with
   `parse(&str) -> Result<Self, LockError>` / `Display`. Source
-  grammar `/`-separated `[a-z0-9._-]+` segments (no `..`,
-  leading `/`, trailing `/`, double `/`, empty segments). Name
+  grammar `/`-separated `[a-z0-9._-]+` segments (no `..`, no
+  `.`, no leading `/`, no trailing `/`, no double `/`, no empty
+  segments — pi-2 commits-finding 7 caught the `.` segment
+  omission). Name
   matches the topic-segment grammar; `version` parsed via
   `semver::Version`. Round-trip stable.
 - **Why.** scope §L8 + pi-3 finding 1.
@@ -328,7 +377,7 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/lock_canonical_id_invalid.rs`,
   `tests/lock_canonical_id_path_traversal.rs`.
 
-### c12 — feat(rafaello-core): lock schema types + serde round-trip (data only — V3 lands later)
+### c13 — feat(rafaello-core): lock schema types + serde round-trip (data only — V3 lands later)
 
 - **What.** New `rafaello_core::lock::Lock` carrying
   `plugins: BTreeMap<CanonicalId, PluginEntry>` and
@@ -343,13 +392,17 @@ broker ACL, fittings W). Default: ship one milestone.
   `renderer_kinds`, `tool_meta` with `sinks_inferred`,
   `load: LoadPolicy` per pi-6 finding 2), `flags`.
   `SessionTable` has `provider_active`, `tool_owner`. Lock
-  capability path fields parse through
-  `CapabilityPathTemplate` (per pi-6 finding 3 lock-side
-  mirror — type-driven rejection of bare relatives at load
-  time). `Lock::to_toml` / `from_toml` deterministic.
+  Lock capability path fields decode as raw strings at parse
+  time (pi-2 commits-finding 6: scope's
+  `lock_capability_path_relative.rs` asserts
+  `ValidationError::LockCapabilityPathRelative` from V3, which
+  is a runtime-authority phase, not parse). The V3 mirror in
+  c25 reparses each lock capability path through
+  `CapabilityPathTemplate` and surfaces the typed
+  `ValidationError`. `Lock::to_toml` / `from_toml` deterministic.
 - **Why.** scope §L1–L5, §L7, §L9.
 - **Depends on.** c07, c08, c09 (capability/load/renderer
-  vocabularies), c11.
+  vocabularies), c12.
 - **Acceptance.** Positives:
   `tests/lock_parse_round_trip.rs`,
   `tests/lock_load_policy_round_trip.rs`,
@@ -358,12 +411,10 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/lock_unknown_field.rs`,
   `tests/lock_helper_field_rejected.rs`,
   `tests/lock_missing_entry.rs`,
-  `tests/lock_entry_traversal.rs`,
-  `tests/lock_capability_path_relative.rs` (lock-side
-  CapabilityPathTemplate rejection at parse time — moved up
-  from V3 since type parsing handles it).
+  `tests/lock_entry_traversal.rs`. (`lock_capability_path_relative.rs`
+  lives in c25's V3 lock-side mirror per pi-2 commits-finding 6.)
 
-### c13 — feat(rafaello-core): tool_meta always_confirm round-trip via programmatic lock fixtures
+### c14 — feat(rafaello-core): tool_meta always_confirm round-trip via programmatic lock fixtures
 
 - **What.** Pure-fixtures test commit. Construct a programmatic
   `Lock` (per scope §"Out of scope" — m1 fixtures construct
@@ -373,19 +424,19 @@ broker ACL, fittings W). Default: ship one milestone.
   install flow's job, not m1's). Asserts `always_confirm`
   round-trips through TOML serialise/parse byte-equal. The
   `CompiledPlugin` half lands as a second-stage extension in
-  c33 (m0 two-stage pattern §4.3).
+  c34 (m0 two-stage pattern §4.3).
 - **Why.** scope §L4 + pi-4 finding 6 (load-bearing for m5;
   pi-1 commits-finding 1 reframed scope).
-- **Depends on.** c12.
+- **Depends on.** c13.
 - **Acceptance.** `tests/tool_meta_always_confirm_round_trip.rs`
-  exercises the lock-side round-trip; extended in c33 with
+  exercises the lock-side round-trip; extended in c34 with
   the `CompiledPlugin.tool_meta` half.
 
 ---
 
 ## Group 3 — Topic-id derivation (T1–T3)
 
-### c14 — feat(rafaello-core): topic_id::derive + collisions_with_prefixes (public)
+### c15 — feat(rafaello-core): topic_id::derive + collisions_with_prefixes (public)
 
 - **What.** New `rafaello_core::topic_id` module. `derive(canonical:
   &str) -> String` returns
@@ -397,7 +448,7 @@ broker ACL, fittings W). Default: ship one milestone.
   &[CanonicalId])` computes prefixes via `derive` then
   delegates.
 - **Why.** scope §T1, §T2, §T3.
-- **Depends on.** c11.
+- **Depends on.** c12.
 - **Acceptance.** Positive: `tests/topic_id_derivation.rs`.
   Negative: `tests/topic_id_collision_detection.rs` (forces a
   collision via the public `collisions_with_prefixes`).
@@ -406,7 +457,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 4 — Single-plugin canonical-id-bound validation (V2)
 
-### c15 — feat(rafaello-core): validate::manifest_with_id (V2) — canonical-id-bound publish ACL
+### c16 — feat(rafaello-core): validate::manifest_with_id (V2) — canonical-id-bound publish ACL
 
 - **What.** New `validate::manifest_with_id(manifest, canonical)`
   per §V2: rejects `plugin.<topic-id>.*` publishes whose
@@ -414,7 +465,7 @@ broker ACL, fittings W). Default: ship one milestone.
   rejects `provider.<id>.*` publishes whose `<id>` doesn't
   match `provides.provider`.
 - **Why.** scope §V2.
-- **Depends on.** c10, c14.
+- **Depends on.** c10, c15.
 - **Acceptance.** Negatives:
   `tests/manifest_publishes_other_plugin_namespace.rs`,
   `tests/manifest_provider_namespace_mismatch.rs`.
@@ -423,7 +474,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 5 — Digest module (D1, D2)
 
-### c16 — feat(rafaello-core): digest::manifest_digest + content_digest (deterministic, files-only, recursion-stack cycle detection)
+### c17 — feat(rafaello-core): digest::manifest_digest + content_digest (deterministic, files-only, recursion-stack cycle detection)
 
 - **What.** New `rafaello_core::digest` module:
   `manifest_digest(canonical_bytes) -> String` and
@@ -447,7 +498,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 6 — Sink default inference (Si1)
 
-### c17 — feat(rafaello-core): sinks::infer_defaults over effective per-tool grant
+### c18 — feat(rafaello-core): sinks::infer_defaults over effective per-tool grant
 
 - **What.** New `rafaello_core::sinks` module.
   `infer_defaults(effective: &GrantBundle, declared:
@@ -462,7 +513,7 @@ broker ACL, fittings W). Default: ship one milestone.
   effective bundle — round-trip rather than projection per
   pi-1 commits-finding 1).
 - **Why.** scope §Si1.
-- **Depends on.** c12.
+- **Depends on.** c13.
 - **Acceptance.** Positives:
   `tests/sinks_infer_defaults.rs`,
   `tests/sinks_infer_from_named_bundle.rs`,
@@ -470,13 +521,13 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ---
 
-## **m1a / m1b checkpoint after c17.** Driver re-evaluates and either continues or opens a split request. Boundary matches scope §"Internal split" (data layer vs policy/emission layer).
+## **m1a / m1b checkpoint after c18.** Driver re-evaluates and either continues or opens a split request. Boundary matches scope §"Internal split" (data layer vs policy/emission layer).
 
 ---
 
 ## Group 7 — Trifecta refusal (Tr1–Tr5)
 
-### c18 — feat(rafaello-core): trifecta::evaluate (one-hop, private-state structurally excluded)
+### c19 — feat(rafaello-core): trifecta::evaluate (one-hop, private-state structurally excluded)
 
 - **What.** New `rafaello_core::trifecta` module.
   `evaluate(lock: &Lock, canonical: &CanonicalId, ctx:
@@ -489,13 +540,13 @@ broker ACL, fittings W). Default: ship one milestone.
   subscribe-pattern-matches-publish-topic graph. `refuse =
   ... && !flags.i_know_what_im_doing`.
 - **Why.** scope §Tr1–Tr5.
-- **Depends on.** c03 (PathContext), c12.
+- **Depends on.** c03 (PathContext), c13.
 - **Acceptance.** Positives:
   `tests/trifecta_two_plugins_one_hop.rs`,
   `tests/trifecta_iknowwhatimdoing_bypass.rs`. The
   private-state-exclusion *integration* test lands as
   `tests/compile_private_state_excluded_from_workspace_write.rs`
-  in c30 once the compiler injects the C5 dir (m0 two-stage
+  in c31 once the compiler injects the C5 dir (m0 two-stage
   pattern); a unit-style assertion using a pre-built
   programmatic lock (no compiler injection required) lands
   here as a basic Tr4 sanity check.
@@ -504,7 +555,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 8 — Carve-out decomposition (K1–K4)
 
-### c19 — feat(rafaello-core): carveout::compile_against — project-class decompose / credential-class refuse / write refuse / explicit override
+### c20 — feat(rafaello-core): carveout::compile_against — project-class decompose / credential-class refuse / write refuse / explicit override
 
 - **What.** New `rafaello_core::carveout` module. `CARVE_OUTS`
   constant per §K1 (two classes: project, credential).
@@ -528,7 +579,7 @@ broker ACL, fittings W). Default: ship one milestone.
   snapshotted into the output, not a live filter (§K4).
 - **Why.** scope §K1, §K2, §K3, §K4.
 - **Depends on.** c03 (PathContext + CapabilityPathTemplate),
-  c12.
+  c13.
 - **Acceptance.** Positives:
   `tests/carveout_default_workspace_decomposition.rs`,
   `tests/carveout_workspace_excludes_rafaello_dot_dirs.rs`.
@@ -544,7 +595,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 9 — Env scrubber + reserved-env C7.1 helpers (Sc1–Sc3)
 
-### c20 — feat(rafaello-core): scrubber::strip + reserved-env C7.1 rejection helper
+### c21 — feat(rafaello-core): scrubber::strip + reserved-env C7.1 rejection helper
 
 - **What.** New `rafaello_core::scrubber` module.
   `SECRET_PATTERNS` constant per §Sc1.
@@ -553,7 +604,7 @@ broker ACL, fittings W). Default: ship one milestone.
   `scrubber::reject_reserved(env_pass, env_set) ->
   Result<(), CompileError>` per §C7.1 — rejects `RFL_BUS_FD` /
   `RFL_PLUGIN` in either collection. Compiler calls into both
-  in c32.
+  in c33.
 - **Why.** scope §Sc1–Sc3, §C7.1.
 - **Depends on.** c01.
 - **Acceptance.** Positives:
@@ -563,20 +614,20 @@ broker ACL, fittings W). Default: ship one milestone.
   negative).
   Negatives: `tests/env_scrubber_strips_secret_globs.rs`.
   C7.1's `compile_reserved_env_in_pass.rs` /
-  `compile_reserved_env_in_set.rs` land in c32 once the
+  `compile_reserved_env_in_set.rs` land in c33 once the
   compiler invokes them (m0 two-stage pattern).
 
 ---
 
 ## Group 10 — Cross-plugin lock validation (V3 — wires Tr + carveout + sink-drift + topic-id collision + tool-owner + lock-side mirrors)
 
-### c21 — feat(rafaello-core): validate::lock multi-plugin context + topic-id collision + provider/tool_owner integrity
+### c22 — feat(rafaello-core): validate::lock multi-plugin context + topic-id collision + provider/tool_owner integrity
 
 - **What.** New `validate::lock(lock: &Lock, ctx:
   &LockValidationContext) -> Result<()>` per §V3 with the
   multi-plugin context per pi-6 finding 1. This commit lands
   the orchestration shell + the rules that don't require
-  trifecta/carveout/sinks (which wire in c22):
+  trifecta/carveout/sinks (which wire in c23):
   - topic-id collision (delegates to `topic_id::collisions`),
   - conflicting tool name + `[session].tool_owner` resolution
     + target integrity (pi-5 finding 2 — installed, declares
@@ -587,7 +638,7 @@ broker ACL, fittings W). Default: ship one milestone.
     `LockValidationContext.plugin_dirs`,
   - `MissingPluginDir` failure for canonicals without an entry.
 - **Why.** scope §V3 (orchestration + non-Tr/K bullets).
-- **Depends on.** c12, c14.
+- **Depends on.** c13, c15.
 - **Acceptance.** Positive:
   `tests/validate_lock_multiplugin_context.rs`. Negatives:
   `tests/lock_provider_active_unknown.rs`,
@@ -598,22 +649,22 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/lock_tool_owner_redundant.rs`,
   `tests/topic_id_collision_at_lock.rs`.
 
-### c22 — feat(rafaello-core): V3 wires trifecta + carveout + sink-drift
+### c23 — feat(rafaello-core): V3 wires trifecta + carveout + sink-drift
 
 - **What.** Extend V3 to delegate per-plugin trifecta
-  evaluation (c18), carve-out enforcement (c19), and
+  evaluation (c19), carve-out enforcement (c20), and
   sink-default drift detection (Si2). Failures surface as
   `ValidationError::TrifectaRefused`, `CarveOutRefused`,
   `CarveOutTooLarge`, `SinkInferenceDrift`.
 - **Why.** scope §V3 (trifecta + carve-out + Si2 bullets).
-- **Depends on.** c17, c18, c19, c21.
+- **Depends on.** c18, c19, c20, c22.
 - **Acceptance.** Negative: `tests/sinks_inference_drift.rs`.
-  Trifecta and carve-out negative tests landed in c18/c19;
+  Trifecta and carve-out negative tests landed in c19/c20;
   this commit's acceptance is `tests/validate_lock_full_pass.rs`
   building a multi-plugin fixture and asserting both pass and
   refusal cases via the public V3 entry point.
 
-### c23 — feat(rafaello-core): V3 lock-side publish ACL mirror
+### c24 — feat(rafaello-core): V3 lock-side publish ACL mirror
 
 - **What.** Extend V3 with the lock-side namespace ACL on
   `.grant.publishes` per pi-5 finding 1: rejects `core.*` /
@@ -622,31 +673,37 @@ broker ACL, fittings W). Default: ship one milestone.
   `provider.<id>.*` requires `bindings.provider == true` and
   matching `bindings.provider_id`.
 - **Why.** scope §V3 lock-side publish authority bullet.
-- **Depends on.** c21.
+- **Depends on.** c22.
 - **Acceptance.** Negatives:
   `tests/lock_publishes_core_topic.rs`,
   `tests/lock_publishes_frontend_topic.rs`,
   `tests/lock_publishes_other_plugin_namespace.rs`,
   `tests/lock_provider_namespace_mismatch.rs`.
 
-### c24 — feat(rafaello-core): V3 lock-side allow_hosts mode + bundle-key mirrors
+### c25 — feat(rafaello-core): V3 lock-side allow_hosts mode + bundle-key + capability-path mirrors
 
-- **What.** Extend V3 with two more lock-side mirrors:
+- **What.** Extend V3 with three lock-side mirrors:
   - `allow_hosts` requires proxy mode (pi-5 finding 3) on
     every grant bundle's `network`;
   - unknown grant bundle key rejection (pi-6 finding 3) —
     every key in `.grant.bundles` must be `Default` or a
-    tool name from `bindings.tools`.
-  (The lock-side `CapabilityPathTemplate` rejection of bare
-  relatives is type-driven at load time per c12.)
-- **Why.** scope §V3 lock-side `allow_hosts` / bundle key
-  bullets.
-- **Depends on.** c21.
+    tool name from `bindings.tools`;
+  - **capability-path template re-validation** (pi-2
+    commits-finding 6): each `read_paths` / `read_dirs` /
+    `write_paths` / `write_dirs` / `exec_paths` / `exec_dirs`
+    string in every grant bundle is re-parsed through
+    `CapabilityPathTemplate`. Bare relative paths (no
+    placeholder, not absolute) →
+    `ValidationError::LockCapabilityPathRelative`.
+- **Why.** scope §V3 lock-side `allow_hosts` / bundle key /
+  capability-path bullets.
+- **Depends on.** c22.
 - **Acceptance.** Negatives:
   `tests/lock_allow_hosts_outside_proxy.rs`,
-  `tests/lock_unknown_bundle_key.rs`.
+  `tests/lock_unknown_bundle_key.rs`,
+  `tests/lock_capability_path_relative.rs`.
 
-### c25 — feat(rafaello-core): V3 lock-side bindings grammar + tool_meta consistency mirrors
+### c26 — feat(rafaello-core): V3 lock-side bindings grammar + tool_meta consistency mirrors
 
 - **What.** Extend V3 with the bindings-snapshot validations
   per pi-5 finding 6 + pi-6 finding 3:
@@ -661,7 +718,7 @@ broker ACL, fittings W). Default: ship one milestone.
   - `bindings.tool_meta.<n>.sinks` values re-validated against
     the sink-class grammar.
 - **Why.** scope §V3 binding-snapshot validation bullets.
-- **Depends on.** c21.
+- **Depends on.** c22.
 - **Acceptance.** Negatives:
   `tests/lock_tool_meta_grant_match_traversal.rs`,
   `tests/lock_tool_meta_orphan.rs`,
@@ -671,44 +728,44 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/lock_bindings_tools_invalid_grammar.rs`,
   `tests/lock_tool_meta_invalid_sink.rs`.
 
-### c26 — feat(rafaello-core): V3 lock-side exec_paths under ${project} refusal
+### c27 — feat(rafaello-core): V3 lock-side exec_paths under ${project} refusal
 
 - **What.** Extend V3 with the §6.9 exec-under-project refusal
-  on the lock side (pi-6 finding 4). Uses the c30 path
+  on the lock side (pi-6 finding 4). Uses the c31 path
   resolver; this commit lands the V3 hook + the test.
 - **Why.** scope §V3 exec_paths under project bullet.
-- **Depends on.** c21, c30 (path resolver). **Note ordering:**
-  this commit lands AFTER c30 since it consumes the resolver;
+- **Depends on.** c22, c31 (path resolver). **Note ordering:**
+  this commit lands AFTER c31 since it consumes the resolver;
   numbering keeps grouping coherence — see "Out-of-order land"
   note below.
 - **Acceptance.** Negative:
   `tests/lock_exec_path_inside_project.rs`.
 
-> **Out-of-order land:** c26 follows c30 in commit order
-> despite its low number — the agent driver lands c27 → c30 →
-> c26 → c31 → ... Renumbering would shuffle the rest of the
+> **Out-of-order land:** c27 follows c31 in commit order
+> despite its low number — the agent driver lands c28 → c31 →
+> c27 → c32 → ... Renumbering would shuffle the rest of the
 > doc; the depends-on chain captures the real order. (This is
-> the same pattern m0 used when c20 pre-empted c21; pi-1 round
+> the same pattern m0 used when c21 pre-empted c22; pi-1 round
 > 1 acceptable per scope's per-commit greenness rule.)
 
 ---
 
 ## Group 11 — Compiler core (C1–C7) + plan emission
 
-### c27 — feat(rafaello-core): compile module skeleton + CompiledPlugin / FilesystemPlan / NetworkPlan / EnvPlan / LimitsPlan / LoadPolicy public types
+### c28 — feat(rafaello-core): compile module skeleton + CompiledPlugin / FilesystemPlan / NetworkPlan / EnvPlan / LimitsPlan / LoadPolicy public types
 
 - **What.** New `rafaello_core::compile` module with the
   public `CompiledPlugin` plan struct per §C1 + sub-types
   `FilesystemPlan`, `NetworkPlan { Deny | AllowAll | Proxy {
   allow_hosts } }`, `EnvPlan`, `LimitsPlan`, `CompiledFlags`,
-  `ToolMeta`, `LoadPolicy` (reused from `lock` per c12). No
+  `ToolMeta`, `LoadPolicy` (reused from `lock` per c13). No
   `compile_plugin` body yet.
 - **Why.** scope §C1 (data types only).
-- **Depends on.** c12.
+- **Depends on.** c13.
 - **Acceptance.** `tests/compile_types_compile.rs` is a
   build-only assertion.
 
-### c28 — feat(rafaello-core): compile_plugin entry point + V3-must-run-first guard
+### c29 — feat(rafaello-core): compile_plugin entry point + V3-must-run-first guard
 
 - **What.** Implement `compile_plugin(lock, canonical, ctx,
   recomputed_digests) -> Result<CompiledPlugin, CompileError>`
@@ -720,16 +777,19 @@ broker ACL, fittings W). Default: ship one milestone.
   the rephrase is "a lock violating a V3 invariant returns
   `ValidationNotRun`"; the function does not own a
   validation-token mechanism). Body is a scaffold; per-section
-  emitters land in c29–c33.
+  emitters land in c30–c34.
 - **Why.** scope §C2, §C1.1.
-- **Depends on.** c21, c27.
+- **Depends on.** c22, c24, c28 (pi-2 commits-finding 8 —
+  the V3 invariants `compile_plugin` claims to detect include
+  publish ACL violations from c24's lock-side mirror; depend
+  on c24 explicitly so the contract is honest).
 - **Acceptance.** Negative:
   `tests/compile_without_validate_lock_errors.rs` — a lock
   with two installed plugins resolving to the same topic-id,
   fed straight to `compile_plugin` without V3, returns
   `CompileError::ValidationNotRun`.
 
-### c29 — feat(rafaello-core): compile bundle flatten (full union) + dedup + ordering (C4)
+### c30 — feat(rafaello-core): compile bundle flatten (full union) + dedup + ordering (C4)
 
 - **What.** Per `decisions.md` row 17 + pi-4 finding 1: union
   `default` ∪ every named bundle in `grant.bundles` into one
@@ -737,12 +797,12 @@ broker ACL, fittings W). Default: ship one milestone.
   ordering: sort scalar arrays by string value, dedup. No
   `active_bundles` selection knob.
 - **Why.** scope §C2 (union flatten), §C4 (ordering).
-- **Depends on.** c28.
+- **Depends on.** c29.
 - **Acceptance.** Positives:
   `tests/compile_default_bundle.rs`,
   `tests/compile_scoped_bundle_union.rs`.
 
-### c30 — feat(rafaello-core): compile path resolver (existing-ancestor canonical + lexical suffix + containment) + placeholder application
+### c31 — feat(rafaello-core): compile path resolver (existing-ancestor canonical + lexical suffix + containment) + placeholder application
 
 - **What.** Implement C3's placeholder application + the
   containment resolver per pi-5 finding 7: walk the
@@ -754,9 +814,9 @@ broker ACL, fittings W). Default: ship one milestone.
   `${plugin}` placeholders. Failures:
   `CompileError::UnknownPlaceholder`,
   `CompileError::PathEscape`, `CompileError::SymlinkEscape`.
-  c26 (V3 lock-side exec refusal) calls into this resolver.
+  c27 (V3 lock-side exec refusal) calls into this resolver.
 - **Why.** scope §C3.
-- **Depends on.** c03, c28.
+- **Depends on.** c03, c29.
 - **Acceptance.** Positives:
   `tests/compile_placeholder_resolves_to_absolute.rs`,
   `tests/compile_capability_path_nonexistent_write_leaf.rs`.
@@ -764,9 +824,9 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/compile_path_escape_after_expansion.rs`,
   `tests/compile_capability_path_symlink_ancestor_escape.rs`.
 
-### c31 — feat(rafaello-core): compile filesystem plan via carve-out + private-state grant (C5)
+### c32 — feat(rafaello-core): compile filesystem plan via carve-out + private-state grant (C5)
 
-- **What.** Wire `carveout::compile_against` (c19) into the
+- **What.** Wire `carveout::compile_against` (c20) into the
   compiler so post-flatten reads/writes pass through
   decomposition. Inject the per-plugin private-state grant
   per §C5 using the **topic-id form**
@@ -775,14 +835,14 @@ broker ACL, fittings W). Default: ship one milestone.
   after trifecta evaluation (Tr4's structural exclusion
   remains intact).
 - **Why.** scope §C5 + §K integration.
-- **Depends on.** c19, c29, c30.
+- **Depends on.** c20, c30, c31.
 - **Acceptance.** Positives:
   `tests/compile_private_state_grant.rs`,
   `tests/compile_private_state_excluded_from_workspace_write.rs`
-  (second-stage of c18's trifecta unit assertion — m0
+  (second-stage of c19's trifecta unit assertion — m0
   two-stage pattern).
 
-### c32 — feat(rafaello-core): compile network plan + outpost dry-run + env plan + reserved-env C7.1 wiring + scrubber call
+### c33 — feat(rafaello-core): compile network plan + outpost dry-run + env plan + reserved-env C7.1 wiring + scrubber call
 
 - **What.** Build `NetworkPlan` per §C1: `Deny | AllowAll |
   Proxy { allow_hosts }`. For proxy mode, run
@@ -793,9 +853,9 @@ broker ACL, fittings W). Default: ship one milestone.
   `scrubber::reject_reserved(env_pass, env_set)` first per
   §C7.1; then `scrubber::strip(env_pass,
   flags.i_know_what_im_doing)`. Network and env emission
-  consume the post-flatten effective grant from c29.
+  consume the post-flatten effective grant from c30.
 - **Why.** scope §C1 NetworkPlan + EnvPlan + §C7 + Risks §2.
-- **Depends on.** c20, c29, c31.
+- **Depends on.** c21, c30, c32.
 - **Acceptance.** Positives:
   `tests/compile_network_proxy_plan.rs` (records
   `allow_hosts` verbatim through the plan — scope's name;
@@ -810,7 +870,7 @@ broker ACL, fittings W). Default: ship one milestone.
   `tests/compile_reserved_env_in_pass.rs`,
   `tests/compile_reserved_env_in_set.rs`.
 
-### c33 — feat(rafaello-core): compile entry resolution + limits defaults + digest gating + tool_meta projection (closes C1)
+### c34 — feat(rafaello-core): compile entry resolution + limits defaults + digest gating + tool_meta projection (closes C1)
 
 - **What.** Final compile pieces:
   - **Entry resolution** (per §L2 + pi-3 finding 2): take
@@ -830,7 +890,7 @@ broker ACL, fittings W). Default: ship one milestone.
     Carry `always_confirm` through.
 - **Why.** scope §C1 (entry_absolute, tool_meta filter), §C6,
   §D3, §L2 compile-time check.
-- **Depends on.** c13, c16, c30, c31, c32.
+- **Depends on.** c14, c17, c31, c32, c33.
 - **Acceptance.** Positives:
   `tests/compile_resource_limit_defaults.rs`,
   `tests/compile_digest_match.rs` (the canonical scope name —
@@ -839,7 +899,7 @@ broker ACL, fittings W). Default: ship one milestone.
   pair; this commit lands the single canonical file
   exercising both digests through `compile_plugin`).
   Extension of `tests/tool_meta_always_confirm_round_trip.rs`
-  with the `CompiledPlugin.tool_meta` half (closing the c13
+  with the `CompiledPlugin.tool_meta` half (closing the c14
   two-stage test).
   Negatives:
   `tests/lock_entry_not_found.rs`,
@@ -852,7 +912,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 12 — Broker ACL extraction (G1–G3)
 
-### c34 — feat(rafaello-core): broker_acl::compile with PluginAcl + auto-subscribes + tool_routes + grammar revalidation
+### c35 — feat(rafaello-core): broker_acl::compile with PluginAcl + auto-subscribes + tool_routes + grammar revalidation
 
 - **What.** New `rafaello_core::broker_acl` module.
   `compile(lock: &Lock) -> Result<BrokerAcl, CompileError>`
@@ -865,7 +925,9 @@ broker ACL, fittings W). Default: ship one milestone.
   contract as `compile_plugin` (returns `ValidationNotRun`
   if invariants not enforced).
 - **Why.** scope §G1, §G2, §G3.
-- **Depends on.** c14, c21.
+- **Depends on.** c15, c22, c24, c26 (pi-2 commits-finding 8 —
+  G2 grammar revalidation depends on tool-name +
+  renderer-kind grammar checks introduced through c26).
 - **Acceptance.** Positives:
   `tests/broker_acl_extraction.rs`,
   `tests/broker_acl_tool_owner_resolves_routing.rs`.
@@ -874,7 +936,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 13 — Fittings `MethodNotFound` typed-method cutover (W)
 
-### c35 — feat(fittings): MethodNotFound typed `method` field cutover (W1–W5)
+### c36 — feat(fittings): MethodNotFound typed `method` field cutover (W1–W5)
 
 - **What.** Single workspace-wide cutover commit on the
   `fittings` workspace, mirroring m0's c08 pattern for
@@ -907,7 +969,7 @@ broker ACL, fittings W). Default: ship one milestone.
 
 ## Group 14 — Manual validation
 
-### c36 — docs(rafaello-m1): write manual-validation.md
+### c37 — docs(rafaello-m1): write manual-validation.md
 
 - **What.** Write
   `rafaello/plans/milestones/m1-manifest/manual-validation.md`
@@ -919,7 +981,7 @@ broker ACL, fittings W). Default: ship one milestone.
   develop --impure -L --command ...` green; `tree
   rafaello/crates/rafaello-core/tests/fixtures` dump.
 - **Why.** scope §"Manual validation"; m0 patterns §4.5/§4.6.
-- **Depends on.** c34, c35.
+- **Depends on.** c35, c36.
 - **Acceptance.** `manual-validation.md` exists and captures
   the required evidence; any tooling/CI/Nix follow-ups
   discovered while exercising it land alongside.
@@ -957,16 +1019,16 @@ Beyond per-commit acceptance, m1 lands when:
 - **No workspace-wide cutover required for `rafaello-core`** —
   it's a brand-new crate with no existing consumers; every
   commit can incrementally add modules.
-- **§W (c35) IS a workspace-wide cutover** for fittings — the
+- **§W (c36) IS a workspace-wide cutover** for fittings — the
   `MethodNotFound` enum gains a struct field, source-breaking
   for direct struct literals + named-field pattern matches.
   This single commit consolidates the change and updates every
   in-tree consumer, mirroring m0 c08.
 - **Two-stage tests** per m0 pattern §4.3:
   - `compile_private_state_excluded_from_workspace_write.rs`
-    (c18 trifecta unit + c31 compiler injection).
-  - `tool_meta_always_confirm_round_trip.rs` (c13 lock-side
-    round-trip + c33 CompiledPlugin half).
+    (c19 trifecta unit + c32 compiler injection).
+  - `tool_meta_always_confirm_round_trip.rs` (c14 lock-side
+    round-trip + c34 CompiledPlugin half).
 
 ## Scope test → commit traceability table
 
@@ -975,53 +1037,177 @@ to make drift checks mechanical in later review rounds.)
 
 | scope test file | commit |
 |----------------|--------|
-| `manifest_parse_minimal.rs` | c04 |
-| `manifest_parse_tool_example.rs` | c10 |
-| `manifest_parse_provider_example.rs` | c10 |
-| `manifest_parse_renderer_example.rs` | c10 |
-| `manifest_canonical_bytes_stable.rs` | c10 |
+| `manifest_parse_minimal.rs` | c11 (lifted from c04 per pi-2 commits-finding 2 — needs `canonical_bytes`) |
+| `manifest_parse_tool_example.rs` | c11 |
+| `manifest_parse_provider_example.rs` | c11 |
+| `manifest_parse_renderer_example.rs` | c11 |
+| `manifest_canonical_bytes_stable.rs` | c11 |
 | `manifest_placeholder_expansion.rs` | c03 |
-| `manifest_validate_load_trigger_cross_refs.rs` | c08 |
-| `manifest_load_event_pattern_match.rs` | c08 |
-| `manifest_openrpc_sibling_present.rs` | c10 |
+| `manifest_validate_load_trigger_cross_refs.rs` | c10 (V1) |
+| `manifest_load_event_pattern_match.rs` | c10 (V1) |
+| `manifest_openrpc_sibling_present.rs` | c11 |
+| `manifest_grant_match_present.rs` | c11 |
+| `lock_parse_round_trip.rs` | c13 |
+| `lock_load_policy_round_trip.rs` | c13 |
+| `lock_load_policy_eager_string.rs` | c13 |
+| `sinks_inferred_flag_round_trips.rs` | c13 |
+| `lock_canonical_id_round_trip.rs` | c12 |
+| `topic_id_derivation.rs` | c15 |
+| `compile_default_bundle.rs` | c30 |
+| `compile_scoped_bundle_union.rs` | c30 |
+| `compile_placeholder_resolves_to_absolute.rs` | c31 |
+| `compile_private_state_grant.rs` | c32 |
+| `compile_private_state_excluded_from_workspace_write.rs` | c32 (extends c19 unit) |
+| `compile_resource_limit_defaults.rs` | c34 |
+| `compile_network_proxy_plan.rs` | c33 |
+| `compile_env_set_passes_through.rs` | c33 |
+| `compile_digest_match.rs` | c34 |
+| `broker_acl_extraction.rs` | c35 |
+| `carveout_default_workspace_decomposition.rs` | c20 |
+| `carveout_workspace_excludes_rafaello_dot_dirs.rs` | c20 |
+| `digest_match_compiles.rs` | c34 (alias for `compile_digest_match.rs` per scope round-3 wording — single file under canonical scope name) |
+| `digest_content_deterministic.rs` | c17 |
+| `digest_distinct_paths_same_target.rs` | c17 |
+| `trifecta_two_plugins_one_hop.rs` | c19 |
+| `trifecta_iknowwhatimdoing_bypass.rs` | c19 |
+| `sinks_infer_defaults.rs` | c18 |
+| `sinks_infer_from_named_bundle.rs` | c18 |
+| `tool_table_omitted_uses_defaults.rs` | c18 |
+| `tool_meta_always_confirm_round_trip.rs` | c14 base; c34 extension |
 | `manifest_grant_match_present.rs` | c10 |
-| `lock_parse_round_trip.rs` | c12 |
-| `lock_load_policy_round_trip.rs` | c12 |
-| `lock_load_policy_eager_string.rs` | c12 |
-| `sinks_inferred_flag_round_trips.rs` | c12 |
-| `lock_canonical_id_round_trip.rs` | c11 |
-| `topic_id_derivation.rs` | c14 |
-| `compile_default_bundle.rs` | c29 |
-| `compile_scoped_bundle_union.rs` | c29 |
-| `compile_placeholder_resolves_to_absolute.rs` | c30 |
-| `compile_private_state_grant.rs` | c31 |
-| `compile_private_state_excluded_from_workspace_write.rs` | c31 (extends c18 unit) |
-| `compile_resource_limit_defaults.rs` | c33 |
-| `compile_network_proxy_plan.rs` | c32 |
-| `compile_env_set_passes_through.rs` | c32 |
-| `compile_digest_match.rs` | c33 |
-| `broker_acl_extraction.rs` | c34 |
-| `carveout_default_workspace_decomposition.rs` | c19 |
-| `carveout_workspace_excludes_rafaello_dot_dirs.rs` | c19 |
-| `digest_match_compiles.rs` | c33 (alias for `compile_digest_match.rs` per scope round-3 wording — single file under canonical scope name) |
-| `digest_content_deterministic.rs` | c16 |
-| `digest_distinct_paths_same_target.rs` | c16 |
-| `trifecta_two_plugins_one_hop.rs` | c18 |
-| `trifecta_iknowwhatimdoing_bypass.rs` | c18 |
-| `sinks_infer_defaults.rs` | c17 |
-| `sinks_infer_from_named_bundle.rs` | c17 |
-| `tool_table_omitted_uses_defaults.rs` | c17 |
-| `tool_meta_always_confirm_round_trip.rs` | c13 base; c33 extension |
-| `manifest_grant_match_present.rs` | c10 |
-| `compile_network_proxy_allow_hosts_validates.rs` | c32 |
-| `validate_lock_multiplugin_context.rs` | c21 |
-| `env_scrubber_strips_known_secrets.rs` | c20 |
-| (every negative scope test) | (per the negative-tests rows above) |
+| `compile_network_proxy_allow_hosts_validates.rs` | c33 |
+| `validate_lock_multiplugin_context.rs` | c22 |
+| `env_scrubber_strips_known_secrets.rs` | c21 |
+
+### Negative scope tests → commit (pi-2 commits-finding 9)
+
+| scope negative test | commit |
+|---------------------|--------|
+| `manifest_unknown_field.rs` | c04 |
+| `manifest_legacy_runtime_field.rs` | c04 |
+| `manifest_legacy_rpc_block.rs` | c04 |
+| `manifest_helper_for_field.rs` | c04 |
+| `manifest_invalid_name.rs` | c10 (V1 grammar) |
+| `manifest_publishes_core_topic.rs` | c10 (V1) |
+| `manifest_publishes_other_plugin_namespace.rs` | c16 (V2) |
+| `manifest_publishes_frontend_topic.rs` | c10 (V1) |
+| `manifest_provider_namespace_mismatch.rs` | c16 (V2) |
+| `manifest_publish_with_wildcard.rs` | c10 (V1) |
+| `manifest_subscribe_invalid_pattern.rs` | c10 (V1) |
+| `manifest_topic_segment_grammar.rs` | c10 (V1) |
+| `manifest_dotted_tool_name.rs` | c10 (V1) |
+| `manifest_unknown_tool_table.rs` | c11 (validate-with-package) |
+| `manifest_unknown_bundle_key.rs` | c10 (V1) |
+| `manifest_malformed_sinks.rs` | c10 (V1) |
+| `manifest_reserved_renderer_kind.rs` | c10 (V1) |
+| `manifest_load_trigger_unknown_command.rs` | c10 (V1) |
+| `manifest_missing_openrpc_sibling.rs` | c11 |
+| `lock_unknown_field.rs` | c13 |
+| `lock_canonical_id_invalid.rs` | c12 |
+| `lock_helper_field_rejected.rs` | c13 |
+| `lock_provider_active_unknown.rs` | c22 |
+| `lock_provider_active_not_provider.rs` | c22 |
+| `lock_conflicting_tool_names.rs` | c22 |
+| `lock_missing_entry.rs` | c13 |
+| `topic_id_collision_at_lock.rs` | c22 |
+| `digest_content_mismatch.rs` | c34 |
+| `digest_manifest_mismatch.rs` | c34 |
+| `digest_symlink_escape.rs` | c17 |
+| `carveout_credential_path_refused_read.rs` | c20 |
+| `carveout_credential_path_refused_write.rs` | c20 |
+| `carveout_project_write_refused.rs` | c20 |
+| `carveout_credential_path_override.rs` | c20 |
+| `carveout_decomposition_blowup.rs` | c20 |
+| `carveout_lockfile_path_explicit.rs` | c20 |
+| `compile_unknown_placeholder.rs` | c31 |
+| `compile_reserved_env_in_pass.rs` | c33 |
+| `compile_reserved_env_in_set.rs` | c33 |
+| `env_scrubber_strips_secret_globs.rs` | c21 |
+| `sinks_inference_drift.rs` | c23 |
+| `manifest_topic_too_few_segments.rs` | c10 (V1) |
+| `lock_publishes_core_topic.rs` | c24 |
+| `lock_publishes_frontend_topic.rs` | c24 |
+| `lock_publishes_other_plugin_namespace.rs` | c24 |
+| `lock_provider_namespace_mismatch.rs` | c24 |
+| `lock_allow_hosts_outside_proxy.rs` | c25 |
+| `lock_tool_owner_unknown_plugin.rs` | c22 |
+| `lock_tool_owner_plugin_does_not_declare_tool.rs` | c22 |
+| `lock_tool_owner_redundant.rs` | c22 |
+| `lock_tool_meta_grant_match_traversal.rs` | c26 |
+| `lock_tool_meta_orphan.rs` | c26 |
+| `lock_provider_id_inconsistent.rs` | c26 |
+| `lock_renderer_kind_unprefixed.rs` | c26 |
+| `lock_renderer_kind_builtin.rs` | c26 |
+| `compile_capability_path_symlink_ancestor_escape.rs` | c31 |
+| `compile_invalid_allow_hosts.rs` | c33 |
+| `manifest_entry_traversal.rs` | c11 |
+| `manifest_entry_not_found.rs` | c11 |
+| `manifest_entry_escape_via_symlink.rs` | c11 |
+| `manifest_grant_match_traversal.rs` | c05 (parse-time SafePath) |
+| `manifest_grant_match_missing.rs` | c11 |
+| `lock_canonical_id_path_traversal.rs` | c12 |
+| `compile_path_escape_after_expansion.rs` | c31 |
+| `lock_missing_entry.rs` | c13 |
+| `lock_unknown_bundle_key.rs` | c25 |
+| `lock_capability_path_relative.rs` | c25 (V3 mirror — pi-2 commits-finding 6) |
+| `lock_bindings_tools_invalid_grammar.rs` | c26 |
+| `lock_tool_meta_invalid_sink.rs` | c26 |
+| `manifest_exec_path_inside_project.rs` | c11 |
+| `lock_exec_path_inside_project.rs` | c27 |
+| `compile_without_validate_lock_errors.rs` | c29 |
+| `digest_symlink_cycle.rs` | c17 |
+| `manifest_unprefixed_renderer_kind.rs` | c10 (V1) |
+| `manifest_allow_hosts_outside_proxy.rs` | c10 (V1) |
 
 Driver should reconcile this table against scope §"Demo bar"
 before c01 lands and flag any unplaced test.
 
 ## What changed from prior drafts
+
+Round-2 pi review (`commits-pi-review-2.md`) prompted these
+revisions:
+
+- **Path resolver moved to c03** (pi-2 finding 1 + 4). The
+  `paths::resolve_under_root` helper lives alongside SafePath
+  and CapabilityPathTemplate so c11 (validate-with-package)
+  and c27 (V3 exec-path) can call it without back-edges. The
+  round-2 c26-after-c30 numeric out-of-order note is gone.
+- **Phase-boundary restructure** (pi-2 findings 5 + 6). Parse
+  commits c05–c09 decode raw — string topics, string tool
+  names, string sink classes, string renderer kinds. Grammar
+  + cross-ref + namespace ACL checks land in **new commit
+  c10** (`validate::manifest_standalone`, the V1 entry
+  point). Negative ValidationError tests for grammar / ACL
+  / cross-ref move to c10. ManifestError stays parse-time
+  for TOML / `deny_unknown_fields` / `ReservedField` /
+  `SafePath` / `CapabilityPathTemplate` shape errors. Lock-
+  side capability path negative test stays at c25 (V3
+  mirror) returning `ValidationError`. All subsequent
+  commit numbers bumped +1 (old c10 → c11; old c11 → c12;
+  ...; old c36 → c37).
+- **`manifest_parse_minimal.rs` lifted to c11** (pi-2
+  finding 2 — needs `canonical_bytes`).
+- **`manifest_validate_load_trigger_cross_refs.rs` lives at
+  c10** (pi-2 finding 3 — kind cross-ref needs renderer
+  declarations parsed at c09; V1 in c10 owns the full
+  cross-ref check).
+- **`manifest_exec_path_inside_project.rs` lives at c11**
+  (pi-2 finding 4 — uses c03's resolver via
+  `validate_with_package`).
+- **CanonicalId rejects `.` segment** (pi-2 finding 7). c12
+  (was c11) enumerates the rejected forms explicitly.
+- **c29 / c35 dependencies expanded** (pi-2 finding 8). c29
+  depends on c24 (lock-side publish ACL); c35 depends on
+  c24 + c26.
+- **Negative-test trace table added** at the bottom (pi-2
+  finding 9).
+- **c01 tempfile note clarified** (pi-2 minor 3). The
+  workspace declaration is just the version pin; the dev-dep
+  goes into `rafaello-core`'s `[dev-dependencies]` block in
+  c11 when fixtures first need it.
+- **c17 (digest) and c21 (scrubber) deps reflect error
+  surface** (pi-2 minor 1+2). Both depend on c02 (typed
+  errors) explicitly.
 
 Round-1 pi review (`commits-pi-review-1.md`) prompted these
 revisions:
@@ -1035,30 +1221,30 @@ revisions:
   bullets; c08/c10 no longer hide the dep.
 - **`validate::manifest_standalone` API surface introduced at
   first use (c06)**, not consolidated late (pi-1 finding 2).
-  Earlier rounds had a confusing "later c13 introduces it"
-  bullet; c13 is removed entirely (its consolidation role is
+  Earlier rounds had a confusing "later c14 introduces it"
+  bullet; c14 is removed entirely (its consolidation role is
   handled by tests being written against the public API as it
   grows commit-by-commit).
-- **c10 / c12 dep on capability/bundle types** (pi-1 finding
-  3). c12 (lock schema) explicitly depends on c07 (manifest
+- **c10 / c13 dep on capability/bundle types** (pi-1 finding
+  3). c13 (lock schema) explicitly depends on c07 (manifest
   capabilities/bundles).
-- **c31/c32 depend on c29** (pi-1 finding 5 — bundle flatten
+- **c32/c33 depend on c30** (pi-1 finding 5 — bundle flatten
   must precede network/env emission).
 - **Test name canonicalisation** (pi-1 finding 6). Single
   trace table at the bottom; both `compile_network_proxy_plan.rs`
   and `compile_network_proxy_allow_hosts_validates.rs` exist
-  in scope and now both have an explicit home (c32);
-  `compile_digest_match.rs` is the canonical scope name (c33
+  in scope and now both have an explicit home (c33);
+  `compile_digest_match.rs` is the canonical scope name (c34
   replaces the round-1 duplicate `digest_match_compiles.rs` —
   the trace table aliases for clarity).
-- **`tool_table_omitted_uses_defaults.rs` moves to c17** (pi-1
+- **`tool_table_omitted_uses_defaults.rs` moves to c18** (pi-1
   finding 1). Its scope assertion is "lock has
   `sinks_inferred: true` + the inferred list", which needs
-  sink inference (c17) and a programmatic lock fixture
-  (constructible from c12). The earlier c08 placement
+  sink inference (c18) and a programmatic lock fixture
+  (constructible from c13). The earlier c08 placement
   required a manifest→lock projection API m1 doesn't
   define.
-- **c11 (now c13) reframed** (pi-1 finding 1). Lock-side
+- **c12 (now c14) reframed** (pi-1 finding 1). Lock-side
   round-trip test using a programmatic fixture, not a claim
   to a "manifest → lock projection" API.
 - **c06 explicitly covers the negative event-pattern case**
@@ -1068,15 +1254,15 @@ revisions:
 - **`compile_without_validate_lock_errors.rs` rephrased**
   (pi-1 finding 9). "A lock violating a V3 invariant returns
   `ValidationNotRun` from `compile_plugin`."
-- **m1a/m1b checkpoint moved to after c17** (pi-1 finding
+- **m1a/m1b checkpoint moved to after c18** (pi-1 finding
   10). Boundary now matches the scope's "data layer" vs
-  "policy/emission layer" rationale; c18 onwards is trifecta
+  "policy/emission layer" rationale; c19 onwards is trifecta
   + carve-out + scrubber + V3 + compiler + broker ACL.
 - **Minor cleanups** (pi-1 minor):
   - `env_scrubber_override.rs` correctly classified positive
-    in c20.
-  - `c33` no longer repeats a digest-test name; uses scope's
+    in c21.
+  - `c34` no longer repeats a digest-test name; uses scope's
     canonical `compile_digest_match.rs`.
-  - c19 (carve-out) now spells out the `allow_credential_paths
+  - c20 (carve-out) now spells out the `allow_credential_paths
     = true` override behaviour explicitly.
   - Trace table added at the bottom.
