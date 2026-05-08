@@ -112,6 +112,19 @@ impl McpService for McpServiceImpl {
     }
 
     async fn call_tool(&self, _params: ToolsCallParams) -> Result<ToolResponse> {
+        match self.lifecycle_state() {
+            SessionLifecycle::AwaitingInitialize => {
+                return Err(FittingsError::invalid_request(
+                    "tools/call received before initialize",
+                ));
+            }
+            SessionLifecycle::AwaitingInitializedNotification => {
+                return Err(FittingsError::invalid_request(
+                    "tools/call received before notifications/initialized",
+                ));
+            }
+            SessionLifecycle::Running => {}
+        }
         Err(FittingsError::invalid_request(
             "tools/call not yet implemented",
         ))
@@ -127,10 +140,18 @@ impl McpService for McpServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
-    use crate::protocol::{InitializeParams, ServerInfo};
+    use crate::protocol::{InitializeParams, ServerInfo, ToolsCallParams};
     use crate::registry::ToolRegistry;
     use crate::tool::Tool;
     use fittings::serde_json::{json, Value};
+
+    fn call_params(name: &str) -> ToolsCallParams {
+        ToolsCallParams {
+            name: name.into(),
+            arguments: json!({}),
+            meta: None,
+        }
+    }
 
     fn service(name: &str, version: &str) -> McpServiceImpl {
         service_with_registry(name, version, ToolRegistry::new())
@@ -260,6 +281,47 @@ mod tests {
             .expect("tools/list should be lenient after initialize");
         assert_eq!(result.tools.len(), 1);
         assert_eq!(result.tools[0].name, "a");
+    }
+
+    #[tokio::test]
+    async fn call_tool_before_initialize_is_rejected() {
+        let svc = service("demo", "0.1.0");
+        let err = svc
+            .call_tool(call_params("a"))
+            .await
+            .expect_err("tools/call before initialize should be rejected");
+        assert!(err.to_string().contains("before initialize"));
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::AwaitingInitialize);
+    }
+
+    #[tokio::test]
+    async fn call_tool_before_initialized_notification_is_rejected() {
+        let svc = service("demo", "0.1.0");
+        initialize(&svc).await;
+        let err = svc
+            .call_tool(call_params("a"))
+            .await
+            .expect_err("tools/call before initialized notification should be rejected");
+        assert!(err
+            .to_string()
+            .contains("before notifications/initialized"));
+        assert_eq!(
+            svc.lifecycle_state(),
+            SessionLifecycle::AwaitingInitializedNotification
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_passes_lifecycle_gate_when_running() {
+        let svc = service("demo", "0.1.0");
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        let err = svc
+            .call_tool(call_params("a"))
+            .await
+            .expect_err("tools/call dispatch is not yet implemented");
+        assert!(err.to_string().contains("not yet implemented"));
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::Running);
     }
 
     #[tokio::test]
