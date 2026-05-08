@@ -1,0 +1,11 @@
+error: StructuredObject can only be derived for structs
+ --> tests/ui/structured_object.rs:4:6
+  |
+4 | enum NotAStruct {
+  |      ^^^^^^^^^^
+
+error: StructuredObject can only be derived for structs
+  --> tests/ui/structured_object.rs:10:7
+   |
+10 | union AlsoNot {
+   |       ^^^^^^^

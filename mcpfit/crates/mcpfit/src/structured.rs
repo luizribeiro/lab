@@ -76,11 +76,21 @@ mod tests {
 
     impl StructuredObject for Sum {}
 
+    #[derive(Debug, PartialEq, Eq, Serialize, crate::StructuredObject)]
+    struct Derived {
+        value: i64,
+    }
+
     fn assert_structured<T: StructuredObject>() {}
 
     #[test]
     fn manual_impl_satisfies_marker() {
         assert_structured::<Sum>();
+    }
+
+    #[test]
+    fn derive_impl_satisfies_marker() {
+        assert_structured::<Derived>();
     }
 
     #[test]

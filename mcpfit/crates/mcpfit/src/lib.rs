@@ -1,6 +1,8 @@
 //! Macro-first MCP server framework. See `mcpfit/plans/m0.md`.
 
-use mcpfit_macros as _;
+extern crate self as mcpfit;
+
+pub use mcpfit_macros::StructuredObject;
 
 mod content;
 mod context;
