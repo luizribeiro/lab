@@ -14,3 +14,4 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
 fittings-testkit = { path = "../../crates/testkit" }
+tokio-util.workspace = true

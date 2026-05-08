@@ -6,6 +6,11 @@ use fittings::{FittingsError, Result, ServiceContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use fittings::core::context::{DroppedNotifications, PeerHandle};
+#[cfg(test)]
+use tokio_util::sync::CancellationToken;
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
@@ -147,38 +152,25 @@ impl ToolsCallResult {
 }
 
 /// Per-tool-call context handed to a registered tool handler. Wraps the
-/// handler's `ServiceContext` (so handlers can observe cancellation and
-/// emit `notifications/progress` via `ctx.notify`) plus the optional
-/// progress token negotiated for the call.
+/// handler's `ServiceContext` (so handlers can observe cancellation via
+/// `ctx.cancelled()` / `ctx.is_cancelled()` and emit `notifications/progress`
+/// via `ctx.notify`) plus the optional progress token negotiated for the call.
 #[derive(Clone)]
 pub struct ToolCallContext {
-    inner: ToolCallContextInner,
+    ctx: ServiceContext,
     progress_token: Option<Value>,
-}
-
-#[derive(Clone)]
-enum ToolCallContextInner {
-    Live(ServiceContext),
-    Detached {
-        cancelled: Arc<std::sync::atomic::AtomicBool>,
-    },
 }
 
 impl ToolCallContext {
     pub fn from_service_context(ctx: ServiceContext) -> Self {
         Self {
-            inner: ToolCallContextInner::Live(ctx),
+            ctx,
             progress_token: None,
         }
     }
 
     pub fn detached() -> Self {
-        Self {
-            inner: ToolCallContextInner::Detached {
-                cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            },
-            progress_token: None,
-        }
+        Self::from_service_context(ServiceContext::detached())
     }
 
     pub fn with_progress_token(mut self, progress_token: Option<Value>) -> Self {
@@ -187,19 +179,15 @@ impl ToolCallContext {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        match &self.inner {
-            ToolCallContextInner::Live(ctx) => ctx.is_cancelled(),
-            ToolCallContextInner::Detached { cancelled } => {
-                cancelled.load(std::sync::atomic::Ordering::Acquire)
-            }
-        }
+        self.ctx.is_cancelled()
+    }
+
+    pub async fn cancelled(&self) {
+        self.ctx.cancelled().await
     }
 
     pub fn emit_progress(&self, progress: f64, total: Option<f64>, message: Option<String>) {
         let Some(token) = &self.progress_token else {
-            return;
-        };
-        let ToolCallContextInner::Live(ctx) = &self.inner else {
             return;
         };
         let params = fittings::serde_json::to_value(ProgressNotificationParams {
@@ -209,16 +197,17 @@ impl ToolCallContext {
             message,
         })
         .expect("progress notification params should serialize");
-        let _ = ctx.notify("notifications/progress", params);
+        let _ = self.ctx.notify("notifications/progress", params);
     }
 
     #[cfg(test)]
     fn detached_cancelled() -> Self {
-        let detached = Self::detached();
-        if let ToolCallContextInner::Detached { cancelled } = &detached.inner {
-            cancelled.store(true, std::sync::atomic::Ordering::Release);
-        }
-        detached
+        let token = CancellationToken::new();
+        token.cancel();
+        let (tx, rx) = fittings::tokio::sync::mpsc::channel(1);
+        std::mem::forget(rx);
+        let peer = PeerHandle::new(tx, DroppedNotifications::new(), CancellationToken::new());
+        Self::from_service_context(ServiceContext::new(None, token, peer))
     }
 }
 
