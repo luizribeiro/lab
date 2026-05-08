@@ -93,3 +93,11 @@ path = "../../tests/inbound_request_no_service.rs"
 [[test]]
 name = "inbound_request_with_service"
 path = "../../tests/inbound_request_with_service.rs"
+
+[[test]]
+name = "peerhandle_bidirectional"
+path = "../../tests/peerhandle_bidirectional.rs"
+
+[[test]]
+name = "id_namespace_isolation"
+path = "../../tests/id_namespace_isolation.rs"

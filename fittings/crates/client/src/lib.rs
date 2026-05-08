@@ -18,8 +18,12 @@ use std::{
 };
 
 use fittings_core::{
-    context::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext},
+    context::{
+        DroppedNotifications, OutboundNotification, OutboundRequest, PeerHandle, PendingOutbound,
+        ServiceContext,
+    },
     error::FittingsError,
+    id_allocator::IdAllocator,
     message::Request,
     service::Service,
     transport::Connector,
@@ -61,12 +65,24 @@ where
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (notify_tx, notify_rx) =
             mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
-        let peer = PeerHandle::new(notify_tx, DroppedNotifications::new());
+        let (outbound_request_tx, outbound_request_rx) =
+            mpsc::unbounded_channel::<OutboundRequest>();
+        let pending_outbound = PendingOutbound::new();
+        let id_allocator = Arc::new(IdAllocator::client());
+        let peer = PeerHandle::with_outbound_calls(
+            notify_tx,
+            DroppedNotifications::new(),
+            id_allocator,
+            outbound_request_tx,
+            pending_outbound.clone(),
+        );
         let service: ServiceSlot = Arc::new(RwLock::new(None));
         let worker = tokio::spawn(run_client_loop(
             transport,
             request_rx,
             notify_rx,
+            outbound_request_rx,
+            pending_outbound,
             service.clone(),
             peer.clone(),
         ));
@@ -160,6 +176,8 @@ async fn run_client_loop<T>(
     mut transport: T,
     mut request_rx: mpsc::UnboundedReceiver<ClientCommand>,
     mut notify_rx: mpsc::Receiver<OutboundNotification>,
+    mut outbound_request_rx: mpsc::UnboundedReceiver<OutboundRequest>,
+    pending_outbound: PendingOutbound,
     service: ServiceSlot,
     peer: PeerHandle,
 ) where
@@ -169,21 +187,35 @@ async fn run_client_loop<T>(
         HashMap::new();
     let (inbound_response_tx, mut inbound_response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
+    let shutdown =
+        |pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
+         pending_outbound: &PendingOutbound,
+         request_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
+         error: FittingsError| {
+            fail_pending(pending, error.clone());
+            fail_pending_outbound(pending_outbound, error.clone());
+            fail_queued_calls(request_rx, error);
+        };
+
     loop {
         pending.retain(|_, sender| !sender.is_closed());
 
         tokio::select! {
             Some(notification) = notify_rx.recv() => {
                 if let Err(error) = send_request(&mut transport, None, &notification.method, notification.params).await {
-                    fail_pending(&mut pending, error.clone());
-                    fail_queued_calls(&mut request_rx, error);
+                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
+                    return;
+                }
+            }
+            Some(outbound) = outbound_request_rx.recv() => {
+                if let Err(error) = send_request(&mut transport, Some(&outbound.id), &outbound.method, outbound.params).await {
+                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
                     return;
                 }
             }
             Some(frame) = inbound_response_rx.recv() => {
                 if let Err(error) = transport.send(&frame).await {
-                    fail_pending(&mut pending, error.clone());
-                    fail_queued_calls(&mut request_rx, error);
+                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
                     return;
                 }
             }
@@ -192,8 +224,7 @@ async fn run_client_loop<T>(
                     Some(ClientCommand::Call { id, method, params, response_tx }) => {
                         if let Err(error) = send_request(&mut transport, Some(&id), &method, params).await {
                             let _ = response_tx.send(Err(error.clone()));
-                            fail_pending(&mut pending, error.clone());
-                            fail_queued_calls(&mut request_rx, error);
+                            shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
                             return;
                         }
 
@@ -201,34 +232,73 @@ async fn run_client_loop<T>(
                     }
                     Some(ClientCommand::Notify { method, params }) => {
                         if let Err(error) = send_request(&mut transport, None, &method, params).await {
-                            fail_pending(&mut pending, error.clone());
-                            fail_queued_calls(&mut request_rx, error);
+                            shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
                             return;
                         }
                     }
                     Some(ClientCommand::Shutdown) | None => {
-                        fail_pending(&mut pending, FittingsError::internal("client closed"));
+                        let error = FittingsError::internal("client closed");
+                        fail_pending(&mut pending, error.clone());
+                        fail_pending_outbound(&pending_outbound, error);
                         return;
                     }
                 }
             }
             recv_result = transport.recv() => {
                 match recv_result {
-                    Ok(frame) => handle_inbound_frame(
-                        frame,
-                        &mut pending,
-                        &service,
-                        &inbound_response_tx,
-                        peer.clone(),
-                    ),
+                    Ok(frame) => {
+                        if route_outbound_response(&frame, &pending_outbound) {
+                            continue;
+                        }
+                        handle_inbound_frame(
+                            frame,
+                            &mut pending,
+                            &service,
+                            &inbound_response_tx,
+                            peer.clone(),
+                        );
+                    }
                     Err(error) => {
-                        fail_pending(&mut pending, error.clone());
-                        fail_queued_calls(&mut request_rx, error);
+                        shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
                         return;
                     }
                 }
             }
         }
+    }
+}
+
+fn route_outbound_response(frame: &[u8], pending: &PendingOutbound) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if !object.contains_key("result") && !object.contains_key("error") {
+        return false;
+    }
+    let envelope = match decode_response_line(frame) {
+        Ok(envelope) => envelope,
+        Err(_) => return false,
+    };
+    let Some(tx) = pending.remove(&envelope.id) else {
+        return false;
+    };
+    let result = match (envelope.result, envelope.error) {
+        (Some(value), None) => Ok(value),
+        (None, Some(error)) => Err(from_error_envelope(error)),
+        _ => Err(FittingsError::invalid_request(
+            "response must contain exactly one of `result` or `error`",
+        )),
+    };
+    let _ = tx.send(result);
+    true
+}
+
+fn fail_pending_outbound(pending: &PendingOutbound, error: FittingsError) {
+    for tx in pending.drain_all() {
+        let _ = tx.send(Err(error.clone()));
     }
 }
 
