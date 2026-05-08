@@ -61,18 +61,28 @@ Driver decides during implementation. Default: no split.
   decode paths. Existing dispatcher tests still pass with id-shape
   fixups.
 
-### c02 — feat(fittings-core): FittingsError predefined variants gain data field
+### c02 — feat(fittings-core): FittingsError predefined variants gain data field + Panic variant
 
 - **What.** `FittingsError::{Parse, InvalidRequest, MethodNotFound,
   InvalidParams, Internal}` gain `data: Option<Value>` and a typed
-  `message: String`. Constructors (`FittingsError::method_not_found`,
-  etc.) accept and store the new fields.
+  `message: String`. New `FittingsError::Panic { message: String }`
+  variant for handler-panic propagation; outbound mapping in c04
+  emits `data.fittingsKind = "panic"`. **Existing single-argument
+  constructors (`FittingsError::method_not_found(msg)`, etc.) are
+  preserved and set `data: None`** so the cutover doesn't churn
+  call sites that don't have a payload to attach; data-bearing
+  constructors are added alongside (`method_not_found_with_data`)
+  or callers may directly construct the variant.
 - **Why.** scope §W2; rfc-fittings-errors.md:192-209. Pi review-1
   finding 7: this is `fittings-core` work, not `fittings-wire`.
+  Pi review-2 finding 4: `Panic` variant must be explicit so c04's
+  marker round-trip can prove it. Pi review-2 finding 8: keep
+  one-arg constructors compatible.
 - **Depends on.** baseline.
 - **Acceptance.** `tests/core_predefined_error_data.rs` table-driven
-  across all five variants asserts construction + read of `data`
-  and `message`.
+  across all six variants (five predefined + Panic) asserts
+  construction + read of `data` and `message`. Existing one-arg
+  constructor call sites keep compiling unchanged.
 
 ### c03 — feat(fittings-wire): error_map preserves data field on outbound encode
 
@@ -85,20 +95,24 @@ Driver decides during implementation. Default: no split.
   table-driven across the five variants asserts `data` byte-equal
   + `message` preserved through `to_error_envelope`.
 
-### c04 — feat(fittings-wire): error_map preserves data field on inbound decode
+### c04 — feat(fittings-wire): error_map preserves data field on inbound decode + Transport/Panic markers
 
-- **What.** Update `fittings-wire::error_map::to_fittings_error` to
-  carry `data` and `message` back for predefined codes (current impl
-  discards on the predefined codes). Plus `Transport`/`Panic` markers
-  per rfc-fittings-errors.md:223-262 (server panic produces
-  `data.fittingsKind = "panic"`; transport failure produces
-  `data.fittingsKind = "transport"`; both decode back via the marker).
-- **Why.** scope §W4 + S5/marker preservation.
-- **Depends on.** c03.
+- **What.** Update `fittings-wire::error_map::from_error_envelope`
+  (the inbound mapping; pi review-2 minor note caught the wrong
+  function name in the previous draft) to carry `data` and `message`
+  back for predefined codes. Plus `Transport` / `Panic` marker
+  encoding+decoding per rfc-fittings-errors.md:223-262: outbound
+  emits `data.fittingsKind = "transport"` for Transport,
+  `data.fittingsKind = "panic"` for Panic; inbound decodes the
+  marker back to the typed variant. (The actual dispatcher mapping
+  of handler panics to `FittingsError::Panic` lives in c08.)
+- **Why.** scope §W4 + marker preservation.
+- **Depends on.** c02, c03.
 - **Acceptance.** `tests/wire_inbound_error_round_trip.rs`
-  table-driven across the five variants + Transport + Panic markers
-  asserts byte-equal data and message round-trip via
-  `to_error_envelope` → `to_fittings_error`.
+  table-driven across the five predefined variants + Transport +
+  Panic markers asserts byte-equal data and message round-trip via
+  `to_error_envelope` → `from_error_envelope`. Tests construct
+  `FittingsError::Panic` directly (no dispatcher needed yet).
 
 ### c05 — feat(fittings-core): widen ServiceError code validation + invalidServiceCode marker
 
@@ -128,7 +142,7 @@ Driver decides during implementation. Default: no split.
 
 - **What.** Add `FittingsError::Cancelled { reason: Option<String> }`.
   No wire mapping. Will become a handler-returned response-suppression
-  trigger once the server implements S6 (c23).
+  trigger once the server implements S6 (c22).
 - **Why.** scope §C3.
 - **Depends on.** baseline.
 - **Acceptance.** Variant compiles; existing error-mapping unit
@@ -176,16 +190,31 @@ Driver decides during implementation. Default: no split.
     consumer; its existing `serve_stdio` workaround (the custom
     notification-draining loop and `ToolCallContext` shim) is
     *retained* here — that workaround drops in c26, separately.
+  - **Server panic mapping**: the dispatcher's `catch_unwind` path
+    is updated to map worker panics to `FittingsError::Panic { message }`
+    (carrying the panic's payload string when extractable) instead
+    of the previous flat `Internal("request handler panicked")`.
+    This proves the c04 marker round-trip end-to-end.
 - **Why.** scope §C1, §C2, §C4, §M1, §M2. Pi review-1 findings 1
   and 4: this is the only way to keep the workspace green per
   commit, and `mcp-server` must be in the cutover (not deferred).
-- **Depends on.** c01, c07.
+  Pi review-2 finding 4: server panic mapping must be explicit and
+  land here (the dispatcher cutover) so c04's marker test works
+  end-to-end.
+- **Depends on.** c01, c02, c07.
 - **Acceptance.** `cargo test --workspace` from `fittings/` is
   green. `npm run check:real-client` from
   `fittings/examples/mcp-server` still passes (the wire shape is
   the same; only the in-process API moved). New
   `tests/service_context_basic.rs` asserts a handler can read its
-  `ctx.request_id()` and `ctx.is_cancelled() == false`.
+  `ctx.request_id()` and `ctx.is_cancelled() == false`. New
+  `tests/error_preservation_round_trip.rs` (the scope demo-bar
+  test) table-driven across all five predefined variants: server
+  returns `<variant> { message, data }`; client receives both
+  byte-equal via the full dispatcher path. New
+  `tests/handler_panic_maps_to_panic.rs` asserts a panicking
+  handler surfaces as `FittingsError::Panic` on the client side
+  via the `fittingsKind = "panic"` marker.
 
 ### c09 — feat(fittings-server): two-channel server loop (response unbounded, notification bounded with drop counter)
 
@@ -199,9 +228,18 @@ Driver decides during implementation. Default: no split.
   while responses are still in-flight.
 - **Why.** scope §S4.
 - **Depends on.** c08.
-- **Acceptance.** `tests/bounded_notify_drop.rs`: handler floods
-  notifications faster than transport flushes; bounded sink drops;
-  counter increments; subsequent `peer.call` succeeds.
+- **Acceptance.**
+  - `tests/service_context_notify.rs` (the scope demo-bar test):
+    handler emits 5 notifications mid-request; client receives
+    all 5 *before* the response. Asserts ordering via the
+    non-drop path.
+  - `tests/bounded_notify_drop.rs`: handler floods notifications
+    faster than the transport flushes; bounded sink drops;
+    counter increments; subsequent ordinary request/response
+    traffic still succeeds (asserts the S4 contract: response
+    channel never blocks on the notification sink). Bidirectional
+    `peer.call` traffic post-flood is exercised in c14/c30 once
+    the API exists.
 
 ### c10 — feat(fittings-server,fittings-client): Server::peer() / Client::peer() accessors expose PeerHandle (notify only)
 
@@ -212,29 +250,36 @@ Driver decides during implementation. Default: no split.
   `peer.closed()` light up in Group 3.
 - **Why.** scope §S1, §K1 (notify portion).
 - **Depends on.** c09.
-- **Acceptance.** `tests/peerhandle_outside_handler.rs`: a startup
-  task on each side proactively notifies the peer; both sides
-  observe the inbound notification.
+- **Acceptance.** `tests/peerhandle_outside_handler.rs` part one:
+  a startup task on the server side calls `Server::peer().notify(...)`
+  and a raw test-harness client (reading frames directly off the
+  transport, not via `Client`) observes the notification. The
+  client-side public `Client::peer().notify(...)` plus client-side
+  observation of server-originated notifications via the registered
+  notification handler is added in c19 (which is when K2's handler
+  registration lands).
 
 ---
 
 ## Group 3 — Bidirectional `PeerHandle` + id-null semantics (S2–S3, S9, K2, K3)
 
-### c11 — feat(fittings-core): id-namespace strategy for outbound peer.call
+### c11 — feat(fittings-core): id-namespace strategy for outbound peer.call (standalone allocator)
 
-- **What.** Both server-initiated and client-initiated `peer.call`
-  outbound id allocators use a string prefix encoding (`s_<n>` /
-  `c_<n>`) backed by an `AtomicU64` counter per direction. Document
-  the invariant in `fittings-core` doc comment: generated outbound
-  ids cannot collide with the opposite side's generated namespace;
-  duplicate inbound ids from a peer are still possible and are
-  handled at the in-flight map (a separate concern). Per pi review-1's
-  open-item answer.
-- **Why.** scope §S2 acceptance + risk #2.
+- **What.** A **standalone** `IdAllocator` module in `fittings-core`
+  (no PeerHandle integration yet — that's c12 server-side and c14
+  client-side). Both directions use a string prefix encoding
+  (`s_<n>` / `c_<n>`) backed by an `AtomicU64` counter per direction.
+  Document the invariant in the module doc comment: generated
+  outbound ids cannot collide with the opposite side's generated
+  namespace; duplicate inbound ids from a peer are still possible
+  and are handled at the in-flight map (a separate concern).
+- **Why.** scope §S2 acceptance + risk #2. Pi review-2 open-item
+  answer: standalone allocator depends on c01 only; integration
+  with PeerHandle internals lands in c12/c14.
 - **Depends on.** c01.
 - **Acceptance.** Unit tests: `IdAllocator::next()` returns
-  monotonically increasing prefixed ids; cannot collide with the
-  opposite-direction prefix.
+  monotonically increasing prefixed ids; allocators with different
+  prefixes cannot produce colliding ids.
 
 ### c12 — feat(fittings-server): PeerHandle::call (server-initiated)
 
@@ -307,14 +352,14 @@ Driver decides during implementation. Default: no split.
   explicitly by callers (c27). The dispatcher routes cancellation
   notifications to a per-request token (c07); this commit only
   *configures* which method/extractor the dispatcher listens for.
-  Actual token-firing logic is c20.
+  Actual token-firing logic is c21.
 - **Why.** scope §S7. Pi review-1 finding 3: dropped-future
   cancellation in c18 needs the configured method to exist first.
 - **Depends on.** c08.
 - **Acceptance.** Unit test: server constructed with default
   config has cancellation_method == `$/cancelRequest`; with MCP
   override has `notifications/cancelled` + `requestId`. (Token
-  firing is exercised in c20.)
+  firing is exercised in c21.)
 
 ### c18 — feat(fittings-server): PeerHandle::call dropped-future cancellation
 
@@ -330,18 +375,30 @@ Driver decides during implementation. Default: no split.
   slot vacated. Repeats with MCP override (`notifications/cancelled`
   + `requestId`).
 
-### c19 — feat(fittings-client): inbound notification handler (sync Fn)
+### c19 — feat(fittings-client): inbound notification handler (sync Fn) + client-side outside-handler notify
 
 - **What.** `Client::with_notification_handler(Fn(String, Value) +
   Send + Sync + 'static)`. Wrapped in `tokio::spawn(async move {
   handler(method, params); })`. If unregistered, dropped silently.
   m0 may additionally expose a `Client::dropped_notifications()`
-  counter (an implementation convenience, not RFC-mandated).
-- **Why.** scope §K2.
+  counter (an implementation convenience, not RFC-mandated). With
+  this commit, the client now has the public-API path for observing
+  server-originated notifications, completing the K1/K2 surface.
+- **Why.** scope §K2. Pi review-2 finding 3: c10 needed a raw
+  harness for the outside-handler notify test because K2's
+  notification handler didn't exist yet; this commit adds the
+  public-API client observation.
 - **Depends on.** c10.
-- **Acceptance.** `tests/notification_handler_panic.rs`: panic in
-  handler doesn't kill subsequent notifications; doesn't affect
-  response correlation.
+- **Acceptance.**
+  - `tests/notification_handler_panic.rs`: panic in handler doesn't
+    kill subsequent notifications; doesn't affect response
+    correlation.
+  - Extends `peerhandle_outside_handler.rs` (from c10) with the
+    client-side public path: a startup task on the client calls
+    `Client::peer().notify(...)`, server observes; server's startup
+    task calls `Server::peer().notify(...)`, client's registered
+    notification handler observes. Both directions through the
+    public API.
 
 ### c20 — feat(fittings-server): id_null_explicit_request runtime semantics
 
@@ -478,8 +535,9 @@ Driver decides during implementation. Default: no split.
 - **What.** Re-run `npm run check:real-client` (the
   `scripts/check-with-mcp-sdk.mjs` driver) against the rebuilt
   server; confirm the wire shape changes from Groups 1–4 didn't
-  regress interop. Captures expected output in commit body and
-  in `manual-validation.md`.
+  regress interop. Records the JS-SDK interop output snippet in
+  the commit body. (The full milestone-level `manual-validation.md`
+  artefact is written at c32 after Group 6 lands.)
 - **Why.** scope §E3.
 - **Depends on.** c26, c27, c28.
 - **Acceptance.** `npm run check:real-client` exits 0; output
@@ -513,6 +571,25 @@ Driver decides during implementation. Default: no split.
   child with a hand-rolled echo service; parent `peer.call`s the
   child; child responds; parent `peer.notify`s; child receives.
 
+### c32 — docs(fittings): write manual-validation.md for m0
+
+- **What.** Write `rafaello/plans/milestones/m0-fittings/manual-validation.md`
+  recording the items in scope §"Manual validation in
+  manual-validation.md": the tmux + JS interop driver session
+  with one progress notification + one cancelled call captured;
+  the full m0 test suite running clean (no test hangs past 30s);
+  `cargo build -p fittings` clean (no `target/pre-commit`
+  artefacts in git); `nix develop .#fittings --command cargo test
+  --workspace` green on Linux. The macOS leg is delegated to CI
+  per scope.
+- **Why.** scope §"Manual validation"; pi review-2 finding 5: the
+  manual-validation artefact is a milestone-level deliverable, not
+  a per-commit one, and must land after Group 6.
+- **Depends on.** c30, c31.
+- **Acceptance.** `manual-validation.md` exists, captures the
+  required evidence, and is committed alongside any minor
+  tooling/CI/Nix follow-ups discovered while exercising it.
+
 ---
 
 ## Acceptance for the milestone as a whole
@@ -534,6 +611,38 @@ Beyond per-commit acceptance, m0 lands when:
   `decisions.md` / stream RFCs as deltas.
 
 ## What changed from the first draft
+
+Round-2 pi review (`commits-pi-review-2.md`) prompted these revisions:
+
+- **c02 adds `FittingsError::Panic` variant** explicitly so c04's
+  marker round-trip can prove the contract; c08 (dispatcher cutover)
+  maps handler panics to `Panic`. Pi-2 finding 4.
+- **c02 keeps existing one-arg constructors** (`method_not_found(msg)`)
+  setting `data: None`, with data-bearing constructors added. Pi-2
+  finding 8.
+- **c08 acceptance includes `error_preservation_round_trip.rs`** —
+  the full server→client end-to-end round-trip for predefined
+  variants — and `handler_panic_maps_to_panic.rs`. Pi-2 finding 6.
+- **c09 acceptance includes `service_context_notify.rs`** (the
+  scope demo bar's 5-notifications-mid-request ordering test),
+  and the bounded-drop test no longer references `peer.call` at
+  this commit (`peer.call` traffic post-flood is exercised in
+  c14/c30). Pi-2 findings 1+2.
+- **c10 acceptance restricted to `Server::peer().notify` + raw
+  harness**; client-side public observation moves to c19. Pi-2
+  finding 3.
+- **c11 explicitly standalone allocator** with c01-only dependency;
+  PeerHandle integration in c12/c14. Pi-2 open-item.
+- **c19 acceptance extended** with the client-side public path
+  (`Client::peer().notify` + client-handler observation), now
+  that the client-side notification handler exists. Pi-2 finding 3.
+- **c29 records JS-SDK output only**; the milestone-level
+  `manual-validation.md` is c32 (new). Pi-2 finding 5.
+- **New c32** writes the milestone-level `manual-validation.md`
+  after Group 6. Pi-2 finding 5.
+- **Stale internal references corrected**: c06 cites c22 (not c23);
+  c17 cites c21 (not c20); peer-gone-during-notify reference fixed
+  to c25 (not c30).
 
 Round-1 pi review (`commits-pi-review-1.md`) prompted these revisions:
 
@@ -575,22 +684,20 @@ Round-1 pi review (`commits-pi-review-1.md`) prompted these revisions:
   point inside m0 is after c10 (API+notify cutover, no
   bidirectional). Default is to ship m0 as one milestone.
 
-## Open items for pi review
+## Open items resolved by pi rounds 1–2
 
-- **c08 size.** It's the largest commit by far — Service trait,
-  Middleware, macros, all examples (incl. mcp-server's signature
-  migration), basic ctx.notify wiring. Pi: is the consolidation
-  the right call, or should I introduce a temporary shim path so
-  it can split? My read: the workspace would have to maintain two
-  Service traits in parallel for any split, which is worse than
-  one big "API cutover" commit.
-- **c20 placement.** I moved `id_null_explicit_request` runtime
-  semantics from Group 4 to Group 3. Pi: is c20 the right
-  position, or should it land earlier (between c08 and c11)?
-- **c11 dependency.** c11 only depends on c01 (it's a pure
-  allocator with no runtime). Pi: does it need c08 too, or can
-  the allocator land before the API cutover?
-- **c25 placement.** I have peer-gone-during-notify in Group 4
-  rather than Group 3 because it asserts the cancellation contract
-  (notify doesn't return Cancelled on peer-gone). Pi: should it
-  move to Group 3 (after c19) instead?
+All open questions from earlier drafts have been answered by pi:
+
+- **c08 size**: consolidated cutover is the right trade-off (pi-2
+  resolved).
+- **c20 placement**: pi recommended moving earlier but said it isn't
+  blocking if dependencies are correct. Left in current position
+  (Group 3) since deps are valid (`c01, c08`); future driver may
+  reshuffle.
+- **c11 dependency**: standalone allocator depends on c01 only;
+  documented in the c11 entry.
+- **c25 placement**: pi noted it semantically belongs in Group 3
+  but said placement is not blocking. Left in Group 4 since deps
+  (`c16, c19`) are valid.
+- **m0a/m0b cut**: only clean stopping point is after c10 (default:
+  no split).
