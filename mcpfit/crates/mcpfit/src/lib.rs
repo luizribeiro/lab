@@ -18,6 +18,6 @@ pub use protocol::{
 };
 pub use response::{IntoToolResponse, ToolResponse};
 pub use structured::{Structured, StructuredObject};
-pub use tool::Tool;
+pub use tool::{Tool, ToolSpec};
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
