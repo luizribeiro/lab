@@ -11,3 +11,6 @@ fittings = { path = "../../crates/fittings" }
 schemars.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+fittings-testkit = { path = "../../crates/testkit" }
