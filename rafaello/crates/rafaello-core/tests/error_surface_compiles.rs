@@ -29,7 +29,7 @@ fn module_errors_route_into_top_level() {
 #[allow(dead_code, unreachable_patterns)]
 fn _manifest_variant_names(e: ManifestError) {
     match e {
-        ManifestError::ReservedField => {}
+        ManifestError::ReservedField { .. } => {}
         ManifestError::UnknownField => {}
         ManifestError::MissingOpenRpc => {}
         ManifestError::EntryEscape => {}

@@ -10,8 +10,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ManifestError {
-    #[error("reserved field")]
-    ReservedField,
+    #[error("reserved field `{field}`: {hint}")]
+    ReservedField { field: String, hint: &'static str },
     #[error("unknown field")]
     UnknownField,
     #[error("safepath: leading slash")]
