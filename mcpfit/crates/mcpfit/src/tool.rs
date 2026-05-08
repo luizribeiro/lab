@@ -1,16 +1,27 @@
 //! Builder for tool definitions.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use schemars::JsonSchema;
 use serde_json::Value;
 
+use crate::context::Cx;
+use crate::error::McpfitError;
+use crate::response::{IntoToolResponse, ToolResponse};
 use crate::schema::schema_for;
+use crate::Result;
+
+pub(crate) type HandlerFuture = Pin<Box<dyn Future<Output = Result<ToolResponse>> + Send>>;
+pub(crate) type BoxedHandler = Arc<dyn Fn(Value, Cx) -> HandlerFuture + Send + Sync>;
 
 /// Builder for a single MCP tool.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tool {
     name: String,
     description: Option<String>,
     input_schema: Option<Value>,
+    handler: Option<BoxedHandler>,
 }
 
 impl Tool {
@@ -20,6 +31,7 @@ impl Tool {
             name: name.into(),
             description: None,
             input_schema: None,
+            handler: None,
         }
     }
 
@@ -59,12 +71,41 @@ impl Tool {
     pub fn input_schema_value(&self) -> Option<&Value> {
         self.input_schema.as_ref()
     }
+
+    pub fn handler<F, Fut, R>(mut self, f: F) -> Self
+    where
+        F: Fn(Value, Cx) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: IntoToolResponse + Send + 'static,
+    {
+        self.handler = Some(Arc::new(move |args, cx| {
+            let fut = f(args, cx);
+            Box::pin(async move { fut.await.map(IntoToolResponse::into_tool_response) })
+        }));
+        self
+    }
+
+    /// Invokes the stored handler. Returns `Internal` when no handler has been
+    /// configured.
+    pub async fn call(&self, args: Value, cx: Cx) -> Result<ToolResponse> {
+        match &self.handler {
+            Some(handler) => handler(args, cx).await,
+            None => Err(McpfitError::internal(format!(
+                "tool {} has no handler",
+                self.name
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Tool;
+    use crate::context::Cx;
+    use crate::error::McpfitError;
+    use crate::response::ToolResponse;
     use schemars::JsonSchema;
+    use serde_json::json;
 
     #[derive(JsonSchema)]
     #[allow(dead_code)]
@@ -99,7 +140,7 @@ mod tests {
     fn name_accepts_string_and_str() {
         let from_str = Tool::new("a");
         let from_string = Tool::new(String::from("a"));
-        assert_eq!(from_str, from_string);
+        assert_eq!(from_str.name(), from_string.name());
     }
 
     #[test]
@@ -154,6 +195,34 @@ mod tests {
             .as_object()
             .unwrap();
         assert!(props.contains_key("a"));
+    }
+
+    #[tokio::test]
+    async fn call_runs_stored_handler_with_args() {
+        let tool = Tool::new("echo").handler(|args, _cx| async move {
+            Ok::<_, McpfitError>(args["msg"].as_str().expect("msg key").to_string())
+        });
+        let response = tool
+            .call(json!({"msg": "hi"}), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("hi"));
+    }
+
+    #[tokio::test]
+    async fn call_propagates_handler_errors() {
+        let tool = Tool::new("boom").handler(|_args, _cx| async move {
+            Err::<String, _>(McpfitError::invalid_params("bad"))
+        });
+        let err = tool.call(json!({}), Cx::default()).await.unwrap_err();
+        assert!(matches!(err, McpfitError::InvalidParams(m) if m == "bad"));
+    }
+
+    #[tokio::test]
+    async fn call_returns_internal_when_no_handler() {
+        let tool = Tool::new("noop");
+        let err = tool.call(json!({}), Cx::default()).await.unwrap_err();
+        assert!(matches!(err, McpfitError::Internal(m) if m.contains("noop")));
     }
 
     #[test]
