@@ -108,9 +108,46 @@ impl Tool {
     }
 }
 
+/// Const-constructible handle that builds a [`Tool`] on demand.
+///
+/// The factory is a plain `fn` pointer rather than a closure so that
+/// `pub const TOOL: ToolSpec = ...` is legal in macro-generated modules.
+pub struct ToolSpec {
+    name: &'static str,
+    description: Option<&'static str>,
+    factory: fn() -> Tool,
+}
+
+impl ToolSpec {
+    pub const fn new(name: &'static str, factory: fn() -> Tool) -> Self {
+        Self {
+            name,
+            description: None,
+            factory,
+        }
+    }
+
+    pub const fn with_description(mut self, description: &'static str) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub const fn description(&self) -> Option<&'static str> {
+        self.description
+    }
+
+    pub fn build(&self) -> Tool {
+        (self.factory)()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Tool;
+    use super::{Tool, ToolSpec};
     use crate::context::Cx;
     use crate::error::McpfitError;
     use crate::response::ToolResponse;
@@ -281,6 +318,41 @@ mod tests {
             .await
             .expect("handler ok");
         assert_eq!(response, ToolResponse::success("pong"));
+    }
+
+    fn add_tool() -> Tool {
+        Tool::new("add")
+            .description("Adds two numbers")
+            .input::<AddArgs>()
+            .handler(|args: AddArgs, _cx| async move {
+                Ok::<_, McpfitError>(args.a + args.b)
+            })
+    }
+
+    const ADD_SPEC: ToolSpec = ToolSpec::new("add", add_tool).with_description("Adds two numbers");
+
+    #[test]
+    fn tool_spec_exposes_const_metadata() {
+        assert_eq!(ADD_SPEC.name(), "add");
+        assert_eq!(ADD_SPEC.description(), Some("Adds two numbers"));
+    }
+
+    #[tokio::test]
+    async fn tool_spec_build_produces_working_tool() {
+        let tool = ADD_SPEC.build();
+        assert_eq!(tool.name(), "add");
+        assert_eq!(tool.description_str(), Some("Adds two numbers"));
+        let response = tool
+            .call(json!({"a": 2.0, "b": 3.0}), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("5"));
+    }
+
+    #[test]
+    fn tool_spec_defaults_description_to_none() {
+        const SPEC: ToolSpec = ToolSpec::new("noop", || Tool::new("noop"));
+        assert_eq!(SPEC.description(), None);
     }
 
     #[test]
