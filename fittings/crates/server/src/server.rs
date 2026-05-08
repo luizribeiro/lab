@@ -1,4 +1,10 @@
-use std::{panic::AssertUnwindSafe, sync::Arc};
+use std::{
+    panic::AssertUnwindSafe,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use std::sync::RwLock;
 
@@ -42,6 +48,7 @@ pub struct Server<S, T> {
     pending_outbound: PendingOutbound,
     id_allocator: Arc<IdAllocator>,
     closed_token: CancellationToken,
+    null_in_flight: Arc<AtomicBool>,
 }
 
 impl<S, T> Server<S, T>
@@ -81,6 +88,7 @@ where
             pending_outbound,
             id_allocator,
             closed_token,
+            null_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -237,6 +245,7 @@ where
                                 response_tx.as_ref().expect("response sender should be present").clone(),
                                 peer.clone(),
                                 &mut workers,
+                                self.null_in_flight.clone(),
                             ).await;
                         }
                         Err(error) if is_graceful_eof(&error) => {
@@ -278,6 +287,7 @@ where
         response_tx: mpsc::UnboundedSender<Vec<u8>>,
         peer: PeerHandle,
         workers: &mut JoinSet<()>,
+        null_in_flight: Arc<AtomicBool>,
     ) {
         let permit = match semaphore.acquire_owned().await {
             Ok(permit) => permit,
@@ -289,9 +299,38 @@ where
         let service = Arc::clone(&self.service);
         workers.spawn(async move {
             let _permit = permit;
-            handle_frame(frame, service, response_tx, peer).await;
+            handle_frame(frame, service, response_tx, peer, null_in_flight).await;
         });
     }
+}
+
+/// Drop guard that releases the single-slot Null-id in-flight flag once the
+/// owning request finishes. Per `rfc-fittings-notifications.md:137-145`, at
+/// most one inbound `"id": null` request may be in flight on a connection;
+/// a second one is rejected as a protocol-error duplicate.
+struct NullIdInFlightGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for NullIdInFlightGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+fn try_acquire_null_slot(flag: &Arc<AtomicBool>) -> Option<NullIdInFlightGuard> {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| NullIdInFlightGuard { flag: flag.clone() })
+}
+
+fn duplicate_null_id_error() -> ResponseEnvelope {
+    to_error_envelope(
+        JsonRpcId::Null,
+        FittingsError::invalid_request(
+            "duplicate null-id request: only one explicit null-id request may be in flight",
+        ),
+    )
 }
 
 async fn handle_frame<S>(
@@ -299,6 +338,7 @@ async fn handle_frame<S>(
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
+    null_in_flight: Arc<AtomicBool>,
 ) where
     S: Service + 'static,
 {
@@ -316,11 +356,13 @@ async fn handle_frame<S>(
 
     match value {
         Value::Array(batch) => {
-            handle_batch_request(batch, service, response_tx, peer).await;
+            handle_batch_request(batch, service, response_tx, peer, null_in_flight).await;
         }
         _ => {
             let response = match decode_request_line(&frame) {
-                Ok(request_envelope) => execute_request(request_envelope, service, peer).await,
+                Ok(request_envelope) => {
+                    execute_request(request_envelope, service, peer, &null_in_flight).await
+                }
                 Err(error) => {
                     let (id, err) = map_decode_error(error);
                     Some(to_error_envelope(id, err))
@@ -339,6 +381,7 @@ async fn handle_batch_request<S>(
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
+    null_in_flight: Arc<AtomicBool>,
 ) where
     S: Service + 'static,
 {
@@ -367,7 +410,13 @@ async fn handle_batch_request<S>(
 
         let response = match decode_request_line(&item_line) {
             Ok(request_envelope) => {
-                execute_request(request_envelope, Arc::clone(&service), peer.clone()).await
+                execute_request(
+                    request_envelope,
+                    Arc::clone(&service),
+                    peer.clone(),
+                    &null_in_flight,
+                )
+                .await
             }
             Err(error) => {
                 let (id, err) = map_decode_error(error);
@@ -400,11 +449,20 @@ async fn execute_request<S>(
     request: RequestEnvelope,
     service: Arc<S>,
     peer: PeerHandle,
+    null_in_flight: &Arc<AtomicBool>,
 ) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
 {
     let request_id = request.id.clone();
+    let _null_guard = if matches!(request_id, Some(JsonRpcId::Null)) {
+        match try_acquire_null_slot(null_in_flight) {
+            Some(guard) => Some(guard),
+            None => return Some(duplicate_null_id_error()),
+        }
+    } else {
+        None
+    };
     let ctx = ServiceContext::new(request_id.clone(), CancellationToken::new(), peer);
     let request = Request {
         id: request.id,

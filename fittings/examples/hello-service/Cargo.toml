@@ -117,3 +117,11 @@ path = "../../tests/peerhandle_dropped_future_cancels.rs"
 [[test]]
 name = "notification_handler_panic"
 path = "../../tests/notification_handler_panic.rs"
+
+[[test]]
+name = "id_null_explicit_request"
+path = "../../tests/id_null_explicit_request.rs"
+
+[[test]]
+name = "id_null_concurrent_rejected"
+path = "../../tests/id_null_concurrent_rejected.rs"
