@@ -1,6 +1,9 @@
-use mcpfit::{tool, Result, Server, Structured, StructuredObject};
+use std::time::Duration;
+
+use mcpfit::{tool, Cx, Result, Server, Structured, StructuredObject};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::time::sleep;
 
 #[derive(JsonSchema, Deserialize)]
 pub struct EchoArgs {
@@ -11,6 +14,11 @@ pub struct EchoArgs {
 pub struct AddArgs {
     pub a: f64,
     pub b: f64,
+}
+
+#[derive(JsonSchema, Deserialize)]
+pub struct WaitArgs {
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, PartialEq, Serialize, JsonSchema, StructuredObject)]
@@ -45,11 +53,27 @@ pub async fn add_with_details(args: AddArgs) -> Result<Structured<AddOut>> {
     .with_text(text))
 }
 
+/// Sleeps for the requested duration, honouring cancellation between steps.
+#[tool]
+pub async fn wait(args: WaitArgs, cx: Cx) -> Result<String> {
+    const STEP_MS: u64 = 25;
+    let mut remaining = args.duration_ms;
+    while remaining > 0 {
+        cx.check_cancelled()?;
+        let step = remaining.min(STEP_MS);
+        sleep(Duration::from_millis(step)).await;
+        remaining -= step;
+    }
+    cx.check_cancelled()?;
+    Ok(format!("waited {} ms", args.duration_ms))
+}
+
 pub fn build_server() -> Server {
     Server::new("mcp-server", env!("CARGO_PKG_VERSION"))
         .tool(echo::TOOL)
         .tool(add::TOOL)
         .tool(add_with_details::TOOL)
+        .tool(wait::TOOL)
 }
 
 #[cfg(test)]
@@ -67,7 +91,18 @@ mod tests {
             .into_iter()
             .map(|info| info.name)
             .collect();
-        assert_eq!(names, vec!["add", "add_with_details", "echo"]);
+        assert_eq!(names, vec!["add", "add_with_details", "echo", "wait"]);
+    }
+
+    #[tokio::test]
+    async fn mcpfit_wait_tool_returns_waited_text() {
+        let server = build_server();
+        let response = server
+            .registry()
+            .call("wait", json!({"duration_ms": 10}), Cx::default())
+            .await
+            .expect("wait should succeed");
+        assert_eq!(response, ToolResponse::success("waited 10 ms"));
     }
 
     #[tokio::test]
