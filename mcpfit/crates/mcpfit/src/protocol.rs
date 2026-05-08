@@ -47,11 +47,40 @@ pub struct InitializeResult {
     pub server_info: ServerInfo,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub input_schema: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsListResult {
+    pub tools: Vec<ToolInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsCallParams {
+    pub name: String,
+    #[serde(default = "empty_object")]
+    pub arguments: Value,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+fn empty_object() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo,
-        ToolsCapability,
+        ToolInfo, ToolsCallParams, ToolsCapability, ToolsListResult,
     };
     use serde_json::{json, to_value};
 
@@ -118,6 +147,71 @@ mod tests {
     fn empty_server_capabilities_serializes_as_empty_object() {
         let encoded = to_value(ServerCapabilities::default()).expect("serialize");
         assert_eq!(encoded, json!({}));
+    }
+
+    #[test]
+    fn tool_info_serializes_with_camel_case_and_skips_missing_description() {
+        let encoded = to_value(ToolInfo {
+            name: "add".into(),
+            description: None,
+            input_schema: json!({"type": "object"}),
+        })
+        .expect("serialize");
+        assert_eq!(
+            encoded,
+            json!({
+                "name": "add",
+                "inputSchema": {"type": "object"},
+            })
+        );
+    }
+
+    #[test]
+    fn tools_list_result_round_trips_through_json() {
+        let original = ToolsListResult {
+            tools: vec![ToolInfo {
+                name: "echo".into(),
+                description: Some("Echo the input.".into()),
+                input_schema: json!({"type": "object"}),
+            }],
+        };
+        let encoded = serde_json::to_string(&original).expect("serialize");
+        let decoded: ToolsListResult = serde_json::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn tools_call_params_defaults_arguments_to_empty_object() {
+        let decoded: ToolsCallParams =
+            serde_json::from_value(json!({"name": "ping"})).expect("deserialize");
+        assert_eq!(
+            decoded,
+            ToolsCallParams {
+                name: "ping".into(),
+                arguments: json!({}),
+                meta: None,
+            }
+        );
+    }
+
+    #[test]
+    fn tools_call_params_round_trips_meta_under_underscore_meta() {
+        let original = ToolsCallParams {
+            name: "add".into(),
+            arguments: json!({"a": 1, "b": 2}),
+            meta: Some(json!({"progressToken": "tok"})),
+        };
+        let encoded = to_value(&original).expect("serialize");
+        assert_eq!(
+            encoded,
+            json!({
+                "name": "add",
+                "arguments": {"a": 1, "b": 2},
+                "_meta": {"progressToken": "tok"},
+            })
+        );
+        let decoded: ToolsCallParams = serde_json::from_value(encoded).expect("deserialize");
+        assert_eq!(decoded, original);
     }
 
     #[test]

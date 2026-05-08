@@ -8,8 +8,8 @@ mod response;
 pub use content::{EmbeddedResource, ToolContent};
 pub use error::McpfitError;
 pub use protocol::{
-    ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo,
-    ToolsCapability,
+    ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolInfo,
+    ToolsCallParams, ToolsCapability, ToolsListResult,
 };
 pub use response::ToolResponse;
 
