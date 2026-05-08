@@ -756,6 +756,13 @@ Third-party providers ship as plugins exactly like
 
 ## 9. Helper plugins
 
+> **v1 status: deferred to v2** — see `decisions.md` row 26
+> (reverses #14). The section below describes the eventual
+> design; v1 ships without `bindings.helper_for`, `RFL_HELPER_FD`,
+> or the helper spawn path. CaMeL's Q-LLM (the only concrete v1
+> consumer) is itself v2; adding helpers later is purely additive
+> (no v1 plugin breaks).
+
 Some plugins need a tighter-sandboxed sibling for one job — most
 concretely CaMeL's Q-LLM, which must have network egress to the
 quarantined model endpoint and *nothing else*. v1 supports this
@@ -786,6 +793,16 @@ of this overview.
 
 ## 10. Frontends
 
+> **v1 status: TUI only, no external attach.** v1 ships the
+> local-spawned TUI as the only frontend principal (id `tui`,
+> publishing on `frontend.tui.*`). The external-attached flavour
+> below — UDS attach socket, attach-token handshake, the
+> `frontend.<attach-id>.*` namespace beyond `frontend.tui.*`,
+> `frontend.hello` capability negotiation — is **deferred to v2**
+> per `decisions.md` row 27 (partially reverses #15). Public
+> `rfl serve` is also deferred (`decisions.md` row 34); v1's
+> `rfl chat` runs core + TUI together in one process tree.
+
 Frontends (TUI, web, IDE, email relay) are first-class bus
 principals because they speak for the user inside the trust
 model — they answer confirmation requests. Two flavours:
@@ -793,7 +810,7 @@ model — they answer confirmation requests. Two flavours:
 - **Local-spawned.** The default ratatui TUI is spawned by
   core like a plugin: socketpair, `RFL_BUS_FD`, principal
   bound at spawn time. Ids are core-assigned (`tui`, `gui`).
-- **External-attached.** A web/IDE/email frontend connects to
+- **External-attached.** *(v2)* A web/IDE/email frontend connects to
   `${XDG_RUNTIME_DIR}/rafaello/<session>/attach.sock` (mode
   `0600`) and presents a one-shot 64-byte attach token from
   `attach.token` in the same dir. Successful handshake binds
@@ -804,7 +821,8 @@ model — they answer confirmation requests. Two flavours:
 Frontends may publish on `frontend.<attach-id>.*` only:
 `confirm_answer`, `user_message`, plus future-reserved topics.
 Core re-emits validated `frontend.*.user_message` as canonical
-`core.session.user_message`.
+`core.session.user_message`. *(In v1, `<attach-id>` is always
+`tui`.)*
 
 Network-attached frontends (`rfl serve --bind-tcp`) are
 designed for but **not enabled** in v1: a TCP listener is an
@@ -813,6 +831,11 @@ explicit opt-in with a v2 checklist (security RFC §5.7.2).
 Spec: security RFC §5.7.
 
 ### 10.1 Frontend capability negotiation
+
+> **v1 status: deferred along with external attach** (`decisions.md`
+> row 27). The local-spawned TUI's capabilities are known at compile
+> time; core uses static defaults for it. `frontend.hello` returns
+> when external attach does in v2.
 
 At attach time the frontend sends a fittings request named
 `frontend.hello` carrying its capabilities (renderer-tree
@@ -831,6 +854,21 @@ Stream E was patched in-place during this revision to use
 `core.session.entry.*` consistently — see §15.3.
 
 ## 11. Renderer model and render tree
+
+> **v1 status (renderers): built-in Rust only.** Subprocess
+> plugin renderers — the `renderer.render` JSON-RPC method, the
+> daemon-side renderer cache, and any plugin-supplied custom
+> kinds — are **deferred to v2** per `decisions.md` row 29
+> (partially reverses #19). The render-tree shape, fallback
+> rules, and server-side downgrade are kept; only the subprocess
+> dispatch is cut.
+>
+> **v1 status (streaming): `final` only — turn-by-turn replies.**
+> The `core.session.entry.appended` and `core.session.entry.patched`
+> notifications and the `stream_state: "open"` / `"patch"` enum
+> values are **deferred to v2** per `decisions.md` row 28
+> (partially reverses #20). v1 emits one `core.session.entry.finalized`
+> notification per entry with `stream_state: "final"`.
 
 Conversation history is a sequence of **entries**; rendering
 is the pure function `(entry, capabilities) -> RenderTree`
@@ -914,13 +952,19 @@ ownership, attached frontends, and `user_grants`.
   supported (the renderer is a pure function of entry +
   capabilities), but interactive replay is post-v1.
 
-**Interactive vs daemon mode.** The `rfl` binary always
-exposes the attach socket. In **interactive mode** (`rfl`
-with no subcommand, the common case), core *additionally*
-spawns the bundled `rfl-tui` subprocess and waits on it for
-the session lifetime; the TUI is a separate process attached
-over an inherited bus socketpair (§3, §10), not an
-in-process module. In **daemon mode** (`rfl serve`), core
+**Interactive vs daemon mode.**
+
+> **v1 status: interactive only.** Public `rfl serve` and the
+> attach socket are **deferred to v2** per `decisions.md`
+> row 34 (and row 27 for external attach). The text below
+> describes the eventual two-mode design.
+
+The `rfl` binary always exposes the attach socket. In
+**interactive mode** (`rfl chat` in v1; the only mode in v1),
+core spawns the bundled `rfl-tui` subprocess and waits on it
+for the session lifetime; the TUI is a separate process
+attached over an inherited bus socketpair (§3, §10), not an
+in-process module. In **daemon mode** (`rfl serve`, v2), core
 runs without spawning a TUI and waits for external frontends
 to connect to the attach socket. The two modes share one
 core process; they differ only in whether core also spawns a
@@ -930,7 +974,14 @@ is post-v1.
 ## 13. Load-bearing decisions (mirror to `decisions.md`)
 
 The architectural calls this overview makes that pi or the
-project owner should review before m1:
+project owner should review before m1.
+
+> **Note:** `decisions.md` rows 26–34 record post-design-phase
+> deferrals and refinements. Items 9 (helper plugins), 14
+> (frontend principals beyond TUI), 15 (RenderTree subprocess
+> renderers), and 16 (streaming patch ops) below are partially
+> or fully reversed by those rows for v1 scope. The full v1
+> picture lives in §16.
 
 1. **No embedded scripting language in v1.** Customisation is
    declarative TOML + Markdown plus subprocess plugins. Source:
