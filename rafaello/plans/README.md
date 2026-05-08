@@ -57,7 +57,14 @@ After the milestone's commits all land:
 2. Claude+pi discuss whether anything learned invalidates
    `overview.md`, `decisions.md`, or any stream RFC. Updates land as
    commits on the milestone branch before merge.
-3. The milestone branch merges to main with linear history.
+3. The milestone branch merges into the long-running integration
+   branch `rafaello-v0.1` with linear history (see `decisions.md`
+   row 33). `main` stays at the `rafaello-design` merge until v1 is
+   demo-ready, at which point `rafaello-v0.1` merges to `main` in one
+   pass. Optional exception: m0's fittings work could split out as a
+   `fittings-v0.X` merge to `main` ahead of v1 if a fittings consumer
+   needs it earlier — call this out in m0's retrospective if it
+   applies.
 
 ## Authoring conventions
 
@@ -91,8 +98,9 @@ this prompt:
 >    move on.
 > 5. After the last commit: spawn claude+pi for `retrospective.md`,
 >    update `overview.md` / `decisions.md` with anything learned, and
->    merge the milestone branch to main with linear history. Ping the
->    owner.
+>    merge the milestone branch into `rafaello-v0.1` with linear
+>    history (per `decisions.md` row 33; `main` waits for v1).
+>    Ping the owner.
 >
 > Operational guardrails:
 >
