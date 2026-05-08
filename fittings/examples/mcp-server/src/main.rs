@@ -9,6 +9,8 @@ use fittings::{FittingsError, Result};
 use mcp::{serve_stdio, McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
 
 mod mcp;
+#[allow(dead_code)]
+mod mcpfit_example;
 
 fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
     registry.register(
