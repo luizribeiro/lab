@@ -430,6 +430,7 @@ dependencies = [
  "schemars",
  "serde",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
