@@ -416,38 +416,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
-name = "mcp-server"
-version = "0.1.0"
-dependencies = [
- "fittings",
- "mcpfit",
- "schemars",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "mcpfit"
-version = "0.0.0"
-dependencies = [
- "fittings",
- "mcpfit-macros",
- "schemars",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "mcpfit-macros"
-version = "0.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
