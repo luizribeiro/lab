@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use fittings::serde_json::{json, Value};
 use fittings::{FittingsError, Result};
-use mcp::{McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
-
-mod mcp;
+use mcp_server::mcp::{McpService, McpServiceImpl, ToolRegistry, ToolsCallResult};
 
 fn register_echo_tool(registry: &mut ToolRegistry) -> Result<()> {
     registry.register(
@@ -168,7 +166,10 @@ async fn main() {
     if is_stdio_serve {
         let service = build_service().with_tools_list_changed(true);
         let transport = fittings::from_process_stdio(1_048_576);
-        let server = fittings::Server::new(service.into_service(), transport);
+        let server = mcp_server::configure_cancellation(fittings::Server::new(
+            service.into_service(),
+            transport,
+        ));
         let exit_code = match server.serve().await {
             Ok(()) => 0,
             Err(error) => {
@@ -185,9 +186,9 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::build_service;
-    use crate::mcp::{McpService, ToolContent, ToolsCallParams};
     use fittings::serde_json::json;
     use fittings::{FittingsError, ServiceContext};
+    use mcp_server::mcp::{McpService, ToolContent, ToolsCallParams};
 
     #[tokio::test]
     async fn example_binary_service_registers_echo_and_add_tools() {
