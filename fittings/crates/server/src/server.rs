@@ -566,6 +566,7 @@ where
             id: id.clone(),
         }
     });
+    let token_for_check = cancellation_token.clone();
     let ctx = ServiceContext::new(request_id.clone(), cancellation_token, peer);
     let request = Request {
         id: request.id,
@@ -578,7 +579,12 @@ where
         .catch_unwind()
         .await;
 
+    let token_fired = token_for_check.is_cancelled();
+    let handler_self_cancelled = matches!(call_result, Ok(Err(FittingsError::Cancelled { .. })));
+
     match (request_id, call_result) {
+        (None, _) => None,
+        (Some(_), _) if token_fired || handler_self_cancelled => None,
         (Some(id), Ok(Ok(Response { result, .. }))) => Some(ResponseEnvelope::success(id, result)),
         (Some(id), Ok(Err(error))) => Some(to_error_envelope(id, error)),
         (Some(id), Err(payload)) => Some(to_error_envelope(
@@ -587,7 +593,6 @@ where
                 message: panic_payload_message(payload),
             },
         )),
-        (None, _) => None,
     }
 }
 

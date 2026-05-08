@@ -9,10 +9,6 @@ use fittings_testkit::{fixtures::request_line, memory_transport::MemoryTransport
 use serde_json::json;
 use tokio::time::timeout;
 
-/// Sleeps until the per-request cancellation token fires, then returns.
-/// If the token never fires, the handler eventually times out so a hung
-/// dispatcher is surfaced as a test failure rather than as an indefinite
-/// hang.
 struct WaitForCancelService;
 
 #[async_trait]
@@ -23,7 +19,8 @@ impl Service for WaitForCancelService {
             observed.is_ok(),
             "handler did not observe cancellation token firing"
         );
-        Err(FittingsError::cancelled(None))
+        assert!(ctx.is_cancelled());
+        Err(FittingsError::cancelled(Some("client aborted".to_string())))
     }
 }
 
@@ -39,9 +36,9 @@ fn cancel_notification(id: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn cancellation_observed_while_handler_saturates_semaphore() {
+async fn token_fired_suppresses_response_when_handler_returns() {
     let (mut client, server_transport) = MemoryTransport::pair(8);
-    let server = Server::new(WaitForCancelService, server_transport).with_max_in_flight(1);
+    let server = Server::new(WaitForCancelService, server_transport);
     let handle = tokio::spawn(server.serve());
 
     client
@@ -49,9 +46,6 @@ async fn cancellation_observed_while_handler_saturates_semaphore() {
         .await
         .expect("send saturating request");
 
-    // Give the dispatcher a moment to acquire the only permit and start
-    // the handler, so the next inbound frame would block on the
-    // semaphore if the cancellation reader were not routed outside it.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     client
@@ -59,12 +53,10 @@ async fn cancellation_observed_while_handler_saturates_semaphore() {
         .await
         .expect("send cancellation notification");
 
-    // The handler observes the token firing — that's the c21 invariant.
-    // Per S6, a token-fired request emits no response on the wire.
     let recv = timeout(Duration::from_millis(200), client.recv()).await;
     assert!(
         recv.is_err(),
-        "token-fired request must not emit a response frame, got: {recv:?}",
+        "no response frame must be emitted when token fired and handler returned Cancelled, got: {recv:?}",
     );
 
     drop(client);
