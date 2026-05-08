@@ -26,9 +26,17 @@ struct PingResult {
 trait GreetingService {
     /// Greets a person by name.
     #[fittings::method(name = "tools/hello")]
-    async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError>;
+    async fn hello(
+        &self,
+        _ctx: fittings::ServiceContext,
+        params: HelloParams,
+    ) -> Result<HelloResult, FittingsError>;
 
-    async fn ping(&self, params: PingParams) -> Result<PingResult, FittingsError>;
+    async fn ping(
+        &self,
+        _ctx: fittings::ServiceContext,
+        params: PingParams,
+    ) -> Result<PingResult, FittingsError>;
 }
 
 #[test]

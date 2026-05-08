@@ -157,7 +157,11 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
                         error
                     )))?;
 
-                let result: #result_type = <I as #trait_ident>::#method_ident(&self.inner, decoded_params).await?;
+                let result: #result_type = <I as #trait_ident>::#method_ident(
+                    &self.inner,
+                    ctx,
+                    decoded_params,
+                ).await?;
 
                 ::fittings::serde_json::to_value(result).map_err(|error| {
                     ::fittings::FittingsError::internal(format!(
@@ -235,8 +239,10 @@ pub(crate) fn expand_service(input: ServiceInput) -> proc_macro2::TokenStream {
                 &self,
                 method: &str,
                 params: ::fittings::serde_json::Value,
+                ctx: ::fittings::ServiceContext,
                 _metadata: ::fittings::Metadata,
             ) -> Result<::fittings::serde_json::Value, ::fittings::FittingsError> {
+                let _ = &ctx;
                 match method {
                     #(#dispatch_arms,)*
                     _ => Err(::fittings::FittingsError::method_not_found(method.to_string())),
@@ -319,14 +325,14 @@ fn rewrite_trait_methods_as_send_futures(trait_item: &mut ItemTrait) {
 }
 
 fn method_params_type(method: &TraitItemFn) -> Type {
-    let second_arg = method
+    let params_arg = method
         .sig
         .inputs
         .iter()
-        .nth(1)
-        .expect("service method signature validated to have exactly two arguments");
+        .nth(2)
+        .expect("service method signature validated to have exactly three arguments");
 
-    match second_arg {
+    match params_arg {
         FnArg::Typed(PatType { ty, .. }) => (**ty).clone(),
         FnArg::Receiver(_) => {
             unreachable!("service method signature validated to use a typed params argument")

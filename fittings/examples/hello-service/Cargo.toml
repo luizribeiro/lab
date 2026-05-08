@@ -57,3 +57,15 @@ path = "../../tests/invalid_service_code_marker.rs"
 [[test]]
 name = "cancelled_no_wire_mapping"
 path = "../../tests/cancelled_no_wire_mapping.rs"
+
+[[test]]
+name = "service_context_basic"
+path = "../../tests/service_context_basic.rs"
+
+[[test]]
+name = "error_preservation_round_trip"
+path = "../../tests/error_preservation_round_trip.rs"
+
+[[test]]
+name = "handler_panic_maps_to_panic"
+path = "../../tests/handler_panic_maps_to_panic.rs"

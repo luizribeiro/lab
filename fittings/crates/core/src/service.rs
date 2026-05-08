@@ -3,13 +3,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
+    context::ServiceContext,
     error::FittingsError,
     message::{Request, Response},
 };
 
 #[async_trait]
 pub trait Service: Send + Sync {
-    async fn call(&self, req: Request) -> Result<Response, FittingsError>;
+    async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError>;
 }
 
 #[async_trait]
@@ -17,8 +18,8 @@ impl<T> Service for Arc<T>
 where
     T: Service + ?Sized,
 {
-    async fn call(&self, req: Request) -> Result<Response, FittingsError> {
-        (**self).call(req).await
+    async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError> {
+        (**self).call(req, ctx).await
     }
 }
 
@@ -28,6 +29,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
+        context::ServiceContext,
         error::FittingsError,
         message::{JsonRpcId, Request, Response},
     };
@@ -38,7 +40,11 @@ mod tests {
 
     #[async_trait]
     impl Service for EchoService {
-        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+        async fn call(
+            &self,
+            req: Request,
+            _ctx: ServiceContext,
+        ) -> Result<Response, FittingsError> {
             Ok(Response {
                 id: req.id.unwrap_or(JsonRpcId::Null),
                 result: req.params,

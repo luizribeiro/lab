@@ -84,6 +84,18 @@ impl ServiceContext {
     pub fn notify(&self, method: impl Into<String>, params: Value) -> Result<(), FittingsError> {
         self.inner.peer.notify(method, params)
     }
+
+    /// Construct a context with no live peer or cancellation source. Useful for
+    /// in-process service invocations (tests, direct calls) where the caller
+    /// does not own a server connection. `notify` calls succeed locally but the
+    /// notification is discarded.
+    pub fn detached() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        // Keep the receiver alive so peer.notify does not surface a Transport
+        // error from a closed channel.
+        std::mem::forget(rx);
+        Self::new(None, CancellationToken::new(), PeerHandle::new(tx))
+    }
 }
 
 #[cfg(test)]

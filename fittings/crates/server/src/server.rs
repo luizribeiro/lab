@@ -1,6 +1,7 @@
 use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use fittings_core::{
+    context::{OutboundNotification, PeerHandle, ServiceContext},
     error::FittingsError,
     message::{Request, Response},
     service::Service,
@@ -17,6 +18,7 @@ use tokio::{
     sync::{mpsc, Semaphore},
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 
@@ -47,6 +49,8 @@ where
     pub async fn serve(mut self) -> Result<(), FittingsError> {
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight));
         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (notify_tx, mut notify_rx) = mpsc::unbounded_channel::<OutboundNotification>();
+        let peer = PeerHandle::new(notify_tx);
         let mut response_tx = Some(response_tx);
         let mut workers = JoinSet::new();
         let mut accepting = true;
@@ -65,6 +69,12 @@ where
                     }
                 }
 
+                while let Ok(notification) = notify_rx.try_recv() {
+                    if let Some(frame) = encode_notification(notification) {
+                        self.transport.send(&frame).await?;
+                    }
+                }
+
                 return Ok(());
             }
 
@@ -76,10 +86,25 @@ where
                         return Err(error);
                     }
                 }
+                Some(notification) = notify_rx.recv() => {
+                    if let Some(frame) = encode_notification(notification) {
+                        if let Err(error) = self.transport.send(&frame).await {
+                            workers.abort_all();
+                            while workers.join_next().await.is_some() {}
+                            return Err(error);
+                        }
+                    }
+                }
                 recv_result = self.transport.recv(), if accepting => {
                     match recv_result {
                         Ok(frame) => {
-                            self.spawn_frame_handler(frame, semaphore.clone(), response_tx.as_ref().expect("response sender should be present").clone(), &mut workers).await;
+                            self.spawn_frame_handler(
+                                frame,
+                                semaphore.clone(),
+                                response_tx.as_ref().expect("response sender should be present").clone(),
+                                peer.clone(),
+                                &mut workers,
+                            ).await;
                         }
                         Err(error) if is_graceful_eof(&error) => {
                             accepting = false;
@@ -109,6 +134,7 @@ where
         frame: Vec<u8>,
         semaphore: Arc<Semaphore>,
         response_tx: mpsc::UnboundedSender<Vec<u8>>,
+        peer: PeerHandle,
         workers: &mut JoinSet<()>,
     ) {
         let permit = match semaphore.acquire_owned().await {
@@ -121,7 +147,7 @@ where
         let service = Arc::clone(&self.service);
         workers.spawn(async move {
             let _permit = permit;
-            handle_frame(frame, service, response_tx).await;
+            handle_frame(frame, service, response_tx, peer).await;
         });
     }
 }
@@ -130,6 +156,7 @@ async fn handle_frame<S>(
     frame: Vec<u8>,
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
+    peer: PeerHandle,
 ) where
     S: Service + 'static,
 {
@@ -147,11 +174,11 @@ async fn handle_frame<S>(
 
     match value {
         Value::Array(batch) => {
-            handle_batch_request(batch, service, response_tx).await;
+            handle_batch_request(batch, service, response_tx, peer).await;
         }
         _ => {
             let response = match decode_request_line(&frame) {
-                Ok(request_envelope) => execute_request(request_envelope, service).await,
+                Ok(request_envelope) => execute_request(request_envelope, service, peer).await,
                 Err(error) => {
                     let (id, err) = map_decode_error(error);
                     Some(to_error_envelope(id, err))
@@ -169,6 +196,7 @@ async fn handle_batch_request<S>(
     batch: Vec<Value>,
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
+    peer: PeerHandle,
 ) where
     S: Service + 'static,
 {
@@ -196,7 +224,9 @@ async fn handle_batch_request<S>(
         };
 
         let response = match decode_request_line(&item_line) {
-            Ok(request_envelope) => execute_request(request_envelope, Arc::clone(&service)).await,
+            Ok(request_envelope) => {
+                execute_request(request_envelope, Arc::clone(&service), peer.clone()).await
+            }
             Err(error) => {
                 let (id, err) = map_decode_error(error);
                 Some(to_error_envelope(id, err))
@@ -224,11 +254,16 @@ fn send_single_response(response_tx: mpsc::UnboundedSender<Vec<u8>>, response: R
     }
 }
 
-async fn execute_request<S>(request: RequestEnvelope, service: Arc<S>) -> Option<ResponseEnvelope>
+async fn execute_request<S>(
+    request: RequestEnvelope,
+    service: Arc<S>,
+    peer: PeerHandle,
+) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
 {
     let request_id = request.id.clone();
+    let ctx = ServiceContext::new(request_id.clone(), CancellationToken::new(), peer);
     let request = Request {
         id: request.id,
         method: request.method,
@@ -236,17 +271,38 @@ where
         metadata: Default::default(),
     };
 
-    let call_result = AssertUnwindSafe(service.call(request)).catch_unwind().await;
+    let call_result = AssertUnwindSafe(service.call(request, ctx))
+        .catch_unwind()
+        .await;
 
     match (request_id, call_result) {
         (Some(id), Ok(Ok(Response { result, .. }))) => Some(ResponseEnvelope::success(id, result)),
         (Some(id), Ok(Err(error))) => Some(to_error_envelope(id, error)),
-        (Some(id), Err(_)) => Some(to_error_envelope(
+        (Some(id), Err(payload)) => Some(to_error_envelope(
             id,
-            FittingsError::internal("request handler panicked"),
+            FittingsError::Panic {
+                message: panic_payload_message(payload),
+            },
         )),
         (None, _) => None,
     }
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "request handler panicked".to_string()
+}
+
+fn encode_notification(notification: OutboundNotification) -> Option<Vec<u8>> {
+    let envelope = RequestEnvelope::notification(notification.method, Some(notification.params));
+    let mut encoded = serde_json::to_vec(&envelope).ok()?;
+    encoded.push(b'\n');
+    Some(encoded)
 }
 
 fn map_decode_error(error: WireDecodeError) -> (JsonRpcId, FittingsError) {
@@ -280,6 +336,7 @@ mod tests {
 
     use async_trait::async_trait;
     use fittings_core::{
+        context::ServiceContext,
         error::FittingsError,
         message::{Request, Response},
         service::Service,
@@ -319,7 +376,11 @@ mod tests {
 
     #[async_trait]
     impl Service for DelayService {
-        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+        async fn call(
+            &self,
+            req: Request,
+            _ctx: ServiceContext,
+        ) -> Result<Response, FittingsError> {
             let delay_ms = req
                 .params
                 .get("delay_ms")
@@ -512,6 +573,7 @@ mod tests {
             &self,
             method: &str,
             params: serde_json::Value,
+            _ctx: ServiceContext,
             _metadata: fittings_core::message::Metadata,
         ) -> Result<serde_json::Value, FittingsError> {
             match method {
@@ -685,7 +747,11 @@ mod tests {
 
     #[async_trait]
     impl Service for PanicService {
-        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+        async fn call(
+            &self,
+            req: Request,
+            _ctx: ServiceContext,
+        ) -> Result<Response, FittingsError> {
             if req.method == "boom" {
                 panic!("handler panic");
             }
@@ -725,7 +791,11 @@ mod tests {
 
     #[async_trait]
     impl Service for WrongIdService {
-        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
+        async fn call(
+            &self,
+            req: Request,
+            _ctx: ServiceContext,
+        ) -> Result<Response, FittingsError> {
             let id = req.id.unwrap_or(JsonRpcId::Null);
             Ok(Response {
                 id: JsonRpcId::from(format!("{id}-wrong")),

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fittings::serde_json::{json, Value};
-use fittings::{FittingsError, Result, Transport};
+use fittings::{FittingsError, Result, ServiceContext, Transport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -358,23 +358,35 @@ pub struct ServerNotification {
 pub trait McpService {
     /// Minimal MCP initialize handshake (stdio-oriented baseline).
     #[fittings::method(name = "initialize")]
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult>;
+    async fn initialize(
+        &self,
+        ctx: ServiceContext,
+        params: InitializeParams,
+    ) -> Result<InitializeResult>;
 
     /// Client notification sent after successful initialize handshake.
     #[fittings::method(name = "notifications/initialized")]
-    async fn initialized(&self, params: Value) -> Result<Value>;
+    async fn initialized(&self, ctx: ServiceContext, params: Value) -> Result<Value>;
 
     /// Returns the tools exposed by this process.
     #[fittings::method(name = "tools/list")]
-    async fn list_tools(&self, params: Value) -> Result<ToolsListResult>;
+    async fn list_tools(&self, ctx: ServiceContext, params: Value) -> Result<ToolsListResult>;
 
     /// Executes a named tool with JSON arguments.
     #[fittings::method(name = "tools/call")]
-    async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult>;
+    async fn call_tool(
+        &self,
+        ctx: ServiceContext,
+        params: ToolsCallParams,
+    ) -> Result<ToolsCallResult>;
 
     /// Registers a simple runtime tool and notifies active clients that tools/list changed.
     #[fittings::method(name = "tools/register")]
-    async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult>;
+    async fn register_tool(
+        &self,
+        ctx: ServiceContext,
+        params: ToolsRegisterParams,
+    ) -> Result<ToolsRegisterResult>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +513,11 @@ impl Default for McpServiceImpl {
 }
 
 impl McpService for McpServiceImpl {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(
+        &self,
+        _ctx: ServiceContext,
+        params: InitializeParams,
+    ) -> Result<InitializeResult> {
         let progress_enabled = client_supports_progress_notifications(params.capabilities.as_ref());
         self.set_progress_notifications_enabled(progress_enabled);
 
@@ -527,7 +543,7 @@ impl McpService for McpServiceImpl {
         })
     }
 
-    async fn initialized(&self, _params: Value) -> Result<Value> {
+    async fn initialized(&self, _ctx: ServiceContext, _params: Value) -> Result<Value> {
         let mut lifecycle = self
             .lifecycle
             .lock()
@@ -545,7 +561,7 @@ impl McpService for McpServiceImpl {
         }
     }
 
-    async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
+    async fn list_tools(&self, _ctx: ServiceContext, _params: Value) -> Result<ToolsListResult> {
         let registry = self
             .registry
             .lock()
@@ -556,12 +572,20 @@ impl McpService for McpServiceImpl {
         })
     }
 
-    async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolsCallResult> {
+    async fn call_tool(
+        &self,
+        _ctx: ServiceContext,
+        params: ToolsCallParams,
+    ) -> Result<ToolsCallResult> {
         self.call_tool_with_context(params, ToolCallContext::default())
             .await
     }
 
-    async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
+    async fn register_tool(
+        &self,
+        _ctx: ServiceContext,
+        params: ToolsRegisterParams,
+    ) -> Result<ToolsRegisterResult> {
         if params.name.trim().is_empty() {
             return Err(FittingsError::invalid_params("`name` must not be empty"));
         }
@@ -786,10 +810,11 @@ async fn dispatch_method(
     params: Value,
     context: ToolCallContext,
 ) -> Result<Value> {
+    let ctx = ServiceContext::detached();
     match method {
         "initialize" => {
             let decoded: InitializeParams = decode_params(method, params)?;
-            let result = service.initialize(decoded).await?;
+            let result = service.initialize(ctx, decoded).await?;
             fittings::serde_json::to_value(result).map_err(|error| {
                 FittingsError::internal(format!(
                     "failed to encode result for method `{method}`: {error}"
@@ -798,7 +823,7 @@ async fn dispatch_method(
         }
         "notifications/initialized" => {
             let decoded: Value = decode_params(method, params)?;
-            let result = service.initialized(decoded).await?;
+            let result = service.initialized(ctx, decoded).await?;
             fittings::serde_json::to_value(result).map_err(|error| {
                 FittingsError::internal(format!(
                     "failed to encode result for method `{method}`: {error}"
@@ -807,7 +832,7 @@ async fn dispatch_method(
         }
         "tools/list" => {
             let decoded: Value = decode_params(method, params)?;
-            let result = service.list_tools(decoded).await?;
+            let result = service.list_tools(ctx, decoded).await?;
             fittings::serde_json::to_value(result).map_err(|error| {
                 FittingsError::internal(format!(
                     "failed to encode result for method `{method}`: {error}"
@@ -825,7 +850,7 @@ async fn dispatch_method(
         }
         "tools/register" => {
             let decoded: ToolsRegisterParams = decode_params(method, params)?;
-            let result = service.register_tool(decoded).await?;
+            let result = service.register_tool(ctx, decoded).await?;
             fittings::serde_json::to_value(result).map_err(|error| {
                 FittingsError::internal(format!(
                     "failed to encode result for method `{method}`: {error}"
@@ -1100,11 +1125,14 @@ mod tests {
         let service = McpServiceImpl::default();
 
         let initialize = service
-            .initialize(InitializeParams {
-                protocol_version: "2024-11-05".to_string(),
-                client_info: None,
-                capabilities: None,
-            })
+            .initialize(
+                ServiceContext::detached(),
+                InitializeParams {
+                    protocol_version: "2024-11-05".to_string(),
+                    client_info: None,
+                    capabilities: None,
+                },
+            )
             .await
             .expect("initialize should succeed");
         assert_eq!(initialize.protocol_version, "2024-11-05");
@@ -1119,17 +1147,23 @@ mod tests {
         );
 
         let listed = service
-            .list_tools(fittings::serde_json::Value::Null)
+            .list_tools(
+                ServiceContext::detached(),
+                fittings::serde_json::Value::Null,
+            )
             .await
             .expect("tools/list should succeed");
         assert!(listed.tools.is_empty());
 
         let called = service
-            .call_tool(ToolsCallParams {
-                name: "echo".to_string(),
-                arguments: json!({"message": "hello"}),
-                meta: None,
-            })
+            .call_tool(
+                ServiceContext::detached(),
+                ToolsCallParams {
+                    name: "echo".to_string(),
+                    arguments: json!({"message": "hello"}),
+                    meta: None,
+                },
+            )
             .await;
 
         assert!(matches!(called, Err(FittingsError::MethodNotFound { .. })));
@@ -1139,7 +1173,9 @@ mod tests {
     async fn initialized_before_initialize_is_invalid_request() {
         let service = McpServiceImpl::default();
 
-        let result = service.initialized(Value::Null).await;
+        let result = service
+            .initialized(ServiceContext::detached(), Value::Null)
+            .await;
 
         assert!(matches!(result, Err(FittingsError::InvalidRequest { .. })));
         assert_eq!(
@@ -1158,11 +1194,14 @@ mod tests {
         );
 
         service
-            .initialize(InitializeParams {
-                protocol_version: "2024-11-05".to_string(),
-                client_info: None,
-                capabilities: None,
-            })
+            .initialize(
+                ServiceContext::detached(),
+                InitializeParams {
+                    protocol_version: "2024-11-05".to_string(),
+                    client_info: None,
+                    capabilities: None,
+                },
+            )
             .await
             .expect("initialize should succeed");
         assert_eq!(
@@ -1171,7 +1210,7 @@ mod tests {
         );
 
         service
-            .initialized(Value::Null)
+            .initialized(ServiceContext::detached(), Value::Null)
             .await
             .expect("initialized notification should be accepted");
         assert_eq!(service.lifecycle_state(), SessionLifecycle::Running);
@@ -1182,34 +1221,43 @@ mod tests {
         let service = McpServiceImpl::default().with_tools_list_changed(true);
 
         service
-            .register_tool(ToolsRegisterParams {
-                name: "runtime".to_string(),
-                description: None,
-                response_text: "ok".to_string(),
-            })
+            .register_tool(
+                ServiceContext::detached(),
+                ToolsRegisterParams {
+                    name: "runtime".to_string(),
+                    description: None,
+                    response_text: "ok".to_string(),
+                },
+            )
             .await
             .expect("register should succeed");
         assert!(service.drain_notifications().is_empty());
 
         service
-            .initialize(InitializeParams {
-                protocol_version: "2024-11-05".to_string(),
-                client_info: None,
-                capabilities: None,
-            })
+            .initialize(
+                ServiceContext::detached(),
+                InitializeParams {
+                    protocol_version: "2024-11-05".to_string(),
+                    client_info: None,
+                    capabilities: None,
+                },
+            )
             .await
             .expect("initialize should succeed");
         service
-            .initialized(Value::Null)
+            .initialized(ServiceContext::detached(), Value::Null)
             .await
             .expect("initialized should succeed");
 
         service
-            .register_tool(ToolsRegisterParams {
-                name: "runtime-two".to_string(),
-                description: Some("runtime".to_string()),
-                response_text: "ok".to_string(),
-            })
+            .register_tool(
+                ServiceContext::detached(),
+                ToolsRegisterParams {
+                    name: "runtime-two".to_string(),
+                    description: Some("runtime".to_string()),
+                    response_text: "ok".to_string(),
+                },
+            )
             .await
             .expect("register should succeed");
 
@@ -1229,24 +1277,30 @@ mod tests {
         let service = McpServiceImpl::default().with_tools_list_changed(true);
 
         service
-            .initialize(InitializeParams {
-                protocol_version: "2024-11-05".to_string(),
-                client_info: None,
-                capabilities: None,
-            })
+            .initialize(
+                ServiceContext::detached(),
+                InitializeParams {
+                    protocol_version: "2024-11-05".to_string(),
+                    client_info: None,
+                    capabilities: None,
+                },
+            )
             .await
             .expect("initialize should succeed");
         service
-            .initialized(Value::Null)
+            .initialized(ServiceContext::detached(), Value::Null)
             .await
             .expect("initialized should succeed");
 
         let empty_name = service
-            .register_tool(ToolsRegisterParams {
-                name: "   ".to_string(),
-                description: None,
-                response_text: "ignored".to_string(),
-            })
+            .register_tool(
+                ServiceContext::detached(),
+                ToolsRegisterParams {
+                    name: "   ".to_string(),
+                    description: None,
+                    response_text: "ignored".to_string(),
+                },
+            )
             .await;
         assert!(matches!(
             empty_name,
@@ -1255,21 +1309,27 @@ mod tests {
         assert!(service.drain_notifications().is_empty());
 
         service
-            .register_tool(ToolsRegisterParams {
-                name: "runtime".to_string(),
-                description: None,
-                response_text: "ok".to_string(),
-            })
+            .register_tool(
+                ServiceContext::detached(),
+                ToolsRegisterParams {
+                    name: "runtime".to_string(),
+                    description: None,
+                    response_text: "ok".to_string(),
+                },
+            )
             .await
             .expect("first registration should succeed");
         assert_eq!(service.drain_notifications().len(), 1);
 
         let duplicate = service
-            .register_tool(ToolsRegisterParams {
-                name: "runtime".to_string(),
-                description: None,
-                response_text: "another".to_string(),
-            })
+            .register_tool(
+                ServiceContext::detached(),
+                ToolsRegisterParams {
+                    name: "runtime".to_string(),
+                    description: None,
+                    response_text: "another".to_string(),
+                },
+            )
             .await;
         assert!(matches!(
             duplicate,
@@ -1278,7 +1338,7 @@ mod tests {
         assert!(service.drain_notifications().is_empty());
 
         let listed = service
-            .list_tools(Value::Null)
+            .list_tools(ServiceContext::detached(), Value::Null)
             .await
             .expect("tools/list should succeed");
         assert_eq!(listed.tools.len(), 1);

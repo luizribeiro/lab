@@ -1,5 +1,5 @@
-error: service method error type must be `FittingsError`
- --> tests/ui/fail/missing_fittings_error.rs:3:53
+error: service methods must have signature `async fn name(&self, ctx: ServiceContext, params: P) -> Result<R, FittingsError>`
+ --> tests/ui/fail/missing_fittings_error.rs:3:20
   |
 3 |     async fn hello(&self, params: ()) -> Result<(), String>;
-  |                                                     ^^^^^^
+  |                    ^
