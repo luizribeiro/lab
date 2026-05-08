@@ -1295,15 +1295,17 @@ accordingly.)
 **In v1.** Lockin sandbox; manifest+lock+policy pipeline;
 bus broker with four namespaces and structured taint;
 core-mediated sink confirmation with `user_grants`; carve-out
-by decomposition with loud override; helper plugins; frontends
-as bus principals with UDS+token attach; default ratatui TUI;
-CLI subcommands `rfl init / install / grant / revoke / update
-/ provider use / status / serve`; bundled `rfl-litellm`
-default provider plugin (§8.1); renderer model with semantic
-render-tree and
-server-side downgrade; entry persistence in SQLite; lazy
-loading with five triggers + manual; declarative config
-(TOML+Markdown); fittings v1 with `ServiceContext`,
+by decomposition with loud override; default ratatui TUI as a
+local-spawned bus principal (single frontend, no external
+attach); CLI subcommands `rfl init / install / grant / revoke
+/ update / provider use / status / serve`; bundled
+`rfl-litellm` default provider plugin (§8.1); renderer model
+with semantic render-tree and server-side downgrade,
+**built-in Rust renderers only** (no subprocess plugin
+renderers in v1); turn-by-turn entries (`stream_state:
+"final"` only — patch ops deferred); entry persistence in
+SQLite; lazy loading with five triggers + manual; declarative
+config (TOML+Markdown); fittings v1 with `ServiceContext`,
 bidirectional `PeerHandle` (notify + call in both directions,
 §15.6), cancellation, two-channel server loop, predefined
 error preservation.
@@ -1313,6 +1315,10 @@ error preservation.
 | Feature                                       | Why deferred                                         |
 |-----------------------------------------------|------------------------------------------------------|
 | CaMeL provider + Q-LLM helper                 | Heavy; v1 ships the primitives, v2 ships the plugin  |
+| **Helper plugins (`bindings.helper_for`, `RFL_HELPER_FD`)** | No v1 consumer; CaMeL is itself v2. Forward-compat: purely additive. See `decisions.md` row 26. |
+| **External UDS-attached frontend principals** | v1 ships TUI only, local-spawned. `frontend.<attach-id>.*` namespace reserved. See `decisions.md` row 27. |
+| **Streaming entry patch ops (`stream_state: "open"`/`"patch"`)** | v1 emits `final` only (turn-by-turn). Adding `open`/`patch` later is purely additive. See `decisions.md` row 28. |
+| **Subprocess plugin renderers (`renderer.render`)** | v1 renderers are built-in Rust, compile-time registered. Plugin authors wait for v2. See `decisions.md` row 29. |
 | Capsa-VM-per-tool isolation                   | Capsa not yet ready; lockin is sufficient for v1     |
 | Plugin signing / reproducibility              | Adds infra (key management, build tooling) without changing the threat model in v1 |
 | Embedded scripting (Luau or other)            | See §1.2; can be added later, removing later is hard |
