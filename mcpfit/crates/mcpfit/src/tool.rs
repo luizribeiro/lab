@@ -1,5 +1,6 @@
 //! Builder for tool definitions.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -43,8 +44,12 @@ impl Tool {
         self
     }
 
-    pub fn input<T: JsonSchema>(mut self) -> Self {
-        self.input_schema = Some(schema_for::<T>());
+    pub fn input<T: JsonSchema + 'static>(mut self) -> Self {
+        self.input_schema = Some(if TypeId::of::<T>() == TypeId::of::<()>() {
+            serde_json::json!({"type": "object"})
+        } else {
+            schema_for::<T>()
+        });
         self
     }
 
@@ -82,6 +87,13 @@ impl Tool {
         R: IntoToolResponse + Send + 'static,
     {
         self.handler = Some(Arc::new(move |args, cx| {
+            let args = if TypeId::of::<A>() == TypeId::of::<()>()
+                && args.as_object().is_some_and(|o| o.is_empty())
+            {
+                Value::Null
+            } else {
+                args
+            };
             match serde_json::from_value::<A>(args) {
                 Ok(typed) => {
                     let fut = f(typed, cx);
@@ -334,6 +346,26 @@ mod tests {
             .await
             .expect("handler ok");
         assert_eq!(response, ToolResponse::success("pong"));
+    }
+
+    #[tokio::test]
+    async fn call_accepts_empty_object_for_unit_args() {
+        let tool = Tool::new("ping")
+            .handler(|_args: (), _cx| async move { Ok::<_, McpfitError>("pong".to_string()) });
+        let response = tool
+            .call(json!({}), Cx::default())
+            .await
+            .expect("handler ok");
+        assert_eq!(response, ToolResponse::success("pong"));
+    }
+
+    #[test]
+    fn input_for_unit_emits_empty_object_schema() {
+        let tool = Tool::new("ping").input::<()>();
+        assert_eq!(
+            tool.input_schema_value(),
+            Some(&json!({"type": "object"}))
+        );
     }
 
     fn add_tool() -> Tool {
