@@ -3,7 +3,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fittings::serde_json::{self, json, Value};
+use serde_json::{json, Value};
 
 fn mcp_server_bin() -> &'static str {
     env!("CARGO_BIN_EXE_mcp-server")
@@ -145,7 +145,7 @@ fn stdio_e2e_initialize_list_and_call_follow_strict_jsonrpc_envelopes() {
     );
     assert_eq!(
         initialize["result"]["serverInfo"]["name"],
-        "fittings-mcp-example"
+        "mcpfit-example"
     );
 
     let list = response_by_id(&responses, "list-1");
