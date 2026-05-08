@@ -4,6 +4,7 @@ mod content;
 mod error;
 mod protocol;
 mod response;
+mod structured;
 
 pub use content::{EmbeddedResource, ToolContent};
 pub use error::McpfitError;
@@ -12,5 +13,6 @@ pub use protocol::{
     ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 pub use response::ToolResponse;
+pub use structured::StructuredObject;
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
