@@ -10,6 +10,8 @@ homepage = "https://github.com/luizribeiro/lab/tree/main/rafaello"
 [dependencies]
 thiserror = { workspace = true }
 toml = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }

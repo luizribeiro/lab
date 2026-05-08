@@ -14,6 +14,30 @@ pub enum ManifestError {
     ReservedField,
     #[error("unknown field")]
     UnknownField,
+    #[error("safepath: leading slash")]
+    SafePathLeadingSlash,
+    #[error("safepath: empty segment")]
+    SafePathEmptySegment,
+    #[error("safepath: parent-dir traversal")]
+    SafePathParentDir,
+    #[error("safepath: backslash separator")]
+    SafePathBackslash,
+    #[error("safepath: control character")]
+    SafePathControlChar,
+    #[error("safepath: empty path")]
+    SafePathEmpty,
+    #[error("capability path: bare relative path")]
+    CapabilityPathBareRelative,
+    #[error("capability path: backslash separator")]
+    CapabilityPathBackslash,
+    #[error("capability path: control character")]
+    CapabilityPathControlChar,
+    #[error("capability path: malformed placeholder")]
+    CapabilityPathMalformedPlaceholder,
+    #[error("unknown placeholder in path")]
+    UnknownPlaceholder,
+    #[error("malformed placeholder syntax")]
+    MalformedPlaceholder,
     #[error("missing openrpc.json sibling")]
     MissingOpenRpc,
     #[error("entry path escapes package_dir")]
@@ -160,6 +184,23 @@ pub enum DigestError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
+pub enum PathError {
+    #[error("unknown placeholder in path")]
+    UnknownPlaceholder,
+    #[error("malformed placeholder syntax")]
+    MalformedPlaceholder,
+    #[error("path is not absolute after expansion")]
+    NotAbsolute,
+    #[error("path escapes its root after expansion")]
+    PathEscape,
+    #[error("symlink target escapes its root")]
+    SymlinkEscape,
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CarveOutError {
     #[error(transparent)]
     Compile(#[from] CompileError),
@@ -186,4 +227,6 @@ pub enum Error {
     CarveOut(#[from] CarveOutError),
     #[error(transparent)]
     Trifecta(#[from] TrifectaError),
+    #[error(transparent)]
+    Path(#[from] PathError),
 }
