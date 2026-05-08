@@ -3,5 +3,8 @@ name = "mcpfit"
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+thiserror = "2"
+
 [lints]
 workspace = true
