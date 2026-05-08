@@ -1,10 +1,9 @@
 # m1 — manifest / lock / grant / compiler foundation — scope
 
-> **Status:** draft (round 7). Six pi review rounds so far;
-> findings counts: pi-1 7+3; pi-2 4+5+4; pi-3 4+4+1; pi-4
-> 3+4+2; pi-5 4+3+4; pi-6 4+2+1. All earlier-round blockers
-> resolved at each step. This revision resolves all pi-6
-> findings.
+> **Status:** ratified by owner 2026-05-08 after six pi review
+> rounds (`pi-review-1.md` through `pi-review-6.md`). `commits.md`
+> is also ratified; Phase 3 per-commit agent work begins on the
+> `rafaello-v0.1` branch — see `driver-notes.md`.
 
 ## Goal
 

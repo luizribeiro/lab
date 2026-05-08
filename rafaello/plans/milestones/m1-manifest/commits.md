@@ -1,12 +1,9 @@
 # m1-manifest — commits
 
-> **Status:** draft (round 3). Two pi rounds:
-> `commits-pi-review-1.md` (6 blocking + 4 high + 4 minor, all
-> resolved at round 2); `commits-pi-review-2.md` (6 blocking + 3
-> high + 3 minor). This revision resolves all pi-2 findings,
-> including a phase-boundary restructure (parse decodes raw,
-> V1/V2/V3 own grammar + ACL refusals so `ValidationError`
-> variants land at the right phase per scope's negative matrix).
+> **Status:** ratified by owner 2026-05-08 after three pi review
+> rounds (`commits-pi-review-1.md`, `-2.md`, `-3.md`). Phase 3
+> per-commit agent work begins on the `rafaello-v0.1` branch
+> under the milestone driver — see `driver-notes.md`.
 
 Ordered commit list for m1, derived from `scope.md` (round 7).
 Each commit is one logical idea **and leaves the workspace green**
