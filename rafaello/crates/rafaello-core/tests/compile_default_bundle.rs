@@ -1,13 +1,14 @@
-//! c30 — bundle flatten with only the `default` bundle: the
+//! c30/c31 — bundle flatten with only the `default` bundle: the
 //! resulting `CompiledPlugin`'s effective filesystem / network /
 //! env / limits mirror the lone bundle's values, with C4
 //! post-flatten ordering (sort + dedup) applied. Capability path
-//! strings are still raw — placeholder substitution is c31.
+//! strings are placeholder-resolved per §C3.
 
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 use rafaello_core::compile::{compile_plugin, NetworkPlan};
 use rafaello_core::digest::RecomputedDigests;
@@ -16,11 +17,18 @@ use rafaello_core::lock::{
 };
 use rafaello_core::manifest::capabilities::NetworkMode;
 use rafaello_core::paths::PathContext;
+use rafaello_core::topic_id;
 
 use common::{canonical, entry, lock_with};
 
 #[test]
 fn default_bundle_flattens_into_compiled_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(tmp.path()).unwrap();
+    fs::create_dir(project.join("src")).unwrap();
+    fs::create_dir(project.join("docs")).unwrap();
+    fs::create_dir(project.join("out")).unwrap();
+
     let id = canonical("github.com/acme:writer@1.0.0");
     let mut e = entry(&["writer"], false, None);
 
@@ -62,9 +70,9 @@ fn default_bundle_flattens_into_compiled_plugin() {
     let lock = lock_with(vec![(id.clone(), e)], SessionTable::default());
 
     let ctx = PathContext {
-        project_root: PathBuf::from("/tmp/project"),
+        project_root: project.clone(),
         home: PathBuf::from("/tmp/home"),
-        plugin_dir: PathBuf::from("/tmp/plugin/writer"),
+        plugin_dir: project.join(".rafaello/plugins/writer"),
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
@@ -75,18 +83,17 @@ fn default_bundle_flattens_into_compiled_plugin() {
 
     let plan = compile_plugin(&lock, &id, &ctx, &digests).expect("compile succeeds");
 
-    assert_eq!(
-        plan.filesystem.read_dirs,
-        vec![
-            PathBuf::from("${project}/docs"),
-            PathBuf::from("${project}/src"),
-        ],
-        "read_dirs sorted + deduped per C4"
-    );
-    assert_eq!(
-        plan.filesystem.write_dirs,
-        vec![PathBuf::from("${project}/out")]
-    );
+    let topic = topic_id::derive(&id.to_string());
+    let private_state = project.join(".rafaello-plugin-data").join(&topic);
+
+    let mut expected_read_dirs = vec![project.join("docs"), project.join("src"), private_state.clone()];
+    expected_read_dirs.sort();
+    assert_eq!(plan.filesystem.read_dirs, expected_read_dirs);
+
+    let mut expected_write_dirs = vec![project.join("out"), private_state];
+    expected_write_dirs.sort();
+    assert_eq!(plan.filesystem.write_dirs, expected_write_dirs);
+
     assert_eq!(
         plan.filesystem.exec_paths,
         vec![PathBuf::from("/usr/bin/ls")]
@@ -115,8 +122,4 @@ fn default_bundle_flattens_into_compiled_plugin() {
     assert_eq!(plan.limits.max_open_files, 2048);
     assert_eq!(plan.limits.max_address_space, None);
     assert_eq!(plan.limits.max_processes, Some(64));
-
-    // Path resolver hook-in is c31 — strings remain unresolved here.
-    let raw: &Path = Path::new("${project}/src");
-    assert!(plan.filesystem.read_dirs.contains(&raw.to_path_buf()));
 }

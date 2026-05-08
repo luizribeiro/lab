@@ -1,13 +1,15 @@
-//! c30 — full bundle union per `decisions.md` row 17 + pi review-4
+//! c30/c31 — full bundle union per `decisions.md` row 17 + pi review-4
 //! finding 1: a `default` bundle plus a named `format` bundle each
 //! contribute distinct authority; the compiled plan is the union
-//! of both, with C4 post-flatten ordering (sort + dedup) applied.
-//! There is no `active_bundles` selection knob — the spawn-time
-//! policy reflects every named bundle.
+//! of both, with §C3 placeholder resolution + C4 post-flatten
+//! ordering (sort + dedup) applied. There is no `active_bundles`
+//! selection knob — the spawn-time policy reflects every named
+//! bundle.
 
 mod common;
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 
 use rafaello_core::compile::{compile_plugin, NetworkPlan};
@@ -17,11 +19,18 @@ use rafaello_core::lock::{
 };
 use rafaello_core::manifest::capabilities::NetworkMode;
 use rafaello_core::paths::PathContext;
+use rafaello_core::topic_id;
 
 use common::{canonical, entry, lock_with};
 
 #[test]
 fn default_and_named_bundle_union() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(tmp.path()).unwrap();
+    for d in ["src", "cache", "out", "dist"] {
+        fs::create_dir(project.join(d)).unwrap();
+    }
+
     let id = canonical("github.com/acme:formatter@1.0.0");
     let mut e = entry(&["format"], false, None);
 
@@ -84,9 +93,9 @@ fn default_and_named_bundle_union() {
 
     let lock = lock_with(vec![(id.clone(), e)], SessionTable::default());
     let ctx = PathContext {
-        project_root: PathBuf::from("/tmp/project"),
+        project_root: project.clone(),
         home: PathBuf::from("/tmp/home"),
-        plugin_dir: PathBuf::from("/tmp/plugin/formatter"),
+        plugin_dir: project.join(".rafaello/plugins/formatter"),
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
@@ -97,22 +106,22 @@ fn default_and_named_bundle_union() {
 
     let plan = compile_plugin(&lock, &id, &ctx, &digests).expect("compile succeeds");
 
-    // Filesystem: union; duplicate `${project}/src` deduped; sorted.
-    assert_eq!(
-        plan.filesystem.read_dirs,
-        vec![PathBuf::from("${project}/src")]
-    );
-    assert_eq!(
-        plan.filesystem.write_dirs,
-        vec![
-            PathBuf::from("${project}/cache"),
-            PathBuf::from("${project}/dist"),
-            PathBuf::from("${project}/out"),
-        ],
-        "default's cache + format's dist/out unioned and sorted"
-    );
+    let topic = topic_id::derive(&id.to_string());
+    let private_state = project.join(".rafaello-plugin-data").join(&topic);
 
-    // Network: most-permissive (Proxy beats Deny); allow_hosts unioned.
+    let mut expected_read_dirs = vec![project.join("src"), private_state.clone()];
+    expected_read_dirs.sort();
+    assert_eq!(plan.filesystem.read_dirs, expected_read_dirs);
+
+    let mut expected_write_dirs = vec![
+        project.join("cache"),
+        project.join("dist"),
+        project.join("out"),
+        private_state,
+    ];
+    expected_write_dirs.sort();
+    assert_eq!(plan.filesystem.write_dirs, expected_write_dirs);
+
     match plan.network {
         NetworkPlan::Proxy { allow_hosts } => {
             assert_eq!(allow_hosts, vec!["registry.example.com".to_owned()]);
@@ -120,7 +129,6 @@ fn default_and_named_bundle_union() {
         other => panic!("expected Proxy plan, got {other:?}"),
     }
 
-    // Env: pass unioned + sorted; set merged.
     assert_eq!(plan.env.pass, vec!["HOME".to_owned(), "PATH".to_owned()]);
     assert_eq!(
         plan.env.set,
@@ -130,7 +138,6 @@ fn default_and_named_bundle_union() {
         ])
     );
 
-    // Limits: per-field max of present values.
     assert_eq!(plan.limits.max_cpu_time, 180);
     assert_eq!(plan.limits.max_open_files, 1024);
     assert_eq!(plan.limits.max_address_space, None);

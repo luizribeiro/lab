@@ -14,15 +14,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use crate::error::CompileError;
+use crate::carveout;
 use crate::digest::RecomputedDigests;
+use crate::error::{CompileError, PathError};
 use crate::lock::canonical_id::CanonicalId;
 use crate::lock::load_policy::LoadPolicy;
 use crate::lock::{
-    Grant, GrantEnv, GrantFilesystem, GrantLimits, GrantNetwork, Lock, PluginEntry,
+    Grant, GrantBundle, GrantEnv, GrantFilesystem, GrantLimits, GrantNetwork, Lock, PluginEntry,
 };
 use crate::manifest::capabilities::NetworkMode;
-use crate::paths::PathContext;
+use crate::manifest::placeholders;
+use crate::paths::{self, PathContext, RootKind};
 use crate::topic_id;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,11 +106,10 @@ pub struct ToolMeta {
 /// returns [`CompileError::ValidationNotRun`]. It does not re-run
 /// V3 itself.
 ///
-/// The body is a scaffold: per-section emitters land in c30–c34.
-/// Today it returns a minimally populated [`CompiledPlugin`] with
-/// `entry_absolute = ctx.plugin_dir.join(entry)` and default-empty
-/// plans; later commits fill in the bundle-union, path resolver,
-/// carve-out, network/env, digest gating, and tool_meta layers.
+/// Currently wires §C2 bundle flatten + §C3 placeholder
+/// resolution + §K carve-out decomposition + §C5 private-state
+/// injection. Network/env emission + entry resolution + digest
+/// gating + tool_meta projection land in later commits.
 pub fn compile_plugin(
     lock: &Lock,
     canonical: &CanonicalId,
@@ -127,14 +128,40 @@ pub fn compile_plugin(
 
     let eff = effective_grant(&entry.grant);
 
-    let filesystem = FilesystemPlan {
-        read_paths: eff.filesystem.read_paths.iter().map(PathBuf::from).collect(),
-        read_dirs: eff.filesystem.read_dirs.iter().map(PathBuf::from).collect(),
-        write_paths: eff.filesystem.write_paths.iter().map(PathBuf::from).collect(),
-        write_dirs: eff.filesystem.write_dirs.iter().map(PathBuf::from).collect(),
-        exec_paths: eff.filesystem.exec_paths.iter().map(PathBuf::from).collect(),
-        exec_dirs: eff.filesystem.exec_dirs.iter().map(PathBuf::from).collect(),
+    let resolved_fs = resolve_filesystem(&eff.filesystem, ctx)?;
+
+    let proxy_bundle = GrantBundle {
+        filesystem: Some(resolved_fs.clone()),
+        ..GrantBundle::default()
     };
+    let decomposed = carveout::compile_against(
+        &proxy_bundle,
+        canonical,
+        ctx,
+        entry.flags.allow_credential_paths,
+    )?;
+
+    let private_state = ctx
+        .project_root
+        .join(".rafaello-plugin-data")
+        .join(&topic_id);
+
+    let mut filesystem = FilesystemPlan {
+        read_paths: decomposed.read_paths,
+        read_dirs: decomposed.read_dirs,
+        write_paths: decomposed.write_paths,
+        write_dirs: decomposed.write_dirs,
+        exec_paths: resolved_fs.exec_paths.iter().map(PathBuf::from).collect(),
+        exec_dirs: resolved_fs.exec_dirs.iter().map(PathBuf::from).collect(),
+    };
+    filesystem.read_dirs.push(private_state.clone());
+    filesystem.write_dirs.push(private_state);
+    sort_dedup_paths(&mut filesystem.read_paths);
+    sort_dedup_paths(&mut filesystem.read_dirs);
+    sort_dedup_paths(&mut filesystem.write_paths);
+    sort_dedup_paths(&mut filesystem.write_dirs);
+    sort_dedup_paths(&mut filesystem.exec_paths);
+    sort_dedup_paths(&mut filesystem.exec_dirs);
 
     let network = match eff.network.mode {
         NetworkMode::Deny => NetworkPlan::Deny,
@@ -267,6 +294,71 @@ pub(crate) fn effective_grant(grant: &Grant) -> EffectiveGrant {
 fn sort_dedup(v: &mut Vec<String>) {
     v.sort();
     v.dedup();
+}
+
+fn sort_dedup_paths(v: &mut Vec<PathBuf>) {
+    v.sort();
+    v.dedup();
+}
+
+/// Resolve every capability path template in `fs` to an absolute
+/// path per scope §C3: closed §M8 placeholder expansion + the
+/// existing-ancestor-canonical / lexical-suffix / containment
+/// resolver from `paths::resolve_under_root` for `${project}` and
+/// `${plugin}` prefixed templates. Templates rooted elsewhere
+/// (`${home}`, `${cache}`, `${state}`, absolute) are placeholder-
+/// expanded only — the post-expansion containment check applies
+/// only to project / plugin roots.
+fn resolve_filesystem(
+    fs: &GrantFilesystem,
+    ctx: &PathContext,
+) -> Result<GrantFilesystem, CompileError> {
+    Ok(GrantFilesystem {
+        read_paths: resolve_each(&fs.read_paths, ctx)?,
+        read_dirs: resolve_each(&fs.read_dirs, ctx)?,
+        write_paths: resolve_each(&fs.write_paths, ctx)?,
+        write_dirs: resolve_each(&fs.write_dirs, ctx)?,
+        exec_paths: resolve_each(&fs.exec_paths, ctx)?,
+        exec_dirs: resolve_each(&fs.exec_dirs, ctx)?,
+    })
+}
+
+fn resolve_each(items: &[String], ctx: &PathContext) -> Result<Vec<String>, CompileError> {
+    items
+        .iter()
+        .map(|t| resolve_one(t, ctx).map(|p| p.to_string_lossy().into_owned()))
+        .collect()
+}
+
+fn resolve_one(template: &str, ctx: &PathContext) -> Result<PathBuf, CompileError> {
+    if let Some(kind) = root_kind_for(template) {
+        paths::resolve_under_root(template, ctx, kind).map_err(map_path_err)
+    } else {
+        let expanded = placeholders::expand(template, ctx)
+            .map_err(|_| CompileError::UnknownPlaceholder)?;
+        Ok(PathBuf::from(expanded))
+    }
+}
+
+fn root_kind_for(template: &str) -> Option<RootKind> {
+    if template.starts_with("${project}") {
+        Some(RootKind::Project)
+    } else if template.starts_with("${plugin}") {
+        Some(RootKind::Plugin)
+    } else {
+        None
+    }
+}
+
+fn map_path_err(e: PathError) -> CompileError {
+    match e {
+        PathError::UnknownPlaceholder | PathError::MalformedPlaceholder => {
+            CompileError::UnknownPlaceholder
+        }
+        PathError::PathEscape | PathError::NotAbsolute => CompileError::PathEscape,
+        PathError::SymlinkEscape => CompileError::SymlinkEscape,
+        PathError::Io(io) => CompileError::Io(io),
+    }
 }
 
 fn most_permissive_mode(a: NetworkMode, b: NetworkMode) -> NetworkMode {
