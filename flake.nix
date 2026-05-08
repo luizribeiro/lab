@@ -96,6 +96,13 @@
               ];
             };
 
+            mcpfit = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+              ];
+            };
+
             capsa = devenv.lib.mkShell {
               inherit inputs pkgs;
               modules = [
