@@ -56,6 +56,15 @@ impl Cx {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn extract_progress_token(params: &Value) -> Option<Value> {
+    let token = params.get("_meta")?.get("progressToken")?;
+    match token {
+        Value::String(_) | Value::Number(_) => Some(token.clone()),
+        _ => None,
+    }
+}
+
 #[must_use = "progress notifications are only sent on .emit()"]
 pub struct ProgressBuilder<'a> {
     cx: &'a Cx,
@@ -147,6 +156,29 @@ mod tests {
                 message: Some("quarter".into()),
             }
         );
+    }
+
+    #[test]
+    fn extract_progress_token_accepts_string_and_number() {
+        let s = json!({"_meta": {"progressToken": "abc"}});
+        assert_eq!(extract_progress_token(&s), Some(json!("abc")));
+        let n = json!({"_meta": {"progressToken": 7}});
+        assert_eq!(extract_progress_token(&n), Some(json!(7)));
+    }
+
+    #[test]
+    fn extract_progress_token_ignores_other_shapes() {
+        for token in [json!(true), json!(null), json!([1]), json!({"x": 1})] {
+            let params = json!({"_meta": {"progressToken": token}});
+            assert_eq!(extract_progress_token(&params), None);
+        }
+    }
+
+    #[test]
+    fn extract_progress_token_returns_none_when_absent() {
+        assert_eq!(extract_progress_token(&json!({})), None);
+        assert_eq!(extract_progress_token(&json!({"_meta": {}})), None);
+        assert_eq!(extract_progress_token(&json!("not-an-object")), None);
     }
 
     #[test]
