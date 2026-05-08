@@ -11,7 +11,10 @@ pub type ProcessTransport = SubprocessTransport;
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use fittings_core::{error::FittingsError, transport::Connector};
@@ -42,6 +45,7 @@ where
     notification_tx: broadcast::Sender<InboundNotification>,
     next_id: AtomicU64,
     worker: JoinHandle<()>,
+    notification_handler: Mutex<Option<JoinHandle<()>>>,
     _connector: PhantomData<C>,
 }
 
@@ -71,12 +75,45 @@ where
             notification_tx,
             next_id: AtomicU64::new(1),
             worker,
+            notification_handler: Mutex::new(None),
             _connector: PhantomData,
         })
     }
 
     pub fn subscribe_notifications(&self) -> broadcast::Receiver<InboundNotification> {
         self.notification_tx.subscribe()
+    }
+
+    pub fn with_notification_handler<F>(self, handler: F) -> Self
+    where
+        F: Fn(String, Value) + Send + Sync + 'static,
+    {
+        let handler = Arc::new(handler);
+        let mut rx = self.notification_tx.subscribe();
+        let mut slot = self
+            .notification_handler
+            .lock()
+            .expect("notification handler slot poisoned");
+        let task = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(InboundNotification { method, params }) => {
+                        let handler = Arc::clone(&handler);
+                        let params = params.unwrap_or(Value::Null);
+                        tokio::spawn(async move {
+                            handler(method, params);
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        if let Some(previous) = slot.replace(task) {
+            previous.abort();
+        }
+        drop(slot);
+        self
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
@@ -118,6 +155,11 @@ where
     fn drop(&mut self) {
         let _ = self.request_tx.send(ClientCommand::Shutdown);
         self.worker.abort();
+        if let Ok(mut slot) = self.notification_handler.lock() {
+            if let Some(task) = slot.take() {
+                task.abort();
+            }
+        }
     }
 }
 
@@ -325,7 +367,7 @@ mod tests {
     };
     use fittings_testkit::memory_transport::MemoryTransport;
     use serde_json::json;
-    use tokio::sync::{broadcast::error::RecvError, Mutex};
+    use tokio::sync::{broadcast::error::RecvError, mpsc, Mutex};
 
     use super::Client;
 
@@ -791,6 +833,35 @@ mod tests {
         assert!(matches!(lag, RecvError::Lagged(n) if n >= 12));
 
         server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn with_notification_handler_receives_server_notifications() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
+        let client = client.with_notification_handler(move |method, params| {
+            notify_tx
+                .send((method, params))
+                .expect("test receiver still open");
+        });
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"event/tick\",\"params\":{\"n\":7}}\n")
+            .await
+            .expect("send notification");
+
+        let (method, params) = tokio::time::timeout(Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("handler should fire within timeout")
+            .expect("handler should forward notification");
+        assert_eq!(method, "event/tick");
+        assert_eq!(params, json!({"n": 7}));
+
+        drop(client);
     }
 
     #[tokio::test]
