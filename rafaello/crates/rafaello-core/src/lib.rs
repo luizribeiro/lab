@@ -14,7 +14,8 @@ pub mod trifecta;
 pub mod validate;
 
 pub use compile::{
-    CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan, NetworkPlan, ToolMeta,
+    compile_plugin, CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan,
+    NetworkPlan, ToolMeta,
 };
 pub use error::{
     CarveOutError, CollisionError, CompileError, DigestError, Error, LockError, ManifestError,
