@@ -21,7 +21,7 @@ use crate::lock::{Bindings, CanonicalId, Lock};
 use crate::manifest::{
     Bus, Capabilities, CapabilityPathTemplate, Load, Manifest, NetworkMode, Provides, Renderer,
 };
-use crate::paths::PathContext;
+use crate::paths::{self, PathContext, RootKind};
 use crate::sinks;
 use crate::topic_id;
 use crate::trifecta;
@@ -210,6 +210,11 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
                         if CapabilityPathTemplate::parse(p).is_err() {
                             return Err(ValidationError::LockCapabilityPathRelative);
                         }
+                    }
+                }
+                for tpl in fs.exec_paths.iter().chain(fs.exec_dirs.iter()) {
+                    if paths::resolve_under_root(tpl, &per_plugin_ctx, RootKind::Project).is_ok() {
+                        return Err(ValidationError::ExecPathInsideProject);
                     }
                 }
             }
