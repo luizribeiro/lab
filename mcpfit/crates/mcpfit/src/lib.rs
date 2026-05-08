@@ -22,7 +22,10 @@ pub use protocol::{
 };
 pub use registry::ToolRegistry;
 pub use response::{IntoToolResponse, ToolResponse};
-pub use server::{IntoTool, Server};
+pub use server::{
+    CancellationConfig, IntoTool, Server, MCP_CANCELLATION_METHOD,
+    MCP_CANCELLATION_REQUEST_ID_FIELD,
+};
 pub use service::McpService;
 pub use structured::{Structured, StructuredObject};
 pub use tool::{Tool, ToolSpec};
