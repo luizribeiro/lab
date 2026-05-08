@@ -38,7 +38,7 @@ where
             .await?;
 
         Ok(Response {
-            id: req.id,
+            id: req.id.unwrap_or(fittings_core::message::JsonRpcId::Null),
             result,
             metadata: req.metadata,
         })
@@ -50,7 +50,11 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
 
-    use fittings_core::{error::FittingsError, message::Request, service::Service};
+    use fittings_core::{
+        error::FittingsError,
+        message::{JsonRpcId, Request},
+        service::Service,
+    };
 
     use super::{MethodRouter, RouterService};
 
@@ -76,7 +80,7 @@ mod tests {
     async fn router_service_delegates_and_wraps_response() {
         let service = RouterService::new(EchoRouter);
         let request = Request {
-            id: "r-1".to_string(),
+            id: Some(JsonRpcId::from("r-1")),
             method: "echo".to_string(),
             params: json!({"x": 1}),
             metadata: Default::default(),
@@ -92,7 +96,7 @@ mod tests {
     async fn router_service_propagates_router_errors() {
         let service = RouterService::new(EchoRouter);
         let request = Request {
-            id: "r-2".to_string(),
+            id: Some(JsonRpcId::from("r-2")),
             method: "unknown".to_string(),
             params: json!({}),
             metadata: Default::default(),

@@ -25,3 +25,7 @@ path = "../../tests/spawn_smoke.rs"
 [[test]]
 name = "jsonrpc_conformance"
 path = "../../tests/jsonrpc_conformance.rs"
+
+[[test]]
+name = "core_request_id_shape"
+path = "../../tests/core_request_id_shape.rs"

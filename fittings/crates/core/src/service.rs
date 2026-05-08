@@ -29,7 +29,7 @@ mod tests {
 
     use crate::{
         error::FittingsError,
-        message::{Request, Response},
+        message::{JsonRpcId, Request, Response},
     };
 
     use super::Service;
@@ -40,7 +40,7 @@ mod tests {
     impl Service for EchoService {
         async fn call(&self, req: Request) -> Result<Response, FittingsError> {
             Ok(Response {
-                id: req.id,
+                id: req.id.unwrap_or(JsonRpcId::Null),
                 result: req.params,
                 metadata: Default::default(),
             })
@@ -54,7 +54,7 @@ mod tests {
         assert_service_impl::<EchoService>();
 
         let _request = Request {
-            id: "1".into(),
+            id: Some(JsonRpcId::from("1")),
             method: "echo".into(),
             params: json!({"x": 1}),
             metadata: Default::default(),
