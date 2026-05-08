@@ -225,6 +225,13 @@ impl McpService for McpServiceImpl {
             .expect("registry mutex should not be poisoned")
             .register(tool)
             .map_err(to_fittings_error)?;
+        self.pending_notifications
+            .lock()
+            .expect("pending notifications mutex should not be poisoned")
+            .push(ServerNotification {
+                method: "notifications/tools/list_changed".to_string(),
+                params: Value::Object(Default::default()),
+            });
         Ok(ToolsRegisterResult { tool: info })
     }
 }
@@ -672,6 +679,35 @@ mod tests {
             .await
             .expect("registered tool should be callable");
         assert_eq!(response, ToolResponse::success("pong"));
+    }
+
+    #[tokio::test]
+    async fn register_tool_emits_list_changed_notification_on_success() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        svc.register_tool(register_params("ping"))
+            .await
+            .expect("registration should succeed");
+
+        let notifications = svc.drain_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications[0].method, "notifications/tools/list_changed");
+        assert_eq!(notifications[0].params, json!({}));
+    }
+
+    #[tokio::test]
+    async fn register_tool_does_not_notify_when_rejected() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        let _ = svc.register_tool(register_params("late")).await;
+        assert!(svc.drain_notifications().is_empty());
+
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        svc.register_tool(register_params("ping")).await.unwrap();
+        let _ = svc.drain_notifications();
+        let _ = svc.register_tool(register_params("ping")).await;
+        assert!(svc.drain_notifications().is_empty());
     }
 
     #[tokio::test]
