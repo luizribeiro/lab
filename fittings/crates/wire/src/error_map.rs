@@ -17,27 +17,29 @@ const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
 pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
     let id = id.into();
     let error = match err {
-        FittingsError::ParseError(_) => ErrorEnvelope {
+        FittingsError::Parse { .. } => ErrorEnvelope {
             code: PARSE_ERROR_CODE,
             message: PARSE_ERROR_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::InvalidRequest(_) => ErrorEnvelope {
+        FittingsError::InvalidRequest { .. } => ErrorEnvelope {
             code: INVALID_REQUEST_CODE,
             message: INVALID_REQUEST_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::MethodNotFound(_) => ErrorEnvelope {
+        FittingsError::MethodNotFound { .. } => ErrorEnvelope {
             code: METHOD_NOT_FOUND_CODE,
             message: METHOD_NOT_FOUND_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::InvalidParams(_) => ErrorEnvelope {
+        FittingsError::InvalidParams { .. } => ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
             message: INVALID_PARAMS_MESSAGE.to_string(),
             data: None,
         },
-        FittingsError::Transport(_) | FittingsError::Internal(_) => ErrorEnvelope {
+        FittingsError::Transport(_)
+        | FittingsError::Internal { .. }
+        | FittingsError::Panic { .. } => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
             message: INTERNAL_ERROR_MESSAGE.to_string(),
             data: None,
@@ -182,7 +184,10 @@ mod tests {
             message: "bad json".to_string(),
             data: Some(json!({"ignored": true})),
         });
-        assert!(matches!(parse, FittingsError::ParseError(message) if message == "Parse error"));
+        assert!(matches!(
+            parse,
+            FittingsError::Parse { ref message, data: None } if message == "Parse error"
+        ));
 
         let invalid_request = from_error_envelope(ErrorEnvelope {
             code: -32600,
@@ -191,7 +196,7 @@ mod tests {
         });
         assert!(matches!(
             invalid_request,
-            FittingsError::InvalidRequest(message) if message == "Invalid Request"
+            FittingsError::InvalidRequest { message, .. } if message == "Invalid Request"
         ));
 
         let method_not_found = from_error_envelope(ErrorEnvelope {
@@ -201,7 +206,7 @@ mod tests {
         });
         assert!(matches!(
             method_not_found,
-            FittingsError::MethodNotFound(message) if message == "Method not found"
+            FittingsError::MethodNotFound { message, .. } if message == "Method not found"
         ));
 
         let invalid_params = from_error_envelope(ErrorEnvelope {
@@ -211,7 +216,7 @@ mod tests {
         });
         assert!(matches!(
             invalid_params,
-            FittingsError::InvalidParams(message) if message == "Invalid params"
+            FittingsError::InvalidParams { message, .. } if message == "Invalid params"
         ));
 
         let internal = from_error_envelope(ErrorEnvelope {
@@ -220,7 +225,7 @@ mod tests {
             data: None,
         });
         assert!(
-            matches!(internal, FittingsError::Internal(message) if message == "Internal error")
+            matches!(internal, FittingsError::Internal { message, .. } if message == "Internal error")
         );
 
         let service = from_error_envelope(ErrorEnvelope {
@@ -241,7 +246,7 @@ mod tests {
         });
         assert!(matches!(
             unknown_negative,
-            FittingsError::Internal(message) if message == "Internal error"
+            FittingsError::Internal { message, .. } if message == "Internal error"
         ));
 
         let unknown_positive = from_error_envelope(ErrorEnvelope {
@@ -251,7 +256,7 @@ mod tests {
         });
         assert!(matches!(
             unknown_positive,
-            FittingsError::Internal(message) if message == "Internal error"
+            FittingsError::Internal { message, .. } if message == "Internal error"
         ));
     }
 }

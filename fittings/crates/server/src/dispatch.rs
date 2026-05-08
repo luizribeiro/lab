@@ -105,7 +105,7 @@ mod tests {
         let error = service.call(request).await.expect_err("call should fail");
         assert!(matches!(
             error,
-            FittingsError::MethodNotFound(message) if message == "unknown"
+            FittingsError::MethodNotFound { message, .. } if message == "unknown"
         ));
     }
 }

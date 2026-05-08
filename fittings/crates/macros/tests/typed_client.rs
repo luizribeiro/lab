@@ -144,7 +144,7 @@ async fn generated_typed_client_maps_result_decode_failures_to_internal_error() 
 
     assert!(matches!(
         error,
-        FittingsError::Internal(message)
+        FittingsError::Internal { message, .. }
             if message.contains("failed to decode result for method `math/add`")
     ));
 
@@ -165,7 +165,7 @@ async fn generated_typed_client_maps_params_encode_failures_to_invalid_params() 
 
     assert!(matches!(
         error,
-        FittingsError::InvalidParams(message)
+        FittingsError::InvalidParams { message, .. }
             if message.contains("failed to encode params for method `fail_encode`")
     ));
 }

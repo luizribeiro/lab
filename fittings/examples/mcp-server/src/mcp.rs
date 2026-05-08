@@ -955,7 +955,7 @@ mod tests {
     fn tools_call_result_rejects_non_object_structured_content() {
         let result = ToolsCallResult::text_with_structured("invalid", json!([1, 2, 3]));
 
-        assert!(matches!(result, Err(FittingsError::InvalidParams(_))));
+        assert!(matches!(result, Err(FittingsError::InvalidParams { .. })));
     }
 
     #[test]
@@ -1050,7 +1050,7 @@ mod tests {
             },
             &ToolCallContext::default(),
         );
-        assert!(matches!(unknown, Err(FittingsError::MethodNotFound(_))));
+        assert!(matches!(unknown, Err(FittingsError::MethodNotFound { .. })));
 
         let mut registry = ToolRegistry::new();
         registry
@@ -1070,7 +1070,7 @@ mod tests {
             },
             &ToolCallContext::default(),
         );
-        assert!(matches!(invalid, Err(FittingsError::InvalidParams(_))));
+        assert!(matches!(invalid, Err(FittingsError::InvalidParams { .. })));
     }
 
     #[test]
@@ -1089,7 +1089,10 @@ mod tests {
             |_, _context| Ok(ToolsCallResult::text("two")),
         );
 
-        assert!(matches!(duplicate, Err(FittingsError::InvalidRequest(_))));
+        assert!(matches!(
+            duplicate,
+            Err(FittingsError::InvalidRequest { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1129,7 +1132,7 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(called, Err(FittingsError::MethodNotFound(_))));
+        assert!(matches!(called, Err(FittingsError::MethodNotFound { .. })));
     }
 
     #[tokio::test]
@@ -1138,7 +1141,7 @@ mod tests {
 
         let result = service.initialized(Value::Null).await;
 
-        assert!(matches!(result, Err(FittingsError::InvalidRequest(_))));
+        assert!(matches!(result, Err(FittingsError::InvalidRequest { .. })));
         assert_eq!(
             service.lifecycle_state(),
             SessionLifecycle::AwaitingInitialize,
@@ -1245,7 +1248,10 @@ mod tests {
                 response_text: "ignored".to_string(),
             })
             .await;
-        assert!(matches!(empty_name, Err(FittingsError::InvalidParams(_))));
+        assert!(matches!(
+            empty_name,
+            Err(FittingsError::InvalidParams { .. })
+        ));
         assert!(service.drain_notifications().is_empty());
 
         service
@@ -1265,7 +1271,10 @@ mod tests {
                 response_text: "another".to_string(),
             })
             .await;
-        assert!(matches!(duplicate, Err(FittingsError::InvalidRequest(_))));
+        assert!(matches!(
+            duplicate,
+            Err(FittingsError::InvalidRequest { .. })
+        ));
         assert!(service.drain_notifications().is_empty());
 
         let listed = service
