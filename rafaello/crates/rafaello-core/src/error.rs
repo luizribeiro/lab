@@ -154,6 +154,8 @@ pub enum ValidationError {
     ToolOwnerRedundant,
     #[error("plugin_dirs missing entry for installed plugin")]
     MissingPluginDir,
+    #[error("topic-id collision: {0}")]
+    TopicIdCollision(#[from] CollisionError),
     #[error("trifecta refused")]
     TrifectaRefused,
     #[error("sink inference drift")]

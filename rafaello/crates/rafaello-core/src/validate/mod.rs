@@ -12,12 +12,22 @@ pub use topic::{
     pattern_matches_topic, validate_pattern, validate_topic,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use crate::error::ValidationError;
-use crate::lock::CanonicalId;
+use crate::lock::{CanonicalId, Lock};
 use crate::manifest::{Bus, Capabilities, Load, Manifest, NetworkMode, Provides, Renderer};
 use crate::topic_id;
+
+#[derive(Debug, Clone)]
+pub struct LockValidationContext {
+    pub project_root: PathBuf,
+    pub home: PathBuf,
+    pub plugin_dirs: BTreeMap<CanonicalId, PathBuf>,
+    pub cache_root: PathBuf,
+    pub state_root: PathBuf,
+}
 
 const KNOWN_SINK_CLASSES: &[&str] = &["network", "vcs_push", "mail", "workspace_write", "exec"];
 
@@ -77,6 +87,65 @@ pub fn manifest_with_id(
             _ => {}
         }
     }
+    Ok(())
+}
+
+pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationError> {
+    for canonical in lock.plugins.keys() {
+        if !ctx.plugin_dirs.contains_key(canonical) {
+            return Err(ValidationError::MissingPluginDir);
+        }
+    }
+
+    let prefix_pairs: Vec<(CanonicalId, String)> = lock
+        .plugins
+        .keys()
+        .map(|c| (c.clone(), topic_id::derive(&c.to_string())))
+        .collect();
+    topic_id::collisions_with_prefixes(&prefix_pairs)?;
+
+    let mut tool_claims: BTreeMap<&str, Vec<&CanonicalId>> = BTreeMap::new();
+    for (canonical, entry) in &lock.plugins {
+        for tool in &entry.bindings.tools {
+            tool_claims.entry(tool.as_str()).or_default().push(canonical);
+        }
+    }
+
+    for (tool_name, owner_str) in &lock.session.tool_owner {
+        let owner_id = CanonicalId::parse(owner_str)
+            .map_err(|_| ValidationError::ToolOwnerUnknownPlugin)?;
+        let Some(owner_entry) = lock.plugins.get(&owner_id) else {
+            return Err(ValidationError::ToolOwnerUnknownPlugin);
+        };
+        if !owner_entry.bindings.tools.iter().any(|t| t == tool_name) {
+            return Err(ValidationError::ToolOwnerPluginDoesNotDeclareTool);
+        }
+        let claim_count = tool_claims
+            .get(tool_name.as_str())
+            .map(|v| v.len())
+            .unwrap_or(0);
+        if claim_count <= 1 {
+            return Err(ValidationError::ToolOwnerRedundant);
+        }
+    }
+
+    for (tool_name, claimants) in &tool_claims {
+        if claimants.len() > 1 && !lock.session.tool_owner.contains_key(*tool_name) {
+            return Err(ValidationError::ConflictingToolName);
+        }
+    }
+
+    if let Some(active_str) = &lock.session.provider_active {
+        let active_id = CanonicalId::parse(active_str)
+            .map_err(|_| ValidationError::ProviderActiveUnknown)?;
+        let Some(active_entry) = lock.plugins.get(&active_id) else {
+            return Err(ValidationError::ProviderActiveUnknown);
+        };
+        if !active_entry.bindings.provider || active_entry.bindings.provider_id.is_none() {
+            return Err(ValidationError::ProviderActiveNotProvider);
+        }
+    }
+
     Ok(())
 }
 
