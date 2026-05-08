@@ -33,10 +33,16 @@ the *Internal split* section below.
 
 ### Wire layer — `fittings-wire`
 
-- **W1.** `Request.id: Option<JsonRpcId>` (notifications carry
-  `None`); `Response.id: JsonRpcId` (always present, never `Null` on
-  successful responses). Define behaviour for inbound `id: null`
-  per JSON-RPC 2.0 (treated as notification).
+- **W1.** `Request.id: Option<JsonRpcId>` distinguishes missing
+  `id` field from explicit JSON `null`:
+  - Missing `id` ⇒ `Request.id = None` ⇒ notification, no response.
+  - Explicit `"id": null` ⇒ `Request.id = Some(JsonRpcId::Null)` ⇒
+    request, enters `in_flight` keyed on `JsonRpcId::Null`, returns
+    a response with `"id": null`. A second concurrent inbound
+    `"id": null` request is rejected as a protocol-error duplicate
+    per `rfc-fittings-notifications.md:137-145`.
+  - `Response.id: JsonRpcId` (always present; for the explicit-null
+    request path the response carries `JsonRpcId::Null`).
 - **W2.** Predefined error variants (`Parse`, `InvalidRequest`,
   `MethodNotFound`, `InvalidParams`, `Internal`) carry
   `data: Option<Value>` and a typed `message: String`. Round-trip
@@ -51,37 +57,66 @@ the *Internal split* section below.
 
 - **C1.** `ServiceContext` struct accessible from handlers, exposing:
   - `notify(method, params) -> Result<(), FittingsError>` — fire-and-forget
-    JSON-RPC notification on the same connection.
+    JSON-RPC notification on the same connection. Returns local
+    enqueue/encoding/channel-closed status only; **does not** prove
+    peer delivery (peer-gone is discovered later by the dispatcher,
+    surfaced via `peer.closed()` and pending-call drain — see S3, K3).
   - `cancelled() -> impl Future<Output = ()>` — resolves when the
     cancellation token fires.
   - `is_cancelled() -> bool` — non-blocking check.
-  - `request_id() -> &JsonRpcId`.
-  Cheap to clone (`Arc`-shared inner state).
+  - `request_id() -> Option<&JsonRpcId>` — `None` for notification
+    handlers, `Some(JsonRpcId::Null)` for explicit-null-id requests,
+    `Some(_)` otherwise.
+  Cheap to clone (`Arc`-shared inner state). For connection-scoped
+  use (outside any inbound handler) callers obtain a `PeerHandle`
+  via `Server::peer()` / `Client::peer()` (S2/K1); `ServiceContext`
+  is per-request and does not subsume `PeerHandle`.
 - **C2.** `Service::call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError>`
   — breaking trait change. Old `call(&self, req: Request)` is gone.
 - **C3.** `FittingsError::Cancelled { reason: Option<String> }` variant.
   No wire mapping (response is suppressed; see C7/C8).
 - **C4.** `Middleware::handle` receives `ServiceContext` (so
   middleware can also `notify` and observe cancellation).
-- **C5.** `ServiceError.code: i32` validation accepts the JSON-RPC
-  server-defined range `(-32099)..=(-32000)` *in addition to* the
-  existing `1..=999`. Out-of-range codes still serialise to `Internal`
-  with `data: { original_code: <n> }` preserved.
+- **C5.** `ServiceError.code: i32` validation accepts:
+  - any positive code (`1..=i32::MAX`), and
+  - the JSON-RPC server-defined band (`-32099..=-32000`), and
+  - any negative code outside the reserved cluster
+    (`-32768..=-32000`).
+  Truly invalid (reserved or pre-defined-conflicting) codes serialise
+  to `-32603 Internal` with `data: { "fittingsKind":
+  "invalidServiceCode", "originalCode": <n> }` preserved per
+  `rfc-fittings-errors.md:198-209`. The previous draft's
+  `original_code` snake-case key is wrong; the RFC uses the
+  `fittingsKind` marker convention.
 
 ### Server layer — `fittings-server`
 
-- **S1.** Per-connection `PeerHandle` accessible from handlers via
-  `ServiceContext::notify`. Handlers can fire-and-forget
-  notifications mid-call.
-- **S2.** `PeerHandle::call(method, params) -> Result<Value, FittingsError>`
+- **S1.** `Server::peer() -> PeerHandle` exposes the connection-scoped
+  peer handle for use **outside any inbound handler** (e.g. tasks
+  spawned at server startup that want to notify or call the peer
+  proactively). Inside a handler, a `PeerHandle` is available via
+  the existing `ServiceContext` plumbing — the same handle, just
+  scoped to the handler's connection.
+- **S2.** `PeerHandle::call(method, params).await -> Result<Value, FittingsError>`
   — server-initiated request to the peer, with response correlation.
   v1's only architectural consumer is core's renderer/peer call
   pattern (the renderer subprocess path itself is deferred to v2 per
   `decisions.md` row 29 — the *primitive* lands so it's available
-  when v2 unblocks it).
+  when v2 unblocks it). Acceptance criteria from
+  `rfc-fittings-notifications.md:873-886`:
+  - simultaneous calls in both directions on one fd correlate
+    correctly via disjoint id namespaces (server-initiated and
+    client-initiated; commits.md picks the prefix-or-shared-counter
+    strategy);
+  - dropping a `peer.call` future emits the configured cancellation
+    notification and removes the pending slot in `pending_outbound`;
+  - connection close resolves all pending outbound calls with
+    `FittingsError::Transport` and resolves `peer.closed()`.
 - **S3.** `PeerHandle::closed() -> impl Future<Output = ()>` — fires
   when the underlying transport tears down (graceful EOF or transport
-  error). Used by handlers to bail early.
+  error). The authoritative signal that the peer is gone; `notify`
+  intentionally does NOT report peer-gone synchronously (per
+  `rfc-fittings-notifications.md:717-747`).
 - **S4.** Two-channel server loop:
   - **Response channel:** `mpsc::UnboundedSender<Vec<u8>>` for
     request responses (correctness > backpressure on the response
@@ -95,21 +130,35 @@ the *Internal split* section below.
   a dedicated `notifications/cancelled` reader fires the per-request
   token without competing for handler permits. Tested in S5's negative
   case (semaphore saturated, cancellation still observed).
-- **S6.** Cancellation token semantics:
-  - Token fires AND handler hasn't returned → response is suppressed.
-  - Handler returns `Err(Cancelled)` AND token has fired → response
-    is suppressed (idempotent).
-  - Handler returns `Err(Cancelled)` AND token has NOT fired →
-    dispatcher rejects with `FittingsError::Internal { data: { reason:
-    "handler returned Cancelled without token firing" }}`. Handlers
-    are not allowed to fake cancellation.
-- **S7.** Malformed `notifications/cancelled` payload (non-object,
-  missing `id`, id-type mismatch) is logged at WARN and dropped.
-  Does not kill the connection or affect other in-flight requests.
-- **S8.** Batch cancellation: `notifications/cancelled` references
-  *individual request IDs*, not batch container IDs. A batched
-  request whose component is cancelled has that component suppressed
-  in the batch response; remaining components proceed.
+- **S6.** Cancellation suppression has **two independent triggers**
+  per `rfc-fittings-notifications.md:563-575` and `:591-593`:
+  - Token-fired ⇒ response suppressed when the handler returns,
+    regardless of the handler's return value.
+  - Handler-returned `Err(FittingsError::Cancelled)` ⇒ response
+    suppressed regardless of whether the token fired.
+  Both paths are valid; handlers may "self-cancel" by returning
+  `Err(Cancelled)` without the token firing (e.g. a deadline-exceeded
+  case the handler decides on its own). Earlier draft text rejecting
+  handler-initiated cancellation as `Internal` is removed.
+- **S7.** Cancellation method name and id-extractor are configurable
+  on `Server` (per `rfc-fittings-notifications.md` cancellation
+  configuration). Defaults align with the MCP convention (method
+  `notifications/cancelled`, id field `requestId`); LSP-style
+  callers can override (`$/cancelRequest`, id field `id`). m0's
+  `mcp-server` example uses MCP defaults; tests cover both
+  conventions where relevant.
+- **S7.1.** Malformed `notifications/cancelled` payload (non-object,
+  missing the configured id field, id-type mismatch — string id sent
+  for a numeric in-flight key or vice versa) is logged at WARN and
+  dropped. Does not kill the connection or affect other in-flight
+  requests.
+- **S8.** Batch cancellation per `rfc-fittings-notifications.md:628-671`:
+  `notifications/cancelled` references *individual request IDs*, not
+  batch container IDs. A batched request whose component is
+  cancelled has that component's response suppressed in the batch
+  response; remaining components proceed. If every component in a
+  batch is suppressed (cancelled or notification-only), no batch
+  response is emitted at all.
 - **S9.** Inbound peer-originated *request* (with `id`) when no
   inbound service is registered → `-32601 Method not found`.
   Registration goes via a new `Server::with_inbound_handler(svc)`
@@ -118,16 +167,19 @@ the *Internal split* section below.
 
 ### Client layer — `fittings-client`
 
-- **K1.** Symmetric `PeerHandle` on the client: `notify` and `call`.
-  (`call` was already there; `notify` is new.)
+- **K1.** `Client::peer() -> PeerHandle` symmetric to `Server::peer()`
+  (S1). Exposes `notify`, `call`, and `closed` on the client side.
+  (`call` already existed; `notify` and `closed` are new on this
+  side.) Acceptance criteria mirror S2: dropped-future cancellation,
+  close-drain, simultaneous bidirectional calls.
 - **K2.** Inbound unsolicited *notifications* from server are
   dispatched to a registered async handler, run via `tokio::spawn`
   (not on the client read loop). If no handler registered, dropped
   with a counter exposed at `Client::dropped_notifications()`.
-- **K3.** Inbound peer-originated *requests* from server (server-side
-  `PeerHandle::call`) are dispatched to a `Service` registered via
-  `Client::with_service(svc)`. If unregistered, `-32601`. Mirror of
-  S9.
+- **K3.** `Client::with_service(svc)` registers a service for
+  inbound peer-originated *requests* from server (server-side
+  `PeerHandle::call`). Without it, the client returns `-32601 Method
+  not found`. Mirror of S9.
 
 ### Transport layer — `fittings-transport`
 
@@ -191,11 +243,20 @@ the *Internal split* section below.
 | Test file | Exercises |
 |-----------|-----------|
 | `peerhandle_bidirectional.rs` | Server-initiated `peer.call` → client responds; client-initiated `peer.call` → server responds; both within one connection. |
+| `peerhandle_outside_handler.rs` | `Server::peer()` (S1) used by a startup task to call/notify the peer proactively, with no inbound request in flight. Mirror via `Client::peer()`. |
+| `peerhandle_dropped_future_cancels.rs` | Dropping a `peer.call` future emits the configured cancellation notification on the wire and removes the slot in `pending_outbound`. |
+| `peerhandle_close_drain.rs` | Closing the underlying transport resolves all pending `peer.call` futures with `FittingsError::Transport` and resolves `peer.closed()`. |
 | `service_context_notify.rs` | Handler emits 5 notifications mid-request; client receives all 5 *before* the response. |
-| `service_context_cancelled.rs` | Client sends `notifications/cancelled` for an in-flight request; handler observes `is_cancelled() == true`, returns `Err(Cancelled)`; client receives no response. |
-| `error_preservation_round_trip.rs` | Server returns `MethodNotFound { message: "...", data: { method: "foo" } }`; client receives both fields byte-equal. |
+| `service_context_cancelled_by_token.rs` | Client sends `notifications/cancelled` for an in-flight request; handler observes `is_cancelled() == true`, returns `Err(Cancelled)`; client receives no response. |
+| `service_context_cancelled_by_handler.rs` | Handler returns `Err(Cancelled)` *without* the cancellation token firing (e.g. handler-decided deadline); response is still suppressed. Asserts S6's two-independent-triggers rule. |
+| `error_preservation_round_trip.rs` | **Table-driven across all five predefined codes** (`Parse`, `InvalidRequest`, `MethodNotFound`, `InvalidParams`, `Internal`): server returns `<variant> { message: "...", data: { ... } }`; client receives `message` and `data` byte-equal. |
+| `error_marker_round_trip.rs` | `Transport` and `Panic` markers map to `-32603` outbound and decode back via the `fittingsKind` marker per `rfc-fittings-errors.md:223-262`. |
+| `service_code_ranges.rs` | Valid positive (`42`), valid server-band (`-32050`), valid below-reserved (`-40000`) all round-trip without `invalidServiceCode` rewriting. |
+| `id_null_explicit_request.rs` | Inbound `"id": null` request enters in-flight; handler runs; response `"id": null` returned. Distinct from a missing-id notification in the same connection. |
+| `id_null_concurrent_rejected.rs` | A second concurrent `"id": null` inbound request is rejected per `rfc-fittings-notifications.md:137-145`. |
 | `bounded_notify_drop.rs` | Handler floods notifications faster than transport flushes; bounded sink drops; `dropped_notifications()` increments; subsequent `peer.call` succeeds. |
 | `cancellation_outside_semaphore.rs` | `with_max_in_flight(1)` saturated by a sleeping handler; second `notifications/cancelled` arrives; handler observes the token without waiting for a permit. |
+| `batch_cancellation_partial_suppression.rs` | Send a 3-component batch; cancel one component mid-flight; only that response suppressed; remaining responses delivered. Plus a batch where every component is suppressed — no batch response emitted. |
 | `id_namespace_isolation.rs` | Server-initiated and client-initiated `peer.call`s use disjoint id namespaces (commits.md picks the strategy). |
 
 ### Negative integration tests in `fittings/tests/`
@@ -296,8 +357,12 @@ the call to the owner before pi review.
 
 m0 is done when:
 
-- All 7 positive integration tests pass.
-- All 7 negative integration tests pass.
+- All 16 positive integration tests pass (counts the round-1 review
+  additions: outside-handler, dropped-future, close-drain,
+  handler-cancel, table-driven error preservation, marker
+  round-trip, service-code ranges, explicit-null-id, concurrent-null,
+  batch cancellation).
+- All 5 negative integration tests pass.
 - `cargo test -p fittings -p fittings-{wire,core,server,client,transport,spawn,macros,testkit} -p mcp-server`
   is green on Linux + macOS.
 - The JS-SDK interop check passes against the rebuilt server.
