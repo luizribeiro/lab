@@ -2,7 +2,7 @@
 
 extern crate self as mcpfit;
 
-pub use mcpfit_macros::StructuredObject;
+pub use mcpfit_macros::{StructuredObject, tool};
 
 mod content;
 mod context;

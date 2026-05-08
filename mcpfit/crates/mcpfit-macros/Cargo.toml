@@ -12,6 +12,9 @@ quote = "1"
 syn = { version = "2", features = ["derive", "full"] }
 
 [dev-dependencies]
+mcpfit = { path = "../mcpfit" }
+schemars = { version = "0.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 trybuild = "1"
 
 [lints]
