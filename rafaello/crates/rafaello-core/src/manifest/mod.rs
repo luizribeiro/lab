@@ -10,6 +10,7 @@ pub mod capability_path_template;
 pub mod load;
 pub mod placeholders;
 pub mod provides;
+pub mod renderers;
 pub mod safepath;
 pub mod top_level;
 
@@ -21,5 +22,6 @@ pub use capabilities::{
 pub use capability_path_template::CapabilityPathTemplate;
 pub use load::Load;
 pub use provides::{Provides, ToolMetaManifest};
+pub use renderers::Renderer;
 pub use safepath::SafePath;
 pub use top_level::Manifest;
