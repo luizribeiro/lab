@@ -1,7 +1,10 @@
 # m0 — fittings v1 — scope
 
-> **Status:** drafted by claude (orchestrator) for pi adversarial
-> review. Pending owner ratification.
+> **Status:** converged after three pi review rounds
+> (`pi-review-1.md`, `pi-review-2.md`, `pi-review-3.md`). Pi
+> recommended ratification after the round-3 must-fix landed. Pending
+> owner ratification at scope granularity, after which claude drafts
+> `commits.md` (Phase 2 step 4 of `plans/README.md`).
 
 ## Goal
 
