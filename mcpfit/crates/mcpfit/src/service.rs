@@ -10,6 +10,7 @@ use crate::protocol::{
     InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolsCallParams,
     ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
+use crate::registry::ToolRegistry;
 use crate::response::ToolResponse;
 
 #[fittings::service]
@@ -42,14 +43,16 @@ pub(crate) enum SessionLifecycle {
 #[allow(dead_code)]
 pub(crate) struct McpServiceImpl {
     server_info: ServerInfo,
+    registry: ToolRegistry,
     lifecycle: Mutex<SessionLifecycle>,
 }
 
 #[allow(dead_code)]
 impl McpServiceImpl {
-    pub(crate) fn new(server_info: ServerInfo) -> Self {
+    pub(crate) fn new(server_info: ServerInfo, registry: ToolRegistry) -> Self {
         Self {
             server_info,
+            registry,
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
         }
     }
@@ -98,9 +101,14 @@ impl McpService for McpServiceImpl {
     }
 
     async fn list_tools(&self, _params: Value) -> Result<ToolsListResult> {
-        Err(FittingsError::invalid_request(
-            "tools/list not yet implemented",
-        ))
+        if self.lifecycle_state() == SessionLifecycle::AwaitingInitialize {
+            return Err(FittingsError::invalid_request(
+                "tools/list received before initialize",
+            ));
+        }
+        Ok(ToolsListResult {
+            tools: self.registry.list(),
+        })
     }
 
     async fn call_tool(&self, _params: ToolsCallParams) -> Result<ToolResponse> {
@@ -120,13 +128,32 @@ impl McpService for McpServiceImpl {
 mod tests {
     use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
     use crate::protocol::{InitializeParams, ServerInfo};
+    use crate::registry::ToolRegistry;
+    use crate::tool::Tool;
     use fittings::serde_json::{json, Value};
 
     fn service(name: &str, version: &str) -> McpServiceImpl {
-        McpServiceImpl::new(ServerInfo {
-            name: name.into(),
-            version: version.into(),
+        service_with_registry(name, version, ToolRegistry::new())
+    }
+
+    fn service_with_registry(name: &str, version: &str, registry: ToolRegistry) -> McpServiceImpl {
+        McpServiceImpl::new(
+            ServerInfo {
+                name: name.into(),
+                version: version.into(),
+            },
+            registry,
+        )
+    }
+
+    async fn initialize(svc: &McpServiceImpl) {
+        svc.initialize(InitializeParams {
+            protocol_version: "2025-01-01".into(),
+            client_info: None,
+            capabilities: None,
         })
+        .await
+        .expect("initialize should succeed");
     }
 
     #[test]
@@ -201,6 +228,38 @@ mod tests {
             .expect_err("initialized before initialize should be rejected");
         assert!(err.to_string().contains("before initialize"));
         assert_eq!(svc.lifecycle_state(), SessionLifecycle::AwaitingInitialize);
+    }
+
+    #[tokio::test]
+    async fn list_tools_before_initialize_is_rejected() {
+        let svc = service("demo", "0.1.0");
+        let err = svc
+            .list_tools(json!({}))
+            .await
+            .expect_err("tools/list before initialize should be rejected");
+        assert!(err.to_string().contains("before initialize"));
+        assert_eq!(svc.lifecycle_state(), SessionLifecycle::AwaitingInitialize);
+    }
+
+    #[tokio::test]
+    async fn list_tools_is_allowed_before_initialized_notification() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("a").description("alpha"))
+            .unwrap();
+        let svc = service_with_registry("demo", "0.1.0", registry);
+        initialize(&svc).await;
+        assert_eq!(
+            svc.lifecycle_state(),
+            SessionLifecycle::AwaitingInitializedNotification
+        );
+
+        let result = svc
+            .list_tools(json!({}))
+            .await
+            .expect("tools/list should be lenient after initialize");
+        assert_eq!(result.tools.len(), 1);
+        assert_eq!(result.tools[0].name, "a");
     }
 
     #[tokio::test]
