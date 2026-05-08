@@ -2,10 +2,15 @@
 
 mod content;
 mod error;
+mod protocol;
 mod response;
 
 pub use content::{EmbeddedResource, ToolContent};
 pub use error::McpfitError;
+pub use protocol::{
+    ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo,
+    ToolsCapability,
+};
 pub use response::ToolResponse;
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
