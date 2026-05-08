@@ -80,6 +80,23 @@ impl Server {
             .await
     }
 
+    /// Process entrypoint kept compatible with existing fittings host
+    /// launchers, which set `FITTINGS=1` and pass `serve` as the first arg.
+    pub async fn run_entrypoint(self) -> Result<()> {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let env_fittings = std::env::var("FITTINGS").ok();
+        match classify_entrypoint(env_fittings.as_deref(), &args) {
+            EntrypointAction::Serve => self.serve_stdio().await,
+            EntrypointAction::PrintUsage => {
+                eprintln!(
+                    "usage: set FITTINGS=1 and pass `serve` as the first argument \
+                     to start the MCP stdio server"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
     pub(crate) async fn serve_with_transport<T>(self, transport: T) -> Result<()>
     where
         T: fittings::core::transport::Transport + Sync + 'static,
@@ -88,6 +105,24 @@ impl Server {
             .serve_transport(transport)
             .await
             .map_err(|err| McpfitError::Internal(err.to_string()))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum EntrypointAction {
+    Serve,
+    PrintUsage,
+}
+
+pub(crate) fn classify_entrypoint(
+    env_fittings: Option<&str>,
+    args: &[String],
+) -> EntrypointAction {
+    let first_is_serve = matches!(args.first(), Some(arg) if arg == "serve");
+    if env_fittings.is_some() && first_is_serve {
+        EntrypointAction::Serve
+    } else {
+        EntrypointAction::PrintUsage
     }
 }
 
@@ -117,7 +152,8 @@ impl IntoTool for &ToolSpec {
 #[cfg(test)]
 mod tests {
     use super::{
-        CancellationConfig, Server, MCP_CANCELLATION_METHOD, MCP_CANCELLATION_REQUEST_ID_FIELD,
+        classify_entrypoint, CancellationConfig, EntrypointAction, Server,
+        MCP_CANCELLATION_METHOD, MCP_CANCELLATION_REQUEST_ID_FIELD,
     };
     use crate::tool::{Tool, ToolSpec};
     use fittings_testkit::memory_transport::MemoryTransport;
@@ -176,6 +212,46 @@ mod tests {
         let _ = Server::new("demo", "0.1.0")
             .tool(Tool::new("dup"))
             .tool(Tool::new("dup"));
+    }
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    #[test]
+    fn classify_entrypoint_requires_fittings_env_and_serve_arg() {
+        assert_eq!(
+            classify_entrypoint(Some("1"), &args(&["serve"])),
+            EntrypointAction::Serve
+        );
+    }
+
+    #[test]
+    fn classify_entrypoint_allows_extra_args_after_serve() {
+        assert_eq!(
+            classify_entrypoint(Some("1"), &args(&["serve", "--debug"])),
+            EntrypointAction::Serve
+        );
+    }
+
+    #[test]
+    fn classify_entrypoint_prints_usage_without_fittings_env() {
+        assert_eq!(
+            classify_entrypoint(None, &args(&["serve"])),
+            EntrypointAction::PrintUsage
+        );
+    }
+
+    #[test]
+    fn classify_entrypoint_prints_usage_without_serve_arg() {
+        assert_eq!(
+            classify_entrypoint(Some("1"), &args(&[])),
+            EntrypointAction::PrintUsage
+        );
+        assert_eq!(
+            classify_entrypoint(Some("1"), &args(&["help"])),
+            EntrypointAction::PrintUsage
+        );
     }
 
     #[tokio::test]
