@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::context::Cx;
 use crate::error::McpfitError;
+use crate::protocol::ToolInfo;
 use crate::response::{IntoToolResponse, ToolResponse};
 use crate::schema::schema_for;
 use crate::Result;
@@ -93,6 +94,21 @@ impl Tool {
             }
         }));
         self
+    }
+
+    pub(crate) fn cloned_handler(&self) -> Option<BoxedHandler> {
+        self.handler.clone()
+    }
+
+    pub(crate) fn to_info(&self) -> ToolInfo {
+        ToolInfo {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            input_schema: self
+                .input_schema
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({"type": "object"})),
+        }
     }
 
     /// Invokes the stored handler. Returns `Internal` when no handler has been

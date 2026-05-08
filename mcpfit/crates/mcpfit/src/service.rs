@@ -14,6 +14,7 @@ use crate::protocol::{
 };
 use crate::registry::ToolRegistry;
 use crate::response::ToolResponse;
+use crate::tool::Tool;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerNotification {
@@ -61,19 +62,25 @@ pub(crate) enum SessionLifecycle {
 #[allow(dead_code)]
 pub(crate) struct McpServiceImpl {
     server_info: ServerInfo,
-    registry: ToolRegistry,
+    registry: Mutex<ToolRegistry>,
     lifecycle: Mutex<SessionLifecycle>,
     pending_notifications: Arc<Mutex<Vec<ServerNotification>>>,
+    allow_runtime_registration: bool,
 }
 
 #[allow(dead_code)]
 impl McpServiceImpl {
-    pub(crate) fn new(server_info: ServerInfo, registry: ToolRegistry) -> Self {
+    pub(crate) fn new(
+        server_info: ServerInfo,
+        registry: ToolRegistry,
+        allow_runtime_registration: bool,
+    ) -> Self {
         Self {
             server_info,
-            registry,
+            registry: Mutex::new(registry),
             lifecycle: Mutex::new(SessionLifecycle::AwaitingInitialize),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
+            allow_runtime_registration,
         }
     }
 
@@ -153,9 +160,12 @@ impl McpService for McpServiceImpl {
                 "tools/list received before initialize",
             ));
         }
-        Ok(ToolsListResult {
-            tools: self.registry.list(),
-        })
+        let tools = self
+            .registry
+            .lock()
+            .expect("registry mutex should not be poisoned")
+            .list();
+        Ok(ToolsListResult { tools })
     }
 
     async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolResponse> {
@@ -173,17 +183,52 @@ impl McpService for McpServiceImpl {
             SessionLifecycle::Running => {}
         }
         let cx = self.cx_for_call(params.meta.as_ref());
-        self.registry
-            .call(&params.name, params.arguments, cx)
-            .await
-            .map_err(to_fittings_error)
+        let handler = self
+            .registry
+            .lock()
+            .expect("registry mutex should not be poisoned")
+            .handler_for(&params.name);
+        match handler {
+            Some(handler) => handler(params.arguments, cx).await.map_err(to_fittings_error),
+            None => Err(FittingsError::method_not_found(format!(
+                "unknown tool: {}",
+                params.name
+            ))),
+        }
     }
 
-    async fn register_tool(&self, _params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
-        Err(FittingsError::method_not_found(
-            "tools/register is disabled; enable runtime registration on the server to use it",
-        ))
+    async fn register_tool(&self, params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
+        if !self.allow_runtime_registration {
+            return Err(FittingsError::method_not_found(
+                "tools/register is disabled; enable runtime registration on the server to use it",
+            ));
+        }
+        if self.lifecycle_state() != SessionLifecycle::Running {
+            return Err(FittingsError::invalid_request(
+                "tools/register requires an initialized session",
+            ));
+        }
+        let tool = build_runtime_tool(&params);
+        let info = tool.to_info();
+        self.registry
+            .lock()
+            .expect("registry mutex should not be poisoned")
+            .register(tool)
+            .map_err(to_fittings_error)?;
+        Ok(ToolsRegisterResult { tool: info })
     }
+}
+
+fn build_runtime_tool(params: &ToolsRegisterParams) -> Tool {
+    let response_text = params.response_text.clone();
+    let mut tool = Tool::new(params.name.clone()).handler(move |_args: Value, _cx: Cx| {
+        let text = response_text.clone();
+        async move { Ok::<_, McpfitError>(text) }
+    });
+    if let Some(desc) = &params.description {
+        tool = tool.description(desc.clone());
+    }
+    tool
 }
 
 #[cfg(test)]
@@ -227,12 +272,22 @@ mod tests {
     }
 
     fn service_with_registry(name: &str, version: &str, registry: ToolRegistry) -> McpServiceImpl {
+        service_with_options(name, version, registry, false)
+    }
+
+    fn service_with_options(
+        name: &str,
+        version: &str,
+        registry: ToolRegistry,
+        allow_runtime_registration: bool,
+    ) -> McpServiceImpl {
         McpServiceImpl::new(
             ServerInfo {
                 name: name.into(),
                 version: version.into(),
             },
             registry,
+            allow_runtime_registration,
         )
     }
 
@@ -520,7 +575,73 @@ mod tests {
             .await
             .expect_err("tools/register should be disabled by default");
         assert_register_disabled(err);
-        assert_eq!(svc.registry.list().len(), 0);
+        assert_eq!(svc.registry.lock().unwrap().list().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn register_tool_when_enabled_requires_running_state() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        let err = svc
+            .register_tool(register_params("late"))
+            .await
+            .expect_err("tools/register before initialize should be rejected");
+        assert!(err.to_string().contains("invalid request"));
+        assert!(err.to_string().contains("requires an initialized session"));
+        assert_eq!(svc.registry.lock().unwrap().list().len(), 0);
+
+        initialize(&svc).await;
+        let err = svc
+            .register_tool(register_params("late"))
+            .await
+            .expect_err("tools/register before initialized notification should be rejected");
+        assert!(err
+            .to_string()
+            .contains("requires an initialized session"));
+    }
+
+    #[tokio::test]
+    async fn register_tool_when_enabled_adds_callable_tool() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+
+        let result = svc
+            .register_tool(ToolsRegisterParams {
+                name: "ping".into(),
+                description: Some("static responder".into()),
+                response_text: "pong".into(),
+            })
+            .await
+            .expect("registration should succeed when enabled and running");
+        assert_eq!(result.tool.name, "ping");
+        assert_eq!(result.tool.description.as_deref(), Some("static responder"));
+
+        let list = svc
+            .list_tools(json!({}))
+            .await
+            .expect("tools/list should include the new tool");
+        assert_eq!(list.tools.len(), 1);
+        assert_eq!(list.tools[0].name, "ping");
+
+        let response = svc
+            .call_tool(call_params("ping"))
+            .await
+            .expect("registered tool should be callable");
+        assert_eq!(response, ToolResponse::success("pong"));
+    }
+
+    #[tokio::test]
+    async fn register_tool_rejects_duplicates_when_enabled() {
+        let svc = service_with_options("demo", "0.1.0", ToolRegistry::new(), true);
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        svc.register_tool(register_params("ping")).await.unwrap();
+        let err = svc
+            .register_tool(register_params("ping"))
+            .await
+            .expect_err("duplicate registration should fail");
+        assert!(err.to_string().contains("invalid request"));
+        assert!(err.to_string().contains("ping"));
     }
 
     #[tokio::test]

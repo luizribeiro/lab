@@ -40,6 +40,7 @@ impl Default for CancellationConfig {
 pub struct Server {
     info: ServerInfo,
     registry: ToolRegistry,
+    allow_runtime_registration: bool,
 }
 
 impl Server {
@@ -50,7 +51,19 @@ impl Server {
                 version: version.into(),
             },
             registry: ToolRegistry::new(),
+            allow_runtime_registration: false,
         }
+    }
+
+    /// Exposes the client-callable `tools/register` JSON-RPC method. The
+    /// method still requires a fully initialized session (`Running` lifecycle).
+    pub fn allow_runtime_registration(mut self) -> Self {
+        self.allow_runtime_registration = true;
+        self
+    }
+
+    pub fn runtime_registration_allowed(&self) -> bool {
+        self.allow_runtime_registration
     }
 
     /// Registers a tool. Panics on duplicate names — duplicate registration is
@@ -101,7 +114,7 @@ impl Server {
     where
         T: fittings::core::transport::Transport + Sync + 'static,
     {
-        McpServiceImpl::new(self.info, self.registry)
+        McpServiceImpl::new(self.info, self.registry, self.allow_runtime_registration)
             .serve_transport(transport)
             .await
             .map_err(|err| McpfitError::Internal(err.to_string()))
@@ -173,6 +186,18 @@ mod tests {
         assert_eq!(server.server_info().name, "demo");
         assert_eq!(server.server_info().version, "1.2.3");
         assert!(server.registry().is_empty());
+    }
+
+    #[test]
+    fn runtime_registration_disabled_by_default() {
+        let server = Server::new("demo", "0.1.0");
+        assert!(!server.runtime_registration_allowed());
+    }
+
+    #[test]
+    fn allow_runtime_registration_sets_flag() {
+        let server = Server::new("demo", "0.1.0").allow_runtime_registration();
+        assert!(server.runtime_registration_allowed());
     }
 
     #[test]
