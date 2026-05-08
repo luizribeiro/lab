@@ -467,7 +467,7 @@ fn to_compiled_tool_meta(m: &LockToolMeta) -> ToolMeta {
     }
 }
 
-fn spot_check_v3(
+pub(crate) fn spot_check_v3(
     lock: &Lock,
     canonical: &CanonicalId,
     entry: &PluginEntry,

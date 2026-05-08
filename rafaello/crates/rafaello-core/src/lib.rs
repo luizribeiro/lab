@@ -1,5 +1,6 @@
 // crate doc placeholder; modules land in subsequent m1 commits.
 
+pub mod broker_acl;
 pub mod carveout;
 pub mod compile;
 pub mod digest;
