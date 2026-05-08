@@ -13,6 +13,6 @@ pub use protocol::{
     ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 pub use response::ToolResponse;
-pub use structured::StructuredObject;
+pub use structured::{Structured, StructuredObject};
 
 pub type Result<T, E = McpfitError> = std::result::Result<T, E>;
