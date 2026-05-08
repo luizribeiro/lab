@@ -51,6 +51,7 @@ fn env_set_and_pass_pass_through_without_reserved_or_secret_hits() {
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
+    common::make_plugin_dir(&ctx.plugin_dir);
     let digests = RecomputedDigests {
         content: "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
         manifest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),

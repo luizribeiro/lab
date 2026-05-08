@@ -99,6 +99,7 @@ fn default_and_named_bundle_union() {
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
+    common::make_plugin_dir(&ctx.plugin_dir);
     let digests = RecomputedDigests {
         content: "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
         manifest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),

@@ -2,7 +2,7 @@
 //! Shared lock-fixture helpers for c22+ V3 integration tests.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use rafaello_core::lock::{
@@ -51,6 +51,15 @@ pub fn lock_with(plugins: Vec<(CanonicalId, PluginEntry)>, session: SessionTable
         plugins: plugins.into_iter().collect(),
         session,
     }
+}
+
+/// Materialise `<base>/bin/main.js` so c34's entry-resolution
+/// gate (the `entry` field defaulted by [`entry`]) passes.
+pub fn make_plugin_dir(base: &Path) -> PathBuf {
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).expect("create plugin bin/");
+    std::fs::write(bin.join("main.js"), b"// stub").expect("write entry");
+    base.to_path_buf()
 }
 
 pub fn ctx_for(canonicals: &[&CanonicalId]) -> LockValidationContext {

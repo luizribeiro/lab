@@ -7,9 +7,9 @@
 //! prior successful `validate::lock(..)` is required. The body
 //! spot-checks a handful of obvious V3 invariants and returns
 //! `CompileError::ValidationNotRun` if any are violated; it does
-//! **not** re-run V3. Per-section emitters (bundle flatten, path
-//! resolution, carve-out, network/env, entry resolution + digest
-//! gating) land in c30–c34.
+//! **not** re-run V3. Bundle flatten, path resolution, carve-out,
+//! network/env, entry resolution, digest gating, and tool_meta
+//! projection all run in-line below.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -21,6 +21,7 @@ use crate::lock::canonical_id::CanonicalId;
 use crate::lock::load_policy::LoadPolicy;
 use crate::lock::{
     Grant, GrantBundle, GrantEnv, GrantFilesystem, GrantLimits, GrantNetwork, Lock, PluginEntry,
+    ToolMeta as LockToolMeta,
 };
 use crate::manifest::capabilities::NetworkMode;
 use crate::manifest::placeholders;
@@ -107,17 +108,20 @@ pub struct ToolMeta {
 /// returns [`CompileError::ValidationNotRun`]. It does not re-run
 /// V3 itself.
 ///
-/// Currently wires §C2 bundle flatten + §C3 placeholder
-/// resolution + §K carve-out decomposition + §C5 private-state
-/// injection + §C1 NetworkPlan/EnvPlan emission with the
+/// Wires §D3 digest gating, §L2 entry resolution, §C2 bundle
+/// flatten, §C3 placeholder resolution, §K carve-out
+/// decomposition, §C5 private-state injection, §C1
+/// NetworkPlan/EnvPlan emission with the
 /// `outpost::NetworkPolicy::from_allowed_hosts` dry-run (Risks
-/// §2) and §Sc / §C7.1 env scrubbing. Entry resolution + digest
-/// gating + tool_meta projection land in later commits.
+/// §2), §Sc / §C7.1 env scrubbing, §C6 limits defaults
+/// (300s cpu, 1024 fds when absent — explicit `0` preserved),
+/// and the §C1 `tool_meta` projection filtered by
+/// `[session].tool_owner`.
 pub fn compile_plugin(
     lock: &Lock,
     canonical: &CanonicalId,
     ctx: &PathContext,
-    _recomputed_digests: &RecomputedDigests,
+    recomputed_digests: &RecomputedDigests,
 ) -> Result<CompiledPlugin, CompileError> {
     let entry = lock
         .plugins
@@ -126,8 +130,15 @@ pub fn compile_plugin(
 
     spot_check_v3(lock, canonical, entry)?;
 
+    if recomputed_digests.content != entry.digest {
+        return Err(CompileError::ContentDigestMismatch);
+    }
+    if recomputed_digests.manifest != entry.manifest_digest {
+        return Err(CompileError::ManifestDigestMismatch);
+    }
+
     let topic_id = topic_id::derive(&canonical.to_string());
-    let entry_absolute = ctx.plugin_dir.join(entry.entry.as_ref());
+    let entry_absolute = resolve_entry(&ctx.plugin_dir, entry.entry.as_ref())?;
 
     let eff = effective_grant(&entry.grant);
 
@@ -187,11 +198,13 @@ pub fn compile_plugin(
     };
 
     let limits = LimitsPlan {
-        max_cpu_time: eff.limits.max_cpu_time.unwrap_or(0),
-        max_open_files: eff.limits.max_open_files.unwrap_or(0),
+        max_cpu_time: eff.limits.max_cpu_time.unwrap_or(300),
+        max_open_files: eff.limits.max_open_files.unwrap_or(1024),
         max_address_space: eff.limits.max_address_space,
         max_processes: eff.limits.max_processes,
     };
+
+    let tool_meta = project_tool_meta(canonical, entry, &lock.session.tool_owner);
 
     Ok(CompiledPlugin {
         canonical: canonical.clone(),
@@ -204,7 +217,7 @@ pub fn compile_plugin(
         subscribe_patterns: Vec::new(),
         publish_topics: Vec::new(),
         auto_subscribes: Vec::new(),
-        tool_meta: BTreeMap::new(),
+        tool_meta,
         provider_id: entry.bindings.provider_id.clone(),
         load: entry.bindings.load.clone(),
         flags: CompiledFlags {
@@ -391,6 +404,66 @@ fn max_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
         (Some(x), Some(y)) => Some(x.max(y)),
         (Some(x), None) | (None, Some(x)) => Some(x),
         (None, None) => None,
+    }
+}
+
+fn resolve_entry(plugin_dir: &std::path::Path, rel: &str) -> Result<PathBuf, CompileError> {
+    let pkg_canon = std::fs::canonicalize(plugin_dir).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            CompileError::EntryNotFound
+        } else {
+            CompileError::Io(e)
+        }
+    })?;
+    let joined = plugin_dir.join(rel);
+    let lmeta = match std::fs::symlink_metadata(&joined) {
+        Ok(m) => m,
+        Err(_) => return Err(CompileError::EntryNotFound),
+    };
+    let canon = match std::fs::canonicalize(&joined) {
+        Ok(c) => c,
+        Err(_) => {
+            // broken symlink target, etc.
+            return if lmeta.file_type().is_symlink() {
+                Err(CompileError::EntryEscape)
+            } else {
+                Err(CompileError::EntryNotFound)
+            };
+        }
+    };
+    if !canon.starts_with(&pkg_canon) {
+        return Err(CompileError::EntryEscape);
+    }
+    if !canon.is_file() {
+        return Err(CompileError::EntryNotFile);
+    }
+    Ok(canon)
+}
+
+fn project_tool_meta(
+    canonical: &CanonicalId,
+    entry: &PluginEntry,
+    tool_owner: &BTreeMap<String, String>,
+) -> BTreeMap<String, ToolMeta> {
+    let mut out = BTreeMap::new();
+    let own = canonical.to_string();
+    for (name, meta) in &entry.bindings.tool_meta {
+        if let Some(owner) = tool_owner.get(name) {
+            if owner != &own {
+                continue;
+            }
+        }
+        out.insert(name.clone(), to_compiled_tool_meta(meta));
+    }
+    out
+}
+
+fn to_compiled_tool_meta(m: &LockToolMeta) -> ToolMeta {
+    ToolMeta {
+        sinks: m.sinks.clone(),
+        sinks_inferred: m.sinks_inferred,
+        grant_match: m.grant_match.as_ref().map(|p| PathBuf::from(p.as_str())),
+        always_confirm: m.always_confirm,
     }
 }
 

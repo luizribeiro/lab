@@ -1,19 +1,23 @@
-//! c14 — `tool_meta.<n>.always_confirm` round-trips through
-//! `Lock::to_toml` / `Lock::from_toml` byte-equal.
-//!
-//! Lock-side half of the two-stage test (m0 §4.3); the
-//! `CompiledPlugin.tool_meta` half lands in c34. Constructed
-//! programmatically per scope §"Out of scope" — m1 fixtures do
-//! not project from manifests.
+//! c14 + c34 — `tool_meta.<n>.always_confirm` round-trips through
+//! `Lock::to_toml` / `Lock::from_toml` byte-equal (c14 lock-side
+//! half) **and** survives projection into
+//! `CompiledPlugin.tool_meta` (c34 compile-side half — closes the
+//! m0 §4.3 two-stage test). Constructed programmatically per
+//! scope §"Out of scope" — m1 fixtures do not project from
+//! manifests.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
+use rafaello_core::compile::compile_plugin;
+use rafaello_core::digest::RecomputedDigests;
 use rafaello_core::lock::{
-    Bindings, CanonicalId, Lock, LockFlags, PluginEntry, ToolMeta,
+    Bindings, CanonicalId, Lock, LockFlags, PluginEntry, SessionTable, ToolMeta,
 };
 use rafaello_core::lock::grant::Grant;
 use rafaello_core::manifest::safepath::SafePath;
+use rafaello_core::paths::PathContext;
 
 fn fixture_lock() -> Lock {
     let mut tool_meta = BTreeMap::new();
@@ -57,7 +61,7 @@ fn fixture_lock() -> Lock {
 
     Lock {
         plugins,
-        session: Default::default(),
+        session: SessionTable::default(),
     }
 }
 
@@ -89,4 +93,40 @@ fn always_confirm_survives_toml_round_trip() {
         meta.always_confirm,
         "always_confirm survives the round-trip"
     );
+}
+
+#[test]
+fn always_confirm_projects_through_compile_plugin() {
+    let lock = fixture_lock();
+    let id = CanonicalId::parse("github.com/acme:grep@1.4.2").unwrap();
+    let entry = lock.plugins.get(&id).unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project = std::fs::canonicalize(tmp.path()).unwrap();
+    let plugin_dir = project.join(".rafaello/plugins/grep");
+    std::fs::create_dir_all(plugin_dir.join("bin")).unwrap();
+    std::fs::write(plugin_dir.join("bin/grep.js"), b"// stub").unwrap();
+
+    let ctx = PathContext {
+        project_root: project.clone(),
+        home: PathBuf::from("/tmp/home"),
+        plugin_dir,
+        cache_dir: PathBuf::from("/tmp/cache"),
+        state_dir: PathBuf::from("/tmp/state"),
+    };
+    let digests = RecomputedDigests {
+        content: entry.digest.clone(),
+        manifest: entry.manifest_digest.clone(),
+    };
+
+    let plan = compile_plugin(&lock, &id, &ctx, &digests).expect("compile succeeds");
+    let projected = plan
+        .tool_meta
+        .get("grep")
+        .expect("tool_meta.grep present in compiled plan");
+    assert!(
+        projected.always_confirm,
+        "always_confirm carried through CompiledPlugin.tool_meta"
+    );
+    assert_eq!(projected.sinks, vec!["workspace_write".to_owned()]);
 }
