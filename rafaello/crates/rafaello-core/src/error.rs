@@ -70,36 +70,44 @@ pub enum LockError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ValidationError {
-    #[error("publish on reserved namespace")]
-    PublishOnReservedNamespace,
-    #[error("publish on frontend namespace from non-frontend plugin")]
-    PublishOnFrontendNamespace,
+    #[error("illegal manifest name `{name}`")]
+    IllegalManifestName { name: String },
+    #[error("publish on reserved namespace: `{topic}`")]
+    PublishOnReservedNamespace { topic: String },
+    #[error("publish on frontend namespace from non-frontend plugin: `{topic}`")]
+    PublishOnFrontendNamespace { topic: String },
     #[error("publish on foreign topic id")]
     PublishOnForeignTopicId,
     #[error("provider namespace mismatch")]
     ProviderNamespaceMismatch,
-    #[error("pattern in publish position")]
-    PatternInPublishPosition,
-    #[error("invalid pattern segment")]
-    InvalidPatternSegment,
-    #[error("illegal topic segment")]
-    IllegalTopicSegment,
-    #[error("topic has too few segments")]
-    TopicTooFewSegments,
-    #[error("illegal tool name")]
-    IllegalToolName,
-    #[error("unknown tool table")]
-    UnknownToolTable,
-    #[error("unknown bundle key")]
-    UnknownBundleKey,
-    #[error("reserved renderer kind")]
-    ReservedRendererKind,
-    #[error("unprefixed renderer kind")]
-    UnprefixedRendererKind,
-    #[error("load trigger references unknown command")]
-    LoadTriggerUnknownCommand,
-    #[error("allow_hosts set outside proxy mode")]
-    AllowHostsOutsideProxy,
+    #[error("pattern in publish position: `{topic}`")]
+    PatternInPublishPosition { topic: String },
+    #[error("invalid pattern segment `{segment}` in pattern `{pattern}`")]
+    InvalidPatternSegment { pattern: String, segment: String },
+    #[error("illegal topic segment `{segment}` in topic `{topic}`")]
+    IllegalTopicSegment { topic: String, segment: String },
+    #[error("topic `{topic}` has too few segments")]
+    TopicTooFewSegments { topic: String },
+    #[error("illegal tool name `{name}`")]
+    IllegalToolName { name: String },
+    #[error("illegal sink class `{class}`")]
+    IllegalSinkClass { class: String },
+    #[error("unknown tool table `{tool}`")]
+    UnknownToolTable { tool: String },
+    #[error("unknown bundle key `{bundle}`")]
+    UnknownBundleKey { bundle: String },
+    #[error("reserved renderer kind `{kind}`")]
+    ReservedRendererKind { kind: String },
+    #[error("unprefixed renderer kind `{kind}`")]
+    UnprefixedRendererKind { kind: String },
+    #[error("load trigger references unknown command `{command}`")]
+    LoadTriggerUnknownCommand { command: String },
+    #[error("load trigger event `{event}` not matched by any bus subscribe pattern")]
+    LoadTriggerUnmatchedEvent { event: String },
+    #[error("load trigger references unknown renderer kind `{kind}`")]
+    LoadTriggerUnknownKind { kind: String },
+    #[error("allow_hosts set outside proxy mode in bundle `{bundle}`")]
+    AllowHostsOutsideProxy { bundle: String },
     #[error("exec_path inside project")]
     ExecPathInsideProject,
     #[error("session.provider_active references unknown plugin")]

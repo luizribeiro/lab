@@ -56,21 +56,25 @@ fn _lock_variant_names(e: LockError) {
 #[allow(dead_code, unreachable_patterns)]
 fn _validation_variant_names(e: ValidationError) {
     match e {
-        ValidationError::PublishOnReservedNamespace => {}
-        ValidationError::PublishOnFrontendNamespace => {}
+        ValidationError::IllegalManifestName { .. } => {}
+        ValidationError::PublishOnReservedNamespace { .. } => {}
+        ValidationError::PublishOnFrontendNamespace { .. } => {}
         ValidationError::PublishOnForeignTopicId => {}
         ValidationError::ProviderNamespaceMismatch => {}
-        ValidationError::PatternInPublishPosition => {}
-        ValidationError::InvalidPatternSegment => {}
-        ValidationError::IllegalTopicSegment => {}
-        ValidationError::TopicTooFewSegments => {}
-        ValidationError::IllegalToolName => {}
-        ValidationError::UnknownToolTable => {}
-        ValidationError::UnknownBundleKey => {}
-        ValidationError::ReservedRendererKind => {}
-        ValidationError::UnprefixedRendererKind => {}
-        ValidationError::LoadTriggerUnknownCommand => {}
-        ValidationError::AllowHostsOutsideProxy => {}
+        ValidationError::PatternInPublishPosition { .. } => {}
+        ValidationError::InvalidPatternSegment { .. } => {}
+        ValidationError::IllegalTopicSegment { .. } => {}
+        ValidationError::TopicTooFewSegments { .. } => {}
+        ValidationError::IllegalToolName { .. } => {}
+        ValidationError::IllegalSinkClass { .. } => {}
+        ValidationError::UnknownToolTable { .. } => {}
+        ValidationError::UnknownBundleKey { .. } => {}
+        ValidationError::ReservedRendererKind { .. } => {}
+        ValidationError::UnprefixedRendererKind { .. } => {}
+        ValidationError::LoadTriggerUnknownCommand { .. } => {}
+        ValidationError::LoadTriggerUnmatchedEvent { .. } => {}
+        ValidationError::LoadTriggerUnknownKind { .. } => {}
+        ValidationError::AllowHostsOutsideProxy { .. } => {}
         ValidationError::ExecPathInsideProject => {}
         ValidationError::ProviderActiveUnknown => {}
         ValidationError::ProviderActiveNotProvider => {}
