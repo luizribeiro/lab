@@ -37,3 +37,11 @@ path = "../../tests/core_predefined_error_data.rs"
 [[test]]
 name = "wire_outbound_error_round_trip"
 path = "../../tests/wire_outbound_error_round_trip.rs"
+
+[[test]]
+name = "wire_inbound_error_round_trip"
+path = "../../tests/wire_inbound_error_round_trip.rs"
+
+[[test]]
+name = "error_marker_round_trip"
+path = "../../tests/error_marker_round_trip.rs"

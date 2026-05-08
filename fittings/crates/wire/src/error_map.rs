@@ -1,4 +1,5 @@
 use fittings_core::{error::FittingsError, message::ServiceError};
+use serde_json::{json, Value};
 
 use crate::types::{ErrorEnvelope, JsonRpcId, ResponseEnvelope};
 
@@ -8,11 +9,14 @@ const METHOD_NOT_FOUND_CODE: i32 = -32601;
 const INVALID_PARAMS_CODE: i32 = -32602;
 const INTERNAL_ERROR_CODE: i32 = -32603;
 
-const PARSE_ERROR_MESSAGE: &str = "Parse error";
-const INVALID_REQUEST_MESSAGE: &str = "Invalid Request";
-const METHOD_NOT_FOUND_MESSAGE: &str = "Method not found";
-const INVALID_PARAMS_MESSAGE: &str = "Invalid params";
+const TRANSPORT_MESSAGE: &str = "transport";
+const PANIC_MESSAGE: &str = "internal error";
 const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
+
+const FITTINGS_KIND_KEY: &str = "fittingsKind";
+const FITTINGS_KIND_TRANSPORT: &str = "transport";
+const FITTINGS_KIND_PANIC: &str = "panic";
+const FITTINGS_DETAIL_KEY: &str = "detail";
 
 pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
     let id = id.into();
@@ -42,10 +46,21 @@ pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> Respon
             message,
             data,
         },
-        FittingsError::Transport(_) | FittingsError::Panic { .. } => ErrorEnvelope {
+        FittingsError::Transport(detail) => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
-            message: INTERNAL_ERROR_MESSAGE.to_string(),
-            data: None,
+            message: TRANSPORT_MESSAGE.to_string(),
+            data: Some(json!({
+                FITTINGS_KIND_KEY: FITTINGS_KIND_TRANSPORT,
+                FITTINGS_DETAIL_KEY: detail,
+            })),
+        },
+        FittingsError::Panic { message } => ErrorEnvelope {
+            code: INTERNAL_ERROR_CODE,
+            message: PANIC_MESSAGE.to_string(),
+            data: Some(json!({
+                FITTINGS_KIND_KEY: FITTINGS_KIND_PANIC,
+                FITTINGS_DETAIL_KEY: message,
+            })),
         },
         FittingsError::Service(ServiceError {
             code,
@@ -70,24 +85,37 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
     match error {
         ErrorEnvelope {
             code: PARSE_ERROR_CODE,
-            ..
-        } => FittingsError::parse_error(PARSE_ERROR_MESSAGE),
+            message,
+            data,
+        } => FittingsError::Parse { message, data },
         ErrorEnvelope {
             code: INVALID_REQUEST_CODE,
-            ..
-        } => FittingsError::invalid_request(INVALID_REQUEST_MESSAGE),
+            message,
+            data,
+        } => FittingsError::InvalidRequest { message, data },
         ErrorEnvelope {
             code: METHOD_NOT_FOUND_CODE,
-            ..
-        } => FittingsError::method_not_found(METHOD_NOT_FOUND_MESSAGE),
+            message,
+            data,
+        } => FittingsError::MethodNotFound { message, data },
         ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
-            ..
-        } => FittingsError::invalid_params(INVALID_PARAMS_MESSAGE),
+            message,
+            data,
+        } => FittingsError::InvalidParams { message, data },
         ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
-            ..
-        } => FittingsError::internal(INTERNAL_ERROR_MESSAGE),
+            message,
+            data,
+        } => match fittings_kind(data.as_ref()) {
+            Some(FITTINGS_KIND_TRANSPORT) => {
+                FittingsError::Transport(extract_detail(data.as_ref(), &message))
+            }
+            Some(FITTINGS_KIND_PANIC) => FittingsError::Panic {
+                message: extract_detail(data.as_ref(), &message),
+            },
+            _ => FittingsError::Internal { message, data },
+        },
         ErrorEnvelope {
             code,
             message,
@@ -99,6 +127,17 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
         }),
         ErrorEnvelope { .. } => FittingsError::internal(INTERNAL_ERROR_MESSAGE),
     }
+}
+
+fn fittings_kind(data: Option<&Value>) -> Option<&str> {
+    data?.get(FITTINGS_KIND_KEY)?.as_str()
+}
+
+fn extract_detail(data: Option<&Value>, fallback_message: &str) -> String {
+    data.and_then(|d| d.get(FITTINGS_DETAIL_KEY))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| fallback_message.to_string())
 }
 
 #[cfg(test)]
@@ -145,12 +184,20 @@ mod tests {
         let transport = to_error_envelope("1".to_string(), FittingsError::transport("pipe"));
         let transport_error = transport.error.expect("error");
         assert_eq!(transport_error.code, -32603);
-        assert_eq!(transport_error.message, "Internal error");
+        assert_eq!(transport_error.message, "transport");
+        assert_eq!(
+            transport_error.data,
+            Some(json!({"fittingsKind": "transport", "detail": "pipe"})),
+        );
 
         let panic = to_error_envelope("1".to_string(), FittingsError::panic("boom"));
         let panic_error = panic.error.expect("error");
         assert_eq!(panic_error.code, -32603);
-        assert_eq!(panic_error.message, "Internal error");
+        assert_eq!(panic_error.message, "internal error");
+        assert_eq!(
+            panic_error.data,
+            Some(json!({"fittingsKind": "panic", "detail": "boom"})),
+        );
     }
 
     #[test]
@@ -190,11 +237,12 @@ mod tests {
         let parse = from_error_envelope(ErrorEnvelope {
             code: -32700,
             message: "bad json".to_string(),
-            data: Some(json!({"ignored": true})),
+            data: Some(json!({"line": 1})),
         });
         assert!(matches!(
             parse,
-            FittingsError::Parse { ref message, data: None } if message == "Parse error"
+            FittingsError::Parse { message, data }
+                if message == "bad json" && data == Some(json!({"line": 1}))
         ));
 
         let invalid_request = from_error_envelope(ErrorEnvelope {
@@ -204,17 +252,18 @@ mod tests {
         });
         assert!(matches!(
             invalid_request,
-            FittingsError::InvalidRequest { message, .. } if message == "Invalid Request"
+            FittingsError::InvalidRequest { message, data: None } if message == "bad request"
         ));
 
         let method_not_found = from_error_envelope(ErrorEnvelope {
             code: -32601,
             message: "missing".to_string(),
-            data: None,
+            data: Some(json!({"method": "x"})),
         });
         assert!(matches!(
             method_not_found,
-            FittingsError::MethodNotFound { message, .. } if message == "Method not found"
+            FittingsError::MethodNotFound { message, data }
+                if message == "missing" && data == Some(json!({"method": "x"}))
         ));
 
         let invalid_params = from_error_envelope(ErrorEnvelope {
@@ -224,17 +273,19 @@ mod tests {
         });
         assert!(matches!(
             invalid_params,
-            FittingsError::InvalidParams { message, .. } if message == "Invalid params"
+            FittingsError::InvalidParams { message, data: None } if message == "bad params"
         ));
 
         let internal = from_error_envelope(ErrorEnvelope {
             code: -32603,
-            message: "internal".to_string(),
-            data: None,
+            message: "kaboom".to_string(),
+            data: Some(json!({"trace": "abc"})),
         });
-        assert!(
-            matches!(internal, FittingsError::Internal { message, .. } if message == "Internal error")
-        );
+        assert!(matches!(
+            internal,
+            FittingsError::Internal { message, data }
+                if message == "kaboom" && data == Some(json!({"trace": "abc"}))
+        ));
 
         let service = from_error_envelope(ErrorEnvelope {
             code: 42,
