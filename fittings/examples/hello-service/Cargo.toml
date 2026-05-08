@@ -29,3 +29,7 @@ path = "../../tests/jsonrpc_conformance.rs"
 [[test]]
 name = "core_request_id_shape"
 path = "../../tests/core_request_id_shape.rs"
+
+[[test]]
+name = "core_predefined_error_data"
+path = "../../tests/core_predefined_error_data.rs"

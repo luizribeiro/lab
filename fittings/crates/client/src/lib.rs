@@ -468,7 +468,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            FittingsError::MethodNotFound(message) if message == "Method not found"
+            FittingsError::MethodNotFound { message, .. } if message == "Method not found"
         ));
 
         server.await.expect("server task should join");
@@ -615,7 +615,7 @@ mod tests {
             let error = result.expect_err("all pending calls should fail");
             assert!(matches!(
                 error,
-                FittingsError::InvalidRequest(message)
+                FittingsError::InvalidRequest { message, .. }
                     if message == "invalid response envelope: field `jsonrpc` must be \"2.0\""
             ));
         }
@@ -650,7 +650,7 @@ mod tests {
             let error = result.expect_err("all pending calls should fail");
             assert!(matches!(
                 error,
-                FittingsError::InvalidRequest(message)
+                FittingsError::InvalidRequest { message, .. }
                     if message == "response must be valid JSON-RPC 2.0 JSON"
             ));
         }

@@ -59,7 +59,7 @@ async fn generated_router_rejects_unknown_method() {
 
     assert!(matches!(
         error,
-        FittingsError::MethodNotFound(message) if message == "double"
+        FittingsError::MethodNotFound { message, .. } if message == "double"
     ));
 }
 
@@ -76,7 +76,7 @@ async fn generated_router_maps_decode_errors_to_invalid_params() {
         .await
         .expect_err("invalid params should fail");
 
-    assert!(matches!(error, FittingsError::InvalidParams(_)));
+    assert!(matches!(error, FittingsError::InvalidParams { .. }));
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -132,7 +132,7 @@ async fn generated_router_propagates_service_errors() {
 
     assert!(matches!(
         error,
-        FittingsError::Internal(message) if message == "service failed"
+        FittingsError::Internal { message, .. } if message == "service failed"
     ));
 }
 
@@ -149,5 +149,5 @@ async fn generated_router_maps_result_encoding_errors_to_internal_error() {
         .await
         .expect_err("result encoding should fail");
 
-    assert!(matches!(error, FittingsError::Internal(_)));
+    assert!(matches!(error, FittingsError::Internal { .. }));
 }

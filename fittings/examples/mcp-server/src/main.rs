@@ -268,6 +268,6 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(invalid, Err(FittingsError::InvalidParams(_))));
+        assert!(matches!(invalid, Err(FittingsError::InvalidParams { .. })));
     }
 }
