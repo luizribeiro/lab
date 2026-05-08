@@ -1,5 +1,6 @@
 // crate doc placeholder; modules land in subsequent m1 commits.
 
+pub mod digest;
 pub mod error;
 pub mod lock;
 pub mod manifest;
