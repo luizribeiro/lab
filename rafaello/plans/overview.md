@@ -50,11 +50,18 @@ in the streams; this document does not duplicate them.
    explicitly deferred to v2/CaMeL.
 5. **Multiple frontends over one bus.** The default ratatui TUI
    is one client; a daemon mode lets web/IDE/email frontends
-   attach over JSON-RPC.
+   attach over JSON-RPC. *(v1 ships TUI only; the daemon /
+   external attach pieces are deferred to v2 per `decisions.md`
+   rows 27 and 34. The bus model and namespace are sized for
+   the full picture from day one.)*
 6. **CaMeL-as-plugin is buildable on v1.** Every primitive CaMeL
    needs (provider role, structured taint, sink confirmation,
-   helper plugins, fd-based bus, frontend-mediated confirmation)
-   is committed in this document.
+   fd-based bus, frontend-mediated confirmation) is committed
+   in this document. *(v1 commits all of these except helper
+   plugins, which were deferred to v2 alongside CaMeL itself
+   per `decisions.md` row 26 — CaMeL's Q-LLM isolation runs
+   as a plain plugin in v2, with helpers added the same
+   release.)*
 
 ### 1.2 Non-goals (v1)
 
@@ -120,6 +127,21 @@ verbatim claim to a capability-system claim.
 Authoritative spec: `streams/a-security/rfc-security-model.md`.
 
 ## 3. Process model
+
+> **v1 cast (cuts from the full picture below):**
+> - The **helper plugin** box and `RFL_HELPER_FD` arrow are
+>   **deferred to v2** per `decisions.md` row 26.
+> - Of the frontend choices, only the local-spawned `rfl-tui`
+>   subprocess exists in v1; the external-attached web / IDE /
+>   email row is **deferred to v2** per `decisions.md` row 27,
+>   along with the public `rfl serve` command (row 34) and the
+>   attach-socket / attach-token plumbing.
+> - The **renderer plugin** box ("plug (rndr)") shows where a
+>   subprocess renderer would attach in v2; v1 renderers are
+>   built-in Rust inside core (`decisions.md` row 29).
+>
+> The diagram below is the eventual cast; §16 lists the v1
+> subset.
 
 A running rafaello session is a small, fixed cast of OS processes:
 
@@ -435,15 +457,30 @@ Authoritative: security RFC §5.5.1.
 
 ## 5. Plugins: manifest, lock, policy, lifecycle
 
+> **v1 status (manifest schema):** rows 30–32 of `decisions.md`
+> simplify the v1 manifest:
+> - `runtime` field omitted in v1 (default: subprocess+lockin;
+>   row 30).
+> - `[rpc]` block dropped; the plugin ships a path-referenced
+>   `openrpc.json` sibling at the manifest's parent directory
+>   (row 31).
+> - The compiler emits **lockin builder calls in-memory**, not
+>   a `lockin.toml` artifact — the third arrow in the diagram
+>   below is a Rust API call, not a TOML write (row 32).
+>
+> **v1 status (helper plugins):** the `helper_for` row in §5.3
+> is **deferred to v2** along with the rest of §9 (`decisions.md`
+> row 26). v1's lock has no `helper_for` field.
+
 ### 5.1 Three artifacts, one direction
 
 ```
-plugin author writes        rfl install --review writes        runtime derives
+plugin author writes        rfl install --review writes        runtime applies
 +----------------+          +-------------------+              +----------------+
-| rafaello.toml  | -------> | rafaello.lock     | -----------> | lockin.toml    |
-| (request)      |  user    | (grant + digest   |  spawn time  | (enforcement)  |
-+----------------+  edits   |  + bindings)      |              +----------------+
-                            +-------------------+
+| rafaello.toml  | -------> | rafaello.lock     | -----------> | lockin builder |
+| (request)      |  user    | (grant + digest   |  spawn time  | (Rust API,     |
++----------------+  edits   |  + bindings)      |              |  in-memory)    |
+                            +-------------------+              +----------------+
 ```
 
 - The **manifest** (`rafaello.toml` at the plugin root) is the
@@ -1088,6 +1125,24 @@ per notification") with the wrapped `async move { handler(...);
 }` form.
 
 ## 15. Cross-stream gaps and proposed fixes
+
+> **v1 status:** rows 26–32 of `decisions.md` change which of
+> the gaps below are still in scope for m1. Specifically:
+> - `helper_for` (the row tagged "(§9)" in §15.1) — **deferred
+>   to v2** along with the rest of §9 (row 26). m1 does not
+>   need this manifest field.
+> - Subprocess `renderer.render` and the Stream B "renderer
+>   JSON-RPC vs notification API" subsection (§15.5) — the
+>   subprocess renderer dispatch is **deferred to v2** (row 29).
+>   §15.5's reconciliation still applies if/when subprocess
+>   renderers return.
+> - Streaming entry topics (`core.session.entry.appended` /
+>   `patched`) — only the `finalized` event is in v1 scope
+>   (row 28); `appended` / `patched` reconciliation deferred.
+> - Manifest fields `runtime` and `[rpc]` — v1 omits them
+>   (rows 30 and 31). Stream F's eventual schema keeps them.
+>
+> The remaining items below are still load-bearing for m1.
 
 ### 15.1 Stream F manifest does not yet expose every Stream A field
 
