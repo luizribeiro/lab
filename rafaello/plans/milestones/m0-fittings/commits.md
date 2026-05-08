@@ -1,11 +1,10 @@
 # m0-fittings — commits
 
-> **Status:** converged after three pi review rounds
-> (`commits-pi-review-1.md`, `commits-pi-review-2.md`,
-> `commits-pi-review-3.md`). Pi recommended ratification after
-> the round-3 traceability fixes landed. Pending owner ratification
-> at commits granularity, after which Phase 3 per-commit agent work
-> begins on `rafaello-v0.1`.
+> **Status:** ratified by owner 2026-05-08 after three pi review
+> rounds (`commits-pi-review-1.md`, `commits-pi-review-2.md`,
+> `commits-pi-review-3.md`). Phase 3 per-commit agent work begins
+> on the `rafaello-v0.1` branch under the milestone driver — see
+> `driver-notes.md` for the per-commit kickoff pattern.
 
 Ordered commit list for m0, derived from `scope.md`. Each commit is
 one logical idea **and leaves the workspace green** — pre-commit

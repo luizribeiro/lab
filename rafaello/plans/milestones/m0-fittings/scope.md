@@ -2,9 +2,8 @@
 
 > **Status:** ratified by owner 2026-05-08 after three pi review
 > rounds (`pi-review-1.md`, `pi-review-2.md`, `pi-review-3.md`).
-> Next deliverable is `commits.md` (Phase 2 step 4 of
-> `plans/README.md`); claude drafts, pi reviews, owner ratifies
-> before per-commit agent work begins.
+> `commits.md` is also ratified; Phase 3 per-commit agent work
+> begins on the `rafaello-v0.1` branch — see `driver-notes.md`.
 
 ## Goal
 
