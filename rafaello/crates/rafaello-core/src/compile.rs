@@ -25,6 +25,7 @@ use crate::lock::{
 use crate::manifest::capabilities::NetworkMode;
 use crate::manifest::placeholders;
 use crate::paths::{self, PathContext, RootKind};
+use crate::scrubber;
 use crate::topic_id;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +109,9 @@ pub struct ToolMeta {
 ///
 /// Currently wires §C2 bundle flatten + §C3 placeholder
 /// resolution + §K carve-out decomposition + §C5 private-state
-/// injection. Network/env emission + entry resolution + digest
+/// injection + §C1 NetworkPlan/EnvPlan emission with the
+/// `outpost::NetworkPolicy::from_allowed_hosts` dry-run (Risks
+/// §2) and §Sc / §C7.1 env scrubbing. Entry resolution + digest
 /// gating + tool_meta projection land in later commits.
 pub fn compile_plugin(
     lock: &Lock,
@@ -166,13 +169,20 @@ pub fn compile_plugin(
     let network = match eff.network.mode {
         NetworkMode::Deny => NetworkPlan::Deny,
         NetworkMode::AllowAll => NetworkPlan::AllowAll,
-        NetworkMode::Proxy => NetworkPlan::Proxy {
-            allow_hosts: eff.network.allow_hosts,
-        },
+        NetworkMode::Proxy => {
+            outpost::NetworkPolicy::from_allowed_hosts(
+                eff.network.allow_hosts.iter().map(String::as_str),
+            )
+            .map_err(|_| CompileError::InvalidAllowHosts)?;
+            NetworkPlan::Proxy {
+                allow_hosts: eff.network.allow_hosts,
+            }
+        }
     };
 
+    scrubber::reject_reserved(&eff.env.pass, &eff.env.set)?;
     let env = EnvPlan {
-        pass: eff.env.pass,
+        pass: scrubber::strip(&eff.env.pass, entry.flags.i_know_what_im_doing),
         set: eff.env.set,
     };
 
