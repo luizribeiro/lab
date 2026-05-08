@@ -145,3 +145,7 @@ path = "../../tests/malformed_cancellation.rs"
 [[test]]
 name = "batch_cancellation_partial_suppression"
 path = "../../tests/batch_cancellation_partial_suppression.rs"
+
+[[test]]
+name = "peer_gone_during_notify"
+path = "../../tests/peer_gone_during_notify.rs"
