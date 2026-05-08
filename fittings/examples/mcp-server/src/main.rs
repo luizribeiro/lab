@@ -1,6 +1,5 @@
 use std::process;
 
-mod mcp;
 mod mcpfit_example;
 
 #[tokio::main]
