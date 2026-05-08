@@ -33,12 +33,6 @@ pub(crate) fn parse(item: &ItemFn) -> syn::Result<ParsedTool> {
 
 pub(crate) fn expand(item: ItemFn) -> syn::Result<TokenStream> {
     let parsed = parse(&item)?;
-    if let Some(cx) = &parsed.cx_arg {
-        return Err(syn::Error::new_spanned(
-            cx,
-            "#[tool] does not yet support a `cx: Cx` parameter",
-        ));
-    }
 
     let vis = &item.vis;
     let name = &parsed.name;
@@ -53,20 +47,32 @@ pub(crate) fn expand(item: ItemFn) -> syn::Result<TokenStream> {
         .filter(|a| a.path().is_ident("doc"))
         .collect::<Vec<_>>();
 
+    let (fn_sig, handler_call) = if let Some(cx_ty) = &parsed.cx_arg {
+        (
+            quote! { pub async fn #name(args: #args_ty, cx: #cx_ty) -> #return_ty },
+            quote! { #name(args, cx).await },
+        )
+    } else {
+        (
+            quote! { pub async fn #name(args: #args_ty) -> #return_ty },
+            quote! { #name(args).await },
+        )
+    };
+
     Ok(quote! {
         #[allow(non_snake_case)]
         #vis mod #name {
             use super::*;
 
             #(#attrs)*
-            pub async fn #name(args: #args_ty) -> #return_ty #block
+            #fn_sig #block
 
             fn __mcpfit_build() -> ::mcpfit::Tool {
                 ::mcpfit::Tool::new(#name_str)
                     .description(#description)
                     .input::<#args_ty>()
-                    .handler(|args: #args_ty, _cx: ::mcpfit::Cx| async move {
-                        #name(args).await
+                    .handler(|args: #args_ty, cx: ::mcpfit::Cx| async move {
+                        #handler_call
                     })
             }
 
