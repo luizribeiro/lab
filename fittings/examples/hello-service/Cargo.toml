@@ -69,3 +69,11 @@ path = "../../tests/error_preservation_round_trip.rs"
 [[test]]
 name = "handler_panic_maps_to_panic"
 path = "../../tests/handler_panic_maps_to_panic.rs"
+
+[[test]]
+name = "service_context_notify"
+path = "../../tests/service_context_notify.rs"
+
+[[test]]
+name = "bounded_notify_drop"
+path = "../../tests/bounded_notify_drop.rs"
