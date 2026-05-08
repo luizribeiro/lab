@@ -71,6 +71,30 @@ pub enum LockError {
     MissingEntry,
     #[error("toml parse error: {0}")]
     Toml(#[from] toml::de::Error),
+    #[error("canonical id `{input}` missing `:` between source and name")]
+    CanonicalIdMissingNameSeparator { input: String },
+    #[error("canonical id `{input}` missing `@` between name and version")]
+    CanonicalIdMissingVersionSeparator { input: String },
+    #[error("canonical id source is empty")]
+    CanonicalIdEmptySource,
+    #[error("canonical id source has leading `/`")]
+    CanonicalIdSourceLeadingSlash,
+    #[error("canonical id source has trailing `/`")]
+    CanonicalIdSourceTrailingSlash,
+    #[error("canonical id source has empty segment")]
+    CanonicalIdSourceEmptySegment,
+    #[error("canonical id source segment `{segment}` is `.` or `..`")]
+    CanonicalIdSourceDotSegment { segment: String },
+    #[error("canonical id source segment `{segment}` contains illegal character")]
+    CanonicalIdIllegalSourceSegment { segment: String },
+    #[error("canonical id name `{name}` violates topic-segment grammar")]
+    CanonicalIdIllegalName { name: String },
+    #[error("canonical id version `{version}` is not valid semver: {source}")]
+    CanonicalIdInvalidVersion {
+        version: String,
+        #[source]
+        source: semver::Error,
+    },
 }
 
 #[derive(Debug, Error)]
