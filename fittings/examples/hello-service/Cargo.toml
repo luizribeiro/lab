@@ -153,3 +153,7 @@ path = "../../tests/peer_gone_during_notify.rs"
 [[test]]
 name = "transport_bidirectional_regression"
 path = "../../tests/transport_bidirectional_regression.rs"
+
+[[test]]
+name = "spawn_peerhandle_round_trip"
+path = "../../tests/spawn_peerhandle_round_trip.rs"
