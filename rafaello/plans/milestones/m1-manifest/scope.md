@@ -1,10 +1,9 @@
 # m1 — manifest / lock / grant / compiler foundation — scope
 
-> **Status:** draft (round 6). Five pi review rounds so far;
+> **Status:** draft (round 7). Six pi review rounds so far;
 > findings counts: pi-1 7+3; pi-2 4+5+4; pi-3 4+4+1; pi-4
-> 3+4+2 (all 9 pi-3 resolved); pi-5 4+3+4 (all pi-4 blockers
-> resolved; remaining issues are lock-side counterparts of
-> manifest-side rules). This revision resolves all pi-5
+> 3+4+2; pi-5 4+3+4; pi-6 4+2+1. All earlier-round blockers
+> resolved at each step. This revision resolves all pi-6
 > findings.
 
 ## Goal
@@ -367,6 +366,13 @@ to carry every input the compiler needs.
   - `provider_id: Option<String>` (present iff `provider == true`),
   - `tools: Vec<String>`,
   - `renderer_kinds: Vec<String>`,
+  - `load: LoadPolicy` — snapshot of the manifest's `[load]`
+    block (pi review-6 finding 2). Without this, the spawn
+    path would have to re-read the live manifest, breaking
+    "spawn reads the lock snapshot" from security RFC §3.2.
+    `LoadPolicy` is an enum mirroring M6:
+    `Eager | Boot | Manual | Lazy { event: Vec<String>,
+    command: Vec<String>, kind: Vec<String> }`.
   - `tool_meta: BTreeMap<String, ToolMeta>` where
     `ToolMeta = { sinks: Vec<String>, sinks_inferred: bool,
     grant_match: Option<PathBuf>, always_confirm: bool }`.
@@ -471,10 +477,18 @@ finding 4).
     `frontend.*` outright.
   - **Reserved built-in renderer kinds** in `[[renderers]]` per
     M7.
-  - **`provides.tool.<name>` table presence** for every name in
-    `provides.tools`. A `[provides.tool.<name>]` table whose
-    name is not in `provides.tools` is rejected as
-    `UnknownToolTable`.
+  - **`provides.tool.<name>` table optional, defaults
+    applied** (pi review-6 finding 5 — overview §15.1 says
+    "missing tables default to `{ sinks = None,
+    grant_match = absent, always_confirm = false }`", which
+    is the ratified normative). Round-6's "must have a
+    matching table" wording was stricter than the
+    overview; this revision aligns: every tool name in
+    `provides.tools` either has a `[provides.tool.<name>]`
+    table OR gets the overview's defaults. A
+    `[provides.tool.<name>]` table whose name is **not**
+    in `provides.tools` is still rejected as
+    `UnknownToolTable` (no orphan tool tables).
   - **Sink class** values: must be either a known class
     (`network`/`vcs_push`/`mail`/`workspace_write`/`exec`) or
     match the custom-class grammar `[a-z0-9_]+`.
@@ -508,8 +522,28 @@ finding 4).
     rejected as `PublishOnForeignTopicId`.
   - **Provider namespace publish**: `provider.<id>.*` publishes
     are valid only when `<id>` matches `provides.provider`.
-- **V3.** `validate::lock(lock: &Lock, ctx: &PathContext) ->
-  Result<()>` — multi-plugin pass. Pi review-5 expanded V3
+- **V3.** `validate::lock(lock: &Lock, ctx:
+  &LockValidationContext) -> Result<()>` where
+  ```rust
+  pub struct LockValidationContext {
+      pub project_root: PathBuf,
+      pub home:         PathBuf,
+      pub plugin_dirs:  BTreeMap<CanonicalId, PathBuf>,
+      pub cache_root:   PathBuf,
+      pub state_root:   PathBuf,
+  }
+  ```
+  Per pi review-6 finding 1: V3 is multi-plugin and must
+  resolve `${plugin}` per-plugin. The earlier round-6 wording
+  used a single `PathContext` (which carried one
+  `plugin_dir`) — that was wrong because two installed
+  plugins live in distinct package dirs. V3 derives a
+  per-plugin `PathContext` from
+  `LockValidationContext.plugin_dirs.get(canonical)` when
+  delegating to `trifecta::evaluate` / `carveout::compile_against`
+  / per-plugin path-escape checks. A canonical id without an
+  entry in `plugin_dirs` → `ValidationError::MissingPluginDir`.
+  Pi review-5 expanded V3
   to mirror every manifest-side security rule on the lock
   side, since the lock is the runtime authority and a
   hand-edited lock can otherwise bypass install-time checks.
@@ -544,6 +578,35 @@ finding 4).
     every grant bundle's `network`. Non-empty `allow_hosts`
     with `mode = "deny"` or `"allow_all"` →
     `ValidationError::LockAllowHostsOutsideProxy`.
+  - **Lock-side grant bundle key validation** (pi review-6
+    finding 3): every key in `.grant.bundles` must be
+    `default` or a tool name from `bindings.tools`; unknown
+    keys → `ValidationError::LockUnknownBundleKey`. Without
+    this rule, a hand-edited `[grant.bundles.typo]` would
+    contribute to C2's spawn-time union.
+  - **Lock-side capability path templates** (pi review-6
+    finding 3): every `read_paths` / `read_dirs` /
+    `write_paths` / `write_dirs` / `exec_paths` /
+    `exec_dirs` entry in every `.grant.bundles.<n>` is
+    re-parsed through `manifest::CapabilityPathTemplate`
+    (M11). A bare relative path with no placeholder prefix
+    → `ValidationError::LockCapabilityPathRelative`.
+  - **Lock-side tool-name and sink-class grammar checks**
+    (pi review-6 finding 3): `bindings.tools` values and
+    `[session].tool_owner` keys re-validated against the
+    M3 tool-name grammar; `bindings.tool_meta.<n>.sinks`
+    values re-validated against the M3 sink-class grammar.
+  - **`exec_paths` / `exec_dirs` refusal under
+    `${project}`** (pi review-6 finding 4 — security RFC
+    §6.9). After C3-style placeholder expansion + canonical
+    resolution of any existing ancestor, if any
+    `exec_paths` or `exec_dirs` entry resolves inside the
+    `project_root`, V3 refuses with
+    `ValidationError::ExecPathInsideProject`. No override
+    flag in v1 (pi: this is a "footgun we don't want even
+    the user accidentally enabling"). The check runs both
+    on the manifest at install time (V1) and on the lock at
+    runtime (V3 — symmetric mirror).
   - **Lock-side binding snapshot validation** (pi review-5
     finding 6):
     - `bindings.tool_meta.<n>.grant_match` (when set) is
@@ -594,6 +657,7 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
       pub auto_subscribes:    Vec<String>,  // self-subscribe: plugin.<topic-id>.tool_request
       pub tool_meta:        BTreeMap<String, ToolMeta>, // only entries this plugin owns post-tool_owner resolution; pi review-2 finding 4
       pub provider_id:      Option<String>,
+      pub load:              LoadPolicy,        // pi review-6 finding 2: m2/m3's spawn path needs the load snapshot from the lock, not the live manifest
       pub flags:             CompiledFlags,
   }
   ```
@@ -609,6 +673,19 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   `SandboxBuilder`. `EnvPlan` is populated post-scrubbing
   (§Sc) and consumed by m2's call into `lockin_config::apply_env`
   *after* `command(...)` produces the `SandboxedCommand`.
+- **C1.1.** **API contract** (pi review-6 medium 7):
+  `compile_plugin` and `broker_acl::compile` **require** a
+  prior successful `validate::lock(&Lock, &LockValidationContext)`
+  on the same `Lock` value. Both functions document this
+  precondition and return `CompileError::ValidationNotRun`
+  if invariants V3 is supposed to enforce are violated
+  (e.g. duplicate topic-id, conflicting tool name without
+  resolution, foreign-namespace publish). They do **not**
+  re-run V3 internally for performance and to keep one
+  validation entry point. Production callers (m2's
+  supervisor) call V3 once per lock-load and cache the
+  result; m1's tests call V3 in a small per-test setup
+  helper.
 - **C2.** Public entry point:
   ```rust
   pub fn compile_plugin(
@@ -705,11 +782,19 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   sha256. **Symlinks** are followed when their target resolves
   inside `package_dir`, and refused when the target resolves
   outside (`DigestError::SymlinkEscape`). Directory-typed
-  symlinks are followed with **canonical-target cycle
-  detection** via a visited-set keyed on the canonicalised
-  absolute path — pi review-3 finding 7 caught the cycle hole.
-  Cycles → `DigestError::SymlinkCycle { at: PathBuf }` (no
-  silent skip). File permission bits,
+  symlinks are followed; **cycle detection uses a
+  recursion-stack** (the set of ancestor canonical paths in
+  the current walk) rather than a global visited-set
+  (pi review-6 finding 6: a global visited-set would silently
+  skip distinct-logical-path / same-canonical-target pairs
+  like `vendor_src -> src/`, which violates the
+  "deterministic relative-path hashing" model). Cycles
+  (canonical target equals an ancestor in the recursion
+  stack) → `DigestError::SymlinkCycle { at: PathBuf }`. Two
+  distinct in-package paths that point at the same canonical
+  directory contribute under **both logical relative paths**
+  — the digest is over package contents by relative path,
+  not by inode. File permission bits,
   mtimes, and ownership are intentionally **excluded** from
   the digest so it is reproducible across hosts. The exact
   algorithm is pinned in m1's commit body and a doc comment on
@@ -1083,7 +1168,14 @@ exercised at least once.
 | `manifest_subscribe_invalid_pattern.rs` | `bus.subscribes = ["core.**.tool_*"]` (in-segment `*`) rejected as `ValidationError::InvalidPatternSegment`. |
 | `manifest_topic_segment_grammar.rs` | A topic / pattern segment violating `[a-z0-9_-]+` (uppercase, dot inside segment, slash) rejected as `ValidationError::IllegalTopicSegment`. |
 | `manifest_dotted_tool_name.rs` | `provides.tools = ["rust.format"]` rejected as `ValidationError::IllegalToolName` (V1 — tool names are single segments per pi-1 finding 3). |
-| `manifest_unknown_tool_table.rs` | `provides.tools = ["grep"]` but a `[provides.tool.gerp]` table (typo) → `ValidationError::UnknownToolTable`. |
+| `manifest_unknown_tool_table.rs` | `provides.tools = ["grep"]` but a `[provides.tool.gerp]` table (typo) → `ValidationError::UnknownToolTable`. (Note: missing tables for declared tools no longer error per pi-6 finding 5 — see `tool_table_omitted_uses_defaults.rs` in the positive matrix.) |
+| `lock_unknown_bundle_key.rs` | Lock `[grant.bundles.typo]` for a key not in `default ∪ bindings.tools` → `ValidationError::LockUnknownBundleKey` (pi-6 finding 3). |
+| `lock_capability_path_relative.rs` | Lock `read_dirs = ["relative/path"]` (no placeholder prefix, not absolute) → `ValidationError::LockCapabilityPathRelative` (pi-6 finding 3). |
+| `lock_bindings_tools_invalid_grammar.rs` | Lock `bindings.tools = ["Rust-Tools"]` (uppercase) rejected per V3's tool-name grammar mirror (pi-6 finding 3). |
+| `lock_tool_meta_invalid_sink.rs` | Lock `bindings.tool_meta.<n>.sinks = ["Network"]` (uppercase, fails sink-class grammar) rejected by V3 (pi-6 finding 3). |
+| `manifest_exec_path_inside_project.rs` | Manifest `exec_paths = ["${project}/scripts/runner"]` rejected as `ValidationError::ExecPathInsideProject` per security RFC §6.9 (pi-6 finding 4). |
+| `lock_exec_path_inside_project.rs` | Lock `exec_dirs = ["${project}/bin"]` rejected by V3 mirror (pi-6 finding 4). |
+| `compile_without_validate_lock_errors.rs` | Calling `compile_plugin` against a lock with a topic-id collision when `validate::lock` was not called first → `CompileError::ValidationNotRun` (pi-6 medium 7 — API contract). |
 | `manifest_unknown_bundle_key.rs` | `[capabilities.foo.filesystem]` for a bundle key not in `provides.tools` (and not `default`) → `ValidationError::UnknownBundleKey`. |
 | `manifest_malformed_sinks.rs` | `[provides.tool.foo] sinks = [42]` (non-string), and `sinks = ["Network"]` (uppercase, fails the `[a-z0-9_]+` custom-class grammar): both rejected. |
 | `manifest_reserved_renderer_kind.rs` | `[[renderers]] kind = "text"` rejected per M7 (built-ins reserved). |
@@ -1119,6 +1211,11 @@ exercised at least once.
 | `lock_renderer_kind_builtin.rs` | Lock `bindings.renderer_kinds = ["text"]` (built-in name) rejected per V3's M7 mirror (pi-5 finding 6). |
 | `compile_capability_path_nonexistent_write_leaf.rs` | A grant `write_dirs = ["${project}/target/new"]` where the `target` directory exists but `new` does not — compiles successfully (pi-5 finding 7 resolver: existing-ancestor canonicalisation + lexical join + containment). |
 | `compile_capability_path_symlink_ancestor_escape.rs` | A grant `read_dirs = ["${project}/symlinked"]` where `${project}/symlinked` is a symlink whose canonical target is outside `${project}` → `CompileError::SymlinkEscape` (pi-5 finding 7). |
+| `validate_lock_multiplugin_context.rs` | `validate::lock` with a `LockValidationContext` whose `plugin_dirs` map carries distinct paths for two installed plugins resolves each plugin's `${plugin}` correctly; a `plugin_dirs` map missing one of the canonical ids → `ValidationError::MissingPluginDir` (pi-6 finding 1). |
+| `lock_load_policy_round_trip.rs` | A lock with `bindings.load = { kind = ["mermaid:diagram"] }` parses, serialises, parses again byte-equal; `CompiledPlugin.load == LoadPolicy::Lazy { kind: vec!["mermaid:diagram"], ... }` (pi-6 finding 2 — L4 + C1 `LoadPolicy` snapshot). |
+| `lock_load_policy_eager_string.rs` | A lock with `bindings.load = "eager"` round-trips; compiled `LoadPolicy::Eager`. |
+| `tool_table_omitted_uses_defaults.rs` | A manifest with `provides.tools = ["grep"]` and **no** `[provides.tool.grep]` table parses, validates, and lock-snapshots `tool_meta.grep = ToolMeta { sinks: vec![], sinks_inferred: true (per Si1 inference), grant_match: None, always_confirm: false }` per overview §15.1 defaults (pi-6 finding 5 — round-6 alignment). |
+| `digest_distinct_paths_same_target.rs` | A package containing `src/lib.rs` and `vendor_src/` (where `vendor_src -> src`): `content_digest` hashes the file contents under both `src/lib.rs` and `vendor_src/lib.rs` (recursion-stack cycle detection allows distinct logical paths sharing a canonical target — pi-6 finding 6). |
 | `manifest_missing_openrpc_provider.rs` | Provider plugin manifest (no `provides.tools`, has `provides.provider = "anthropic"`) but no `openrpc.json` next to it → `ManifestError::MissingOpenRpc` (M10 + pi review-3 finding 4: row 31 requires the sibling for every plugin, not just tool plugins). |
 | `digest_symlink_cycle.rs` | `package_dir` contains `loop -> .` (or `a -> b`, `b -> a`); `content_digest` returns `DigestError::SymlinkCycle` (D1 — pi review-3 finding 7). |
 | `topic_id_collision_at_lock.rs` | Two distinct canonical ids whose pre-computed prefixes (passed via `collisions_with_prefixes`) match → `CollisionError`. |
@@ -1341,6 +1438,47 @@ m1 is done when:
     landed in C5.
 
 ## What changed from prior drafts
+
+Round-6 pi review (`pi-review-6.md`) prompted these revisions:
+
+- **`validate::lock` takes a multi-plugin context** (pi-6
+  finding 1). New `LockValidationContext` with
+  `plugin_dirs: BTreeMap<CanonicalId, PathBuf>`; V3 derives
+  per-plugin `PathContext` from it. New positive test
+  `validate_lock_multiplugin_context.rs`.
+- **`bindings.load` snapshot in the lock + `CompiledPlugin.load`**
+  (pi-6 finding 2). L4 adds `load: LoadPolicy`; C1 carries
+  it. The spawn path (m2/m3) reads the snapshot, not the
+  live manifest, per security RFC §3.2. New positive tests
+  `lock_load_policy_round_trip.rs`,
+  `lock_load_policy_eager_string.rs`.
+- **More lock-side mirrors** (pi-6 finding 3). V3 adds:
+  unknown grant bundle key check; capability path template
+  re-validation on lock load; tool-name grammar check on
+  `bindings.tools` and `[session].tool_owner` keys;
+  sink-class grammar check on `bindings.tool_meta.<n>.sinks`.
+  Four new negative tests.
+- **`exec_paths` / `exec_dirs` inside `${project}` refused**
+  per security RFC §6.9 (pi-6 finding 4). V1 + V3 mirror
+  rules; no override. Two new negative tests:
+  `manifest_exec_path_inside_project.rs`,
+  `lock_exec_path_inside_project.rs`.
+- **Tool-table presence aligned with overview defaults**
+  (pi-6 finding 5). Missing `[provides.tool.<name>]` tables
+  use the §15.1 defaults rather than failing validation.
+  Round-6 wording reversed; new positive test
+  `tool_table_omitted_uses_defaults.rs`; existing
+  `manifest_unknown_tool_table.rs` description updated.
+- **`content_digest` symlinked-directory semantics pinned**
+  (pi-6 finding 6). Recursion-stack cycle detection (not
+  global visited-set), so distinct logical paths sharing a
+  canonical target both contribute to the hash. New
+  positive test `digest_distinct_paths_same_target.rs`.
+- **`compile_plugin` / `broker_acl::compile` precondition
+  contract documented** (pi-6 medium 7). New C1.1 spelling
+  out the V3-must-run-first invariant + the
+  `CompileError::ValidationNotRun` failure mode. New
+  negative test `compile_without_validate_lock_errors.rs`.
 
 Round-5 pi review (`pi-review-5.md`) prompted these revisions:
 
