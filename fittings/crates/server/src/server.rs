@@ -38,6 +38,7 @@ pub struct Server<S, T> {
     outbound_request_rx: Option<mpsc::UnboundedReceiver<OutboundRequest>>,
     pending_outbound: PendingOutbound,
     id_allocator: Arc<IdAllocator>,
+    closed_token: CancellationToken,
 }
 
 impl<S, T> Server<S, T>
@@ -52,12 +53,14 @@ where
         let (request_tx, request_rx) = mpsc::unbounded_channel::<OutboundRequest>();
         let pending_outbound = PendingOutbound::new();
         let id_allocator = Arc::new(IdAllocator::server());
+        let closed_token = CancellationToken::new();
         let peer = PeerHandle::with_outbound_calls(
             notify_tx,
             dropped_notifications.clone(),
             id_allocator.clone(),
             request_tx,
             pending_outbound.clone(),
+            closed_token.clone(),
         );
         Self {
             service: Arc::new(service),
@@ -70,6 +73,7 @@ where
             outbound_request_rx: Some(request_rx),
             pending_outbound,
             id_allocator,
+            closed_token,
         }
     }
 
@@ -89,6 +93,7 @@ where
             self.id_allocator.clone(),
             request_tx,
             self.pending_outbound.clone(),
+            self.closed_token.clone(),
         );
         self.notify_rx = Some(notify_rx);
         self.outbound_request_rx = Some(request_rx);
@@ -221,6 +226,7 @@ where
         for pending in pending_outbound.drain_all() {
             let _ = pending.send(Err(FittingsError::transport("peer connection closed")));
         }
+        self.closed_token.cancel();
 
         result
     }

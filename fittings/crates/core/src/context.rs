@@ -100,18 +100,21 @@ struct PeerHandleInner {
     notify_tx: mpsc::Sender<OutboundNotification>,
     dropped: DroppedNotifications,
     outbound_call: Option<OutboundCallChannel>,
+    closed_token: CancellationToken,
 }
 
 impl PeerHandle {
     pub fn new(
         notify_tx: mpsc::Sender<OutboundNotification>,
         dropped: DroppedNotifications,
+        closed_token: CancellationToken,
     ) -> Self {
         Self {
             inner: Arc::new(PeerHandleInner {
                 notify_tx,
                 dropped,
                 outbound_call: None,
+                closed_token,
             }),
         }
     }
@@ -126,6 +129,7 @@ impl PeerHandle {
         id_allocator: Arc<IdAllocator>,
         request_tx: mpsc::UnboundedSender<OutboundRequest>,
         pending: PendingOutbound,
+        closed_token: CancellationToken,
     ) -> Self {
         Self {
             inner: Arc::new(PeerHandleInner {
@@ -136,8 +140,16 @@ impl PeerHandle {
                     request_tx,
                     pending,
                 }),
+                closed_token,
             }),
         }
+    }
+
+    /// Resolves when the underlying transport has torn down (graceful EOF
+    /// or transport error). Pending `peer.call` futures are drained with
+    /// `FittingsError::Transport` at the same point.
+    pub async fn closed(&self) {
+        self.inner.closed_token.cancelled().await
     }
 
     pub async fn call(
@@ -251,7 +263,7 @@ impl ServiceContext {
         Self::new(
             None,
             CancellationToken::new(),
-            PeerHandle::new(tx, DroppedNotifications::new()),
+            PeerHandle::new(tx, DroppedNotifications::new(), CancellationToken::new()),
         )
     }
 }
@@ -267,7 +279,10 @@ mod tests {
 
     fn fresh_peer() -> (PeerHandle, mpsc::Receiver<OutboundNotification>) {
         let (tx, rx) = mpsc::channel(16);
-        (PeerHandle::new(tx, DroppedNotifications::new()), rx)
+        (
+            PeerHandle::new(tx, DroppedNotifications::new(), CancellationToken::new()),
+            rx,
+        )
     }
 
     #[tokio::test]
@@ -334,7 +349,7 @@ mod tests {
     fn peer_notify_enqueues_outbound_notification() {
         let token = CancellationToken::new();
         let (tx, mut rx) = mpsc::channel(16);
-        let peer = PeerHandle::new(tx, DroppedNotifications::new());
+        let peer = PeerHandle::new(tx, DroppedNotifications::new(), CancellationToken::new());
         let ctx = ServiceContext::new(None, token, peer);
 
         ctx.notify("ping", json!({"x": 1}))
@@ -344,11 +359,24 @@ mod tests {
         assert_eq!(msg.params, json!({"x": 1}));
     }
 
+    #[tokio::test]
+    async fn closed_resolves_when_token_fires() {
+        let (tx, _rx) = mpsc::channel(1);
+        let token = CancellationToken::new();
+        let peer = PeerHandle::new(tx, DroppedNotifications::new(), token.clone());
+        let waiter = tokio::spawn({
+            let peer = peer.clone();
+            async move { peer.closed().await }
+        });
+        token.cancel();
+        waiter.await.expect("closed waiter should resolve");
+    }
+
     #[test]
     fn peer_notify_returns_transport_when_channel_closed() {
         let (tx, rx) = mpsc::channel::<OutboundNotification>(1);
         drop(rx);
-        let peer = PeerHandle::new(tx, DroppedNotifications::new());
+        let peer = PeerHandle::new(tx, DroppedNotifications::new(), CancellationToken::new());
         match peer.notify("ping", json!(null)) {
             Err(FittingsError::Transport(_)) => {}
             other => panic!("expected Transport error, got {other:?}"),
@@ -359,7 +387,7 @@ mod tests {
     fn peer_notify_drops_when_bounded_sink_full() {
         let (tx, _rx) = mpsc::channel::<OutboundNotification>(1);
         let dropped = DroppedNotifications::new();
-        let peer = PeerHandle::new(tx, dropped.clone());
+        let peer = PeerHandle::new(tx, dropped.clone(), CancellationToken::new());
 
         peer.notify("first", json!(null)).expect("first fits");
         // Second send fills the slot but is silently dropped (Ok return).

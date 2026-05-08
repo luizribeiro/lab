@@ -69,12 +69,14 @@ where
             mpsc::unbounded_channel::<OutboundRequest>();
         let pending_outbound = PendingOutbound::new();
         let id_allocator = Arc::new(IdAllocator::client());
+        let closed_token = CancellationToken::new();
         let peer = PeerHandle::with_outbound_calls(
             notify_tx,
             DroppedNotifications::new(),
             id_allocator,
             outbound_request_tx,
             pending_outbound.clone(),
+            closed_token.clone(),
         );
         let service: ServiceSlot = Arc::new(RwLock::new(None));
         let worker = tokio::spawn(run_client_loop(
@@ -85,6 +87,7 @@ where
             pending_outbound,
             service.clone(),
             peer.clone(),
+            closed_token,
         ));
 
         Ok(Self {
@@ -172,6 +175,15 @@ enum ClientCommand {
     Shutdown,
 }
 
+struct ClosedGuard(CancellationToken);
+
+impl Drop for ClosedGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_client_loop<T>(
     mut transport: T,
     mut request_rx: mpsc::UnboundedReceiver<ClientCommand>,
@@ -180,9 +192,11 @@ async fn run_client_loop<T>(
     pending_outbound: PendingOutbound,
     service: ServiceSlot,
     peer: PeerHandle,
+    closed_token: CancellationToken,
 ) where
     T: fittings_core::transport::Transport + Send + 'static,
 {
+    let _closed_guard = ClosedGuard(closed_token);
     let mut pending: HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>> =
         HashMap::new();
     let (inbound_response_tx, mut inbound_response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
