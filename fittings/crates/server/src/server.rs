@@ -1,8 +1,9 @@
 use std::{
+    collections::HashMap,
     panic::AssertUnwindSafe,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -35,6 +36,61 @@ use tokio_util::sync::CancellationToken;
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
+/// In-flight per-request cancellation tokens keyed by request id. The
+/// dispatcher registers a token when an inbound request enters execution
+/// and removes it when the handler returns. The cancellation reader (S5)
+/// fires the matching token without traversing the request-worker
+/// semaphore, so saturated handlers still observe cancellation promptly.
+#[derive(Clone, Default)]
+struct InFlightTokens {
+    inner: Arc<Mutex<HashMap<JsonRpcId, CancellationToken>>>,
+}
+
+impl InFlightTokens {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&self, id: JsonRpcId, token: CancellationToken) {
+        self.inner
+            .lock()
+            .expect("in-flight token map poisoned")
+            .insert(id, token);
+    }
+
+    fn remove(&self, id: &JsonRpcId) {
+        self.inner
+            .lock()
+            .expect("in-flight token map poisoned")
+            .remove(id);
+    }
+
+    fn fire(&self, id: &JsonRpcId) {
+        if let Some(token) = self
+            .inner
+            .lock()
+            .expect("in-flight token map poisoned")
+            .get(id)
+        {
+            token.cancel();
+        }
+    }
+}
+
+/// Drops the per-request entry from `InFlightTokens` once the owning
+/// handler completes. Lives next to the handler future inside
+/// `execute_request`.
+struct InFlightTokenGuard {
+    map: InFlightTokens,
+    id: JsonRpcId,
+}
+
+impl Drop for InFlightTokenGuard {
+    fn drop(&mut self) {
+        self.map.remove(&self.id);
+    }
+}
+
 pub struct Server<S, T> {
     service: Arc<S>,
     transport: T,
@@ -49,6 +105,7 @@ pub struct Server<S, T> {
     id_allocator: Arc<IdAllocator>,
     closed_token: CancellationToken,
     null_in_flight: Arc<AtomicBool>,
+    in_flight_tokens: InFlightTokens,
 }
 
 impl<S, T> Server<S, T>
@@ -89,6 +146,7 @@ where
             id_allocator,
             closed_token,
             null_in_flight: Arc::new(AtomicBool::new(false)),
+            in_flight_tokens: InFlightTokens::new(),
         }
     }
 
@@ -239,6 +297,13 @@ where
                             if route_inbound_response(&frame, &pending_outbound) {
                                 continue;
                             }
+                            if route_inbound_cancellation(
+                                &frame,
+                                &self.cancellation,
+                                &self.in_flight_tokens,
+                            ) {
+                                continue;
+                            }
                             self.spawn_frame_handler(
                                 frame,
                                 semaphore.clone(),
@@ -246,6 +311,7 @@ where
                                 peer.clone(),
                                 &mut workers,
                                 self.null_in_flight.clone(),
+                                self.in_flight_tokens.clone(),
                             ).await;
                         }
                         Err(error) if is_graceful_eof(&error) => {
@@ -280,6 +346,7 @@ where
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_frame_handler(
         &self,
         frame: Vec<u8>,
@@ -288,6 +355,7 @@ where
         peer: PeerHandle,
         workers: &mut JoinSet<()>,
         null_in_flight: Arc<AtomicBool>,
+        in_flight_tokens: InFlightTokens,
     ) {
         let permit = match semaphore.acquire_owned().await {
             Ok(permit) => permit,
@@ -299,7 +367,15 @@ where
         let service = Arc::clone(&self.service);
         workers.spawn(async move {
             let _permit = permit;
-            handle_frame(frame, service, response_tx, peer, null_in_flight).await;
+            handle_frame(
+                frame,
+                service,
+                response_tx,
+                peer,
+                null_in_flight,
+                in_flight_tokens,
+            )
+            .await;
         });
     }
 }
@@ -339,6 +415,7 @@ async fn handle_frame<S>(
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
     null_in_flight: Arc<AtomicBool>,
+    in_flight_tokens: InFlightTokens,
 ) where
     S: Service + 'static,
 {
@@ -356,12 +433,27 @@ async fn handle_frame<S>(
 
     match value {
         Value::Array(batch) => {
-            handle_batch_request(batch, service, response_tx, peer, null_in_flight).await;
+            handle_batch_request(
+                batch,
+                service,
+                response_tx,
+                peer,
+                null_in_flight,
+                in_flight_tokens,
+            )
+            .await;
         }
         _ => {
             let response = match decode_request_line(&frame) {
                 Ok(request_envelope) => {
-                    execute_request(request_envelope, service, peer, &null_in_flight).await
+                    execute_request(
+                        request_envelope,
+                        service,
+                        peer,
+                        &null_in_flight,
+                        &in_flight_tokens,
+                    )
+                    .await
                 }
                 Err(error) => {
                     let (id, err) = map_decode_error(error);
@@ -382,6 +474,7 @@ async fn handle_batch_request<S>(
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
     null_in_flight: Arc<AtomicBool>,
+    in_flight_tokens: InFlightTokens,
 ) where
     S: Service + 'static,
 {
@@ -415,6 +508,7 @@ async fn handle_batch_request<S>(
                     Arc::clone(&service),
                     peer.clone(),
                     &null_in_flight,
+                    &in_flight_tokens,
                 )
                 .await
             }
@@ -450,6 +544,7 @@ async fn execute_request<S>(
     service: Arc<S>,
     peer: PeerHandle,
     null_in_flight: &Arc<AtomicBool>,
+    in_flight_tokens: &InFlightTokens,
 ) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
@@ -463,7 +558,15 @@ where
     } else {
         None
     };
-    let ctx = ServiceContext::new(request_id.clone(), CancellationToken::new(), peer);
+    let cancellation_token = CancellationToken::new();
+    let _token_guard = request_id.as_ref().map(|id| {
+        in_flight_tokens.insert(id.clone(), cancellation_token.clone());
+        InFlightTokenGuard {
+            map: in_flight_tokens.clone(),
+            id: id.clone(),
+        }
+    });
+    let ctx = ServiceContext::new(request_id.clone(), cancellation_token, peer);
     let request = Request {
         id: request.id,
         method: request.method,
@@ -541,6 +644,44 @@ fn route_inbound_response(frame: &[u8], pending: &PendingOutbound) -> bool {
         )),
     };
     let _ = tx.send(result);
+    true
+}
+
+/// If the inbound frame is the configured cancellation method (S7), fire
+/// the matching per-request token and swallow the frame so it does not
+/// reach the request-worker semaphore. Returns `true` whenever the
+/// frame's method matches the configured cancellation method, regardless
+/// of whether an id could be extracted — cancellation notifications are
+/// never dispatched as ordinary handler invocations. Malformed-payload
+/// diagnostics (logging, drop counters) land in c23.
+fn route_inbound_cancellation(
+    frame: &[u8],
+    cancellation: &SharedCancellationConfig,
+    in_flight: &InFlightTokens,
+) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let Some(method) = object.get("method").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    let cfg = cancellation
+        .read()
+        .expect("cancellation config poisoned")
+        .clone();
+    if method != cfg.method {
+        return false;
+    }
+    if let Some(params) = object.get("params") {
+        if let Some(id_value) = params.get(&cfg.id_field) {
+            if let Ok(id) = serde_json::from_value::<JsonRpcId>(id_value.clone()) {
+                in_flight.fire(&id);
+            }
+        }
+    }
     true
 }
 

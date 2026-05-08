@@ -125,3 +125,7 @@ path = "../../tests/id_null_explicit_request.rs"
 [[test]]
 name = "id_null_concurrent_rejected"
 path = "../../tests/id_null_concurrent_rejected.rs"
+
+[[test]]
+name = "cancellation_outside_semaphore"
+path = "../../tests/cancellation_outside_semaphore.rs"
