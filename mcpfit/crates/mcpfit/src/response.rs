@@ -45,6 +45,12 @@ pub trait IntoToolResponse {
     fn into_tool_response(self) -> ToolResponse;
 }
 
+impl IntoToolResponse for ToolResponse {
+    fn into_tool_response(self) -> ToolResponse {
+        self
+    }
+}
+
 impl IntoToolResponse for String {
     fn into_tool_response(self) -> ToolResponse {
         ToolResponse::success(self)
@@ -142,6 +148,27 @@ mod tests {
     fn bool_renders_via_display() {
         assert_eq!(true.into_tool_response(), ToolResponse::success("true"));
         assert_eq!(false.into_tool_response(), ToolResponse::success("false"));
+    }
+
+    #[test]
+    fn tool_response_passthrough_preserves_success() {
+        let original = ToolResponse::success("hi").with_structured(json!({"n": 1}));
+        assert_eq!(original.clone().into_tool_response(), original);
+    }
+
+    #[test]
+    fn tool_response_passthrough_preserves_error_flag() {
+        let original = ToolResponse::error("boom");
+        let converted = original.clone().into_tool_response();
+        assert!(converted.is_error);
+        assert_eq!(converted, original);
+    }
+
+    #[test]
+    fn tool_response_passthrough_preserves_multi_content() {
+        let original = ToolResponse::success("primary")
+            .with_content(vec![ToolContent::text("a"), ToolContent::text("b")]);
+        assert_eq!(original.clone().into_tool_response(), original);
     }
 
     #[test]
