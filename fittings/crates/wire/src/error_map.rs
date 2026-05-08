@@ -17,29 +17,32 @@ const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
 pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> ResponseEnvelope {
     let id = id.into();
     let error = match err {
-        FittingsError::Parse { .. } => ErrorEnvelope {
+        FittingsError::Parse { message, data } => ErrorEnvelope {
             code: PARSE_ERROR_CODE,
-            message: PARSE_ERROR_MESSAGE.to_string(),
-            data: None,
+            message,
+            data,
         },
-        FittingsError::InvalidRequest { .. } => ErrorEnvelope {
+        FittingsError::InvalidRequest { message, data } => ErrorEnvelope {
             code: INVALID_REQUEST_CODE,
-            message: INVALID_REQUEST_MESSAGE.to_string(),
-            data: None,
+            message,
+            data,
         },
-        FittingsError::MethodNotFound { .. } => ErrorEnvelope {
+        FittingsError::MethodNotFound { message, data } => ErrorEnvelope {
             code: METHOD_NOT_FOUND_CODE,
-            message: METHOD_NOT_FOUND_MESSAGE.to_string(),
-            data: None,
+            message,
+            data,
         },
-        FittingsError::InvalidParams { .. } => ErrorEnvelope {
+        FittingsError::InvalidParams { message, data } => ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
-            message: INVALID_PARAMS_MESSAGE.to_string(),
-            data: None,
+            message,
+            data,
         },
-        FittingsError::Transport(_)
-        | FittingsError::Internal { .. }
-        | FittingsError::Panic { .. } => ErrorEnvelope {
+        FittingsError::Internal { message, data } => ErrorEnvelope {
+            code: INTERNAL_ERROR_CODE,
+            message,
+            data,
+        },
+        FittingsError::Transport(_) | FittingsError::Panic { .. } => ErrorEnvelope {
             code: INTERNAL_ERROR_CODE,
             message: INTERNAL_ERROR_MESSAGE.to_string(),
             data: None,
@@ -112,7 +115,7 @@ mod tests {
         let parse = to_error_envelope("1".to_string(), FittingsError::parse_error("bad json"));
         let parse_error = parse.error.expect("error");
         assert_eq!(parse_error.code, -32700);
-        assert_eq!(parse_error.message, "Parse error");
+        assert_eq!(parse_error.message, "bad json");
 
         let invalid = to_error_envelope(
             "1".to_string(),
@@ -120,29 +123,34 @@ mod tests {
         );
         let invalid_error = invalid.error.expect("error");
         assert_eq!(invalid_error.code, -32600);
-        assert_eq!(invalid_error.message, "Invalid Request");
+        assert_eq!(invalid_error.message, "bad request");
 
         let not_found =
             to_error_envelope("1".to_string(), FittingsError::method_not_found("missing"));
         let not_found_error = not_found.error.expect("error");
         assert_eq!(not_found_error.code, -32601);
-        assert_eq!(not_found_error.message, "Method not found");
+        assert_eq!(not_found_error.message, "missing");
 
         let bad_params =
             to_error_envelope("1".to_string(), FittingsError::invalid_params("bad params"));
         let bad_params_error = bad_params.error.expect("error");
         assert_eq!(bad_params_error.code, -32602);
-        assert_eq!(bad_params_error.message, "Invalid params");
+        assert_eq!(bad_params_error.message, "bad params");
 
         let internal = to_error_envelope("1".to_string(), FittingsError::internal("oops"));
         let internal_error = internal.error.expect("error");
         assert_eq!(internal_error.code, -32603);
-        assert_eq!(internal_error.message, "Internal error");
+        assert_eq!(internal_error.message, "oops");
 
         let transport = to_error_envelope("1".to_string(), FittingsError::transport("pipe"));
         let transport_error = transport.error.expect("error");
         assert_eq!(transport_error.code, -32603);
         assert_eq!(transport_error.message, "Internal error");
+
+        let panic = to_error_envelope("1".to_string(), FittingsError::panic("boom"));
+        let panic_error = panic.error.expect("error");
+        assert_eq!(panic_error.code, -32603);
+        assert_eq!(panic_error.message, "Internal error");
     }
 
     #[test]

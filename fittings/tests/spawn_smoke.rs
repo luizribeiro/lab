@@ -446,7 +446,7 @@ fn invalid_envelope_reuses_string_id_and_maps_to_invalid_request() {
     let response = parse_single_response(&output.stdout);
     assert_eq!(response["id"], "bad-1");
     assert_eq!(response["error"]["code"], -32600);
-    assert_eq!(response["error"]["message"], "Invalid Request");
+    assert_eq!(response["error"]["message"], "unexpected field `metadata`");
 }
 
 #[test]
@@ -485,7 +485,10 @@ fn empty_batch_returns_single_invalid_request_error() {
     let response = parse_single_response(&output.stdout);
     assert_eq!(response["id"], Value::Null);
     assert_eq!(response["error"]["code"], -32600);
-    assert_eq!(response["error"]["message"], "Invalid Request");
+    assert_eq!(
+        response["error"]["message"],
+        "batch request must not be empty"
+    );
 }
 
 #[test]

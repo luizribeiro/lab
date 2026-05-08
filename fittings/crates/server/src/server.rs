@@ -463,7 +463,7 @@ mod tests {
 
         assert_eq!(response.id, JsonRpcId::Null);
         assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "Invalid Request");
+        assert_eq!(error.message, "batch request must not be empty");
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -582,9 +582,13 @@ mod tests {
         errors.sort_by_key(|error| error.code);
 
         assert_eq!(errors[0].code, -32700);
-        assert_eq!(errors[0].message, "Parse error");
+        assert_ne!(
+            errors[0].message, "Parse error",
+            "predefined parse message should preserve the typed detail"
+        );
+        assert!(!errors[0].message.is_empty());
         assert_eq!(errors[1].code, -32600);
-        assert_eq!(errors[1].message, "Invalid Request");
+        assert_eq!(errors[1].message, "batch request must not be empty");
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -623,11 +627,23 @@ mod tests {
         assert_eq!(responses[0].id, JsonRpcId::from("bad-1"));
         assert_eq!(responses[1].id, JsonRpcId::from("bad-2"));
 
+        let mut messages: Vec<String> = Vec::new();
         for response in responses {
             let error = response.error.expect("response should be an error");
             assert_eq!(error.code, -32600);
-            assert_eq!(error.message, "Invalid Request");
+            assert_ne!(
+                error.message, "Invalid Request",
+                "predefined invalid-request message should preserve the typed detail"
+            );
+            assert!(!error.message.is_empty());
+            messages.push(error.message);
         }
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("method names starting with `rpc.` are reserved")),
+            "expected the reserved-method detail among preserved messages: {messages:?}",
+        );
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -654,7 +670,11 @@ mod tests {
 
         assert_eq!(response.id, JsonRpcId::Null);
         assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "Invalid Request");
+        assert_ne!(
+            error.message, "Invalid Request",
+            "predefined invalid-request message should preserve the typed detail"
+        );
+        assert!(!error.message.is_empty());
 
         drop(client);
         let result = handle.await.expect("server task join");
