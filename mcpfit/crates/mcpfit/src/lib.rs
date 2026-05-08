@@ -4,6 +4,7 @@ mod content;
 mod context;
 mod error;
 mod protocol;
+mod registry;
 mod response;
 mod schema;
 mod structured;
@@ -16,6 +17,7 @@ pub use protocol::{
     ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolInfo,
     ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
+pub use registry::ToolRegistry;
 pub use response::{IntoToolResponse, ToolResponse};
 pub use structured::{Structured, StructuredObject};
 pub use tool::{Tool, ToolSpec};
