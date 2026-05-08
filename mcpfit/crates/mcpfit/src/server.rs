@@ -5,6 +5,32 @@ use crate::registry::ToolRegistry;
 use crate::tool::{Tool, ToolSpec};
 use crate::Result;
 
+pub const MCP_CANCELLATION_METHOD: &str = "notifications/cancelled";
+pub const MCP_CANCELLATION_REQUEST_ID_FIELD: &str = "requestId";
+
+/// Names the JSON-RPC method and `params` field that the transport reads to
+/// cancel an in-flight request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancellationConfig {
+    pub method: &'static str,
+    pub request_id_field: &'static str,
+}
+
+impl CancellationConfig {
+    pub const fn mcp() -> Self {
+        Self {
+            method: MCP_CANCELLATION_METHOD,
+            request_id_field: MCP_CANCELLATION_REQUEST_ID_FIELD,
+        }
+    }
+}
+
+impl Default for CancellationConfig {
+    fn default() -> Self {
+        Self::mcp()
+    }
+}
+
 /// Builder for an MCP server. Owns the canonical [`ServerInfo`] returned in
 /// `initialize` responses and the [`ToolRegistry`] populated via [`Server::tool`].
 pub struct Server {
@@ -70,8 +96,19 @@ impl IntoTool for &ToolSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::Server;
+    use super::{
+        CancellationConfig, Server, MCP_CANCELLATION_METHOD, MCP_CANCELLATION_REQUEST_ID_FIELD,
+    };
     use crate::tool::{Tool, ToolSpec};
+
+    #[test]
+    fn cancellation_constants_match_mcp_wire_strings() {
+        assert_eq!(MCP_CANCELLATION_METHOD, "notifications/cancelled");
+        assert_eq!(MCP_CANCELLATION_REQUEST_ID_FIELD, "requestId");
+        let config = CancellationConfig::default();
+        assert_eq!(config.method, MCP_CANCELLATION_METHOD);
+        assert_eq!(config.request_id_field, MCP_CANCELLATION_REQUEST_ID_FIELD);
+    }
 
     #[test]
     fn new_records_server_info() {
