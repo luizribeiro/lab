@@ -137,3 +137,7 @@ path = "../../tests/service_context_cancelled_by_token.rs"
 [[test]]
 name = "service_context_cancelled_by_handler"
 path = "../../tests/service_context_cancelled_by_handler.rs"
+
+[[test]]
+name = "malformed_cancellation"
+path = "../../tests/malformed_cancellation.rs"
