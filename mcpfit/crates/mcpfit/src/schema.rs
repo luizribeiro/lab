@@ -8,7 +8,6 @@ use serde_json::Value;
 /// Used by the tool builder to derive `inputSchema` from typed argument
 /// definitions. Kept crate-private so the public surface only exposes the
 /// builder methods that consume it.
-#[allow(dead_code)]
 pub(crate) fn schema_for<T: JsonSchema>() -> Value {
     let schema = schemars::schema_for!(T);
     serde_json::to_value(&schema).expect("schemars output must serialize as JSON")
