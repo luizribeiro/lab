@@ -65,7 +65,7 @@ impl InFlightTokens {
             .remove(id);
     }
 
-    fn fire(&self, id: &JsonRpcId) {
+    fn fire(&self, id: &JsonRpcId) -> bool {
         if let Some(token) = self
             .inner
             .lock()
@@ -73,8 +73,27 @@ impl InFlightTokens {
             .get(id)
         {
             token.cancel();
+            true
+        } else {
+            false
         }
     }
+
+    fn has_type_mismatch(&self, id: &JsonRpcId) -> bool {
+        let guard = self.inner.lock().expect("in-flight token map poisoned");
+        guard
+            .keys()
+            .any(|key| key.to_string() == id.to_string() && !same_id_kind(key, id))
+    }
+}
+
+fn same_id_kind(a: &JsonRpcId, b: &JsonRpcId) -> bool {
+    matches!(
+        (a, b),
+        (JsonRpcId::String(_), JsonRpcId::String(_))
+            | (JsonRpcId::Number(_), JsonRpcId::Number(_))
+            | (JsonRpcId::Null, JsonRpcId::Null)
+    )
 }
 
 /// Drops the per-request entry from `InFlightTokens` once the owning
@@ -657,8 +676,10 @@ fn route_inbound_response(frame: &[u8], pending: &PendingOutbound) -> bool {
 /// reach the request-worker semaphore. Returns `true` whenever the
 /// frame's method matches the configured cancellation method, regardless
 /// of whether an id could be extracted — cancellation notifications are
-/// never dispatched as ordinary handler invocations. Malformed-payload
-/// diagnostics (logging, drop counters) land in c23.
+/// never dispatched as ordinary handler invocations. Malformed payloads
+/// (non-object params, missing the configured id field, or id-type
+/// mismatch with any in-flight key) are logged at WARN and dropped per
+/// scope §S7.1.
 fn route_inbound_cancellation(
     frame: &[u8],
     cancellation: &SharedCancellationConfig,
@@ -680,11 +701,48 @@ fn route_inbound_cancellation(
     if method != cfg.method {
         return false;
     }
-    if let Some(params) = object.get("params") {
-        if let Some(id_value) = params.get(&cfg.id_field) {
-            if let Ok(id) = serde_json::from_value::<JsonRpcId>(id_value.clone()) {
-                in_flight.fire(&id);
-            }
+
+    let params = object.get("params");
+    if !params.map(Value::is_object).unwrap_or(false) {
+        tracing::warn!(
+            method = %cfg.method,
+            "cancellation payload dropped: params missing or not a JSON object",
+        );
+        return true;
+    }
+    let params = params.expect("checked above");
+    let Some(id_value) = params.get(&cfg.id_field) else {
+        tracing::warn!(
+            method = %cfg.method,
+            id_field = %cfg.id_field,
+            "cancellation payload dropped: configured id field absent",
+        );
+        return true;
+    };
+    let id = match serde_json::from_value::<JsonRpcId>(id_value.clone()) {
+        Ok(id) => id,
+        Err(_) => {
+            tracing::warn!(
+                method = %cfg.method,
+                id_field = %cfg.id_field,
+                "cancellation payload dropped: id field is not a valid JSON-RPC id",
+            );
+            return true;
+        }
+    };
+    if !in_flight.fire(&id) {
+        if in_flight.has_type_mismatch(&id) {
+            tracing::warn!(
+                method = %cfg.method,
+                id = %id,
+                "cancellation payload dropped: id type does not match any in-flight request",
+            );
+        } else {
+            tracing::warn!(
+                method = %cfg.method,
+                id = %id,
+                "cancellation payload dropped: no matching in-flight request",
+            );
         }
     }
     true
