@@ -129,3 +129,11 @@ path = "../../tests/id_null_concurrent_rejected.rs"
 [[test]]
 name = "cancellation_outside_semaphore"
 path = "../../tests/cancellation_outside_semaphore.rs"
+
+[[test]]
+name = "service_context_cancelled_by_token"
+path = "../../tests/service_context_cancelled_by_token.rs"
+
+[[test]]
+name = "service_context_cancelled_by_handler"
+path = "../../tests/service_context_cancelled_by_handler.rs"
