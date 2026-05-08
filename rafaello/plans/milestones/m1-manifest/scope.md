@@ -1,8 +1,9 @@
 # m1 — manifest / lock / grant / compiler foundation — scope
 
-> **Status:** draft (round 4). Three pi review rounds so far
+> **Status:** draft (round 5). Four pi review rounds so far
 > (`pi-review-1.md` 7+3; `pi-review-2.md` 4+5+4;
-> `pi-review-3.md` 4+4+1). This revision resolves all
+> `pi-review-3.md` 4+4+1; `pi-review-4.md` 3+4+2 — all 9
+> pi-3 findings resolved). This revision resolves all pi-4
 > findings. The "What changed from prior drafts" section at
 > the end records the deltas. Owner ratification gate next.
 
@@ -18,9 +19,15 @@ inputs; every test is a function-level assertion. m2 is the first
 consumer (it spawns subprocess plugins from m1's compile output).
 
 The deliverable is a new in-tree library crate `rafaello-core`,
-exercised exclusively by `cargo test -p rafaello-core`. Nothing
-under `rafaello/crates/rafaello/` (the `rfl` binary) gains any new
-behaviour in m1.
+exercised primarily by `cargo test --manifest-path
+rafaello/Cargo.toml -p rafaello-core`. Plus a small Stream B
+fittings cutover (§W — `FittingsError::MethodNotFound` typed
+`method` field per `decisions.md` row 36 — exercised by
+`cargo test --manifest-path fittings/Cargo.toml --test
+method_not_found_typed_method_round_trip`). Nothing under
+`rafaello/crates/rafaello/` (the `rfl` binary) gains any new
+behaviour in m1. Pi review-4 finding 3 forced the explicit
+two-deliverable acceptance gate.
 
 ## Inputs
 
@@ -211,20 +218,28 @@ matches Stream F **post-simplifications**: no `runtime`, no
   (`"eager"` / `"boot"` / `"manual"` / `"lazy"` sugar) or a
   table with one or more of `event` / `command` / `kind`.
 - **M7.** `[[renderers]]` array per manifest RFC §6: `kind`,
-  optional `priority` (default 100), optional `method`. The
-  built-in v1 renderers (`text`, `code_block`, `tool_call`,
-  `tool_result`, `error`, `heading`, `thinking`, `image`) are
-  reserved and **rejected** if a plugin tries to register them
-  — built-in registration is hard-coded in core (m3 territory).
-  Non-built-in plugin renderer registrations (e.g.
-  `mermaid:diagram`) **parse and round-trip into the lock**
-  for forward compatibility, but `decisions.md` row 29 defers
-  subprocess `renderer.render` dispatch to v2; m3's renderer
-  router is built-in-only and **ignores plugin renderer
-  registrations entirely** (pi review-2 finding 10 — make the
-  v1 inertness explicit). m1 records a comment on the parsed
-  type pointing the next reader at row 29 so the inertness
-  isn't accidentally relied on as a v1 feature.
+  optional `priority` (default 100), optional `method`. Two
+  rejection classes:
+  - **Built-in kind names** (`text`, `code_block`,
+    `tool_call`, `tool_result`, `error`, `heading`,
+    `thinking`, `image`) are reserved and rejected — built-in
+    registration is hard-coded in core (m3 territory).
+  - **Plugin kind grammar** per Stream E §8 (pi review-4
+    finding 7): plugin-supplied kinds must be **prefixed**
+    `<vendor-prefix>:<kind-name>`, where `<vendor-prefix>`
+    matches `[a-z][a-z0-9_-]*` and `<kind-name>` matches the
+    same. Examples: `mermaid:diagram`, `myorg:trace`,
+    `diff:code`. Unprefixed plugin kinds (e.g. `code.diff`)
+    are rejected as `ValidationError::UnprefixedRendererKind`
+    so a v2 stream-E pattern collision can't bite.
+  Non-built-in plugin renderer registrations parse and
+  round-trip into the lock for forward compatibility, but
+  `decisions.md` row 29 defers subprocess `renderer.render`
+  dispatch to v2; m3's renderer router is built-in-only and
+  **ignores plugin renderer registrations entirely** (pi
+  review-2 finding 10). m1 records a doc comment on the
+  parsed type pointing the next reader at row 29 so the
+  inertness isn't accidentally relied on as a v1 feature.
 - **M8.** Placeholder substitution table per manifest RFC §5.1,
   exposed as `manifest::placeholders::expand(input: &str,
   ctx: &PathContext) -> Result<String, ManifestError>`.
@@ -269,25 +284,34 @@ matches Stream F **post-simplifications**: no `runtime`, no
   v1 does **not** parse openrpc.json; that contract belongs to
   fittings + m2's spawn path.
 
-- **M11.** **Path-safety rule for in-manifest paths.** Pi review-2
-  finding 1. Every path-bearing manifest field (`entry`,
-  `grant_match`, `read_paths` / `read_dirs` / `write_paths` /
-  `write_dirs` / `exec_paths` / `exec_dirs` *after* placeholder
-  expansion when the placeholder is `${plugin}` or `${project}`
-  + the result must stay inside the substituted root) is parsed
-  through a single `manifest::SafePath::parse(s: &str) -> Result<Self,
-  ManifestError>` helper that rejects:
-  - leading `/` in fields documented as relative
-    (`entry`, `grant_match`),
-  - `..` segments at any position,
-  - empty path segments (consecutive `/` or trailing `/`),
-  - control characters and non-UTF-8 bytes,
-  - Windows-style `\` separators (rafaello is Unix-only in v1).
-  The capability sections accept `${...}`-prefixed paths and
-  enforce the no-traversal rule on the post-expansion form
-  during compile (C3 surfaces a typed
-  `CompileError::PathEscape` if a placeholder expansion
-  yielded a path that escapes the substituted root).
+- **M11.** **Two distinct path vocabularies in the manifest**
+  (pi review-2 finding 1 + pi review-4 finding 2 split):
+  - **`SafePath` (relative-package paths).** Used by `entry`
+    and `[provides.tool.<n>].grant_match`. Parsed through
+    `manifest::SafePath::parse(s: &str) -> Result<Self,
+    ManifestError>` which rejects: leading `/`, `..` segments
+    at any position, empty path segments (consecutive `/` or
+    trailing `/`), control characters and non-UTF-8 bytes,
+    `\` separators. These fields are always relative to the
+    package directory and never carry placeholders.
+  - **`CapabilityPathTemplate` (placeholder-or-absolute
+    paths).** Used by `read_paths` / `read_dirs` /
+    `write_paths` / `write_dirs` / `exec_paths` /
+    `exec_dirs`. Parsed through
+    `manifest::CapabilityPathTemplate::parse(s: &str) ->
+    Result<Self, ManifestError>` which accepts a closed
+    placeholder set from M8 as a prefix (`${project}`,
+    `${home}`, `${plugin}`, `${cache}`, `${state}`) **or**
+    an absolute host path (e.g. `/usr/bin/rustc`); rejects
+    relative paths without a placeholder prefix (no implicit
+    cwd anchor), control chars, and non-UTF-8 bytes. `..`
+    segments are *parser-allowed* in capability templates;
+    C3's post-expansion root-containment check catches
+    escapes for `${project}` / `${plugin}`-anchored paths
+    (this is what makes `compile_path_escape_after_expansion.rs`
+    reachable — pi review-4 finding 2 caught the round-3
+    contradiction where uniform `SafePath` would have
+    rejected `..` at parse time).
 
 ### L — lock schema (`rafaello_core::lock`)
 
@@ -299,7 +323,7 @@ to carry every input the compiler needs.
   - Per-plugin tables keyed by canonical id `<source>:<name>@<version>`,
     e.g. `[plugin."github:acme/grep@1.4.2"]`.
   - Per-plugin sub-tables `.entry`, `.grant`, `.bindings`,
-    `.flags`, `.active_bundles` (pi-1 finding 2 — see L8).
+    `.flags`.
   - `[session]` table with:
     - `provider_active: Option<String>` (string or absent)
     - `tool_owner: BTreeMap<String, String>` — per security RFC
@@ -357,14 +381,18 @@ to carry every input the compiler needs.
     refusal class per §7.3 rule 5).
   Both default `false`. Both are surfaced by the broker / runtime
   in `rfl status` (m2+ work; m1 only has to round-trip the field).
-- **L6.** **`.active_bundles: Vec<String>`** (pi-1 finding 2).
-  The set of named-bundle keys that are currently active for
-  spawn, in addition to `default`. m1 does not dictate how this
-  set is populated — m5 is the consumer that flips a named
-  bundle on per-call. m1 round-trips the field through the lock
-  loader and respects it in the compiler's bundle-flatten step
-  (C2). For m1 fixtures, the field is normally empty
-  (default-bundle only).
+- **L6.** *(removed in round 5 per pi review-4 finding 1.)* The
+  earlier `.active_bundles` field assumed per-call sandbox
+  policy switching, which contradicts `decisions.md` row 17
+  and `overview.md` §5.2: v1 unions every granted bundle
+  (`default` plus every named bundle in `grant.bundles`)
+  into a single spawn-time policy at compile time. There is
+  no active-bundle selection knob in v1; per-method
+  enforcement above the sandbox is core's responsibility.
+  Sink inference still uses the per-tool effective grant
+  (`default ∪ <tool-name>`) for metadata snapshotting (Si1)
+  — that's a metadata computation, not a runtime sandbox
+  switch, so no contradiction.
 - **L7.** Identity fields per `[plugin.<canonical-id>]`:
   `digest = "sha256:<hex>"`, `manifest_digest = "sha256:<hex>"`,
   `granted_at` (RFC 3339, parsed with `chrono::DateTime<Utc>`).
@@ -444,6 +472,12 @@ finding 4).
   - **Sink class** values: must be either a known class
     (`network`/`vcs_push`/`mail`/`workspace_write`/`exec`) or
     match the custom-class grammar `[a-z0-9_]+`.
+  - **`network.allow_hosts` requires proxy mode** (pi review-4
+    finding 8): for any bundle's
+    `[capabilities.<bundle>.network]`, a non-empty
+    `allow_hosts` is rejected unless `mode = "proxy"`. Mirror
+    of `lockin_config::resolve_network_plan`'s rule; prevents
+    a silently-ignored field on hand-edited manifests.
   - **Lazy-load triggers** (`[load]`) cross-validated against
     declared methods/topics/kinds:
     - `command = ["foo"]` trigger referencing a tool not in
@@ -485,7 +519,8 @@ finding 4).
     `(reads_untrusted, has_outbound, has_workspace_write)`
     triple for diagnostics.
   - **Carve-out enforcement** per §7.3 — V3 calls into
-    `carveout::compile_against` per plugin per active bundle; a
+    `carveout::compile_against` per plugin against the union
+    of all granted bundles; a
     carve-out failure surfaces as
     `ValidationError::CarveOutRefused` /
     `ValidationError::CarveOutTooLarge`.
@@ -536,11 +571,14 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
       recomputed_digests:  &RecomputedDigests,  // see D3
   ) -> Result<CompiledPlugin, CompileError>
   ```
-  `Lock` carries the `active_bundles` field (L6); the compiler
-  flattens `default` ∪ `active_bundles` per `decisions.md`
-  row 17 (pi-1 finding 2 — no out-of-band parameter). Tests that
-  want to exercise scoped-bundle behaviour set `active_bundles`
-  on the fixture lock.
+  The compiler unions `default` ∪ every named bundle in
+  `grant.bundles` into one spawn-time policy per
+  `decisions.md` row 17 / `overview.md` §5.2 (pi review-4
+  finding 1 dropped the round-3 `.active_bundles` selection
+  knob — there is no per-call sandbox switch in v1). Tests
+  that want to exercise scoped-bundle behaviour put per-tool
+  authority into named bundles in the fixture lock; the
+  compile output reflects the union.
 - **C3.** **Placeholder substitution** is invoked once per
   string field, against a `PathContext` carrying:
   `project_root`, `home`, `plugin_dir` (the installed-package
@@ -564,7 +602,7 @@ plan onto a `lockin::SandboxBuilder` + `SandboxedCommand`.
   insertion order.
 - **C5.** **Per-plugin private state grant** per security RFC §7.5:
   the compiler unconditionally adds
-  `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (note:
+  `${project}/.rafaello-plugin-data/<topic-id>/` (note:
   the **topic-id** form per pi review-2 finding 1 — not the
   raw canonical id; `<source>:<name>@<version>` is not a safe
   filename) to `filesystem.read_dirs` and
@@ -680,18 +718,18 @@ finding 4).
   the booleans `(reads_untrusted, has_outbound,
   has_workspace_write)` plus `refuse: bool`. The `ctx` is
   required because Tr2 must expand placeholders before deciding
-  "outside `${PROJECT_ROOT}`".
+  "outside `${project}`".
 - **Tr2.** `reads_untrusted` per §7.1: any of (a)
-  `network.mode != "deny"` (across the active bundle union),
+  `network.mode != "deny"` (across the full bundle union),
   (b) `read_dirs` / `read_paths` (post-expansion) contains a
-  path outside `${PROJECT_ROOT}`, (c) `subscribes` matches
+  path outside `${project}`, (c) `subscribes` matches
   `core.session.tool_result` or `core.session.assistant_message`.
 - **Tr3.** `has_outbound`: `network.mode != "deny"` OR a
   one-hop direct check — for any *other* plugin in the lock
   whose subscribe patterns match this plugin's published
   topics, where that other plugin has `network.mode != "deny"`.
 - **Tr4.** `has_workspace_write`: `write_dirs` non-empty
-  (across the active bundle union) **excluding** the
+  (across the full bundle union) **excluding** the
   per-plugin private-state subtree — this is C5's automatic
   grant added by the compiler, not a `write_dirs` entry in the
   lock; trifecta evaluation runs against the lock entries
@@ -712,15 +750,15 @@ overridable by `allow_credential_paths`).
 - **K1.** `carveout::CARVE_OUTS: &[CarveOut]` is the v1 set,
   classified into two classes:
   - **Project-class (decomposable on read, refused on write):**
-    - `${PROJECT_ROOT}/rafaello.lock`
-    - `${PROJECT_ROOT}/.rafaello/**`
+    - `${project}/rafaello.lock`
+    - `${project}/.rafaello/**`
   - **Credential-class (refused on both read and write):**
-    - `${HOME}/.config/rafaello/**`
-    - `${HOME}/.ssh/**`
-    - `${HOME}/.gnupg/**`
-    - `${HOME}/.aws/**`
-    - `${HOME}/.config/gh/**`
-    - `${HOME}/.netrc`
+    - `${home}/.config/rafaello/**`
+    - `${home}/.ssh/**`
+    - `${home}/.gnupg/**`
+    - `${home}/.aws/**`
+    - `${home}/.config/gh/**`
+    - `${home}/.netrc`
 - **K2.** `carveout::compile_against(grant: &GrantBundle,
   canonical: &CanonicalId, ctx: &PathContext,
   allow_credential_paths: bool) -> Result<DecomposedGrant,
@@ -741,7 +779,7 @@ overridable by `allow_credential_paths`).
     `allow_credential_paths` is set. Writes are never
     decomposed in v1 — pi-1 finding 5.
   - **Explicit leaf hits on a carve-out path** (e.g. literal
-    `read_paths = ["${PROJECT_ROOT}/rafaello.lock"]`): always
+    `read_paths = ["${project}/rafaello.lock"]`): always
     `CompileError::CarveOutRefused` (no silent drop, no
     diagnostic-list field — pi review-2 finding 7 rejected the
     earlier "drop with diagnostic" wording as too surprising).
@@ -751,7 +789,7 @@ overridable by `allow_credential_paths`).
     flag is recorded in the compiled plan's `flags` so m2's
     `rfl status` can render the loud override (m2 work).
 - **K3.** **Hidden-directory rule** (§7.3.1): the default
-  workspace grant `${PROJECT_ROOT}` (when present in the
+  workspace grant `${project}` (when present in the
   lock's `read_dirs`) is decomposed at compile time into the
   immediate non-hidden children of the project root. The
   per-plugin private state dir (C5) is added to `read_dirs` /
@@ -930,27 +968,28 @@ exercised at least once.
 | `manifest_parse_minimal.rs` | Smallest valid manifest (`schema`, `name`, `version`, `entry`, `rafaello`, empty `[provides]`, no capabilities) round-trips through `Manifest::parse` and `Manifest::canonical_bytes`. |
 | `manifest_parse_tool_example.rs` | Post-simplification rewrite of RFC §9.1 (`rust-tools`-shaped) decodes; `provides.tools = ["format", "check"]` (single-segment names per pi-1 finding 3); scoped `[capabilities.format.filesystem]` (bundle key matches a tool name); `[load]` table; `[bus]` populate the typed structs. |
 | `manifest_parse_provider_example.rs` | Post-simplification rewrite of RFC §9.3 (`anthropic`-shaped) decodes; `provides.provider = "anthropic"`; `eager` load string; `[capabilities.default.network]` with `proxy` mode + `allow_hosts`; `env.set` keys are literal strings only (no `${secret:...}`). |
-| `manifest_parse_renderer_example.rs` | Post-simplification rewrite of RFC §9.2 decodes; `[[renderers]]` list of two non-built-in kinds (`mermaid:diagram`, `code.diff`); registration accepted. |
+| `manifest_parse_renderer_example.rs` | Post-simplification rewrite of RFC §9.2 decodes; `[[renderers]]` list of two prefixed non-built-in kinds (`mermaid:diagram`, `diff:code` — both Stream-E-prefixed per M7 / pi-4 finding 7); registration accepted. |
+| `tool_meta_always_confirm_round_trip.rs` | A tool with `[provides.tool.<n>] always_confirm = true` round-trips manifest → lock → `CompiledPlugin.tool_meta.<n>.always_confirm == true` (M3 / L4 / C1 — pi-4 finding 6: load-bearing for m5's confirmation gate, must not be quietly dropped during projection). |
 | `manifest_canonical_bytes_stable.rs` | `Manifest::canonical_bytes` is byte-stable across two parses of the same TOML re-emitted with key reordering and trivial whitespace differences. |
 | `manifest_placeholder_expansion.rs` | All five placeholders expand against a hand-built `PathContext`; deeply-nested mixes (e.g. `${project}/sub/${plugin}/foo`) resolve correctly. |
 | `manifest_validate_load_trigger_cross_refs.rs` | `[load]` table referencing only declared methods/topics/kinds passes `validate::manifest_standalone`. |
 | `manifest_openrpc_sibling_present.rs` | `validate_with_package` succeeds against a fixture directory containing a non-empty `openrpc.json` next to the manifest. |
-| `lock_parse_round_trip.rs` | Worked-example lock (mirroring security RFC §3.2 + L2/L3/L6's expansions for `entry`, `grant.bundles`, `active_bundles`, `[session].tool_owner`) parses, serialises, parses again byte-equal. Includes `[session].provider_active`, `.flags`, `bindings.tool_meta`. |
+| `lock_parse_round_trip.rs` | Worked-example lock (mirroring security RFC §3.2 + L2/L3's expansions for `entry`, `grant.bundles`, `[session].tool_owner`) parses, serialises, parses again byte-equal. Includes `[session].provider_active`, `.flags`, `bindings.tool_meta`. |
 | `lock_canonical_id_round_trip.rs` | `CanonicalId::parse("github:acme/grep@1.4.2").to_string() == input` over a small grammar matrix (different `source` shapes, semver pre-release / build metadata). |
 | `topic_id_derivation.rs` | Deterministic for a fixed input: e.g. `derive("github:acme/grep@1.4.2") == "id_<known-prefix>"`; the test pins the expected first 16 chars of base32-no-pad-lowercase against a hand-computed fixture. |
 | `topic_id_collision_detection.rs` | Pre-computed-prefix helper (`collisions_with_prefixes`) rejects two distinct canonical ids paired with identical prefixes (no test seam in `derive` itself; T3). |
 | `compile_default_bundle.rs` | Worked lock entry with `default` bundle compiles; resulting `CompiledPlugin` carries the expected `FilesystemPlan`, `NetworkPlan`, `EnvPlan`, `LimitsPlan` (post-default-fill), `entry_absolute`, `topic_id`, etc. Asserts on the structured plan, not on builder calls. |
-| `compile_scoped_bundle_union.rs` | Lock specifies `active_bundles = ["format"]`; resulting plan reflects the union of `default` + the `format` bundle (default's reads + format's writes); duplicate entries dedup; ordering deterministic per C4. |
+| `compile_scoped_bundle_union.rs` | Lock specifies a `default` bundle plus a `format` named bundle; resulting plan reflects the union of both (default's reads + format's writes) per `decisions.md` row 17 (single spawn-time policy, no per-call switch — pi review-4 finding 1); duplicate entries dedup; ordering deterministic per C4. |
 | `compile_placeholder_resolves_to_absolute.rs` | All paths in the compiled plan are absolute; `${...}` is fully expanded. |
-| `compile_private_state_grant.rs` | Compiled plan contains `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (after expansion to absolute) in both `read_dirs` and `write_dirs` regardless of whether the lock requested it. (**Topic-id form**, not raw canonical id — C5 + pi review-3 finding 5.) |
+| `compile_private_state_grant.rs` | Compiled plan contains `${project}/.rafaello-plugin-data/<topic-id>/` (after expansion to absolute) in both `read_dirs` and `write_dirs` regardless of whether the lock requested it. (**Topic-id form**, not raw canonical id — C5 + pi review-3 finding 5.) |
 | `compile_private_state_excluded_from_workspace_write.rs` | Trifecta evaluation against a lock whose only writes would be the private-state dir reports `has_workspace_write == false` (Tr4 — the structural exclusion). |
 | `compile_resource_limit_defaults.rs` | Lock omits `limits`; compiled plan carries `max_cpu_time = 300`, `max_open_files = 1024`. A lock that explicitly sets `max_cpu_time = 0` (provider plugin shape) preserves the `0` verbatim. |
 | `compile_network_proxy_plan.rs` | Lock specifies `network.mode = "proxy"`, `allow_hosts = ["api.example.com", "*.example.com"]`; compiled `NetworkPlan::Proxy { allow_hosts }` records the host list verbatim (m2 starts the outpost proxy and supplies the port; m1 only emits the plan). |
 | `compile_env_set_passes_through.rs` | Lock's `env.set = { CARGO_TERM_COLOR = "always" }` reaches `EnvPlan.set` verbatim. (Reserved-key rejection is exercised by `compile_reserved_env_in_set.rs` in the negative matrix per C7's unified-rejection rule.) |
 | `compile_digest_match.rs` | `RecomputedDigests` matches the lock's stored digests; compile succeeds; mismatched values are exercised in the negative matrix below. |
 | `broker_acl_extraction.rs` | Two-plugin lock; `broker_acl::compile` emits per-plugin `publish_topics`, `subscribe_patterns`, the auto-inserted `plugin.<topic-id>.tool_request` self-subscribe, and the bound provider id (for the provider plugin). |
-| `carveout_default_workspace_decomposition.rs` | `read_dirs = ["${PROJECT_ROOT}"]` decomposes to immediate non-hidden children of a fixture project root (K3); the per-plugin private state dir is added separately by C5 (also asserted via the `compile_private_state_grant.rs` test). |
-| `carveout_workspace_excludes_rafaello_dot_dirs.rs` | `read_dirs = ["${PROJECT_ROOT}"]` against a project that contains `.rafaello/` decomposes around the carve-out (no entry covering `.rafaello/`). |
+| `carveout_default_workspace_decomposition.rs` | `read_dirs = ["${project}"]` decomposes to immediate non-hidden children of a fixture project root (K3); the per-plugin private state dir is added separately by C5 (also asserted via the `compile_private_state_grant.rs` test). |
+| `carveout_workspace_excludes_rafaello_dot_dirs.rs` | `read_dirs = ["${project}"]` against a project that contains `.rafaello/` decomposes around the carve-out (no entry covering `.rafaello/`). |
 | `digest_match_compiles.rs` | Lock's `digest` matches recomputed `content_digest`; lock's `manifest_digest` matches recomputed `manifest_digest`; compile succeeds. |
 | `digest_content_deterministic.rs` | Two invocations of `content_digest` against the same fixture tree return the same value; constructing the tree in a different order doesn't change the digest. |
 | `trifecta_two_plugins_one_hop.rs` | Plugin A has workspace_write + reads_untrusted but `network.mode = "deny"`; plugin B subscribes to A's published topic and has `network.mode = "proxy"`. A's `has_outbound` evaluates true via the one-hop check; combined with A's other booleans, the trifecta refusal fires. |
@@ -999,19 +1038,20 @@ exercised at least once.
 | `lock_entry_escape_via_symlink.rs` | Lock `.entry = "bin/wat"` resolves through a symlink whose target is outside `plugin_dir` → `CompileError::EntryEscape` (L2). |
 | `lock_entry_is_directory.rs` | Lock `.entry = "bin"` points at a directory rather than a regular file → `CompileError::EntryNotFile` (L2). |
 | `manifest_invalid_name.rs` | Manifest `name = "Rust-Tools"` (uppercase), `name = "rust/tools"` (slash), `name = "rust.tools"` (dot), `name = ""` (empty): all rejected by V1 (M1's name grammar — pi review-3 finding 8). |
+| `manifest_unprefixed_renderer_kind.rs` | `[[renderers]] kind = "code.diff"` (no `<vendor>:` prefix) rejected as `ValidationError::UnprefixedRendererKind` per M7 / pi-4 finding 7. |
+| `manifest_allow_hosts_outside_proxy.rs` | `[capabilities.default.network] mode = "deny", allow_hosts = ["x.example"]` (or `mode = "allow_all"` with non-empty `allow_hosts`) rejected as `ValidationError::AllowHostsOutsideProxy` (pi-4 medium finding 8 — mirror of `lockin_config::resolve_network_plan`'s rule so a hand-edited manifest can't have a silently-ignored field). |
 | `manifest_missing_openrpc_provider.rs` | Provider plugin manifest (no `provides.tools`, has `provides.provider = "anthropic"`) but no `openrpc.json` next to it → `ManifestError::MissingOpenRpc` (M10 + pi review-3 finding 4: row 31 requires the sibling for every plugin, not just tool plugins). |
 | `digest_symlink_cycle.rs` | `package_dir` contains `loop -> .` (or `a -> b`, `b -> a`); `content_digest` returns `DigestError::SymlinkCycle` (D1 — pi review-3 finding 7). |
-| `lock_active_bundle_unknown.rs` | `active_bundles = ["nope"]` referencing a bundle absent from `grant.bundles` → `ValidationError::ActiveBundleUnknown`. |
 | `topic_id_collision_at_lock.rs` | Two distinct canonical ids whose pre-computed prefixes (passed via `collisions_with_prefixes`) match → `CollisionError`. |
 | `digest_content_mismatch.rs` | Lock's `digest` field doesn't match the recomputed `content_digest`; `compile::compile_plugin` returns `CompileError::ContentDigestMismatch`. |
 | `digest_manifest_mismatch.rs` | Lock's `manifest_digest` doesn't match recomputed value; `CompileError::ManifestDigestMismatch`. |
 | `digest_symlink_escape.rs` | A symlink in the package directory pointing outside the package root → `DigestError::SymlinkEscape`. |
-| `carveout_credential_path_refused_read.rs` | `read_dirs = ["${HOME}"]` covering `~/.ssh` with `allow_credential_paths = false` → `CompileError::CarveOutRefused` (K2 — credential class refuses on read). |
-| `carveout_credential_path_refused_write.rs` | `write_dirs = ["${HOME}"]` covering `~/.ssh` with `allow_credential_paths = false` → `CompileError::CarveOutRefused`. |
-| `carveout_project_write_refused.rs` | `write_dirs = ["${PROJECT_ROOT}"]` (would cover `rafaello.lock` and `.rafaello/`) with `allow_credential_paths = false` → `CompileError::CarveOutRefused` (K2 — project-class also refuses on write; pi-1 finding 5 forced this consistency). |
+| `carveout_credential_path_refused_read.rs` | `read_dirs = ["${home}"]` covering `~/.ssh` with `allow_credential_paths = false` → `CompileError::CarveOutRefused` (K2 — credential class refuses on read). |
+| `carveout_credential_path_refused_write.rs` | `write_dirs = ["${home}"]` covering `~/.ssh` with `allow_credential_paths = false` → `CompileError::CarveOutRefused`. |
+| `carveout_project_write_refused.rs` | `write_dirs = ["${project}"]` (would cover `rafaello.lock` and `.rafaello/`) with `allow_credential_paths = false` → `CompileError::CarveOutRefused` (K2 — project-class also refuses on write; pi-1 finding 5 forced this consistency). |
 | `carveout_credential_path_override.rs` | The two `_refused_*` variants above with `allow_credential_paths = true` compile; resulting plan records the broad grants verbatim and surfaces the loud-override flag. |
-| `carveout_decomposition_blowup.rs` | A project root containing 300 immediate children plus `.rafaello/`; `read_dirs = ["${PROJECT_ROOT}"]` decomposition exceeds the 256-entry cap → `CompileError::CarveOutTooLarge`. |
-| `carveout_lockfile_path_explicit.rs` | An explicit `read_paths = ["${PROJECT_ROOT}/rafaello.lock"]` or `read_paths = ["${HOME}/.netrc"]` (leaf hit on either project-class or credential-class carve-out) is **refused** with `CompileError::CarveOutRefused` unless `allow_credential_paths = true` (K2 fifth bullet — pi review-2 finding 7 dropped the earlier "silent drop with `dropped_carveouts`" wording). |
+| `carveout_decomposition_blowup.rs` | A project root containing 300 immediate children plus `.rafaello/`; `read_dirs = ["${project}"]` decomposition exceeds the 256-entry cap → `CompileError::CarveOutTooLarge`. |
+| `carveout_lockfile_path_explicit.rs` | An explicit `read_paths = ["${project}/rafaello.lock"]` or `read_paths = ["${home}/.netrc"]` (leaf hit on either project-class or credential-class carve-out) is **refused** with `CompileError::CarveOutRefused` unless `allow_credential_paths = true` (K2 fifth bullet — pi review-2 finding 7 dropped the earlier "silent drop with `dropped_carveouts`" wording). |
 | `manifest_entry_traversal.rs` | `entry = "../evil"` rejected by `Manifest::parse` (M11 / `SafePath::parse`); `entry = "/abs/path"` rejected; `entry = "ok//double-slash"` rejected. |
 | `manifest_entry_not_found.rs` | `entry = "bin/missing"` with no such file under `package_dir` → `ManifestError::EntryNotFound` from `validate_with_package` (M10). |
 | `manifest_entry_escape_via_symlink.rs` | `entry = "bin/wat"` is a symlink whose target is outside `package_dir` after canonicalisation → `ManifestError::EntryEscape`. |
@@ -1031,17 +1071,26 @@ exercised at least once.
 
 The driver runs and captures:
 
-- `cargo test -p rafaello-core` green on Linux (CI rerun for
-  macOS — m1 has no platform-specific code, so the macOS leg
-  is delegated to CI per the m0 precedent).
-- `cargo doc -p rafaello-core --no-deps` clean — the m1 surface
-  is the future m2 consumer's API; doc warnings would surface
-  drift between scope §C / §G / §V and the landed types.
-- `cargo test -p rafaello-core --release` green (digest-module
-  performance and carve-out worst-case behaviour).
-- `nix develop --impure -L --command cargo test -p
-  rafaello-core` green (per the m0 retrospective gotcha §4.6 —
-  `--impure` is load-bearing for `nix develop` invocations).
+- `cargo test --manifest-path rafaello/Cargo.toml -p
+  rafaello-core` green on Linux (CI rerun for macOS — m1 has
+  no platform-specific code, so the macOS leg is delegated
+  to CI per the m0 precedent). The repo has no root
+  `Cargo.toml`, so `--manifest-path` is mandatory (pi
+  review-4 finding 9).
+- `cargo test --manifest-path fittings/Cargo.toml --test
+  method_not_found_typed_method_round_trip` green (the §W
+  cutover — explicit second deliverable per pi-4 finding 3).
+- `cargo doc --manifest-path rafaello/Cargo.toml -p
+  rafaello-core --no-deps` clean — the m1 surface is the
+  future m2 consumer's API; doc warnings would surface drift
+  between scope §C / §G / §V and the landed types.
+- `cargo test --manifest-path rafaello/Cargo.toml -p
+  rafaello-core --release` green (digest-module performance
+  and carve-out worst-case behaviour).
+- `nix develop --impure -L --command cargo test
+  --manifest-path rafaello/Cargo.toml -p rafaello-core`
+  green (per the m0 retrospective gotcha §4.6 — `--impure`
+  is load-bearing for `nix develop` invocations).
 - A `tree rafaello/crates/rafaello-core/tests/fixtures` dump
   capturing the manifest+lock+openrpc fixture surface.
 
@@ -1131,7 +1180,8 @@ independently green.
 2. **Manifest validate-with-package + openrpc sibling** (M10):
    ~2 commits.
 3. **Lock types + canonical id + bundle-aware grant + entry +
-   active_bundles + tool_owner + round-trip** (L1–L9):
+   tool_owner + round-trip** (L1–L9 — note L6 dropped per
+   pi-4 finding 1):
    ~4–5 commits.
 4. **Topic-id derivation + collision helper** (T1–T3):
    ~2 commits.
@@ -1180,21 +1230,81 @@ m1 is done when:
   *Negative integration tests* matrices above is implemented
   and passes. Tests may split or merge during `commits.md`
   drafting as long as the named behaviours are all covered.
-- `cargo test -p rafaello-core` is green on Linux; CI rerun
-  is the authoritative cross-platform signal for macOS.
-- `cargo doc -p rafaello-core --no-deps` is warning-free.
+- `cargo test --manifest-path rafaello/Cargo.toml -p
+  rafaello-core` is green on Linux; CI rerun is the
+  authoritative cross-platform signal for macOS.
+- `cargo test --manifest-path fittings/Cargo.toml --test
+  method_not_found_typed_method_round_trip` is green (§W).
+- `cargo doc --manifest-path rafaello/Cargo.toml -p
+  rafaello-core --no-deps` is warning-free.
 - `manual-validation.md` records the items in the *Manual
   validation* section above.
 - `retrospective.md` is written, with any drift surfaced
   during implementation landing in `overview.md` /
   `decisions.md` / stream RFCs as deltas. m1 retrospective
-  specifically owns the Stream F drift items pinned in
-  `milestones/README.md` §"Stream RFC drift" (the §15.1
-  normative-delta items 1–4 plus the security RFC's
-  `requires_confirmation` → `always_confirm` rename, helper
-  / external-attach drift).
+  specifically owns:
+  - the Stream F drift items pinned in
+    `milestones/README.md` §"Stream RFC drift" (the §15.1
+    normative-delta items 1–4 plus the security RFC's
+    `requires_confirmation` → `always_confirm` rename,
+    helper / external-attach drift);
+  - the **private-state path-key clarification** (pi
+    review-4 finding 4): `overview.md` §5.5 /
+    `decisions.md` row 16 / `glossary.md` "Per-plugin
+    private state" all currently say `<plugin-id>` (which
+    is ambiguous between canonical and topic-id forms).
+    m1 retrospective patches all three to spell out
+    "topic-id" as the path segment, matching what m1
+    landed in C5.
 
 ## What changed from prior drafts
+
+Round-4 pi review (`pi-review-4.md`) prompted these revisions:
+
+- **`.active_bundles` removed; full bundle union per row 17**
+  (pi-4 finding 1). The compiler unions every named bundle in
+  `grant.bundles` with `default` into one spawn-time policy;
+  there is no per-call sandbox switch in v1. L6 marked
+  removed; C2 / V3 / Tr / K wording updated;
+  `lock_active_bundle_unknown.rs` test removed;
+  `compile_scoped_bundle_union.rs` rewritten to put per-tool
+  authority into a named bundle and assert the union.
+- **Two distinct path vocabularies** (pi-4 finding 2). M11
+  splits into `SafePath` (relative-package: `entry`,
+  `grant_match`) and `CapabilityPathTemplate`
+  (placeholder-or-absolute: `read_paths` etc.). C3's
+  post-expansion escape check stays on the capability side
+  so `compile_path_escape_after_expansion.rs` is reachable.
+  All `${PROJECT_ROOT}` / `${HOME}` references in the doc
+  normalised to `${project}` / `${home}` per M8.
+- **W cutover acceptance commands explicit** (pi-4 finding 3).
+  Goal mentions both deliverables; Manual validation +
+  Acceptance summary include the
+  `cargo test --manifest-path fittings/Cargo.toml --test
+  method_not_found_typed_method_round_trip` command. All
+  `cargo test -p rafaello-core` invocations spell
+  `--manifest-path rafaello/Cargo.toml` (pi-4 medium 9).
+- **Private-state architectural drift flagged for m1
+  retrospective** (pi-4 finding 4). m1 uses the topic-id
+  form per C5; `overview.md` §5.5 / `decisions.md` row 16 /
+  `glossary.md` "Per-plugin private state" still say
+  `<plugin-id>` (ambiguous). m1 retrospective patches the
+  three docs to say "topic-id" explicitly. Captured in the
+  Acceptance summary's retrospective bullet below.
+- **`milestones/README.md` m1 row patched** (pi-4 finding 5)
+  to say "produces a structured `CompiledPlugin` plan
+  consumed by m2", not "builder calls", and to include the
+  fittings W cutover.
+- **`always_confirm` round-trip test added** (pi-4 finding 6).
+  New positive test `tool_meta_always_confirm_round_trip.rs`.
+- **Renderer kind grammar pinned to Stream E §8 prefix rule**
+  (pi-4 finding 7). M7 rejects unprefixed plugin kinds.
+  Worked-example fixture updated `code.diff` → `diff:code`.
+  New negative test `manifest_unprefixed_renderer_kind.rs`.
+- **`allow_hosts` requires proxy mode** (pi-4 medium 8). V1
+  rejects non-empty `allow_hosts` for `deny` / `allow_all`
+  modes. New negative test
+  `manifest_allow_hosts_outside_proxy.rs`.
 
 Round-3 pi review (`pi-review-3.md`) prompted these revisions:
 
@@ -1326,8 +1436,9 @@ Round-1 pi review (`pi-review-1.md`) prompted these revisions:
     `entry_absolute`).
   - L3 reshapes `.grant` as `BTreeMap<BundleKey, GrantBundle>`
     so scoped bundles round-trip.
-  - L6 adds `active_bundles: Vec<String>` to drive C2's
-    bundle flatten.
+  - L6 (round-2 only) added `active_bundles: Vec<String>`
+    to drive C2; **dropped in round 5** per pi review-4
+    finding 1 — see the round-5 changelog.
   - L1 adds `[session].tool_owner: BTreeMap<String, String>`
     for V3's conflicting-tool-name resolution.
   - C2 takes `RecomputedDigests` (D3) explicitly; no
