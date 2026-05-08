@@ -26,12 +26,16 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
+const DEFAULT_CANCELLATION_METHOD: &str = "$/cancelRequest";
+const DEFAULT_CANCELLATION_ID_FIELD: &str = "id";
 
 pub struct Server<S, T> {
     service: Arc<S>,
     transport: T,
     max_in_flight: usize,
     notification_capacity: usize,
+    cancellation_method: String,
+    cancellation_id_field: String,
     peer: PeerHandle,
     notify_rx: Option<mpsc::Receiver<OutboundNotification>>,
     dropped_notifications: DroppedNotifications,
@@ -67,6 +71,8 @@ where
             transport,
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             notification_capacity: DEFAULT_NOTIFICATION_CAPACITY,
+            cancellation_method: DEFAULT_CANCELLATION_METHOD.to_string(),
+            cancellation_id_field: DEFAULT_CANCELLATION_ID_FIELD.to_string(),
             peer,
             notify_rx: Some(notify_rx),
             dropped_notifications,
@@ -98,6 +104,27 @@ where
         self.notify_rx = Some(notify_rx);
         self.outbound_request_rx = Some(request_rx);
         self
+    }
+
+    /// Configure the cancellation notification method and id-field extractor
+    /// the dispatcher will listen for. The library default is the LSP shape
+    /// (`$/cancelRequest`, id field `id`); MCP callers override to
+    /// `notifications/cancelled` + `requestId`.
+    ///
+    /// This commit only stores the configuration; the dispatcher's
+    /// token-firing logic that consumes it lands in c21.
+    pub fn with_cancellation(mut self, method: &str, id_field: &str) -> Self {
+        self.cancellation_method = method.to_string();
+        self.cancellation_id_field = id_field.to_string();
+        self
+    }
+
+    pub fn cancellation_method(&self) -> &str {
+        &self.cancellation_method
+    }
+
+    pub fn cancellation_id_field(&self) -> &str {
+        &self.cancellation_id_field
     }
 
     pub fn dropped_notifications(&self) -> DroppedNotifications {
@@ -535,6 +562,20 @@ mod tests {
                 metadata: Default::default(),
             })
         }
+    }
+
+    #[test]
+    fn cancellation_default_is_lsp_and_override_applies() {
+        let (_client, server_transport) = MemoryTransport::pair(1);
+        let server = Server::new(DelayService, server_transport);
+        assert_eq!(server.cancellation_method(), "$/cancelRequest");
+        assert_eq!(server.cancellation_id_field(), "id");
+
+        let (_client, server_transport) = MemoryTransport::pair(1);
+        let server = Server::new(DelayService, server_transport)
+            .with_cancellation("notifications/cancelled", "requestId");
+        assert_eq!(server.cancellation_method(), "notifications/cancelled");
+        assert_eq!(server.cancellation_id_field(), "requestId");
     }
 
     #[tokio::test]
