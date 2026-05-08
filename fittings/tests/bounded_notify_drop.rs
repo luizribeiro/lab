@@ -3,7 +3,7 @@ use std::time::Duration;
 use fittings::{
     async_trait::async_trait,
     core::message::{JsonRpcId, Request, Response},
-    FittingsError, Server, Service, ServiceContext, Transport,
+    Client, Connector, FittingsError, Server, Service, ServiceContext, Transport,
 };
 use fittings_testkit::{
     fixtures::{parse_response_fixture, request_line},
@@ -120,5 +120,87 @@ async fn bounded_notify_drops_then_responses_and_subsequent_traffic_succeed() {
 
     drop(client);
     let result = handle.await.expect("server task join");
+    assert!(result.is_ok(), "server should exit cleanly: {result:?}");
+}
+
+struct PeerEcho;
+
+#[async_trait]
+impl Service for PeerEcho {
+    async fn call(&self, req: Request, _ctx: ServiceContext) -> Result<Response, FittingsError> {
+        Ok(Response {
+            id: req.id.unwrap_or(JsonRpcId::Null),
+            result: json!({ "echoed": req.params }),
+            metadata: Default::default(),
+        })
+    }
+}
+
+struct OneShotConnector {
+    transport: tokio::sync::Mutex<Option<MemoryTransport>>,
+}
+
+#[async_trait]
+impl Connector for OneShotConnector {
+    type Connection = MemoryTransport;
+
+    async fn connect(&self) -> Result<Self::Connection, FittingsError> {
+        self.transport
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| FittingsError::internal("connector already used"))
+    }
+}
+
+#[tokio::test]
+async fn server_peer_call_succeeds_after_bounded_notification_drops() {
+    use fittings_testkit::memory_transport::MemoryTransport as MT;
+
+    let (client_transport, server_transport) = MT::pair(2);
+    let server =
+        Server::new(BurstService, server_transport).with_notification_capacity(NOTIFY_CAPACITY);
+    let dropped = server.dropped_notifications();
+    let server_peer = server.peer();
+    let serve = tokio::spawn(server.serve());
+
+    let client = Client::connect(OneShotConnector {
+        transport: tokio::sync::Mutex::new(Some(client_transport)),
+    })
+    .await
+    .expect("client connects")
+    .with_service(PeerEcho);
+
+    let flood = client.call("flood", json!({}));
+    let result = timeout(Duration::from_secs(5), flood)
+        .await
+        .expect("flood resolves")
+        .expect("flood ok");
+    assert_eq!(result, json!({ "emitted": FLOOD_COUNT }));
+
+    let dropped_count = dropped.count();
+    assert!(
+        dropped_count > 0,
+        "expected at least one notification to be dropped under flood; got {dropped_count}",
+    );
+
+    // Scope-required post-flood assertion: a peer.call from the server side
+    // (using the same connection that just dropped notifications) still
+    // completes, because the response/request paths are not blocked by the
+    // bounded notification sink.
+    let after = timeout(
+        Duration::from_secs(5),
+        server_peer.call("ping", json!({ "n": 7 })),
+    )
+    .await
+    .expect("post-flood peer.call resolves")
+    .expect("post-flood peer.call ok");
+    assert_eq!(after, json!({ "echoed": { "n": 7 } }));
+
+    drop(client);
+    let result = timeout(Duration::from_secs(5), serve)
+        .await
+        .expect("serve exits")
+        .expect("server task join");
     assert!(result.is_ok(), "server should exit cleanly: {result:?}");
 }
