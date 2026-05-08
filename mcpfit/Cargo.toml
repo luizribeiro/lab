@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/mcpfit", "crates/mcpfit-macros"]
+members = ["crates/mcpfit", "crates/mcpfit-macros", "examples/mcp-server"]
 resolver = "3"
 
 [workspace.package]
