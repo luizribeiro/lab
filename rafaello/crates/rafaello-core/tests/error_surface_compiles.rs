@@ -83,8 +83,10 @@ fn _validation_variant_names(e: ValidationError) {
         ValidationError::ToolOwnerPluginDoesNotDeclareTool => {}
         ValidationError::ToolOwnerRedundant => {}
         ValidationError::MissingPluginDir => {}
-        ValidationError::TrifectaRefused => {}
-        ValidationError::SinkInferenceDrift => {}
+        ValidationError::TrifectaRefused { .. } => {}
+        ValidationError::CarveOutRefused => {}
+        ValidationError::CarveOutTooLarge => {}
+        ValidationError::SinkInferenceDrift { .. } => {}
         ValidationError::LockPublishOnReservedNamespace => {}
         ValidationError::LockPublishOnFrontendNamespace => {}
         ValidationError::LockPublishOnForeignTopicId => {}

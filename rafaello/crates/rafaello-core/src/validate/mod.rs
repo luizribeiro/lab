@@ -15,10 +15,14 @@ pub use topic::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use crate::error::ValidationError;
+use crate::carveout;
+use crate::error::{CompileError, ValidationError};
 use crate::lock::{CanonicalId, Lock};
 use crate::manifest::{Bus, Capabilities, Load, Manifest, NetworkMode, Provides, Renderer};
+use crate::paths::PathContext;
+use crate::sinks;
 use crate::topic_id;
+use crate::trifecta;
 
 #[derive(Debug, Clone)]
 pub struct LockValidationContext {
@@ -132,6 +136,63 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
     for (tool_name, claimants) in &tool_claims {
         if claimants.len() > 1 && !lock.session.tool_owner.contains_key(*tool_name) {
             return Err(ValidationError::ConflictingToolName);
+        }
+    }
+
+    for (canonical, entry) in &lock.plugins {
+        let plugin_dir = ctx
+            .plugin_dirs
+            .get(canonical)
+            .expect("plugin_dirs presence checked above")
+            .clone();
+        let per_plugin_ctx = PathContext {
+            project_root: ctx.project_root.clone(),
+            home: ctx.home.clone(),
+            plugin_dir,
+            cache_dir: ctx.cache_root.clone(),
+            state_dir: ctx.state_root.clone(),
+        };
+
+        let state = trifecta::evaluate(lock, canonical, &per_plugin_ctx);
+        if state.refuse {
+            return Err(ValidationError::TrifectaRefused {
+                reads_untrusted: state.reads_untrusted,
+                has_outbound: state.has_outbound,
+                has_workspace_write: state.has_workspace_write,
+            });
+        }
+
+        for bundle in entry.grant.bundles.values() {
+            match carveout::compile_against(
+                bundle,
+                canonical,
+                &per_plugin_ctx,
+                entry.flags.allow_credential_paths,
+            ) {
+                Ok(_) => {}
+                Err(CompileError::CarveOutRefused) => {
+                    return Err(ValidationError::CarveOutRefused);
+                }
+                Err(CompileError::CarveOutTooLarge) => {
+                    return Err(ValidationError::CarveOutTooLarge);
+                }
+                Err(_) => {}
+            }
+        }
+
+        for (tool, meta) in &entry.bindings.tool_meta {
+            if !meta.sinks_inferred {
+                continue;
+            }
+            let effective = sinks::effective_grant(&entry.grant, tool);
+            let recomputed = sinks::infer_defaults(&effective, &None);
+            if recomputed != meta.sinks {
+                return Err(ValidationError::SinkInferenceDrift {
+                    tool: tool.clone(),
+                    expected: recomputed,
+                    found: meta.sinks.clone(),
+                });
+            }
         }
     }
 

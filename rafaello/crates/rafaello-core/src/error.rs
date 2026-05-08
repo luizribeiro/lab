@@ -156,10 +156,22 @@ pub enum ValidationError {
     MissingPluginDir,
     #[error("topic-id collision: {0}")]
     TopicIdCollision(#[from] CollisionError),
-    #[error("trifecta refused")]
-    TrifectaRefused,
-    #[error("sink inference drift")]
-    SinkInferenceDrift,
+    #[error("trifecta refused (reads_untrusted={reads_untrusted}, has_outbound={has_outbound}, has_workspace_write={has_workspace_write})")]
+    TrifectaRefused {
+        reads_untrusted: bool,
+        has_outbound: bool,
+        has_workspace_write: bool,
+    },
+    #[error("carve-out refused")]
+    CarveOutRefused,
+    #[error("carve-out decomposition exceeds cap")]
+    CarveOutTooLarge,
+    #[error("sink inference drift for tool `{tool}` (expected={expected:?}, found={found:?})")]
+    SinkInferenceDrift {
+        tool: String,
+        expected: Vec<String>,
+        found: Vec<String>,
+    },
     #[error("lock publish on reserved namespace")]
     LockPublishOnReservedNamespace,
     #[error("lock publish on frontend namespace from non-frontend plugin")]
