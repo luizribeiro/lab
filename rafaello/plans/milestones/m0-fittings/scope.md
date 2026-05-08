@@ -347,9 +347,11 @@ The driver runs and captures:
    new `data` preservation breaks any string-equality tests on the SDK
    side, that's a real fix. m0 retrospective surfaces if this
    happens.
-5. **Hard breaking change to a published library.** `fittings`
-   doesn't yet have external consumers we're aware of, but the
-   m0 retrospective should confirm before m1 starts.
+5. **Breaking change risk: none in practice.** `fittings` has no
+   external consumers (owner-confirmed 2026-05-08). m0 ships breaking
+   changes freely; per-commit greenness is enforced only by the
+   workspace's own consumers (`hello-*` examples, `mcp-server`,
+   the test suite).
 
 ## Internal split (driver guidance for `commits.md`)
 
