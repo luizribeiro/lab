@@ -8,6 +8,7 @@ mod registry;
 mod response;
 mod schema;
 mod server;
+mod service;
 mod structured;
 mod tool;
 
@@ -22,6 +23,7 @@ pub use protocol::{
 pub use registry::ToolRegistry;
 pub use response::{IntoToolResponse, ToolResponse};
 pub use server::{IntoTool, Server};
+pub use service::McpService;
 pub use structured::{Structured, StructuredObject};
 pub use tool::{Tool, ToolSpec};
 
