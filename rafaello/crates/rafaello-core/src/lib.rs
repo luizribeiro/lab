@@ -5,6 +5,7 @@ pub mod error;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
+pub mod sinks;
 pub mod topic_id;
 pub mod validate;
 
