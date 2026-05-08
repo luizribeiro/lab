@@ -1,12 +1,12 @@
 # rafaello v1 architecture (overview)
 
-> **Status:** converged after three pi review rounds. Reviews live
-> at `overview-review-1.md`, `overview-review-2.md`, and
-> `overview-review-3.md`; pi's round-3 verdict was "sign off after
-> the §1.2 / §16 contradiction patches", and those patches landed.
-> Pending project-owner ratification — the 25 decisions in
-> `decisions.md` are marked `proposed` and flip to `ratified` on
-> sign-off.
+> **Status:** ratified 2026-05-08. Three pi review rounds for the
+> overview itself (`overview-review-{1,2,3}.md`), three for the
+> milestones overview (`milestones/pi-review-{1,2,3}.md`), and
+> two for streams A and B; all rounds converged. The 34 rows in
+> `decisions.md` are now `ratified` (except row 14, which is
+> `reversed` by row 26 — helpers deferred to v2). The next phase
+> drafts `milestones/m0-fittings/scope.md`.
 >
 > This is the single source of truth for v1. If anything in
 > `streams/` conflicts with what is written here, this document
