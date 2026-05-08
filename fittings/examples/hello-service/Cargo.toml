@@ -77,3 +77,7 @@ path = "../../tests/service_context_notify.rs"
 [[test]]
 name = "bounded_notify_drop"
 path = "../../tests/bounded_notify_drop.rs"
+
+[[test]]
+name = "peerhandle_outside_handler"
+path = "../../tests/peerhandle_outside_handler.rs"

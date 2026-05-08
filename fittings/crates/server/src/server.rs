@@ -28,6 +28,8 @@ pub struct Server<S, T> {
     transport: T,
     max_in_flight: usize,
     notification_capacity: usize,
+    peer: PeerHandle,
+    notify_rx: Option<mpsc::Receiver<OutboundNotification>>,
     dropped_notifications: DroppedNotifications,
 }
 
@@ -37,12 +39,18 @@ where
     T: Transport + 'static,
 {
     pub fn new(service: S, transport: T) -> Self {
+        let dropped_notifications = DroppedNotifications::new();
+        let (notify_tx, notify_rx) =
+            mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
+        let peer = PeerHandle::new(notify_tx, dropped_notifications.clone());
         Self {
             service: Arc::new(service),
             transport,
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             notification_capacity: DEFAULT_NOTIFICATION_CAPACITY,
-            dropped_notifications: DroppedNotifications::new(),
+            peer,
+            notify_rx: Some(notify_rx),
+            dropped_notifications,
         }
     }
 
@@ -53,6 +61,10 @@ where
 
     pub fn with_notification_capacity(mut self, n: usize) -> Self {
         self.notification_capacity = n.max(1);
+        let (notify_tx, notify_rx) =
+            mpsc::channel::<OutboundNotification>(self.notification_capacity);
+        self.peer = PeerHandle::new(notify_tx, self.dropped_notifications.clone());
+        self.notify_rx = Some(notify_rx);
         self
     }
 
@@ -60,12 +72,21 @@ where
         self.dropped_notifications.clone()
     }
 
+    /// Connection-scoped peer handle for tasks that live outside any inbound
+    /// request handler (e.g. server startup tasks). Inside a handler, the
+    /// `PeerHandle` is reachable via `ServiceContext::peer()`.
+    pub fn peer(&self) -> PeerHandle {
+        self.peer.clone()
+    }
+
     pub async fn serve(mut self) -> Result<(), FittingsError> {
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight));
         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (notify_tx, mut notify_rx) =
-            mpsc::channel::<OutboundNotification>(self.notification_capacity);
-        let peer = PeerHandle::new(notify_tx, self.dropped_notifications.clone());
+        let mut notify_rx = self
+            .notify_rx
+            .take()
+            .expect("notify receiver should be present until serve is called");
+        let peer = self.peer.clone();
         let mut response_tx = Some(response_tx);
         let mut workers = JoinSet::new();
         let mut accepting = true;
