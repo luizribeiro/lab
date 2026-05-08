@@ -105,3 +105,7 @@ path = "../../tests/id_namespace_isolation.rs"
 [[test]]
 name = "service_context_peer_call"
 path = "../../tests/service_context_peer_call.rs"
+
+[[test]]
+name = "peerhandle_close_drain"
+path = "../../tests/peerhandle_close_drain.rs"
