@@ -6,12 +6,24 @@ use std::sync::Mutex;
 use fittings::serde_json::Value;
 use fittings::{FittingsError, Result};
 
+use crate::context::Cx;
+use crate::error::McpfitError;
 use crate::protocol::{
     InitializeParams, InitializeResult, ServerCapabilities, ServerInfo, ToolsCallParams,
     ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
 };
 use crate::registry::ToolRegistry;
 use crate::response::ToolResponse;
+
+fn to_fittings_error(err: McpfitError) -> FittingsError {
+    match err {
+        McpfitError::InvalidRequest(m) => FittingsError::invalid_request(m),
+        McpfitError::MethodNotFound(m) => FittingsError::method_not_found(m),
+        McpfitError::InvalidParams(m) => FittingsError::invalid_params(m),
+        McpfitError::Cancelled => FittingsError::invalid_request("cancelled"),
+        McpfitError::Internal(m) => FittingsError::internal(m),
+    }
+}
 
 #[fittings::service]
 pub trait McpService {
@@ -111,7 +123,7 @@ impl McpService for McpServiceImpl {
         })
     }
 
-    async fn call_tool(&self, _params: ToolsCallParams) -> Result<ToolResponse> {
+    async fn call_tool(&self, params: ToolsCallParams) -> Result<ToolResponse> {
         match self.lifecycle_state() {
             SessionLifecycle::AwaitingInitialize => {
                 return Err(FittingsError::invalid_request(
@@ -125,9 +137,10 @@ impl McpService for McpServiceImpl {
             }
             SessionLifecycle::Running => {}
         }
-        Err(FittingsError::invalid_request(
-            "tools/call not yet implemented",
-        ))
+        self.registry
+            .call(&params.name, params.arguments, Cx::default())
+            .await
+            .map_err(to_fittings_error)
     }
 
     async fn register_tool(&self, _params: ToolsRegisterParams) -> Result<ToolsRegisterResult> {
@@ -140,10 +153,20 @@ impl McpService for McpServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::{mcp_service_schema, McpService, McpServiceImpl, SessionLifecycle};
+    use crate::error::McpfitError;
     use crate::protocol::{InitializeParams, ServerInfo, ToolsCallParams};
     use crate::registry::ToolRegistry;
+    use crate::response::ToolResponse;
     use crate::tool::Tool;
     use fittings::serde_json::{json, Value};
+    use schemars::JsonSchema;
+    use serde::Deserialize;
+
+    #[derive(JsonSchema, Deserialize)]
+    struct AddArgs {
+        a: f64,
+        b: f64,
+    }
 
     fn call_params(name: &str) -> ToolsCallParams {
         ToolsCallParams {
@@ -155,6 +178,16 @@ mod tests {
 
     fn service(name: &str, version: &str) -> McpServiceImpl {
         service_with_registry(name, version, ToolRegistry::new())
+    }
+
+    fn service_with_add_tool() -> McpServiceImpl {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Tool::new("add").input::<AddArgs>().handler(
+                |args: AddArgs, _cx| async move { Ok::<_, McpfitError>(args.a + args.b) },
+            ))
+            .unwrap();
+        service_with_registry("demo", "0.1.0", registry)
     }
 
     fn service_with_registry(name: &str, version: &str, registry: ToolRegistry) -> McpServiceImpl {
@@ -312,16 +345,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn call_tool_passes_lifecycle_gate_when_running() {
+    async fn call_tool_dispatches_to_registered_tool() {
+        let svc = service_with_add_tool();
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+
+        let response = svc
+            .call_tool(ToolsCallParams {
+                name: "add".into(),
+                arguments: json!({"a": 2.0, "b": 3.0}),
+                meta: None,
+            })
+            .await
+            .expect("dispatch should succeed");
+        assert_eq!(response, ToolResponse::success("5"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_unknown_tool_returns_method_not_found() {
         let svc = service("demo", "0.1.0");
         initialize(&svc).await;
         svc.initialized(json!({})).await.unwrap();
         let err = svc
-            .call_tool(call_params("a"))
+            .call_tool(call_params("missing"))
             .await
-            .expect_err("tools/call dispatch is not yet implemented");
-        assert!(err.to_string().contains("not yet implemented"));
-        assert_eq!(svc.lifecycle_state(), SessionLifecycle::Running);
+            .expect_err("unknown tool should map to method-not-found");
+        assert!(err.to_string().contains("missing"));
+        assert!(err.to_string().contains("method not found"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_propagates_invalid_params_from_handler() {
+        let svc = service_with_add_tool();
+        initialize(&svc).await;
+        svc.initialized(json!({})).await.unwrap();
+        let err = svc
+            .call_tool(ToolsCallParams {
+                name: "add".into(),
+                arguments: json!({"a": "nope", "b": 1.0}),
+                meta: None,
+            })
+            .await
+            .expect_err("bad args should error");
+        assert!(err.to_string().contains("invalid params"));
     }
 
     #[tokio::test]
