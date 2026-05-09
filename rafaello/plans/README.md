@@ -260,8 +260,16 @@ that future milestone drivers should plan around:
 
 ## Tooling notes
 
-- `LITELLM_API_KEY` for the model endpoint at
-  `https://litellm.thepromisedlan.club/v1`.
+- The dev environment's OpenAI-compatible endpoint is a LiteLLM
+  proxy at `https://litellm.thepromisedlan.club/v1`, with the
+  API key in env var `LITELLM_API_KEY`. **This is deployment
+  configuration, not a baked-in dependency**: the bundled
+  default provider plugin (`rfl-openai`, `decisions.md` row 38)
+  speaks the OpenAI Chat Completions wire protocol and works
+  against any compatible endpoint (OpenAI's API directly, vLLM,
+  a local stub, etc.); `rfl init` materialises the dev-environment
+  values into `rafaello.lock` only because that's what the dev
+  setup uses.
 - Default model for rafaello runtime: `vllm/qwen3.6-27b`.
 - pi runs at `gpt-5.5` and is not modified by rafaello tooling.
 - Rust toolchain pinned via repo-root `rust-toolchain.toml`.
