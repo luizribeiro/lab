@@ -76,6 +76,19 @@ grammar, lock-side mirrors, carve-outs, compile-time path
 resolver — confirm the trace table maps onto landed git
 commits without slips.
 
+### Trace-table caveat (pi review-2 finding 5)
+
+`commits.md`'s trace tables have a small handful of stale
+commit-row mappings (e.g. `manifest_grant_match_present.rs`
+appears at both c11 and c10 in the positive table) — artefacts
+of the round-2 → round-4 renumbering when the c10 V1 commit was
+inserted. The coverage conclusion below is scoped to **file
+presence + green test runs**, which were verified mechanically;
+exact commit-row mappings should be cross-checked against
+`git log --oneline -- rafaello/crates/rafaello-core/tests/`
+rather than against the commits.md tables. Acceptable for
+v1 archive purposes; not blocking ratification.
+
 ### Documented alias
 
 `scope.md`'s positive matrix names two tests on adjacent rows
@@ -261,14 +274,17 @@ note about the rename).
 **Canonical fix.** No RFC patch needed for the rename itself —
 the RFC's §9 #2 mention is in "X replaces Y" rename-note
 framing, not as a live field name; the live name is already
-`always_confirm`. Pi review-1 of this retrospective flagged a
-factual error in the round-1 draft's grep claim; the corrected
-state is: `requires_confirmation` appears in the security RFC
-exactly once, in the §9 #2 rename note (line `:1197`), and in
-`rfc-camel-on-v1.md:229` (CaMeL is v2 territory; not m1's
-problem); no other RFC body references. Recorded as
-resolved-by-design; the m1-retrospective Stream A patches
-landed at §2.3 / §2.4 below cover the genuine drift.
+`always_confirm`. No code reference exists (`grep -rn
+requires_confirmation rafaello/crates fittings` is empty).
+The remaining textual occurrences in the plans tree
+(`rfc-security-model.md:1197` rename-note; `rfc-camel-on-v1.md:229`
+CaMeL-v2 territory; `milestones/README.md`,
+`m1-manifest/{scope,commits,driver-notes}.md`, prior overview
+reviews — all rename-note context or m1 process artefacts) are
+deliberate historical notes and process trail, not drift.
+Recorded as resolved-by-design; the m1-retrospective Stream A
+patches landed at §2.3 / §2.4 below cover the genuine drift
+(helper plugins + external attach).
 
 ### 2.3 Security RFC §7.4.1 — helper plugins drift
 
@@ -699,27 +715,18 @@ clippy-derivable_impls / manual_contains cleanups).
 rafaello-core --no-deps` now warning-free; the scope
 §"Acceptance summary" doc bullet is met.
 
-### 5.3 Scope wording on the fixtures directory
+### 5.3 ✅ Resolved: scope wording on the fixtures directory
 
-Captured as `manual-validation.md` §6 + §"Follow-ups" F2.
-Scope §"Manual validation" calls for `tree
-rafaello/crates/rafaello-core/tests/fixtures`, but scope
-§"Out of scope" deliberately puts fixtures inline (string
-literals + `serde_json::json!`) rather than on disk. The two
-scope sections drift; the manual-validation step couldn't
-produce the requested tree because the directory doesn't
-exist (only `tests/fixtures/` exists for the c11
-validate-with-package fixture trees, plus six dirs across
-other tests via `tempfile::tempdir()`).
-
-**Fix.** Land as a separate follow-up commit on this branch
-alongside the §2 doc patches:
-
-> `docs(rafaello-m1): reword scope manual-validation fixture step`
-
-Either reword the bullet to "dump
-`tree rafaello/crates/rafaello-core/tests/`" or drop it; m1 is
-done, so this is for paper-archive consistency only.
+Scope §"Manual validation" originally called for `tree
+rafaello/crates/rafaello-core/tests/fixtures`, but the
+directory doesn't exist — m1 fixtures are inline / programmatic
+via `tempfile::tempdir()` inside each test file. The
+scope bullet now reads `find rafaello/crates/rafaello-core/tests
+-type f -name '*.rs' | sort` (the test surface as it actually
+exists) and explicitly notes the "no separate fixtures/
+directory in v1" intent. Stream F RFC banner also updated to
+match. Pi review-2 of this retrospective caught both stale
+references.
 
 ### 5.4 No new flakes introduced by m1 in `rafaello-core`
 
@@ -749,21 +756,30 @@ milestone driver for m2 has the context here.
 
 ## Follow-up commits on this branch
 
-Drift fixes and the §5.2 / §5.3 cleanups land as separate
-commits after this retrospective, paralleling m0's pattern.
-Status as of 2026-05-08 (planned, pending pi review of this
-draft):
+All drift fixes and cleanups landed BEFORE the retrospective
+ratifies (per pi review-1 + 2 of this retrospective: an
+acceptance-owned follow-up isn't optional cleanup). Final state
+as of 2026-05-08:
 
-1. ⏳ `docs(rafaello-stream-f): fold §15.1 items 1–4 into
-   manifest RFC` — Stream F RFC body patch (§2.1).
-2. ⏳ `docs(rafaello): clarify private-state path key as
-   topic-id` — `overview.md` §5.5 / `decisions.md` row 16 /
-   `glossary.md` (§2.5) plus `scope.md` duplicate-row strike
-   (§2.6).
-3. ⏳ `docs(rafaello-core): disambiguate Error doc link as
-   enum@Error` — `cargo doc` warning fix (§5.2).
-4. ⏳ `docs(rafaello-m1): reword scope manual-validation
-   fixture step` — fixtures-on-disk-vs-inline drift (§5.3).
+1. ✅ Stream A v1-status banners (§5.7 + §7.4.1) — commit
+   `8d0a28c` (§2.3 + §2.4).
+2. ✅ Stream F top-of-RFC v1-status banner — commit `5677dae`
+   (§2.1).
+3. ✅ Private-state topic-id clarification (overview §5.5 +
+   glossary + new `decisions.md` row 37 refining row 16) —
+   commit `93761c8` (§2.5).
+4. ✅ `cargo doc` warning fix + clippy `derivable_impls` /
+   `manual_contains` cleanups + rustfmt re-apply across
+   rafaello + fittings + scope.md duplicate-row strike — commit
+   `823e8bb` (§2.6 + §5.2).
+5. ✅ `lockin.toml` overview/glossary drift patched
+   (`overview.md` §6 + `glossary.md` Lockin / Sandbox-policy
+   entries point at `CompiledPlugin` plan + `decisions.md`
+   row 32) — pi review-2 finding 2 caught it after the round-1
+   retrospective missed; commit landing this batch.
+6. ✅ Scope manual-validation fixtures bullet reworded; Stream
+   F banner updated to drop the non-existent `tests/fixtures/`
+   reference — pi review-2 finding 3; same commit as #5.
 
 No `decisions.md` rows added (the drift items were already
 pinned in existing rows; m1 reconciles, doesn't re-decide).

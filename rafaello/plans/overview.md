@@ -598,10 +598,12 @@ scope §C5.
 ## 6. The grant compiler and tool-call gate
 
 The grant compiler is the core safety-critical component. It
-reads the lock, produces a per-plugin `lockin.toml` and a
-broker ACL table, and refuses configurations that violate v1
-invariants. Spec: `streams/a-security/rfc-security-model.md`
-§7.
+reads the lock, produces a per-plugin **`CompiledPlugin`
+structured plan** (consumed by the spawn path via lockin's
+Rust API per `decisions.md` row 32 — m1 emits no
+`lockin.toml`) and a broker ACL table, and refuses
+configurations that violate v1 invariants. Spec:
+`streams/a-security/rfc-security-model.md` §7.
 
 ### 6.1 Trifecta refusal (per plugin)
 

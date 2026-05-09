@@ -9,7 +9,7 @@ the body is unchanged. The live schema is the union of:
 - the deferrals in `decisions.md` rows 26 (helper plugins to
   v2), 30 (no `runtime` field), 31 (`[rpc]` block dropped;
   `openrpc.json` sibling required), 32 (compiler emits lockin
-  builder calls, not `lockin.toml`), PLUS
+  structured `CompiledPlugin` plan applied via lockin's Rust API at spawn time, not `lockin.toml`), PLUS
 - the §15.1 normative-delta items in `overview.md` (the
   `[provides]` block, the `[provides.tool.<n>]` table with
   `sinks` / `grant_match` / `always_confirm`,
@@ -29,7 +29,7 @@ Concretely:
 | §6 `[[renderers]]` non-built-in kinds | EXTENDED — must use the Stream E `<vendor>:<kind>` prefix grammar; built-in kinds (`text`, `code_block`, etc.) are reserved per `overview.md` §11. |
 | §7.3 boot-sequence `eager` knob references | NARROWED — fail-closed only, no `load.eager_failure` field per `decisions.md` row 24. |
 | §8 "writes `lockin.toml`" | NARROWED — m1 emits a structured `CompiledPlugin` plan against the lockin Rust API per `decisions.md` row 32; m2 applies it. |
-| §9.x worked examples with `runtime` / `[rpc]` / `${secret:...}` | OBSOLETE — the post-simplification rewrites used in m1's fixtures live under `rafaello/crates/rafaello-core/tests/fixtures/`. |
+| §9.x worked examples with `runtime` / `[rpc]` / `${secret:...}` | OBSOLETE — m1's fixtures are inline / programmatic (TempDir-based) inside the test files under `rafaello/crates/rafaello-core/tests/`; no `tests/fixtures/` directory exists or needs to. |
 | §11 open question 1 (scoped bundles in v1) | RESOLVED — accept + flatten at compile time per `decisions.md` row 17. |
 
 Stream F drift items 1–4 from `overview.md` §15.1 are

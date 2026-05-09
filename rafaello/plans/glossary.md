@@ -35,7 +35,7 @@ a `streams/` RFC. Keep definitions to one line where possible.
 | Kind (entry) | Routing key on an entry payload (`text`, `code_block`, `tool_call`, plugin-prefixed `mermaid:diagram`); selects the renderer. |
 | Lazy-load trigger | A condition that causes a plugin to be spawned (`eager`, `boot`, `event`, `command`, `kind`, `manual`); declared in the manifest's `[load]` block. |
 | Lock (`rafaello.lock`) | Project-root TOML file recording, per installed plugin, the granted capabilities + content digest + manifest-snapshot digest + bindings; mutated only by `rfl` install/grant/revoke/update. |
-| Lockin | The OS-level process-tree sandbox used in v1; consumes a per-spawn `lockin.toml` policy compiled from the lock. |
+| Lockin | The OS-level process-tree sandbox used in v1; consumes a per-spawn policy applied via lockin's Rust builder API at spawn time (`decisions.md` row 32 — no `lockin.toml` artifact in v1; m1's `CompiledPlugin` plan is the structured source). |
 | Manifest (`rafaello.toml`) | Plugin author's request, shipped at the plugin root; declares identity, methods, subscribed/published topics, capability bundles, renderer registrations, lazy-load triggers. |
 | Per-plugin private state | `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (the hashed form per `decisions.md` row 5; canonical id is not path-safe — `decisions.md` row 37 refines row 16); recursively read+write granted automatically; excluded from `has_workspace_write`. |
 | Pattern (topic) | A subscribe pattern using `*` (one segment) or `**` (final, one or more trailing segments) on top of the topic grammar; distinct syntactic category from a topic. |
@@ -47,7 +47,7 @@ a `streams/` RFC. Keep definitions to one line where possible.
 | `RFL_HELPER_FD` | Reserved env var pointing to the inherited socketpair fd connecting a helper plugin to its parent; helpers have this *instead of* `RFL_BUS_FD`. |
 | `RFL_PLUGIN` | Reserved env var carrying the canonical plugin id, for the plugin's own logging. |
 | Round-2 must-fix | A finding from `pi-review-2.md` flagged as blocking implementation handoff; addressed in the corresponding stream RFC's "Resolved disagreements" section. |
-| Sandbox policy | The compiled, ephemeral `lockin.toml` (or capsa equivalent) materialised on every plugin spawn and discarded on exit; never hand-edited. |
+| Sandbox policy | The compiled, ephemeral lockin builder calls (or capsa equivalent) materialised on every plugin spawn from m1's `CompiledPlugin` structured plan and discarded on exit; never hand-edited. (Pre-row-32 wording said `lockin.toml`; superseded by `decisions.md` row 32.) |
 | ServiceContext | Per-call, cheap-to-clone handle (fittings) carrying `notify`, `cancelled`, `is_cancelled`, `request_id`; the same instance flows through middleware and the inner handler. |
 | Session | Unit of conversation history, attached frontends, lock ownership, and `user_grants`; persisted under `${PROJECT_ROOT}/.rafaello/state/`. |
 | Sink | A tool whose invocation is irreversible or has external effect (network, vcs_push, mail, workspace_write); declared in the manifest, snapshotted into `bindings.tool_meta.<n>.sinks`. |

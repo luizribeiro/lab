@@ -1268,8 +1268,7 @@ The driver runs and captures:
   --manifest-path rafaello/Cargo.toml -p rafaello-core`
   green (per the m0 retrospective gotcha §4.6 — `--impure`
   is load-bearing for `nix develop` invocations).
-- A `tree rafaello/crates/rafaello-core/tests/fixtures` dump
-  capturing the manifest+lock+openrpc fixture surface.
+- A `find rafaello/crates/rafaello-core/tests -type f -name '*.rs' | sort` listing capturing the integration test surface (m1 fixtures are inline / `tempfile`-based inside each test file; no separate `tests/fixtures/` directory in v1 — that pattern is reserved for if a test grows large enough to need an out-of-band tree).
 
 ## Risks
 
