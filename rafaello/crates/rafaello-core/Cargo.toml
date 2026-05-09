@@ -17,6 +17,24 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 data-encoding = { workspace = true }
 outpost = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+fittings-core = { workspace = true }
+fittings-server = { workspace = true }
+fittings-client = { workspace = true }
+fittings-transport = { workspace = true }
+lockin = { workspace = true }
+outpost-proxy = { workspace = true }
+nix = { workspace = true }
+parking_lot = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-test = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+test-fixture = []
