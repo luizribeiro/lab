@@ -147,6 +147,28 @@ impl Broker {
         self.0.state.lock().registry.clear();
     }
 
+    pub fn handle_plugin_publish(
+        &self,
+        canonical: &CanonicalId,
+        raw_params: &serde_json::Value,
+    ) -> Result<(), BrokerError> {
+        if !self.0.state.lock().registry.contains_key(canonical) {
+            return Err(BrokerError::NotRegistered(canonical.clone()));
+        }
+        let msg: PublishMsg = serde_json::from_value(raw_params.clone()).map_err(|e| {
+            BrokerError::InvalidPayload {
+                publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                reason: e.to_string(),
+            }
+        })?;
+        validate_topic(&msg.topic).map_err(|ve| BrokerError::InvalidTopic {
+            publisher: crate::error::Publisher::Plugin(canonical.clone()),
+            topic: msg.topic.clone(),
+            reason: ve.to_string(),
+        })?;
+        Ok(())
+    }
+
     pub fn publish_boot(&self) -> Result<(), BrokerError> {
         let event = BusEvent {
             topic: "core.lifecycle.boot".to_string(),
