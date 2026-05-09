@@ -1,10 +1,13 @@
 # m2-broker-spawn — commits
 
-> **Status:** round-2 draft, addressing pi commits round-1 (7
-> blocking + many per-commit findings + 5 structural
-> reorderings). Pi commits round-2 review pending. Not yet
-> owner-ratified. Phase 3 per-commit agent work begins on
-> `rafaello-v0.1` after `commits.md` ratifies.
+> **Status:** round-3 draft, addressing pi commits round-2 (8
+> blocking + 5 non-blocking — c19 Response shape, reaper/watcher
+> JoinHandle ownership, c25 mutex-across-await, c20
+> mode-before-fd, canonical headline test renamed/moved to c30,
+> c23 SafePath/LockFlags, c19 reaper test via TestHook, c22
+> start gate). Pi round-3 review pending. Trajectory:
+> 7+many → 8+5 → ?. Phase 3 per-commit agent work begins
+> after ratification.
 
 Ordered commit list for m2, derived from `scope.md` (round 11,
 ratified 2026-05-09). Each commit is one logical idea **and
@@ -527,7 +530,11 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
       registered: Option<RegisteredPlugin>,
       proxy: Option<ProxyHandle>,
       serve_join: Option<tokio::task::JoinHandle<()>>,
-      reaper_join: Option<tokio::task::JoinHandle<()>>,
+      // Pi-2 B2: store ONLY watcher_join. The watcher task
+      // OWNS the reaper JoinHandle (consumes via .await) and
+      // publishes ReaperPanicked on JoinError. Tokio JoinHandle
+      // is not Clone, so it cannot be both moved into the
+      // watcher and kept here.
       watcher_join: Option<tokio::task::JoinHandle<()>>,
   }
   
@@ -739,8 +746,10 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     gating").
   - `tests/supervisor_spawn_starts_proxy_for_proxy_plan.rs`
     — `NetworkPlan::Proxy { allow_hosts: ["example.com"] }`,
-    spawn → `outpost_starts == 1`. Proxy port no longer bound
-    after spawn returns (drop happened in unwind).
+    spawn → `outpost_starts == 1`. Proxy port unbinds within
+    a bounded poll (up to 500ms) after spawn returns —
+    `outpost_proxy::ProxyHandle` drop is asynchronous per
+    its docs (pi-2 N2: poll, do not assert immediate-unbind).
   - `tests/supervisor_spawn_skips_proxy_for_deny_plan.rs` —
     `NetworkPlan::Deny`, spawn → `outpost_starts == 0`.
 
@@ -800,10 +809,12 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     (`req.id == None`), call `broker.handle_plugin_publish(
     &canonical, &req.params)` — any `BrokerError` is already
     handled by §B9 lifecycle emission, the service returns
-    `Ok(Response { jsonrpc: ..., id: JsonRpcId::Null, result:
-    Value::Null, error: None })` regardless (notifications
-    have no response, so the `Response` is swallowed by the
-    server — pi-1 c19 finding). For unknown methods, return
+    `Ok(Response { id: JsonRpcId::Null, result: Value::Null,
+    metadata: Default::default() })` regardless (real fittings
+    type per `fittings_core::message::Response` — pi-2 B1: NO
+    `jsonrpc` field, NO `error` field on the struct;
+    notifications have no response, so the `Response` is
+    swallowed by the server). For unknown methods, return
     `Err(FittingsError::method_not_found("..."))`. Test mode
     (`with_extra_service`): compose with the factory's service
     via a small router (`bus.publish` → broker; everything
@@ -836,11 +847,17 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     rollback assertion); `in_flight` set no longer contains
     canonical.
   - `tests/supervisor_spawn_post_register_reaps_child.rs`
-    (Linux-only via `#[cfg(target_os = "linux")]`) —
-    `cached_pid` is `Some(_)` immediately after spawn
-    returns; within ≤ 200ms the OS no longer has that pid
-    alive (poll `/proc/<pid>/status`). Confirms the
-    post-spawn reap fired during unwind.
+    (pi-2 B7 — c19 returns Err so there's no `SpawnHandle`
+    to read `cached_pid` from; assert through a `TestHooks`
+    counter instead). The c19 commit extends `TestHooks` with
+    `last_reaped_pid: Option<u32>` (an `AtomicI64` storing
+    `-1` for "none"; supervisor's unwind path stores the
+    reaped pid here when the post-spawn reap fires). The
+    test asserts: `child_spawns == 1` after the failing
+    spawn; `last_reaped_pid != None` within bounded poll;
+    AND (Linux-only via `#[cfg(target_os = "linux")]`) the
+    OS no longer has that pid alive
+    (`/proc/<pid>/status` returns `ENOENT`).
 
 ---
 
@@ -853,6 +870,16 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
   universal fixture init per scope §F2 + §F3, but **only the
   `respond_peer_call` mode + the universal `scaffold_only`
   exit-0 sentinel mode**:
+  - **Mode dispatch FIRST** (pi-2 B4 — before fd parsing,
+    so c03's `scaffold_only` and unknown-mode tests that
+    don't set `RFL_BUS_FD` still pass):
+    - Read `RFL_FIXTURE_MODE` env.
+    - `scaffold_only` → exit 0 immediately, no fd setup.
+    - Unknown mode → `eprintln!("rfl-bus-fixture: unknown
+      mode '{}'", mode); std::process::exit(64);` — no fd
+      setup.
+    - Real bus-backed modes (`respond_peer_call`, etc.)
+      proceed to fd setup below.
   - Parse `RFL_BUS_FD`; on missing/invalid → `eprintln!` +
     exit 3.
   - `OwnedFd::from_raw_fd(fd)` once in `unsafe`; wrap as
@@ -906,20 +933,27 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 ### c21 — feat(rafaello-core::supervisor): Phase B steps 18–20 — reaper + watcher + serve loop + headline test
 
 - **What.** Implement scope §SP4 Phase B steps 18–20:
-  - **Step 18** — spawn the reaper task: `tokio::spawn(async
+  - **Step 18** — spawn the reaper task and capture its
+    `JoinHandle`: `let reaper_handle = tokio::spawn(async
     move { let outcome = match child.wait().await { Ok(s) =>
     ReaperOutcome::Exited(s), Err(e) =>
     ReaperOutcome::WaitFailed(e) }; let _ =
-    watch_tx.send(Some(Arc::new(outcome))); })`.
-  - **Spawn the watcher task** per scope §SP4 step 18 + pi-5
-    §1: awaits `reaper_handle`; on `JoinError` publishes
-    `ReaperOutcome::ReaperPanicked`.
+    watch_tx.send(Some(Arc::new(outcome))); });`.
+  - **Spawn the watcher task** that **consumes** the reaper
+    handle (pi-2 B2: single owner of the JoinHandle): `let
+    watcher_join = tokio::spawn(async move { if let Err(_join_err)
+    = reaper_handle.await { let _ =
+    watch_tx_clone.send(Some(Arc::new(ReaperOutcome::ReaperPanicked)));
+    } });`. The reaper handle is moved into the watcher's
+    closure and consumed by `.await`; only `watcher_join` is
+    stored in `ManagedSpawn`.
   - **Step 19** — `tokio::spawn(server.serve())`; store
     `JoinHandle` in `ManagedSpawn.serve_join`.
   - **Step 20** — wrap `SpawnObservation` in `Arc`; build
     `ManagedSpawn { observation: Arc::clone(&obs), registered:
-    Some(reg), proxy: maybe_proxy, serve_join, reaper_join,
-    watcher_join }`; insert into `supervisor.managed`; return
+    Some(reg), proxy: maybe_proxy, serve_join, watcher_join
+    }` (NO `reaper_join` field per pi-2 B2 — the watcher owns
+    it); insert into `supervisor.managed`; return
     `Ok(SpawnHandle(Arc::clone(&obs)))`. The
     `InFlightGuard` from c15 step 1a was already dropped at
     c19 step 17.
@@ -933,25 +967,33 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 - **Why.** scope §SP4 18–20, §SP1, pi-5 §1, pi-1 c20 (cached
   pid).
 - **Depends on.** c19, c20 (real fixture for headline test).
-- **Acceptance.** **The headline test lands here.** Three new
-  tests, all using the c20 minimal fixture via direct
-  `Command`-style spawn replaced by `PluginSupervisor::spawn`:
-  - `tests/supervisor_spawn_fixture_happy_path.rs` (canonical
-    name per scope §"Demo bar") — spawn the c20 fixture in
-    `respond_peer_call` mode via `PluginSupervisor::spawn`.
+- **Acceptance.** First end-to-end spawn is provable here;
+  the **canonical scope-named headline test
+  `supervisor_spawn_fixture_happy_path.rs` lands in c30**
+  (two-fixture publish/observer per scope §"Demo bar" — pi-2
+  B5: c21's surface alone can't prove the publish/observer
+  demo; harness arrives in c23, observer mode in c22). Three
+  new tests in c21:
+  - `tests/supervisor_spawn_fixture_lifecycle.rs` (NOT the
+    canonical scope name — pi-2 B5) — spawn the c20 fixture
+    in `respond_peer_call` mode via `PluginSupervisor::spawn`.
     Build the `CompiledPlugin` synthetically (real harness is
     c23). After spawn returns `Ok(handle)`:
     - `handle.canonical()` matches the plan.
     - `handle.try_wait()` returns `None` initially.
+    - Wait for the fixture's `core.fixture.ready` signal via
+      a temporary inline extra-service (pi-2 N1 — explicit
+      readiness wait so `peer.call` doesn't race service
+      installation).
     - Send `nix::sys::signal::kill(pid, SIGTERM)`; the
       fixture exits.
     - `handle.wait().await` resolves to
       `Arc<ReaperOutcome::Exited(_)>` within bounded wait.
-  - `tests/supervisor_peer_call_core_to_plugin.rs` (pi-1 B4
-    — canonical scope test name) — fixture in
-    `respond_peer_call`; harness calls
-    `handle.peer().call("core.fixture.echo", json!({"x":1})).await`
-    → `Ok({"x":1})`.
+  - `tests/supervisor_peer_call_core_to_plugin.rs` (canonical
+    scope test name) — fixture in `respond_peer_call`;
+    **wait for `core.fixture.ready`** (pi-2 N1) before
+    calling `handle.peer().call("core.fixture.echo",
+    json!({"x":1})).await` → `Ok({"x":1})`.
   - `tests/supervisor_spawn_handle_clone_observes_same_outcome.rs`
     — clone the `SpawnHandle`; both `wait().await` calls
     return `Arc::ptr_eq` outcomes.
@@ -981,13 +1023,17 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     - `client.call("core.fixture.after_publish",
       Value::Null).await` — flush ack.
     - Exit 0.
-  - **`call_core_then_exit` mode** — call
+  - **`call_core_then_exit` mode** — **wait for
+    `core.fixture.start`** (pi-2 B8 — every real fixture mode
+    must observe the two-phase readiness handshake before
+    mode-specific work; round-2 had this missing for this
+    mode and reintroduced the race the handshake exists to
+    avoid). After start ack, call
     `client.peer().call("core.fixture.ping", json!({"n":42})).await`;
-    exit 0 on Ok response with payload non-empty (the
-    fixture does NOT assert specific response shape — pi-1
-    c22 finding — exit-0 just means "the call completed
-    successfully"; the harness chooses the response shape);
-    exit 2 on Err.
+    exit 0 on Ok response (the fixture does NOT assert
+    specific response shape — exit-0 just means "the call
+    completed successfully"; the harness chooses the
+    response shape); exit 2 on Err.
   - **`observer` mode** — `with_notification_handler` per
     scope §H4: synchronous closure clones an outbound
     `PeerHandle` and `tokio::spawn`s the forwarding
@@ -1036,18 +1082,24 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     `bin/fixture` (preserve exec bit), minimal
     `rafaello.toml`, and a canonical "no-op" `openrpc.json`
     sibling shipped at `tests/common/empty_openrpc.json`.
-  - **Constructs the `Lock` value with the actual m1 API**:
+  - **Constructs the `Lock` value with the actual m1 API**
+    (pi-2 B6 — corrected `SafePath` + `LockFlags` types):
     ```
     PluginEntry {
-        entry,             // PathBuf for the entry within the package
-        digest,            // m1 ContentDigest computed via digest::content_digest
-        manifest_digest,   // m1 ManifestDigest computed via digest::manifest_digest
-        granted_at,        // chrono::DateTime<Utc>
+        entry: SafePath,   // SafePath::parse("bin/fixture")? — relative within package
+        digest: String,    // hex of content digest computed via digest::content_digest
+        manifest_digest: String, // hex computed via digest::manifest_digest
+        granted_at: chrono::DateTime<Utc>,
         grant: Grant { ... },        // NOT granted_capabilities
         bindings: Bindings { ... },
-        flags: PluginFlags { ... },
+        flags: LockFlags { ... },    // exported as LockFlags, NOT PluginFlags
     }
     ```
+    The c23 agent reads
+    `rafaello/crates/rafaello-core/src/lock/{mod.rs,canonical_id.rs}`
+    + `digest/mod.rs` to confirm exact field types/values
+    before writing — `digest`/`manifest_digest` are `String`
+    (hex-encoded) per current m1.
     The c23 agent reads `rafaello/crates/rafaello-core/src/lock/mod.rs`
     + `digest/mod.rs` to confirm exact field names + variant
     names before writing.
@@ -1110,8 +1162,17 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 
 - **What.** Implement `PluginSupervisor::shutdown(self).await
   -> ShutdownReport` per scope §SP1 + §SP5:
-  - For each `(canonical, mut managed)` in
-    `self.managed.lock().drain()`:
+  - **Drain the registry under the lock into a local Vec
+    BEFORE any await** (pi-2 B3 — never hold a
+    `parking_lot::MutexGuard` across `.await`):
+    ```rust
+    let drained: Vec<(CanonicalId, ManagedSpawn)> = {
+        let mut guard = self.managed.lock();
+        guard.drain().collect()
+    }; // guard dropped here
+    ```
+  - Then iterate over `drained` (no lock held). For each
+    `(canonical, mut managed)`:
     - `managed.registered.take().drop()` — broker fan-out
       stops immediately.
     - `nix::sys::signal::kill(Pid::from_raw(pid as i32),
@@ -1125,11 +1186,11 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
       result so `ShutdownReport` reflects actual state).
     - `managed.proxy.take().drop()` — after child is dead.
     - `managed.serve_join.take().abort()`.
-    - `managed.reaper_join.take()` and
-      `managed.watcher_join.take()` are intentionally NOT
-      aborted — they own the wait observation that the report
-      depends on, and finish naturally once the child is
-      reaped.
+    - `managed.watcher_join.take()` is intentionally NOT
+      aborted — the watcher owns the reaper join handle and
+      publishes the wait observation the report depends on;
+      both finish naturally once the child is reaped (pi-2
+      B2 — single owner of the reaper join handle).
     - Build the per-plugin entry: `Exited(_)` →
       `report.clean.push(canonical)` (graceful) or
       `report.forced.push(canonical)` (SIGKILL fallback);
@@ -1151,7 +1212,10 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     `RFL_FIXTURE_TRAP_SIGTERM=1` env knob to the fixture
     universal init (the c25 agent extends c20's init: when
     the env var is set, install
-    `tokio::signal::ctrl_c`-style trap that ignores SIGTERM;
+    real SIGTERM handler via
+    `tokio::signal::unix::signal(SignalKind::terminate())`
+    (pi-2 N5: NOT `tokio::signal::ctrl_c` — that's SIGINT)
+    that drains the SIGTERM stream and ignores;
     inline this fixture extension in the commit body); call
     `shutdown` with `shutdown_grace = Duration::from_millis(50)`;
     `report.forced` contains the canonical; SIGKILL fired
@@ -1260,36 +1324,47 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 - **Depends on.** c28.
 - **Acceptance.** As above.
 
-### c30 — test(rafaello-core): cross-plugin round-trip + private-state + taint round-trip
+### c30 — test(rafaello-core): canonical happy-path + cross-plugin round-trip + private-state + taint + plugin-to-core peer call
 
-- **What.** Three integration tests covering remaining
-  positive demo-bar items:
+- **What.** Four integration tests (pi-2 N3 — c30 explicitly
+  owns all four; no agent-time split). All use the c23
+  harness:
+  - `tests/supervisor_spawn_fixture_happy_path.rs` (canonical
+    scope-named headline test — pi-2 B5: this is the scope's
+    two-fixture publish/observer demo, not c21's
+    process-lifecycle test) — A in `publish_one` publishing
+    `"plugin.<A>.hello"` with payload `{"msg":"hi"}`;
+    B in `observer` mode with subscribe grant on `"plugin.**"`
+    via `Observer::watch_all`. Two-phase harness readiness
+    handshake (both fixtures) + `core.fixture.start` to A.
+    Observer receives one `bus.event` matching: `topic ==
+    "plugin.<A>.hello"`, `payload == {"msg":"hi"}`,
+    `publisher == PublisherIdentity::Plugin { canonical: <A>,
+    topic_id: <A's topic-id> }`.
   - `tests/supervisor_bus_publish_round_trip_two_plugins.rs`
-    — A in `publish_one` publishing `"plugin.<A>.greet"`;
-    B with subscribe grant on `"plugin.<A>.greet"` —
-    observer-style B forwards via `core.fixture.observed`.
-    After two-phase readiness handshake + `core.fixture.start`
-    to A, B receives one event matching topic + payload +
-    publisher.
+    — variant: B has explicit grant on `"plugin.<A>.greet"`
+    (not the broad `plugin.**` from the headline above);
+    confirms grant-based fan-out works alongside the broader
+    pattern case.
   - `tests/supervisor_private_state_dir_writable.rs` —
     A in `respond_peer_call`; harness calls
     `core.fixture.write_private_state`; fixture writes to
     `<RFL_PRIVATE_STATE_DIR>/marker`; test verifies file
-    exists and the path matches
+    exists and path matches
     `project_root.join(".rafaello-plugin-data").join(plan.topic_id).join("marker")`.
   - `tests/supervisor_taint_round_trip.rs` — A in
     `publish_with_taint` mode with
     `RFL_FIXTURE_TAINT_JSON=[{"source":"test","detail":"x"}]`;
     observer receives event; `event.taint` round-trips
     byte-equal.
-  - **`supervisor_peer_call_plugin_to_core.rs`** (pi-1 B4 —
-    canonical scope test name) — A in `call_core_then_exit`
+  - `tests/supervisor_peer_call_plugin_to_core.rs` —
+    canonical scope test name; A in `call_core_then_exit`
     mode; harness extra service registers `core.fixture.ping`
     returning `{"echo":"ok"}`; fixture exits 0 within bounded
-    wait. (Could split into a separate commit if c30 grows
-    too large; the c30 agent picks at implementation time and
-    inlines the choice in the commit body.)
-- **Why.** scope §"Demo bar" positives, pi-1 B4.
+    wait.
+- **Why.** scope §"Demo bar" positives, pi-1 B4, pi-2 B5
+  (canonical headline lands here, not c21), pi-2 N3 (c30
+  explicit ownership of all tests).
 - **Depends on.** c29.
 - **Acceptance.** As above.
 
