@@ -106,9 +106,9 @@ pub struct ToolsRegisterResult {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientInfo, InitializeParams, InitializeResult, ServerCapabilities, ServerInfo,
-        ToolInfo, ToolsCallParams, ToolsCapability, ToolsListResult, ToolsRegisterParams,
-        ToolsRegisterResult,
+        ClientInfo, InitializeParams, InitializeResult, ProgressNotificationParams,
+        ServerCapabilities, ServerInfo, ToolInfo, ToolsCallParams, ToolsCapability,
+        ToolsListResult, ToolsRegisterParams, ToolsRegisterResult,
     };
     use serde_json::{json, to_value};
 
@@ -271,6 +271,52 @@ mod tests {
         let encoded = serde_json::to_string(&original).expect("serialize");
         let decoded: ToolsRegisterResult = serde_json::from_str(&encoded).expect("deserialize");
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn progress_notification_params_deserializes_full_payload() {
+        let decoded: ProgressNotificationParams = serde_json::from_value(json!({
+            "progressToken": "tok-1",
+            "progress": 0.5,
+            "total": 1.0,
+            "message": "halfway",
+        }))
+        .expect("deserialize");
+        assert_eq!(decoded.progress_token, json!("tok-1"));
+        assert_eq!(decoded.progress, 0.5);
+        assert_eq!(decoded.total, Some(1.0));
+        assert_eq!(decoded.message.as_deref(), Some("halfway"));
+    }
+
+    #[test]
+    fn progress_notification_params_deserializes_with_integer_token_and_no_optionals() {
+        let decoded: ProgressNotificationParams = serde_json::from_value(json!({
+            "progressToken": 7,
+            "progress": 3.0,
+        }))
+        .expect("deserialize");
+        assert_eq!(decoded.progress_token, json!(7));
+        assert_eq!(decoded.progress, 3.0);
+        assert_eq!(decoded.total, None);
+        assert_eq!(decoded.message, None);
+    }
+
+    #[test]
+    fn progress_notification_params_skips_none_optionals_on_serialize() {
+        let encoded = to_value(ProgressNotificationParams {
+            progress_token: json!("tok-2"),
+            progress: 1.0,
+            total: None,
+            message: None,
+        })
+        .expect("serialize");
+        assert_eq!(
+            encoded,
+            json!({
+                "progressToken": "tok-2",
+                "progress": 1.0,
+            })
+        );
     }
 
     #[test]
