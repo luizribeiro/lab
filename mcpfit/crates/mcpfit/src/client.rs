@@ -73,6 +73,18 @@ where
         Ok(decoded.tools)
     }
 
+    pub async fn call_tool(
+        &self,
+        name: impl Into<String>,
+        args: impl Serialize,
+    ) -> Result<ToolResponse, McpfitError> {
+        let response = self.call_tool_raw(name, args).await?;
+        if response.is_error {
+            return Err(McpfitError::ToolFailed(response));
+        }
+        Ok(response)
+    }
+
     pub async fn call_tool_raw(
         &self,
         name: impl Into<String>,
@@ -570,6 +582,91 @@ mod tests {
             "raw call must passthrough isError without mapping, got: {response:?}"
         );
         assert_eq!(response.content, vec![ToolContent::text("boom")]);
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn call_tool_returns_response_on_success() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("tools/call must carry id");
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "ok"}],
+                    "isError": false,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let response = client
+            .call_tool("ping", json!({}))
+            .await
+            .expect("call_tool succeeds on isError: false");
+
+        assert_eq!(
+            response,
+            ToolResponse {
+                content: vec![ToolContent::text("ok")],
+                structured_content: None,
+                is_error: false,
+            }
+        );
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn call_tool_maps_is_error_to_tool_failed() {
+        use crate::error::McpfitError;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("tools/call must carry id");
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "boom"}],
+                    "isError": true,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let err = client
+            .call_tool("explode", json!({}))
+            .await
+            .expect_err("call_tool must surface isError as ToolFailed");
+
+        match err {
+            McpfitError::ToolFailed(response) => {
+                assert!(response.is_error);
+                assert_eq!(response.content, vec![ToolContent::text("boom")]);
+            }
+            other => panic!("expected ToolFailed, got: {other:?}"),
+        }
 
         server.await.expect("server task joins");
     }

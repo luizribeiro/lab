@@ -29,6 +29,7 @@ fn to_fittings_error(err: McpfitError) -> FittingsError {
         McpfitError::MethodNotFound(m) => FittingsError::method_not_found(m),
         McpfitError::InvalidParams(m) => FittingsError::invalid_params(m),
         McpfitError::Cancelled => FittingsError::invalid_request("cancelled"),
+        McpfitError::ToolFailed(_) => FittingsError::internal("tool returned isError: true"),
         McpfitError::Internal(m) => FittingsError::internal(m),
     }
 }

@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::response::ToolResponse;
+
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum McpfitError {
     #[error("invalid request: {0}")]
@@ -10,6 +12,8 @@ pub enum McpfitError {
     InvalidParams(String),
     #[error("cancelled")]
     Cancelled,
+    #[error("tool returned isError: true")]
+    ToolFailed(ToolResponse),
     #[error("internal error: {0}")]
     Internal(String),
 }
