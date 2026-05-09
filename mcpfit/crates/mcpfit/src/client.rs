@@ -9,11 +9,12 @@ use std::sync::{
 
 use fittings::{
     client::{Client as FittingsClient, InboundNotification, PendingCall},
-    core::transport::Connector,
+    core::{error::FittingsError, transport::Connector},
     tokio::{
         sync::{broadcast, mpsc},
         task::JoinHandle,
     },
+    wire::types::JsonRpcId,
     SubprocessConnector,
 };
 
@@ -117,11 +118,33 @@ impl ProgressRegistry {
 
 const MCP_PROTOCOL_VERSION: &str = "2025-01-01";
 
+pub(crate) trait CancelNotifier: Send + Sync {
+    fn notify_cancelled<'a>(
+        &'a self,
+        request_id: JsonRpcId,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FittingsError>> + Send + 'a>>;
+}
+
+impl<C> CancelNotifier for FittingsClient<C>
+where
+    C: Connector + Send + Sync + 'static,
+{
+    fn notify_cancelled<'a>(
+        &'a self,
+        request_id: JsonRpcId,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FittingsError>> + Send + 'a>> {
+        Box::pin(self.notify(
+            "notifications/cancelled",
+            serde_json::json!({"requestId": request_id}),
+        ))
+    }
+}
+
 pub struct Client<C>
 where
     C: Connector + Send + Sync + 'static,
 {
-    inner: FittingsClient<C>,
+    inner: Arc<FittingsClient<C>>,
     router: Option<JoinHandle<()>>,
     progress: ProgressRegistry,
     next_progress_token: AtomicU64,
@@ -151,9 +174,11 @@ where
     }
 
     pub async fn connect_uninitialized(connector: C) -> Result<Self, McpfitError> {
-        let inner = FittingsClient::connect(connector)
-            .await
-            .map_err(|e| McpfitError::internal(format!("fittings connect: {e}")))?;
+        let inner = Arc::new(
+            FittingsClient::connect(connector)
+                .await
+                .map_err(|e| McpfitError::internal(format!("fittings connect: {e}")))?,
+        );
         let progress = ProgressRegistry::default();
         let router = spawn_notification_router(inner.subscribe_notifications(), progress.clone());
         Ok(Self {
@@ -277,6 +302,7 @@ pub struct ToolCallHandle {
     pending: PendingCall,
     progress_rx: mpsc::Receiver<ProgressNotificationParams>,
     missed: Arc<AtomicU64>,
+    cancel_notifier: Option<Arc<dyn CancelNotifier>>,
     _cleanup: Option<HandleCleanup>,
 }
 
@@ -286,11 +312,13 @@ impl ToolCallHandle {
         progress_rx: mpsc::Receiver<ProgressNotificationParams>,
         missed: Arc<AtomicU64>,
         cleanup: Option<HandleCleanup>,
+        cancel_notifier: Option<Arc<dyn CancelNotifier>>,
     ) -> Self {
         Self {
             pending,
             progress_rx,
             missed,
+            cancel_notifier,
             _cleanup: cleanup,
         }
     }
@@ -301,6 +329,17 @@ impl ToolCallHandle {
 
     pub fn missed_progress_count(&self) -> u64 {
         self.missed.load(Ordering::Relaxed)
+    }
+
+    pub async fn cancel(self) -> Result<(), McpfitError> {
+        let request_id = self.pending.id().clone();
+        let Some(notifier) = self.cancel_notifier else {
+            return Ok(());
+        };
+        notifier
+            .notify_cancelled(request_id)
+            .await
+            .map_err(|e| McpfitError::internal(format!("send cancellation: {e}")))
     }
 }
 
@@ -365,7 +404,14 @@ where
             registry: self.client.progress.clone(),
             token,
         };
-        Ok(ToolCallHandle::new(pending, rx, missed, Some(cleanup)))
+        let cancel_notifier: Arc<dyn CancelNotifier> = self.client.inner.clone();
+        Ok(ToolCallHandle::new(
+            pending,
+            rx,
+            missed,
+            Some(cleanup),
+            Some(cancel_notifier),
+        ))
     }
 }
 
@@ -1339,7 +1385,7 @@ mod tests {
         );
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed, None);
+        let handle = ToolCallHandle::new(pending, rx, missed, None, None);
 
         let response = handle.await.expect("handle resolves to ToolResponse");
 
@@ -1394,7 +1440,7 @@ mod tests {
         );
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed, None);
+        let handle = ToolCallHandle::new(pending, rx, missed, None, None);
 
         let err = handle
             .await
@@ -1427,7 +1473,7 @@ mod tests {
         let pending = fittings_client.start_call("tools/call", json!({}));
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed.clone(), None);
+        let handle = ToolCallHandle::new(pending, rx, missed.clone(), None, None);
 
         assert_eq!(handle.missed_progress_count(), 0);
         missed.store(7, Ordering::Relaxed);
@@ -1740,6 +1786,60 @@ mod tests {
             client.progress_registry().get(&progress_token).is_none(),
             "registry entry must be removed when handle is dropped without awaiting",
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_sends_notifications_cancelled_with_request_id() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let handle = client
+            .call_tool_with_progress("work", json!({}))
+            .start()
+            .await
+            .expect("start progress-enabled call");
+
+        let call_frame = server_transport.recv().await.expect("tools/call request");
+        let call_request = parse_request_fixture(&call_frame).expect("decode tools/call");
+        let request_id = call_request.id.expect("tools/call must carry id");
+
+        handle.cancel().await.expect("cancel succeeds");
+
+        let cancel_frame = server_transport.recv().await.expect("cancel notification");
+        let cancel = parse_request_fixture(&cancel_frame).expect("decode cancel notification");
+        assert_eq!(cancel.method, "notifications/cancelled");
+        assert!(
+            cancel.id.is_none(),
+            "notifications/cancelled must not carry an id, got: {:?}",
+            cancel.id,
+        );
+        assert_eq!(cancel.params, Some(json!({"requestId": request_id})));
+    }
+
+    #[tokio::test]
+    async fn cancel_on_handle_without_notifier_is_noop() {
+        use std::sync::atomic::AtomicU64;
+
+        use fittings::{client::Client as FittingsClient, tokio::sync::mpsc};
+
+        use super::ToolCallHandle;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, _server_transport) = MemoryTransport::pair(8);
+        let fittings_client = FittingsClient::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("fittings client connects");
+        let pending = fittings_client.start_call("tools/call", json!({}));
+        let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        let missed = Arc::new(AtomicU64::new(0));
+        let handle = ToolCallHandle::new(pending, rx, missed, None, None);
+
+        handle
+            .cancel()
+            .await
+            .expect("cancel without notifier should be a no-op");
     }
 }
 
