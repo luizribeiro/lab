@@ -1,7 +1,10 @@
 use std::ffi::OsStr;
 
 use fittings::{
-    client::Client as FittingsClient, core::transport::Connector, SubprocessConnector,
+    client::{Client as FittingsClient, InboundNotification},
+    core::transport::Connector,
+    tokio::sync::broadcast,
+    SubprocessConnector,
 };
 
 use crate::error::McpfitError;
@@ -52,6 +55,10 @@ where
             .map_err(|e| McpfitError::internal(format!("initialize call failed: {e}")))?;
         serde_json::from_value(result)
             .map_err(|e| McpfitError::internal(format!("decode initialize result: {e}")))
+    }
+
+    pub fn notifications(&self) -> broadcast::Receiver<InboundNotification> {
+        self.inner.subscribe_notifications()
     }
 
     pub async fn initialized(&self) -> Result<(), McpfitError> {
@@ -311,6 +318,31 @@ mod tests {
         );
 
         server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn notifications_delegates_to_fittings_subscription() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let mut rx = client.notifications();
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{\"foo\":1}}\n")
+            .await
+            .expect("send notification frame");
+
+        let notif = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("notification arrives within timeout")
+            .expect("broadcast not closed");
+        assert_eq!(notif.method, "notifications/tools/list_changed");
+        assert_eq!(notif.params, Some(json!({"foo": 1})));
     }
 
     #[tokio::test]

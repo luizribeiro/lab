@@ -18,6 +18,7 @@ mod structured;
 mod tool;
 
 pub use client::Client;
+pub use fittings::client::InboundNotification;
 pub use content::{EmbeddedResource, ToolContent};
 pub use context::Cx;
 pub use error::McpfitError;
