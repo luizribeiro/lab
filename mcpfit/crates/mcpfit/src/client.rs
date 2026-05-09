@@ -8,7 +8,7 @@ use fittings::{
 };
 
 use crate::error::McpfitError;
-use crate::protocol::{ClientInfo, InitializeParams, InitializeResult};
+use crate::protocol::{ClientInfo, InitializeParams, InitializeResult, ToolInfo, ToolsListResult};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-01-01";
 
@@ -57,6 +57,17 @@ where
             .map_err(|e| McpfitError::internal(format!("decode initialize result: {e}")))
     }
 
+    pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpfitError> {
+        let result = self
+            .inner
+            .call("tools/list", serde_json::json!({}))
+            .await
+            .map_err(|e| McpfitError::internal(format!("tools/list call failed: {e}")))?;
+        let decoded: ToolsListResult = serde_json::from_value(result)
+            .map_err(|e| McpfitError::internal(format!("decode tools/list result: {e}")))?;
+        Ok(decoded.tools)
+    }
+
     pub fn notifications(&self) -> broadcast::Receiver<InboundNotification> {
         self.inner.subscribe_notifications()
     }
@@ -91,7 +102,9 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::{Client, MCP_PROTOCOL_VERSION};
-    use crate::protocol::{InitializeResult, ServerCapabilities, ServerInfo, ToolsCapability};
+    use crate::protocol::{
+        InitializeResult, ServerCapabilities, ServerInfo, ToolInfo, ToolsCapability,
+    };
 
     struct OneShotConnector {
         transport: Arc<Mutex<Option<MemoryTransport>>>,
@@ -343,6 +356,95 @@ mod tests {
             .expect("broadcast not closed");
         assert_eq!(notif.method, "notifications/tools/list_changed");
         assert_eq!(notif.params, Some(json!({"foo": 1})));
+    }
+
+    #[tokio::test]
+    async fn list_tools_sends_typed_request_and_decodes_result() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/list request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            assert_eq!(request.method, "tools/list");
+            let id = request.id.expect("tools/list must carry id");
+            assert_eq!(request.params, Some(json!({})));
+
+            let response = success_response_line(
+                id,
+                json!({
+                    "tools": [
+                        {
+                            "name": "echo",
+                            "description": "Echo the input.",
+                            "inputSchema": {"type": "object"},
+                        },
+                        {
+                            "name": "add",
+                            "inputSchema": {"type": "object"},
+                        },
+                    ],
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/list response");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let tools = client.list_tools().await.expect("list_tools succeeds");
+
+        assert_eq!(
+            tools,
+            vec![
+                ToolInfo {
+                    name: "echo".into(),
+                    description: Some("Echo the input.".into()),
+                    input_schema: json!({"type": "object"}),
+                },
+                ToolInfo {
+                    name: "add".into(),
+                    description: None,
+                    input_schema: json!({"type": "object"}),
+                },
+            ]
+        );
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn list_tools_surfaces_decode_failure_when_result_is_malformed() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/list request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("request id");
+            let response = success_response_line(id, json!({"not": "a tools/list result"}))
+                .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send malformed result");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let err = client
+            .list_tools()
+            .await
+            .expect_err("malformed result must surface as error");
+        assert!(
+            err.to_string().contains("decode tools/list result"),
+            "unexpected error: {err}"
+        );
+
+        server.await.expect("server task joins");
     }
 
     #[tokio::test]
