@@ -38,3 +38,8 @@ tracing-subscriber = { workspace = true }
 
 [features]
 test-fixture = []
+
+[[bin]]
+name = "rfl-bus-fixture"
+path = "src/bin/rfl_bus_fixture.rs"
+required-features = ["test-fixture"]
