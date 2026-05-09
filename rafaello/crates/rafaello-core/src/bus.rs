@@ -10,7 +10,7 @@ pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
 
 use crate::broker_acl::{BrokerAcl, PluginAcl};
-use crate::error::BrokerError;
+use crate::error::{BrokerError, InReplyToReason};
 use crate::lock::canonical_id::CanonicalId;
 use crate::validate::topic::{validate_pattern, validate_topic};
 
@@ -192,6 +192,28 @@ impl Broker {
                 return Err(BrokerError::UnknownNamespace {
                     publisher: crate::error::Publisher::Plugin(canonical.clone()),
                     topic: msg.topic.clone(),
+                });
+            }
+        }
+        if !publisher_acl.publish_topics.iter().any(|t| t == &msg.topic) {
+            return Err(BrokerError::PublishOutsideGrant {
+                canonical: canonical.clone(),
+                topic: msg.topic.clone(),
+            });
+        }
+        let last = *segments.last().expect("validate_topic ensures non-empty");
+        if last == "tool_result" || last == "rpc_reply" {
+            let reason = match msg.in_reply_to.as_ref() {
+                None => Some(InReplyToReason::Missing),
+                Some(ids) if ids.is_empty() => Some(InReplyToReason::EmptyArray),
+                Some(ids) if ids.len() > 1 => Some(InReplyToReason::UnexpectedMultiple),
+                Some(_) => None,
+            };
+            if let Some(reason) = reason {
+                return Err(BrokerError::InvalidInReplyTo {
+                    canonical: canonical.clone(),
+                    topic: msg.topic.clone(),
+                    reason,
                 });
             }
         }
