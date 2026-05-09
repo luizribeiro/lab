@@ -205,17 +205,36 @@ impl Client<SubprocessConnector> {
 
 fn spawn_notification_router(
     mut rx: broadcast::Receiver<InboundNotification>,
-    _progress: ProgressRegistry,
+    progress: ProgressRegistry,
 ) -> JoinHandle<()> {
     fittings::tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(_notification) => {}
+                Ok(notification) => route_notification(&progress, notification),
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     })
+}
+
+fn route_notification(progress: &ProgressRegistry, notification: InboundNotification) {
+    if notification.method != "notifications/progress" {
+        return;
+    }
+    let Some(params) = notification.params else {
+        return;
+    };
+    let Ok(decoded) = serde_json::from_value::<ProgressNotificationParams>(params) else {
+        return;
+    };
+    let Some(token) = ProgressToken::from_value(&decoded.progress_token) else {
+        return;
+    };
+    let Some(sender) = progress.get(&token) else {
+        return;
+    };
+    let _ = sender.try_send(decoded);
 }
 
 #[cfg(test)]
@@ -947,6 +966,80 @@ mod tests {
         assert!(
             client.progress_registry().get(&token).is_some(),
             "registry handed out by accessor must share state with the Client",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_forwards_progress_notification_to_registered_token() {
+        use std::time::Duration;
+
+        use fittings::tokio::sync::mpsc;
+        use tokio::time::timeout;
+
+        use super::ProgressToken;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let token = ProgressToken::String("call-1".into());
+        let (tx, mut rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        client.progress_registry().register(token, tx);
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"call-1\",\"progress\":0.25,\"total\":1.0,\"message\":\"quarter\"}}\n")
+            .await
+            .expect("send progress frame");
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("router routes within timeout")
+            .expect("progress channel not closed");
+        assert_eq!(event.progress_token, json!("call-1"));
+        assert_eq!(event.progress, 0.25);
+        assert_eq!(event.total, Some(1.0));
+        assert_eq!(event.message.as_deref(), Some("quarter"));
+    }
+
+    #[tokio::test]
+    async fn router_drops_progress_notifications_for_unknown_tokens() {
+        use std::time::Duration;
+
+        use fittings::tokio::sync::mpsc;
+        use tokio::time::timeout;
+
+        use super::ProgressToken;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let registered = ProgressToken::String("known".into());
+        let (tx, mut rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        client.progress_registry().register(registered, tx);
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"stranger\",\"progress\":0.5}}\n")
+            .await
+            .expect("send unknown-token progress frame");
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"known\",\"progress\":0.75}}\n")
+            .await
+            .expect("send known-token progress frame");
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("router routes within timeout")
+            .expect("progress channel not closed");
+        assert_eq!(event.progress, 0.75);
+        assert_eq!(event.progress_token, json!("known"));
+        assert!(
+            rx.try_recv().is_err(),
+            "registered token must not see the unknown-token event",
         );
     }
 
