@@ -16,6 +16,13 @@ impl<C> Client<C>
 where
     C: Connector + Send + Sync + 'static,
 {
+    pub async fn connect(connector: C) -> Result<Self, McpfitError> {
+        let client = Self::connect_uninitialized(connector).await?;
+        client.initialize().await?;
+        client.initialized().await?;
+        Ok(client)
+    }
+
     pub async fn connect_uninitialized(connector: C) -> Result<Self, McpfitError> {
         let inner = FittingsClient::connect(connector)
             .await
@@ -222,6 +229,78 @@ mod tests {
             request.id
         );
         assert_eq!(request.params, Some(json!({})));
+    }
+
+    #[tokio::test]
+    async fn connect_runs_initialize_then_initialized_in_order() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let init_frame = server_transport.recv().await.expect("initialize request");
+            let init_request = parse_request_fixture(&init_frame).expect("decode initialize");
+            assert_eq!(init_request.method, "initialize");
+            let id = init_request.id.expect("initialize must carry id");
+
+            let response = success_response_line(
+                id,
+                json!({
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {"tools": {"listChanged": true}},
+                    "serverInfo": {"name": "test-srv", "version": "9.9.9"},
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send initialize response");
+
+            let notif_frame = server_transport
+                .recv()
+                .await
+                .expect("initialized notification");
+            let notif = parse_request_fixture(&notif_frame).expect("decode notification");
+            assert_eq!(notif.method, "notifications/initialized");
+            assert!(
+                notif.id.is_none(),
+                "notifications/initialized must not carry an id, got: {:?}",
+                notif.id
+            );
+        });
+
+        let _client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("connect performs full handshake");
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn connect_surfaces_initialize_failure() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("initialize request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("request id");
+            let response = success_response_line(id, json!({"not": "an initialize result"}))
+                .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send malformed result");
+        });
+
+        let err = match Client::connect(OneShotConnector::new(client_transport)).await {
+            Ok(_) => panic!("malformed initialize must abort connect"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("decode initialize result"),
+            "unexpected error: {err}"
+        );
+
+        server.await.expect("server task joins");
     }
 
     #[tokio::test]
