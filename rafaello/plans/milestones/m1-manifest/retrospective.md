@@ -266,10 +266,12 @@ still says:
 
 The forward-pointing wording is correct (it tells the reader
 `always_confirm` is the live name and `requires_confirmation`
-is dead). No code references `requires_confirmation` anywhere
-(`grep -rn requires_confirmation rafaello/ fittings/` is empty;
-the only hit in the tree is `overview.md:1193`'s historical
-note about the rename).
+is dead). No code references the dead name (`grep -rn
+requires_confirmation rafaello/crates fittings/crates fittings/tests
+fittings/examples` is empty); the remaining textual occurrences
+in `rafaello/plans/...` are rename-note context, m1 process
+artefacts, and prior overview-review snapshots — see the
+canonical-fix paragraph below for the full list.
 
 **Canonical fix.** No RFC patch needed for the rename itself —
 the RFC's §9 #2 mention is in "X replaces Y" rename-note
@@ -781,11 +783,15 @@ as of 2026-05-08:
    F banner updated to drop the non-existent `tests/fixtures/`
    reference — pi review-2 finding 3; same commit as #5.
 
-No `decisions.md` rows added (the drift items were already
-pinned in existing rows; m1 reconciles, doesn't re-decide).
-No further stream-RFC patches (Stream A drift items §2.3 /
-§2.4 are recorded-only per `plans/README.md`'s
-authoring-conventions rule).
+**One** `decisions.md` row added (37, refining row 16 for the
+private-state path-key clarification). **Two** stream-RFC
+patches landed: Stream A v1-status banners on §5.7 + §7.4.1
++ §9 #2 / #5 strikethroughs (commits `8d0a28c` + the pi-3
+fix landing alongside this retrospective revision); Stream F
+top-of-RFC v1-status banner (commit `5677dae`). The
+README's authoring-conventions rule (RFCs are historical
+artefacts) is honoured — bodies are preserved with banners
+rather than section-by-section rewrites.
 
 ---
 
@@ -837,8 +843,13 @@ authoring-conventions rule).
   landed in overview §5.5 + glossary + new decisions row 37
   (refines row 16) (§2.5 + commit `93761c8`).
 
-m1 is **done pending the four follow-up commits** above. The
-core deliverable (the `rafaello-core` crate with 269 tests
-green and the full fittings workspace cutover green) has
-landed; the open items are documentation reconciliation that
-the milestone retrospective is the natural home for.
+m1 is **done.** The core deliverable (the `rafaello-core` crate
+with 269 tests green) has landed; the §W fittings cutover has
+landed (228 fittings tests green except the m0-known harness
+flake which is explicitly waived above and recorded in §5.1);
+all documentation reconciliation listed in §"Follow-up commits
+on this branch" has landed before sign-off per pi review-1+2+3.
+Open follow-ups for m2 / future milestones: fix the m0 harness
+flake (m0 retrospective §5.2 has the proposed fix); patch the
+remaining pre-m1 architectural-doc rough edges as they surface
+(none currently named).

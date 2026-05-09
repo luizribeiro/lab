@@ -1214,9 +1214,10 @@ consumer of an existing data flow.
 2. Stream F must commit to the manifest fields:
    `provides.tools`, `provides.provider`, `provides.tool.<n>.sinks`,
    `provides.tool.<n>.grant_match`, `subscribes`, `publishes`,
-   `helper_for` (see #5), `always_confirm` (per-tool, enforced
-   UX gate; see `overview.md` §15.1 row 3 — replaces the earlier
-   advisory `requires_confirmation`).
+   ~~`helper_for` (see #5)~~ — **deferred to v2 per `decisions.md`
+   row 26; m1 rejects the field at parse time** —, `always_confirm`
+   (per-tool, enforced UX gate; see `overview.md` §15.1 row 3 —
+   replaces the earlier advisory `requires_confirmation`).
 3. **Bus event payload schemas live in Stream A**, not Stream
    B (per `overview.md` §15.2). Stream A owes complete schemas
    for `core.session.tool_result`, `core.session.tool_request`,
@@ -1230,11 +1231,13 @@ consumer of an existing data flow.
    helper channels.
 4. The grant compiler tests must include each scenario in §6 as
    a concrete refusal-or-allow assertion.
-5. **Helper-plugin primitive accepted as v1.** `bindings.helper_for`
-   and `RFL_HELPER_FD` are specified in §7.4.1; Stream B owes
-   the helper-channel framing definition (identical to bus
-   framing, point-to-point, no broker). This unblocks the clean
-   CaMeL Q-LLM design.
+5. ~~**Helper-plugin primitive accepted as v1.**~~ **Deferred to
+   v2 per `decisions.md` row 26 (2026-05-08), which reverses
+   decision #14.** `bindings.helper_for` / `RFL_HELPER_FD` are
+   v2 work; m1 rejects `helper_for` at parse time and the v1
+   lock has no helper fields. The §7.4.1 design body is
+   preserved as the v2 spec; the §7.4.1 v1-status banner makes
+   the v1 reader unambiguous.
 6. **Document exec-time tamper as a user-visible non-goal.**
    Install-time digest is checked; mid-run swap of plugin
    binaries on disk (e.g. when installed from a mutable local

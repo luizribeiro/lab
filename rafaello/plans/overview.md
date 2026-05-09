@@ -470,9 +470,15 @@ Authoritative: security RFC §5.5.1.
 > - `[rpc]` block dropped; the plugin ships a path-referenced
 >   `openrpc.json` sibling at the manifest's parent directory
 >   (row 31).
-> - The compiler emits **lockin builder calls in-memory**, not
->   a `lockin.toml` artifact — the third arrow in the diagram
->   below is a Rust API call, not a TOML write (row 32).
+> - The compiler emits a **structured `CompiledPlugin` plan**
+>   (m1 owns this; m2 applies it to lockin's Rust builder API
+>   at spawn time), not a `lockin.toml` artifact — the third
+>   arrow in the diagram below is a structured plan handed to
+>   m2's supervisor, which applies it to a `SandboxBuilder`
+>   per `decisions.md` row 32. m1's draft wording said
+>   "lockin builder calls in-memory" — refined in m1
+>   retrospective to the plan-based shape that round-1 pi review
+>   forced.
 >
 > **v1 status (helper plugins):** the `helper_for` row in §5.3
 > is **deferred to v2** along with the rest of §9 (`decisions.md`
@@ -498,8 +504,10 @@ plugin author writes        rfl install --review writes        runtime applies
   user's *grant* plus core-computed metadata: a content digest,
   a manifest snapshot digest, the granted subset, and a
   `bindings` block snapshotting manifest-derived authority
-  (tool names, provider role, sink classes, renderer kinds,
-  `helper_for`). Mutated only by `rfl install`, `rfl grant`,
+  (tool names, provider role, sink classes, renderer kinds —
+  `helper_for` was in the round-1 design but is **deferred to
+  v2** per `decisions.md` row 26). Mutated only by `rfl install`,
+  `rfl grant`,
   `rfl revoke`, and `rfl update`. Authoritative shape: security
   RFC §3.2.
 - The **lockin policy** is compiled at every plugin spawn from
