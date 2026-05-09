@@ -1,11 +1,10 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-7 draft, addressing pi-review-6 (3 blocking +
-> 6 non-blocking — all tiny mechanical: tokio_command call site,
-> ShutdownFailure shareable wait-error, broker_acl.plugins →
-> broker.plugin_acl, plus stale-wording cleanups). Pi round-7
-> review pending. Not yet owner-ratified.
-> Trajectory: 555 → 14 → 8 → 8 → 6 → 3.
+> **Status:** round-8 draft. Pi round-7 returned **ratifiable**
+> with 0 blocking + 6 non-blocking polish items, which are
+> inlined here. Awaiting owner ratification — `commits.md` and
+> Phase 3 work do not start until the owner says go.
+> Trajectory: 555 → 14 → 8 → 8 → 6 → 3 → 0 blocking.
 
 ## Goal
 
@@ -699,13 +698,16 @@ the socketpair plumbing that authenticates the bus connection.
     dropped immediately (registration is now source of truth);
     every Phase A/B failure path also drops the guard so
     retries are unblocked.
-  - `SpawnHandle` is cloneable (`Arc`-backed); the *underlying
-    process* is killed when the **last** `SpawnHandle` clone
-    plus the supervisor's internal handle both drop (pi-1 §54,
-    §364, §510). Supervisor holds one clone in its registry;
-    callers hold others. RAII intent: dropping the supervisor
-    or removing from its registry triggers cleanup if nobody
-    else holds a handle.
+  - `SpawnHandle` is cloneable (`Arc`-backed). Per pi-7
+    non-blocking #5: **the supervisor owns child lifetime,
+    not external clones.** Dropping the supervisor (or
+    calling `shutdown(self).await`) kills every managed
+    child synchronously even if external `SpawnHandle`
+    clones still exist; those orphaned clones can still
+    observe the cached `ReaperOutcome` via `wait()` /
+    `try_wait()` but cannot keep the process alive. This is
+    the safer rule (no risk of a forgotten test handle
+    keeping a child alive after supervisor teardown).
   - `wait` / `try_wait` give tests deterministic exit-status
     access (pi-1 §18). Implementation uses a per-spawn reaper
     task that owns the `lockin::tokio::SandboxedChild` and
@@ -768,6 +770,13 @@ the socketpair plumbing that authenticates the bus connection.
       Spawn { canonical: CanonicalId, source: std::io::Error },
       ProxyStart { canonical: CanonicalId, source: std::io::Error },
       Socketpair { canonical: CanonicalId, source: nix::errno::Errno },
+      // pi-7 non-blocking #6: kept as future-proofing.
+      // Current SP4 fittings setup (StdioTransport::new,
+      // Server::new, service router build) is infallible,
+      // so this variant is unreachable in m2 but reserved
+      // for m3+ when fittings setup grows fallible paths
+      // (e.g. notification-handler registration with
+      // configuration validation).
       FittingsBuild { canonical: CanonicalId, source: FittingsError },
       ReservedEnvInPlan { canonical: CanonicalId, var: String },
       // Post-spawn transport-setup I/O errors (pi-2 §8 +
@@ -817,16 +826,17 @@ the socketpair plumbing that authenticates the bus connection.
   
   **Phase A — validate plan (synchronous, no resources):**
   1a. **Acquire supervisor `in_flight` reservation** (pi-5
-     §4): atomically insert `plan.canonical` into the
-     supervisor's `Mutex<HashSet<CanonicalId>>` `in_flight`
-     set. If already present, return `SpawnError::AlreadyRegistered`
-     immediately. The reservation is held as a local guard
-     (RAII) — every Phase A / Phase B failure path drops it
-     so a retry can succeed; success path moves the guard
-     into the `SpawnHandle`'s shared state and only releases
-     it after broker `register_plugin` succeeds. This closes
-     the concurrent-spawn race that
-     `try_reserve_registration` alone cannot catch.
+     §4; pi-7 non-blocking #1 simplified): atomically insert
+     `plan.canonical` into the supervisor's
+     `Mutex<HashSet<CanonicalId>>` `in_flight` set. If
+     already present, return `SpawnError::AlreadyRegistered`
+     immediately. The reservation is a local RAII guard
+     held through Phase A + Phase B; on every failure path
+     the guard drops (removes from `in_flight`); on
+     successful `broker.register_plugin` at step 17 the
+     guard drops immediately because broker registration is
+     now the source of truth. This closes the concurrent-spawn
+     race that `try_reserve_registration` alone cannot catch.
   1b. `broker.try_reserve_registration(&plan.canonical)` →
      errors map to `SpawnError::NotInAcl` /
      `SpawnError::AlreadyRegistered` (pi-2 §12). This catches
@@ -1013,7 +1023,9 @@ the socketpair plumbing that authenticates the bus connection.
       ```
       (pi-1 §4, §348, §349; pi-2 §8 added the explicit
       `TransportSetup` mapping.) Failures here trigger the
-      step-13 unwind: SIGKILL the child via `nix`, drop
+      step-13 unwind: SIGKILL the child, **`child.wait().await`
+      to reap** (pi-7 non-blocking #4 — mirrors step 17;
+      avoids zombies in test parallelism), drop
       `ProxyHandle` if any, drop `core_fd` (closes parent
       half).
   15. Build the per-connection `Service` impl. In production
@@ -1029,9 +1041,13 @@ the socketpair plumbing that authenticates the bus connection.
       `try_reserve_registration` precheck makes
       `AlreadyRegistered` here practically impossible
       (single-supervisor invariant), but the call still maps
-      `BrokerError` to `SpawnError` for completeness. Any
-      error here unwinds per the post-spawn contract above:
-      SIGKILL the child, **`child.wait().await` to reap**
+      (pi-7 non-blocking #2): `BrokerError::NotInAcl(c)` →
+      `SpawnError::NotInAcl(c)`, `BrokerError::AlreadyRegistered(c)`
+      → `SpawnError::AlreadyRegistered(c)`. Any other broker
+      error variant is unreachable for `register_plugin`
+      under §B1 and is a logic bug if it occurs. Failure
+      unwinds per the post-spawn contract above: SIGKILL
+      the child, **`child.wait().await` to reap**
       (pi-6 non-blocking #6), drop proxy, abort serve loop.
       On success, the in-flight reservation guard from
       step 1a is **dropped immediately** — registration is
@@ -1401,7 +1417,7 @@ unit tests run on every platform.
 | `bus_event_schema_round_trip.rs` | Build a `BusEvent` with each `PublisherIdentity` variant; serialise with `serde_json`; deserialise back into a permissive test struct; assert all fields preserved. Verifies the wire shape m4 will need. |
 | `supervisor_spawn_fixture_happy_path.rs` | Headline test. Two fixtures: A in `publish_one` mode publishing `plugin.<A>.hello` with payload `{"msg":"hi"}`; B in `observer` mode subscribed to `plugin.**`. Harness handshake (§H5). Observer receives the event; assertion: `event.topic == "plugin.<A>.hello"`, `event.payload == {"msg":"hi"}`, `event.publisher == Plugin { canonical: A, topic_id: <A's id> }`. |
 | `supervisor_peer_call_core_to_plugin.rs` | A in `respond_peer_call` mode. Test calls `spawn_a.peer().call("core.fixture.echo", json!({"x":1})).await` → response `{"x":1}`. |
-| `supervisor_peer_call_plugin_to_core.rs` | A in `call_core_then_exit` mode. Harness extra service registers `core.fixture.ping` (echoes params + 1). Wait for fixture exit; `matches!(*spawn.wait().await, ReaperOutcome::Exited(s) if s.code() == Some(0))` (pi-5 §1 — `wait` returns `Arc<ReaperOutcome>`). |
+| `supervisor_peer_call_plugin_to_core.rs` | A in `call_core_then_exit` mode. Harness extra service registers `core.fixture.ping` (echoes params + 1). Wait for fixture exit; `matches!(spawn.wait().await.as_ref(), ReaperOutcome::Exited(s) if s.code() == Some(0))` (pi-7 non-blocking #3 — borrow through `Arc<ReaperOutcome>` via `.as_ref()` to avoid moving the non-`Copy` `WaitFailed(io::Error)` variant). |
 | `supervisor_bus_publish_round_trip_two_plugins.rs` | A in `publish_one`, B with subscribe grant on `plugin.<A>.greet`. B in observer-like mode forwards via `core.fixture.observed` extra service. After handshake, B receives A's event. Asserts cross-plugin fan-out via lock grants. |
 | `supervisor_lifecycle_drop_kills_child.rs` | Spawn A in `respond_peer_call` (holds open). Drop the `SpawnHandle` and the supervisor's internal copy by calling `shutdown(self).await`. After completion, `shutdown_report.clean.contains(A)`. The reaper task observed the exit; the test does NOT use `kill -0` (pi-1 §367, §731). |
 | `supervisor_proxy_starts_and_env_injected.rs` | A in `respond_peer_call` with `NetworkPlan::Proxy { allow_hosts: ["example.com"] }`. Harness calls `core.fixture.dump_env` requesting `RFL_FIXTURE_ENV_KEYS=HTTP_PROXY,HTTPS_PROXY,ALL_PROXY,NO_PROXY,http_proxy,https_proxy,all_proxy,no_proxy,RFL_BUS_FD` (pi-5 §6 — both cases listed). Assertions: uppercase + lowercase `*_PROXY` are all `http://127.0.0.1:<port>`; uppercase + lowercase `NO_PROXY` are empty; `RFL_BUS_FD = "3"`. The proxy port is non-zero and `<= u16::MAX`. (pi-1 §26, §107, §108, §325, §496, §542.) |
