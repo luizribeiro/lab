@@ -1,11 +1,11 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-6 draft, addressing pi-review-5 (6 blocking +
-> 3 non-blocking — wait/Reaper model, post-publish flush via
-> ClientCommand FIFO, B2 namespace wording, in_flight reservation
-> in spawn sequence, post-spawn child reaping, lowercase proxy
-> env keys). Pi round-6 review pending. Not yet owner-ratified.
-> Trajectory: 555 → 14 → 8 → 8 → 6.
+> **Status:** round-7 draft, addressing pi-review-6 (3 blocking +
+> 6 non-blocking — all tiny mechanical: tokio_command call site,
+> ShutdownFailure shareable wait-error, broker_acl.plugins →
+> broker.plugin_acl, plus stale-wording cleanups). Pi round-7
+> review pending. Not yet owner-ratified.
+> Trajectory: 555 → 14 → 8 → 8 → 6 → 3.
 
 ## Goal
 
@@ -675,22 +675,30 @@ the socketpair plumbing that authenticates the bus connection.
       pub forced: Vec<CanonicalId>,         // SIGKILLed after grace
       pub failed: Vec<(CanonicalId, ShutdownFailure)>,
   }
-  pub enum ShutdownFailure { SignalSendFailed(nix::errno::Errno),
-                             WaitFailed(std::io::Error) }
+  pub enum ShutdownFailure {
+      SignalSendFailed(nix::errno::Errno),
+      // Shareable projection of the reaper's wait error
+      // (pi-6 §2): shutdown observes ReaperOutcome through
+      // the same Arc<> cache as everyone else and cannot
+      // own a fresh non-cloneable io::Error. Stores the
+      // ErrorKind + message so the report is informative
+      // and PartialEq-friendly without holding the original.
+      WaitFailed { kind: std::io::ErrorKind, message: String },
+      ReaperPanicked,
+  }
   ```
   - `&self` (not `&mut self`) on `spawn` so multi-spawn tests
     just hold multiple `SpawnHandle`s without lifetime games
     (pi-1 §17). Internal state guarded by `parking_lot::Mutex`,
     plus a separate `parking_lot::Mutex<HashSet<CanonicalId>>
     in_flight` set for duplicate-spawn protection on a
-    multi-thread runtime (pi-3 §7): Phase A inserts canonical
-    into `in_flight` (failing with `AlreadyRegistered` if
-    already present, *separately from* the broker registry's
-    own `try_reserve_registration` check); successful
-    `register_plugin` removes from `in_flight`; failure paths
-    also remove. This closes the concurrent-`spawn` race the
-    broker's lockless `try_reserve_registration` cannot
-    catch alone.
+    multi-thread runtime (pi-3 §7). Per pi-6 non-blocking #5:
+    Phase A inserts canonical into `in_flight` as an RAII
+    guard (drop = remove); the guard is held through Phase B;
+    on successful `broker.register_plugin` the guard is
+    dropped immediately (registration is now source of truth);
+    every Phase A/B failure path also drops the guard so
+    retries are unblocked.
   - `SpawnHandle` is cloneable (`Arc`-backed); the *underlying
     process* is killed when the **last** `SpawnHandle` clone
     plus the supervisor's internal handle both drop (pi-1 §54,
@@ -713,10 +721,15 @@ the socketpair plumbing that authenticates the bus connection.
     (pi-1 §102, §371). Consumes `self` deliberately — once
     initiated, the supervisor is gone.
   - `Drop` for `PluginSupervisor` is best-effort
-    **synchronous** SIGKILL only (pi-1 §28, §371): it cannot
-    `await`, so it sends SIGKILL via `nix::sys::signal::kill`
-    and lets the OS reap. Tests that want graceful shutdown
-    call `shutdown(self).await`.
+    **synchronous** SIGKILL only (pi-1 §28, §371; pi-6
+    non-blocking #4): it cannot `await`, so it sends SIGKILL
+    via `nix::sys::signal::kill` and relies on the
+    already-running per-spawn reaper task (which owns the
+    child) to perform the actual `wait()` and reap. The
+    reaper task continues until the child exits even after
+    supervisor Drop. Tests that want deterministic graceful
+    shutdown call `shutdown(self).await` instead, which
+    blocks on the reaper.
 - **SP2.** **Test-only `ExtraServiceFactory` hook**
   (pi-1 §117, §169, §428, §515–§518). The per-connection
   fittings `Service` impl built by the supervisor handles
@@ -820,10 +833,14 @@ the socketpair plumbing that authenticates the bus connection.
      ACL membership and any cross-supervisor conflict the
      `in_flight` set cannot see (m2's only consumer is one
      supervisor, but the broker is conceptually shareable).
-  2. Look up `plan.canonical` in `broker_acl.plugins`,
-     compare ACL's `topic_id` against `plan.topic_id`. Mismatch
+  2. `broker.plugin_acl(&plan.canonical)` → on `Some(acl)`,
+     compare `acl.topic_id` against `plan.topic_id`; mismatch
      ⇒ `InvalidPlan { reason: TopicIdMismatch }` (pi-1 §260,
-     §488).
+     §488; pi-6 §3 — use the public lookup, not the private
+     `broker_acl.plugins` field). `None` is unreachable here
+     since step 1b's `try_reserve_registration` already
+     returned `NotInAcl`, but defensively map to
+     `SpawnError::NotInAcl` for completeness.
   3. **Path validation** — for each path field in
      `plan.filesystem`, `plan.entry_absolute`,
      `paths.project_root`, and `paths.private_state_dir`
@@ -920,10 +937,12 @@ the socketpair plumbing that authenticates the bus connection.
       `rafaello_core::supervisor`. The harness derives
       `private_state_dir = project_root.join(".rafaello-plugin-data").join(&plan.topic_id)`
       explicitly.
-  12. `builder.command(&plan.entry_absolute).map_err(|e|
-      Lockin { source: e })?` → `lockin::tokio::SandboxedCommand`
-      (note: `tokio_command(...)` for the tokio variant —
-      pi-4 §3).
+  12. `builder.tokio_command(&plan.entry_absolute).map_err(|e|
+      Lockin { canonical, source: e })?` →
+      `lockin::tokio::SandboxedCommand` (pi-6 §1: must be
+      `tokio_command`, NOT `command` — the latter returns the
+      sync variant which would not typecheck against the
+      async `child.wait().await` later in the sequence).
       Apply env to the command (pi-1 §266, §1928; pi-2 §5, §6):
       ```rust
       cmd.env_clear();                      // step (a)
@@ -1011,8 +1030,12 @@ the socketpair plumbing that authenticates the bus connection.
       `AlreadyRegistered` here practically impossible
       (single-supervisor invariant), but the call still maps
       `BrokerError` to `SpawnError` for completeness. Any
-      error here unwinds: kill child via SIGKILL, drop
-      proxy, abort outstanding builders.
+      error here unwinds per the post-spawn contract above:
+      SIGKILL the child, **`child.wait().await` to reap**
+      (pi-6 non-blocking #6), drop proxy, abort serve loop.
+      On success, the in-flight reservation guard from
+      step 1a is **dropped immediately** — registration is
+      now the source of truth (pi-6 non-blocking #5).
   18. Spawn the reaper task: `tokio::spawn(async move {
       child.wait().await })`; it owns the
       `lockin::tokio::SandboxedChild` and publishes the
@@ -1025,9 +1048,9 @@ the socketpair plumbing that authenticates the bus connection.
       observe the failure rather than waiting forever.
       Otherwise the watcher just confirms the reaper exited
       cleanly. The watcher's own `JoinHandle` is stored for
-      shutdown.
-      broadcast channel inside the `SpawnHandle`'s shared
-      state (pi-1 §367, §1903).
+      shutdown (pi-6 non-blocking #1: stale "broadcast" line
+      removed; the channel is `tokio::sync::watch` per
+      §SP1).
   19. Spawn the serve loop: `tokio::spawn(server.serve())`.
       Store its `JoinHandle` in the shared state for
       shutdown (pi-1 §1903).
@@ -1139,10 +1162,12 @@ and digests recomputed against the on-disk content.
     extra services compose.
   - For each plan, computes `paths = SpawnPaths { project_root,
     private_state_dir: project_root.join(".rafaello-plugin-data")
-    .join(&plan.topic_id) }`, ensures `private_state_dir`'s
-    parent (`.rafaello-plugin-data`) exists (the supervisor
-    only `create_dir_all`s the leaf), then calls
-    `supervisor.spawn(plan, &paths).await`. Returns
+    .join(&plan.topic_id) }`, then calls
+    `supervisor.spawn(plan, &paths).await` (the supervisor's
+    SP4 step 11 calls `fs::create_dir_all(private_state_dir)`
+    which already creates intermediate `.rafaello-plugin-data`;
+    the harness does not need to pre-create — pi-6
+    non-blocking #3). Returns
     `(Broker, PluginSupervisor, Vec<SpawnHandle>)`.
 - **H4.** `Observer` helper (pi-1 §74, §170, §387, §417;
   pi-4 §4 added the sync-handler clarification):
@@ -1369,7 +1394,7 @@ unit tests run on every platform.
 | Test file | Exercises |
 |-----------|-----------|
 | `bus_pattern_matches.rs` | Re-exports m1's `pattern_matches_topic` cases; adds zero-trailing negatives (`core.session.**` does NOT match `core.session`; `plugin.id_x.**` does NOT match `plugin.id_x`) per pi-1 §91. Pure unit test. |
-| `broker_publish_boot_event.rs` | `Broker::new(acl)?` returns `Ok`; then register the observer; then call `broker.publish_boot()` explicitly (the same call `PluginSupervisor::new` makes — see §B1 boot rule). Observer receives `core.lifecycle.boot` with payload `{ "version": <rafaello-core version string>, "plugin_count": <ACL plugin count> }`. The event has `publisher == PublisherIdentity::Core`. (pi-2 §1: boot is no longer emitted by `Broker::new` itself; explicit `publish_boot()` is the only entry point.) |
+| `broker_publish_boot_event.rs` | `Broker::new(acl)?` returns `Ok`; then register the observer; then call `broker.publish_boot()` explicitly. Observer receives `core.lifecycle.boot` with payload `{ "version": <rafaello-core version string>, "plugin_count": <ACL plugin count> }`. The event has `publisher == PublisherIdentity::Core`. (pi-2 §1 + pi-6 non-blocking #2: boot is emitted only via the explicit `publish_boot()`; `PluginSupervisor::new` does NOT auto-emit it.) |
 | `broker_register_unregister.rs` | Register canonical present in ACL → ok; drop guard → `contains_plugin` still true (canonical stays in ACL) but `handle_plugin_publish` returns `NotRegistered` (pi-1 §11, §139, §185). |
 | `broker_publish_core_happy_path.rs` | `publish_core("core.lifecycle.boot", payload)` with one registered observer subscribed to `core.lifecycle.**` → observer's `peer` receives one `bus.event` whose `publisher = PublisherIdentity::Core`. |
 | `broker_publish_core_invalid_topic_rejected.rs` | `publish_core("plugin.x.y", ...)` → `BrokerError::PublishOnReservedNamespace` (core publishing on a non-core namespace). `publish_core("core.Bad", ...)` → `InvalidTopic` (pi-1 §71, §1278). `publish_core("evil.foo", ...)` → `UnknownNamespace`. |
