@@ -28,6 +28,7 @@ parking_lot = "0.12"
 anyhow = "1"
 serial_test = "3"
 tracing-test = "0.2"
+tokio-util = "0.7"
 
 [profile.dist]
 inherits = "release"

@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 //! Shared lock-fixture helpers for c22+ V3 integration tests.
 
+pub mod peer_test_kit;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
