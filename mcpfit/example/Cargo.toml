@@ -10,7 +10,5 @@ workspace = true
 mcpfit = { path = "../crates/mcpfit" }
 schemars = { version = "0.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-
-[dev-dependencies]
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
