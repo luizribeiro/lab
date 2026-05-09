@@ -1,8 +1,17 @@
 # m1 — manifest / lock / grant / compiler foundation — retrospective
 
-> Written 2026-05-08, after all 36 m1 git commits (`ba66f05` →
-> `c8cd1af`) landed on `rafaello-v0.1`. Worktree:
-> `/home/luiz/lab-wt/m1-retro-claude` on `agents/m1-retro/claude`.
+> **Status:** ratified by owner 2026-05-08 after four pi review
+> rounds (`retrospective-pi-review.md` through
+> `retrospective-pi-review-4.md`). Owner waiver of the
+> fittings flake (m0-known, self-resolves on `mcpfit-v0.1`
+> merge) recorded in §"Acceptance summary check". m1 closes;
+> m2 scoping starts when the owner says go.
+>
+> Originally drafted 2026-05-08 after all 36 m1 git commits
+> (`ba66f05` → `c8cd1af`) landed on `rafaello-v0.1` (worktree
+> `/home/luiz/lab-wt/m1-retro-claude`); this revision folds in
+> the four pi review iterations + the doc-drift follow-up
+> commits.
 
 This is the milestone-level review against `scope.md` (round 7,
 ratified) and `commits.md` (round 4, ratified) per
@@ -807,25 +816,26 @@ rather than section-by-section rewrites.
   to CI per scope's "no platform-specific code" carve-out;
   if the CI run for the `rafaello-v0.1` tip fails on macOS,
   m1's acceptance flips red.
-- ⏳ `cargo test --manifest-path fittings/Cargo.toml
-  --workspace` — m1 retrospective re-run: 1 failure
-  reproduces the m0-known flake
-  `mcp-server::stdio_e2e::stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list`
-  on attempts 1 and 2; passes on attempt 3 (FAIL, FAIL, PASS).
-  This is the m0 retrospective §5.2 documented pre-existing race
-  in the mcp-server test harness (write-all-then-read vs
-  read-then-write on `tools/list` after `tools/register`). The
-  §W cutover doesn't touch the test or its harness; the flake
-  is a pre-existing harness bug owned by mcp-server's test
-  infrastructure, not the fittings library. **Waiver request,
-  pending explicit owner ratification at retrospective sign-off**:
-  per pi review-3+4 of this retrospective, a self-declared waiver
-  in the retrospective is not equivalent to satisfying the
-  ratified acceptance criterion; the owner-ratification step is
-  the natural place to either approve the waiver (m1 closes) or
-  require the fix from m0 retrospective §5.2 land before m1
-  closes. The 228 other fittings tests (including the §W targeted
-  regression test) all pass.
+- ✅ `cargo test --manifest-path fittings/Cargo.toml
+  --workspace` — **owner-approved waiver 2026-05-08** for the
+  pre-existing m0 flake `mcp-server::stdio_e2e::stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list`.
+  m1 retrospective re-run: 3 attempts FAIL, FAIL, PASS — same
+  race as m0 retrospective §5.2 (write-all-then-read on
+  `tools/list` after `tools/register`). The §W cutover doesn't
+  touch the test or its harness; the flake is a pre-existing
+  harness bug owned by mcp-server's test infrastructure, not
+  the fittings library. **Self-resolves on `mcpfit-v0.1` merge**:
+  the in-flight `mcpfit-v0.1` branch (95 commits of mcpfit
+  reimplementation work; merge base `0d4ab4a` predates m0)
+  moves the mcp-server example out of the fittings workspace
+  to `mcpfit/example/`; on `mcpfit-v0.1` the same test passes
+  reliably (5/5 in a worktree run during this retrospective)
+  because the mcpfit reimplementation processes stdin requests
+  in strict order. After `mcpfit-v0.1` merges, the flaky test
+  is no longer in the fittings workspace AND no longer flakes
+  in its new home — the m1 acceptance gate becomes naturally
+  green. The 228 other fittings tests (including the §W
+  targeted regression test) all pass at current HEAD.
 - ✅ `cargo doc --manifest-path rafaello/Cargo.toml -p
   rafaello-core --no-deps` warning-free (§5.2 — fixed in
   commit `823e8bb`).
@@ -847,14 +857,15 @@ rather than section-by-section rewrites.
   landed in overview §5.5 + glossary + new decisions row 37
   (refines row 16) (§2.5 + commit `93761c8`).
 
-m1 is **done pending one owner decision**: approve the fittings
-flake waiver (above) — at which point all acceptance gates are
-met and m1 closes — or direct the milestone driver to land the
-m0 retrospective §5.2 mcp-server harness fix before m1 closes.
-The core deliverable (the `rafaello-core` crate with 269 tests
+m1 is **done.** Owner approved the fittings-flake waiver
+2026-05-08 with the rationale that `mcpfit-v0.1` merges
+self-resolve the flake (the test moves out of the fittings
+workspace AND no longer races under the mcpfit
+reimplementation). All other acceptance gates are met. The
+core deliverable (the `rafaello-core` crate with 269 tests
 green) has landed; the §W fittings cutover has landed (228
-fittings tests green; one m0-known-flake test under owner
-review); all documentation reconciliation listed in §"Follow-up
-commits on this branch" has landed; security RFC §7.5
-private-state path-key banner landed alongside this revision.
-No open architectural-doc rough edges currently named.
+fittings tests green); all documentation reconciliation
+listed in §"Follow-up commits on this branch" has landed;
+security RFC §7.5 private-state path-key banner landed
+alongside the final revision. No open architectural-doc
+rough edges currently named.
