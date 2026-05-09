@@ -96,9 +96,13 @@ this prompt:
 > 3. If `commits.md` doesn't exist yet: same flow.
 > 4. Once both are ratified: walk `commits.md` in order. For each
 >    commit, spawn a fresh claude tmux session on a worktree at
->    `agents/m<N>/c<NN>`, hand it the inputs above plus the specific
->    commit row, wait for completion, verify the commit landed clean,
->    move on.
+>    `agents/m<N>/c<NN>`. **Inline the full commit row text + every
+>    acceptance bullet verbatim into the per-commit prompt** —
+>    do NOT cite by row number and tell the agent to read
+>    `commits.md` itself. Citing-by-row delegates the granularity
+>    decision (and adjacent-row bundling temptation) to the agent;
+>    inlining keeps it with the orchestrator. m1 §4.2.
+>    Wait for completion, verify the commit landed clean, move on.
 > 5. After the last commit: spawn claude+pi for `retrospective.md`,
 >    update `overview.md` / `decisions.md` with anything learned, and
 >    merge the milestone branch into `rafaello-v0.1` with linear
@@ -220,10 +224,39 @@ that future milestone drivers should plan around:
   scope and commits.** m0's first-pass retrospective was
   overconfident in three places ("no coverage gaps", "no overview
   drift", an invented `originalCode` claim) and pi review-1 caught
-  all three. Always run `retrospective.md` through pi before owner
-  sign-off; the retrospective itself names the drift, and missing
-  drift there is exactly what pi catches. m0
-  `retrospective-pi-review.md` + `retrospective-pi-review-2.md`.
+  all three. m1 needed **four** rounds on retrospective.md before
+  ratification — round 1 incorrectly punted Stream A drift
+  patches, round 2 caught lockin.toml + stale fixtures drift,
+  round 3 caught helper drift, round 4 caught a self-declared
+  fittings-flake waiver that needed explicit owner approval.
+  Always run `retrospective.md` through pi before owner sign-off;
+  budget for at least 2 rounds and up to 4 if the milestone has
+  meaningful drift. m0 `retrospective-pi-review.md` /
+  `retrospective-pi-review-2.md`; m1
+  `retrospective-pi-review.md` through `retrospective-pi-review-4.md`.
+- **Per-commit agent prompts must inline the row text and every
+  acceptance bullet, not cite by row number.** m1's plan c31 +
+  c32 bundled into a single git commit (`14a1688`) because the
+  per-commit prompt cited "the next unlanded row" rather than
+  inlining the c31 row text + acceptance. The c31 agent opened
+  `commits.md`, saw c31 and c32 sitting adjacent, judged the
+  increment small, and bundled. Bundling itself was defensible —
+  but the *granularity decision happened inside the agent*, not
+  in the orchestrator's prompt. Cite-by-row delegates a
+  scope-vs-implementation trade-off the orchestrator should own;
+  inlining makes the result predictable. Also defends against
+  mid-implementation `commits.md` drift: an in-flight per-commit
+  agent that re-reads the doc fresh would see different text
+  than prompt-time text. m1 §4.2 + §4.5.
+- **Surface size predicts pi-rounds, not "applying ratified RFCs."**
+  m1 was supposed to be smaller than m0 ("apply Stream A + Stream
+  F to a concrete commit plan"). Reality: m1's 6k-LoC new crate
+  with V1+V2+V3 dual-validation mirroring took **6 pi rounds on
+  scope, 3 on commits, 4 on retrospective**, vs m0's 3+3+2.
+  When sizing a future milestone, weight by surface area honestly:
+  a brand-new crate with dual-side validation needs more rounds
+  than refactoring an existing crate, even when the design is
+  ratified. m1 §4.1.
 
 ## Tooling notes
 
