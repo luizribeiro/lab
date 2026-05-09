@@ -1,9 +1,46 @@
 # RFC: rafaello plugin manifest schema
 
-Status: draft / research only. No code lands from this RFC; it
-fixes the contract between plugin authors, `rfl install`,
-`rafaello.lock`, and the runtime sandbox backend (lockin in v1,
-capsa in v2/v3).
+Status: historical-as-of-2026-05-07. The body below is the
+round-2 design; **the live v1 schema diverges in several
+ratified ways**. m1 retrospective added this status banner;
+the body is unchanged. The live schema is the union of:
+
+- this RFC body (the historical baseline), MINUS
+- the deferrals in `decisions.md` rows 26 (helper plugins to
+  v2), 30 (no `runtime` field), 31 (`[rpc]` block dropped;
+  `openrpc.json` sibling required), 32 (compiler emits lockin
+  builder calls, not `lockin.toml`), PLUS
+- the §15.1 normative-delta items in `overview.md` (the
+  `[provides]` block, the `[provides.tool.<n>]` table with
+  `sinks` / `grant_match` / `always_confirm`,
+  install-time validation rules), MINUS
+- §11 open question 1 (scoped bundles flatten at compile time,
+  per `decisions.md` row 17), and §11 open question 7 (eager
+  handshake is fail-closed in v1, per `decisions.md` row 24 —
+  no `load.eager_failure` knob).
+
+Concretely:
+
+| RFC text in the body | Live v1 position |
+|----------------------|------------------|
+| §2 `runtime = "subprocess"` example field | DROPPED — `decisions.md` row 30; m1 manifest parser rejects it. |
+| §3 `[rpc]` block (`openrpc` field + inline `[[rpc.methods]]`) | DROPPED — `decisions.md` row 31; m1 rejects `[rpc]` and requires an `openrpc.json` sibling at the manifest's parent dir. |
+| §4 `bus.publishes` examples without `[provides]` | EXTENDED — see `overview.md` §15.1: tools / provider / sinks / grant_match / always_confirm live in a top-level `[provides]` block in v1. |
+| §6 `[[renderers]]` non-built-in kinds | EXTENDED — must use the Stream E `<vendor>:<kind>` prefix grammar; built-in kinds (`text`, `code_block`, etc.) are reserved per `overview.md` §11. |
+| §7.3 boot-sequence `eager` knob references | NARROWED — fail-closed only, no `load.eager_failure` field per `decisions.md` row 24. |
+| §8 "writes `lockin.toml`" | NARROWED — m1 emits a structured `CompiledPlugin` plan against the lockin Rust API per `decisions.md` row 32; m2 applies it. |
+| §9.x worked examples with `runtime` / `[rpc]` / `${secret:...}` | OBSOLETE — the post-simplification rewrites used in m1's fixtures live under `rafaello/crates/rafaello-core/tests/fixtures/`. |
+| §11 open question 1 (scoped bundles in v1) | RESOLVED — accept + flatten at compile time per `decisions.md` row 17. |
+
+Stream F drift items 1–4 from `overview.md` §15.1 are
+authoritative for the live v1 schema. m1 implementation
+(`rafaello/crates/rafaello-core/`) follows the live schema, not
+the body of this RFC. Future revisions to the body are
+deferred to a Stream F post-v1 cleanup pass.
+
+---
+
+(Body below preserved as the round-2 design baseline.)
 
 ## 1. Three-artifact pipeline
 
