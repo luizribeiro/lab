@@ -1067,25 +1067,30 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 - **Why.** scope §F2 (full mode set), §H4, pi-4 §5–§7,
   pi-5 §2.
 - **Depends on.** c21.
-- **Acceptance.** Three new tests directly exercising the
-  fixture via supervisor spawn (uses the c21 supervisor
-  surface):
-  - `tests/fixture_publish_one_emits_event.rs` — two
-    fixtures: A in `publish_one`, B in `observer`. Spawn
-    both via supervisor; harness ready/start handshake (both
-    fixtures); observer's harness-side `core.fixture.observed`
-    extra service receives one `bus.event` matching A's
-    publish.
-  - `tests/fixture_call_core_then_exit_completes.rs` —
-    fixture in `call_core_then_exit`; harness extra service
-    registers `core.fixture.ping` returning `{"echo": "ok"}`;
-    fixture exits 0 within bounded wait.
-  - `tests/fixture_dump_env_returns_allow_listed_keys.rs` —
-    fixture in `respond_peer_call`; call
-    `core.fixture.dump_env` with
-    `RFL_FIXTURE_ENV_KEYS=RFL_BUS_FD,RFL_PLUGIN`; response
-    contains both keys with expected values
-    (`RFL_BUS_FD == "3"`, `RFL_PLUGIN == plan.canonical.to_string()`).
+- **Acceptance** (revised mid-Phase-3 after c22 round-1 hung
+  for >1h on integration tests that depend on harness
+  surfaces — see `driver-notes.md` §"c22 restructure
+  2026-05-09"). c22 now lands ONLY the fixture-mode
+  dispatch + a build-only compile assertion. The three
+  supervisor-driven integration tests originally listed
+  here move to **c23.5** (a new commit landing right after
+  the harness, since they depend on `with_extra_service`
+  for `core.fixture.ready` / `core.fixture.observed` /
+  `core.fixture.ping` extra-service shims that the production
+  `BusPublishService` doesn't route to and c20 couldn't
+  pre-thread without inventing the harness early).
+  - **`tests/fixture_modes_compile.rs`** (build-only) —
+    asserts the new `RFL_FIXTURE_MODE` dispatch arms compile
+    by importing the bin module path or by instantiating
+    helper enums/types added by c22. The c22 agent picks a
+    workable form (e.g. a small library path the bin uses, or
+    a `--check` invocation in the test).
+  - The supervisor end-to-end behavioural verification of
+    the new fixture modes lands in **c23.5** (publish_one
+    via observer, call_core_then_exit, dump_env via
+    respond_peer_call) using the c23 harness. Until then,
+    mode-correctness is verified by the c20 direct-spawn
+    pattern only for `respond_peer_call` (already covered).
 
 ### c23 — test(rafaello-core): m2 harness — `FixtureLockBuilder` + `Spawn` + `Observer` + `ReadinessGate`
 
@@ -1145,12 +1150,32 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 - **Why.** scope §H1–§H5, pi-1 B6 (real m1 API names),
   pi-3 non-blocking #1.
 - **Depends on.** c22.
-- **Acceptance.** The c20–c22 fixture tests are refactored
-  to use the harness (their inline plumbing collapses). New
-  test `tests/harness_lock_builder_round_trip.rs` —
-  `FixtureLockBuilder` builds a one-plugin lock; assert
-  `validate::lock` returns `Ok(...)`; assert `compile_plugin`
-  returns `Ok(CompiledPlugin)` with expected fields.
+- **Acceptance.** The c20 fixture test is refactored to
+  use the harness (its inline plumbing collapses). New
+  tests:
+  - `tests/harness_lock_builder_round_trip.rs` —
+    `FixtureLockBuilder` builds a one-plugin lock; assert
+    `validate::lock` returns `Ok(...)`; assert
+    `compile_plugin` returns `Ok(CompiledPlugin)` with
+    expected fields.
+  - **Three integration tests deferred from c22** (driver
+    restructure 2026-05-09 — c22's supervisor-driven tests
+    needed extra-service plumbing that didn't exist until
+    this harness lands; original c22 attempt hung >1h):
+    - `tests/fixture_publish_one_emits_event.rs` — two
+      fixtures: A in `publish_one`, B in `observer`. Spawn
+      both via the harness; ready/start handshake on both;
+      observer's harness-side `core.fixture.observed` extra
+      service receives one `bus.event` matching A's publish.
+    - `tests/fixture_call_core_then_exit_completes.rs` —
+      fixture in `call_core_then_exit`; harness extra service
+      registers `core.fixture.ping` returning `{"echo": "ok"}`;
+      fixture exits 0 within bounded wait.
+    - `tests/fixture_dump_env_returns_allow_listed_keys.rs`
+      — fixture in `respond_peer_call`; call
+      `core.fixture.dump_env` with
+      `RFL_FIXTURE_ENV_KEYS=RFL_BUS_FD,RFL_PLUGIN`; response
+      contains both keys with expected values.
 
 ### c24 — test(rafaello-core): real duplicate-spawn refusal (pi-1 B5)
 
