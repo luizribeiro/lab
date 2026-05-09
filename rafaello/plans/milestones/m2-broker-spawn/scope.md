@@ -1,10 +1,10 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-4 draft, addressing pi-review-3 (8 blocking +
-> 4 non-blocking — all localized cleanup of stale cross-references
-> introduced by the round-2/round-3 rewrites). Pi round-4 review
-> pending. Not yet owner-ratified. The `commits.md` and Phase 3
-> work do not start until this document ratifies.
+> **Status:** round-5 draft, addressing pi-review-4 (8 blocking +
+> 6 non-blocking — concentrated on lockin sync/async, fittings
+> param types, fixture readiness/flush, SpawnPaths validation,
+> wait-status storage). Pi round-5 review pending. Not yet
+> owner-ratified.
 
 ## Goal
 
@@ -55,11 +55,12 @@ from a raw entry path.
 It does **not** hold against a caller who hand-mutates a
 `CompiledPlugin` value (the struct fields are `pub` by m1's
 choice). The supervisor performs `InvalidPlan` spot-checks for
-the cases that would otherwise crash the lockin builder
-(non-absolute paths, reserved env vars, topic-id ↔ canonical
-mismatch), but it does not re-run V3/digest/grant validation —
-that contract sits with `compile::compile_plugin` and m1's
-`validate::lock`. The supervisor trusts a well-formed
+the cases that would otherwise crash the lockin builder —
+non-absolute paths, **ASCII control characters in paths**
+(pi-4 §2 — lockin's builder asserts on these), reserved env
+vars, topic-id ↔ canonical mismatch. It does not re-run
+V3/digest/grant validation — that contract sits with
+`compile::compile_plugin` and m1's `validate::lock`. The supervisor trusts a well-formed
 `CompiledPlugin` the way m1's `compile_plugin` trusts a
 prior-validated `Lock`. Production callers that obtain a
 `CompiledPlugin` exclusively from `compile_plugin` get the full
@@ -110,16 +111,23 @@ deviation.
     (not `lockin-sandbox`).
   - `lockin::Sandbox::builder() -> SandboxBuilder` with all
     builder methods named in m1 scope.
-  - `SandboxBuilder::command(self, program: &Path) ->
-    anyhow::Result<SandboxedCommand>` consumes the builder.
+  - **Tokio path chosen (pi-4 §3).** m2 uses lockin's
+    `--features tokio` API throughout the supervisor:
+    `SandboxBuilder::tokio_command(self, program: &Path) ->
+    anyhow::Result<lockin::tokio::SandboxedCommand>` consumes
+    the builder. This avoids `spawn_blocking` for child wait
+    and keeps the supervisor consistently async.
   - `SandboxBuilder::inherit_fd_as(self, fd: OwnedFd, child_fd:
     RawFd) -> Self` consumes the `OwnedFd` (pi-1 §24).
-  - `SandboxedCommand::env`/`envs`/`env_remove`/`env_clear`/
-    `current_dir` apply env + cwd to the prepared command;
-    `spawn() -> std::io::Result<SandboxedChild>`.
-  - `SandboxedChild::{wait, try_wait, kill, id, as_child,
-    as_child_mut, into_parts}`. `kill()` sends `SIGKILL`,
-    not `SIGTERM`; graceful termination uses `nix` (pi-1 §28).
+  - `lockin::tokio::SandboxedCommand::env`/`envs`/`env_remove`/
+    `env_clear`/`current_dir` apply env + cwd; async
+    `spawn() -> std::io::Result<lockin::tokio::SandboxedChild>`.
+  - `lockin::tokio::SandboxedChild::{wait, try_wait, kill, id,
+    as_child, as_child_mut, into_parts}`. `wait()` is async,
+    returning `std::io::Result<ExitStatus>`. `id()` returns
+    `Option<u32>` per `tokio::process::Child` (vs. sync
+    `std::process::Child::id() -> u32`). `kill()` sends
+    `SIGKILL`; graceful termination uses `nix` (pi-1 §28).
   - `SandboxedCommand::env_clear()` documented to remove
     `TMPDIR`/`TMP`/`TEMP` pointing at the sandbox private tmp
     (pi-1 §27). m2 cannot re-inject them: `SandboxedCommand`
@@ -239,6 +247,16 @@ test matrix.
 The broker is the in-process publish/subscribe layer. It owns
 no transport: each plugin connection is a `fittings`
 `PeerHandle` registered with the broker via the supervisor.
+
+> **§B1 RegisteredPlugin drop semantics (pi-4 non-blocking
+> #2).** Dropping the broker-held `RegisteredPlugin` guard
+> removes the broker's registration entry and drops the
+> broker's clone of the plugin's `PeerHandle`; it does NOT
+> guarantee that other clones of `PeerHandle` (held by the
+> supervisor's `SpawnHandle`, by tests, etc.) close. The
+> broker's only guarantee is "fan-out to this plugin stops".
+> Connection close happens when the last `PeerHandle` clone
+> AND the serve loop both drop.
 
 - **B1.** New module `rafaello_core::bus`. Public surface:
   - `pub struct Broker` — cheap-clone handle wrapping
@@ -454,13 +472,16 @@ no transport: each plugin connection is a `fittings`
   - `provider.*`, `frontend.*`, `core.*` from plugins: rejected
     earlier in §B3, never reach this check.
 - **B7.** **Fan-out.** After authorisation (§B3) and class
-  checks (§B6), construct a `BusEvent` (§B8), then for each
-  registered plugin **other than** the publisher, check the
-  set `subscribe_patterns ∪ auto_subscribes` against the
-  topic using `validate::topic::pattern_matches_topic` (the
-  existing m1 helper — pi-1 §6). If matched, call
-  `peer.notify("bus.event", &bus_event)` on that plugin's
-  `PeerHandle`. The publishing plugin is excluded from its own
+  checks (§B6), construct a `BusEvent` (§B8), serialise to
+  `serde_json::Value` via `serde_json::to_value(&bus_event)`,
+  then for each registered plugin **other than** the
+  publisher, check the set `subscribe_patterns ∪ auto_subscribes`
+  against the topic using `validate::topic::pattern_matches_topic`
+  (the existing m1 helper — pi-1 §6). If matched, call
+  `peer.notify("bus.event", value.clone())` on that plugin's
+  `PeerHandle`. (pi-4 §4: `PeerHandle::notify` takes
+  `serde_json::Value`, not a generic `Serialize` ref —
+  serialise once outside the loop, clone per fan-out.) The publishing plugin is excluded from its own
   fan-out (pi-1 §245, §247). Fan-out uses a snapshot of the
   registry (clone the `PeerHandle` list under lock, release
   lock, then iterate; pi-1 §46, §1022) so notify cannot
@@ -614,20 +635,29 @@ the socketpair plumbing that authenticates the bus connection.
   impl SpawnHandle {
       pub fn canonical(&self) -> &CanonicalId;
       pub fn topic_id(&self) -> &str;
-      pub fn child_pid(&self) -> u32;
+      // pi-4 §3: tokio::process::Child::id returns Option<u32>;
+      // expose the Option directly. Returns None after wait
+      // observes exit (consistent with tokio semantics).
+      pub fn child_pid(&self) -> Option<u32>;
       pub fn peer(&self) -> &PeerHandle;
-      // Resolves once the reaper task has observed child exit
-      // and published the status to the shared broadcast slot.
-      // Multiple awaits return the same status (broadcast slot
-      // retains the most-recent value). Infallible — if the
-      // reaper task panicked the broadcast resolves to a
-      // structured "reaper-died" status; see implementation.
-      pub async fn wait(&self) -> ExitStatus;
-      // Cached-observation only (pi-2 §10): returns Some iff
-      // the reaper has already published. Never blocks, never
-      // calls into the child handle (the reaper owns it).
-      // Hence no io::Result.
-      pub fn try_wait(&self) -> Option<ExitStatus>;
+      // pi-4 §8: cached status using `tokio::sync::watch`
+      // initialized to `None`; the reaper sends Some(result)
+      // exactly once on observation. `wait` awaits the watch
+      // until the value transitions to Some, then returns it.
+      // Late callers see the cached value immediately. The
+      // ReaperError variant covers reaper-task panic (turned
+      // into a typed result by the supervisor's `tokio::spawn`
+      // join handler — see SP4 step 18) and io::Error from
+      // the underlying wait call.
+      pub async fn wait(&self) -> Result<ExitStatus, ReaperError>;
+      // Returns Some(result) iff the reaper has already
+      // observed exit. Never blocks.
+      pub fn try_wait(&self) -> Option<Result<ExitStatus, ReaperError>>;
+  }
+  
+  pub enum ReaperError {
+      Wait(std::io::Error),
+      ReaperPanicked,
   }
   
   pub struct ShutdownReport {
@@ -660,10 +690,9 @@ the socketpair plumbing that authenticates the bus connection.
     else holds a handle.
   - `wait` / `try_wait` give tests deterministic exit-status
     access (pi-1 §18). Implementation uses a per-spawn reaper
-    task that owns the `SandboxedChild` (`tokio::task::spawn_blocking`
-    wrapping `child.wait()` since lockin's `SandboxedChild`
-    is `std::process::Child`-backed; the `lockin/tokio` feature
-    provides an async wrapper if available — pi-1 §165, §166).
+    task that owns the `lockin::tokio::SandboxedChild` and
+    awaits `child.wait().await` directly (m2 uses lockin's
+    `tokio` feature throughout — pi-4 §3).
     The reaper publishes the `ExitStatus` to a broadcast
     channel; `wait` resolves on the next observation.
   - `shutdown(self)` is the cooperative path: SIGTERM every
@@ -717,25 +746,38 @@ the socketpair plumbing that authenticates the bus connection.
       Socketpair { canonical: CanonicalId, source: nix::errno::Errno },
       FittingsBuild { canonical: CanonicalId, source: FittingsError },
       ReservedEnvInPlan { canonical: CanonicalId, var: String },
+      // Post-spawn transport-setup I/O errors (pi-2 §8 +
+      // pi-4 non-blocking #1): set_nonblocking,
+      // UnixStream::from_std failures.
+      TransportSetup { canonical: CanonicalId, source: std::io::Error },
+      // Private-state directory create_dir_all failure
+      // (pi-4 non-blocking #5 — clearer than reusing
+      // TransportSetup).
+      PrivateStateDirCreate { canonical: CanonicalId, path: PathBuf, source: std::io::Error },
   }
   
   pub enum InvalidPlanReason {
       NonAbsolutePath { kind: PathKind, path: PathBuf },
+      ControlCharsInPath { kind: PathKind, path: PathBuf },  // pi-4 §2
       TopicIdMismatch { expected: String, got: String },
-      ReservedEnvVar { var: String },        // also covered by variant above for clarity
+      // (no ReservedEnvVar — pi-4 non-blocking #4 dropped the
+      //  redundant variant; SpawnError::ReservedEnvInPlan is
+      //  the single error path for reserved env collisions.)
       NetworkAllowHostsInvalid { source: outpost::DomainPatternParseError },
       ProviderNotInM2 { provider_id: String },  // pi-2 §11
   }
   
-  pub enum PathKind { ReadPath, ReadDir, WritePath, WriteDir,
-                       ExecPath, ExecDir, EntryAbsolute }
+  pub enum PathKind {
+      ReadPath, ReadDir, WritePath, WriteDir,
+      ExecPath, ExecDir, EntryAbsolute,
+      // pi-4 §1: SpawnPaths fields get their own kinds.
+      ProjectRoot, PrivateStateDir,
+  }
   ```
-  Plus a separate variant for post-spawn transport-setup errors
-  (pi-2 §8): `TransportSetup { canonical: CanonicalId, source:
-  std::io::Error }` covers `set_nonblocking` / `UnixStream::from_std`
-  failures during SP4 step 14, distinct from `Spawn` (which is
-  reserved for `cmd.spawn` itself) and from `FittingsBuild`
-  (which wraps `FittingsError`).
+  (`TransportSetup` is now in the enum block above per pi-4
+  non-blocking #1 — it covers `set_nonblocking` /
+  `UnixStream::from_std` failures during SP4 step 14, distinct
+  from `Spawn` and from `FittingsBuild`.)
   - `lockin` returns `anyhow::Result` from `command(...)`;
     `Lockin.source` is `anyhow::Error` (pi-1 §19 #3, §155).
   - `fittings_core::error::FittingsError` is the canonical
@@ -759,9 +801,20 @@ the socketpair plumbing that authenticates the bus connection.
      compare ACL's `topic_id` against `plan.topic_id`. Mismatch
      ⇒ `InvalidPlan { reason: TopicIdMismatch }` (pi-1 §260,
      §488).
-  3. For each path field in `plan.filesystem` and
-     `plan.entry_absolute`: assert absolute. Non-absolute ⇒
-     `InvalidPlan { reason: NonAbsolutePath }` (pi-1 §489).
+  3. **Path validation** — for each path field in
+     `plan.filesystem`, `plan.entry_absolute`,
+     `paths.project_root`, and `paths.private_state_dir`
+     (pi-4 §1):
+     a. assert absolute (`path.is_absolute()`); non-absolute
+        ⇒ `InvalidPlan { reason: NonAbsolutePath { kind } }`
+        where `kind` covers each `PathKind` variant including
+        the new `ProjectRoot` / `PrivateStateDir` (pi-1 §489).
+     b. assert no ASCII control chars (lockin's builder
+        methods `assert_no_control_chars` would otherwise
+        panic in Phase B); a control char ⇒ `InvalidPlan {
+        reason: ControlCharsInPath { kind, path } }`
+        (pi-4 §2). Defined as `path.as_os_str().as_bytes()
+        .iter().any(|b| *b < 0x20 || *b == 0x7f)`.
   4. Iterate `plan.env.set` keys + `plan.env.pass` entries:
      if any equals `RFL_BUS_FD` / `RFL_PLUGIN` / `RFL_HELPER_FD`
      / `RFL_PROJECT_ROOT` / `RFL_PRIVATE_STATE_DIR` /
@@ -787,9 +840,11 @@ the socketpair plumbing that authenticates the bus connection.
      m2 retrospective notes the staged restriction.
   
   **Phase B — allocate child resources (async):**
-  8. `socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)` →
+  8. `nix::sys::socket::socketpair(AddressFamily::Unix,
+     SockType::Stream, None, SockFlag::SOCK_CLOEXEC)` →
      `(core_fd, child_fd)`, both `OwnedFd`. `SOCK_CLOEXEC`
-     prevents accidental leaks (pi-1 §31, §503).
+     prevents accidental leaks (pi-1 §31, §503; pi-4
+     non-blocking #3 — Rust shape, not C-shape).
   9. If proxy mode: `outpost_proxy::start(policy).await` →
      `ProxyHandle`. Capture `proxy.listen_addr().port()`.
   10. Build `SandboxBuilder`. Methods consume `self` and
@@ -832,8 +887,9 @@ the socketpair plumbing that authenticates the bus connection.
       injects `RFL_PROJECT_ROOT` / `RFL_PRIVATE_STATE_DIR` /
       `RFL_TOPIC_ID` (the latter from `plan.topic_id`) at
       step 12. If `create_dir_all` fails ⇒
-      `SpawnError::TransportSetup { source }` (general "I/O
-      during spawn setup" bucket).
+      `SpawnError::PrivateStateDirCreate { path, source }`
+      (pi-4 non-blocking #5 — dedicated variant rather than
+      reusing `TransportSetup`).
       
       **SP1 signature update:** `pub async fn spawn(&self,
       plan: &CompiledPlugin, paths: &SpawnPaths) -> Result<...>`.
@@ -842,7 +898,9 @@ the socketpair plumbing that authenticates the bus connection.
       `private_state_dir = project_root.join(".rafaello-plugin-data").join(&plan.topic_id)`
       explicitly.
   12. `builder.command(&plan.entry_absolute).map_err(|e|
-      Lockin { source: e })?` → `SandboxedCommand`.
+      Lockin { source: e })?` → `lockin::tokio::SandboxedCommand`
+      (note: `tokio_command(...)` for the tokio variant —
+      pi-4 §3).
       Apply env to the command (pi-1 §266, §1928; pi-2 §5, §6):
       ```rust
       cmd.env_clear();                      // step (a)
@@ -921,9 +979,9 @@ the socketpair plumbing that authenticates the bus connection.
       error here unwinds: kill child via SIGKILL, drop
       proxy, abort outstanding builders.
   18. Spawn the reaper task: `tokio::spawn(async move {
-      child.wait().await })` (using the lockin/tokio feature
-      or `spawn_blocking` fallback); it owns the
-      `SandboxedChild` and publishes `ExitStatus` to the
+      child.wait().await })`; it owns the
+      `lockin::tokio::SandboxedChild` and publishes the
+      `Result<ExitStatus, ReaperError>` to the
       broadcast channel inside the `SpawnHandle`'s shared
       state (pi-1 §367, §1903).
   19. Spawn the serve loop: `tokio::spawn(server.serve())`.
@@ -1042,31 +1100,56 @@ and digests recomputed against the on-disk content.
     only `create_dir_all`s the leaf), then calls
     `supervisor.spawn(plan, &paths).await`. Returns
     `(Broker, PluginSupervisor, Vec<SpawnHandle>)`.
-- **H4.** `Observer` helper (pi-1 §74, §170, §387, §417):
+- **H4.** `Observer` helper (pi-1 §74, §170, §387, §417;
+  pi-4 §4 added the sync-handler clarification):
   - Spawns one fixture instance configured as
     `RFL_FIXTURE_MODE=observer` (which holds open until
     SIGTERM and forwards every `bus.event` notification it
-    receives back to core via `peer.call("core.fixture.observed",
-    event)`). The harness registers a `core.fixture.observed`
-    extra service that pushes the event into a
-    `tokio::sync::mpsc::Receiver` returned to the test.
+    receives back to core via
+    `peer.call("core.fixture.observed", event_value).await`).
+    Because `Client::with_notification_handler` takes a
+    **synchronous** closure (`Fn(String, Value)`), the
+    fixture's notification handler clones its outbound
+    `PeerHandle`, then spawns an async forwarding task via
+    `tokio::spawn(async move { peer_clone.call(...).await })`
+    so the synchronous handler returns immediately and
+    forwarding runs on the runtime. The harness registers a
+    `core.fixture.observed` extra service that pushes the
+    event into a `tokio::sync::mpsc::UnboundedSender` whose
+    receiver is returned to the test.
   - Tests await events on this receiver with a bounded
     timeout. Receivers are flushed on observer drop.
   - Subscribe pattern: the observer's lock grants explicit
     namespace patterns like `core.**`, `plugin.**`, etc. — NEVER
     bare `**` (pi-1 §33, §463). Helper `Observer::watch_all`
     builds the multi-namespace grant.
-- **H5.** **Readiness handshake** (pi-1 §21, §333, §385,
-  §386). To eliminate publish-before-observer-ready races,
-  every fixture mode that publishes on startup waits for an
-  inbound `core.fixture.start` request before publishing. The
-  harness calls
-  `spawn_handle.peer().call("core.fixture.start", ()).await`
-  on each publishing fixture **after** the observer fixture
-  is registered and its `core.fixture.observed` service is
-  installed. The fixture's `start` handler returns immediately;
-  the harness then awaits the expected events on the observer
-  channel. This makes every test schedule-deterministic.
+- **H5.** **Two-phase readiness handshake** (pi-1 §21,
+  §333, §385, §386; **pi-4 §5 added the fixture-ready
+  half**). The race exists in two places:
+  1. **Fixture-ready (plugin → core).** After the fixture's
+     `Client::connect`, `with_service`, and
+     `with_notification_handler` are all installed, the
+     fixture calls `peer.call("core.fixture.ready",
+     serde_json::json!({"mode": "<mode>"}))` exactly once.
+     The harness registers a `core.fixture.ready` extra
+     service that records each fixture's readiness and
+     unblocks the harness-side wait. Without this, core
+     calls to `core.fixture.start` / `core.fixture.echo` /
+     `core.fixture.dump_env` could land before the fixture's
+     service registry is installed, returning
+     `MethodNotFound`.
+  2. **Publisher-start (core → plugin).** Once both the
+     observer fixture AND the publishing fixture have
+     completed step 1, the harness calls
+     `spawn_handle.peer().call("core.fixture.start",
+     serde_json::Value::Null).await` (pi-4 §4: `()` is not a
+     valid `peer.call` param; use `Value::Null`) on the
+     publishing fixture. The fixture's `start` handler is
+     the trigger for any publish-on-start mode and returns
+     immediately. The harness then awaits the expected
+     events on the observer channel.
+  The two-phase shape makes every test schedule-deterministic
+  even under multi-thread tokio scheduling.
 
 ### F — fixture binary (`rafaello-core` `[[bin]] rfl-bus-fixture`)
 
@@ -1082,28 +1165,69 @@ is fully controlled by env vars set by the harness via
   `rafaello-core`'s test/feature deps (pi-1 §114).
 - **F2.** **Mode dispatch via `RFL_FIXTURE_MODE`** (replaces
   the round-1 grab-bag of independent env vars per pi-1 §412,
-  §415–§418):
-  - `publish_one` — wait for `core.fixture.start`, then
-    publish one `bus.publish` notification with topic from
-    `RFL_FIXTURE_TOPIC` and payload from
-    `RFL_FIXTURE_PAYLOAD_JSON` (parsed); exit 0.
-  - `publish_bad_namespace` — wait for `start`, publish
-    `core.session.user_message` (or `RFL_FIXTURE_TOPIC` if
-    set); exit 0 regardless of broker rejection.
-  - `publish_bad_grammar` — wait for `start`, publish topic
-    `plugin.<own-topic-id>.UPPERCASE` (own topic-id taken
-    from `RFL_PLUGIN`-derived hash provided to fixture via
-    `RFL_TOPIC_ID` reserved env var the supervisor now also
-    injects — see SP4 update below); exit 0.
-  - `publish_outside_grant` — wait for `start`, publish
-    `plugin.<own-topic-id>.ungranted`; exit 0.
-  - `publish_bad_in_reply_to_missing` — wait for `start`,
-    publish `plugin.<own-topic-id>.tool_result` with no
-    `in_reply_to` field; exit 0.
-  - `publish_bad_in_reply_to_empty` — same with `in_reply_to:
-    []`; exit 0.
-  - `publish_bad_in_reply_to_multiple` — same with
-    `in_reply_to: ["a", "b"]`; exit 0.
+  §415–§418).
+  
+  **Universal fixture init (every mode does this in order)**
+  per pi-4 §5:
+  1. Parse `RFL_BUS_FD`, set up transport (§F3).
+  2. Build `Client` via `OneShotConnector`.
+  3. Install `with_service` and/or
+     `with_notification_handler` per mode requirements.
+  4. Call `peer.call("core.fixture.ready",
+     json!({"mode": "<mode>"})).await` exactly once. The
+     harness `core.fixture.ready` extra service unblocks
+     each fixture's readiness wait. This MUST complete
+     before the fixture either accepts inbound calls or
+     proceeds with mode-specific behavior.
+  
+  **Publish-and-exit modes** (`publish_one`,
+  `publish_bad_namespace`, `publish_bad_grammar`,
+  `publish_outside_grant`, `publish_bad_in_reply_to_*`,
+  `publish_with_taint`) all share this post-init shape per
+  pi-4 §6:
+  - Wait for `core.fixture.start`.
+  - Perform the configured publish (mode-specific shape
+    described below).
+  - Call `peer.call("core.fixture.after_publish",
+    Value::Null).await` — this is the **flush ack**: a
+    fittings request roundtrip guarantees the prior
+    `bus.publish` notification has been written to the
+    socket before the fixture exits (notifications and
+    requests share a single ordered transport stream).
+    The harness `core.fixture.after_publish` extra service
+    just records the call and returns.
+  - Exit 0.
+  
+  Mode-specific bodies:
+  - `publish_one` — publish one `bus.publish` notification
+    with `topic` from `RFL_FIXTURE_TOPIC` and `payload`
+    from `RFL_FIXTURE_PAYLOAD_JSON` (parsed).
+  - `publish_with_taint` — publish a `bus.publish`
+    notification whose top-level params have `topic`,
+    `payload`, AND `taint` from `RFL_FIXTURE_TAINT_JSON`
+    (parsed; an array of `TaintEntry`-shaped JSON). pi-4 §7
+    added this mode because `taint` lives at the top-level
+    of `PublishMsg`, not inside `payload`.
+  - `publish_full_params` (escape hatch) — publish a
+    `bus.publish` notification whose params are the verbatim
+    JSON value from `RFL_FIXTURE_FULL_PARAMS_JSON`. Used by
+    tests asserting decode-side rejection of arbitrary
+    malformed shapes (e.g. extra unknown fields, missing
+    required fields).
+  - `publish_bad_namespace` — publish `core.session.user_message`
+    (or `RFL_FIXTURE_TOPIC` if set); broker rejects, fixture
+    continues to flush ack and exits.
+  - `publish_bad_grammar` — publish topic
+    `plugin.<RFL_TOPIC_ID>.UPPERCASE`.
+  - `publish_outside_grant` — publish
+    `plugin.<RFL_TOPIC_ID>.ungranted` (the test's lock grant
+    omits this exact topic).
+  - `publish_bad_in_reply_to_missing` — publish
+    `plugin.<RFL_TOPIC_ID>.tool_result` with no `in_reply_to`.
+  - `publish_bad_in_reply_to_empty` — same topic with
+    `in_reply_to: []`.
+  - `publish_bad_in_reply_to_multiple` — same topic with
+    `in_reply_to: ["a", "b"]`.
   - `respond_peer_call` — register a fittings `Service` impl
     handling:
     - `core.fixture.start` → empty response.
@@ -1209,7 +1333,7 @@ unit tests run on every platform.
 | `supervisor_env_set_overrides_pass.rs` | `#[serial(env)]`. Plan with `env.pass = ["FOO_VAR"]` and `env.set = {"FOO_VAR": "set-wins"}`. Parent has `FOO_VAR=pass-loses`. Dump: `FOO_VAR == "set-wins"` (pi-1 §321). |
 | `supervisor_env_clear_strips_unrelated.rs` | `#[serial(env)]`. Parent has `RANDOM_PARENT_VAR=secret` (not in pass/set). Dump asserts `RANDOM_PARENT_VAR` is absent (pi-1 §323). |
 | `supervisor_private_state_dir_writable.rs` | A in `respond_peer_call`. Harness calls `core.fixture.write_private_state`; fixture writes to `<RFL_PRIVATE_STATE_DIR>/marker`; test verifies file exists and the directory path includes the topic-id form per row 37 (pi-1 §35, §286, §326). The supervisor created the dir at SP4 step 11 before spawn. |
-| `supervisor_taint_round_trip.rs` | A in `publish_one` with payload that includes `taint: [{"source": "test", "detail": "x"}]` in the `bus.publish` params. Observer receives event; `event.taint == Some(...)` byte-equal (pi-1 §308, §356). |
+| `supervisor_taint_round_trip.rs` | A in `publish_with_taint` mode (pi-4 §7) with `RFL_FIXTURE_TAINT_JSON=[{"source":"test","detail":"x"}]`. Observer receives event; `event.taint == Some(vec![TaintEntry{...}])` byte-equal (pi-1 §308, §356). |
 
 #### Negative integration tests
 
