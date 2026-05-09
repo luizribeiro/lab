@@ -110,3 +110,88 @@ shorthands always produce `isError: false`.
 
 `Server::serve_stdio()` is the embedder/test entrypoint; `Server::run_entrypoint()`
 adds the `FITTINGS` env + first-arg `serve` dance.
+
+## Client
+
+`mcpfit::Client` connects to an MCP server over any `fittings::Connector` and
+exposes the protocol as typed Rust calls.
+
+```rust
+use mcpfit::Client;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> mcpfit::Result<()> {
+    let client = Client::spawn("./my-mcp-server").await?;
+    for tool in client.list_tools().await? {
+        println!("{}", tool.name);
+    }
+    let response = client.call_tool("add", json!({"a": 1, "b": 2})).await?;
+    println!("{:?}", response.content);
+    Ok(())
+}
+```
+
+`Client::spawn` is sugar for `Client::connect(SubprocessConnector::new(cmd))` —
+it inherits the `FITTINGS=1` env + first-arg `serve` injection from
+`SubprocessConnector`, so the same binary that runs `Server::run_entrypoint()`
+on the server side spawns cleanly.
+
+### Handshake
+
+`Client::connect` performs the full MCP handshake (`initialize` then
+`notifications/initialized`) and returns a ready client. Use the explicit form
+to inspect the `InitializeResult` or interleave setup work:
+
+```rust
+let client = Client::connect_uninitialized(connector).await?;
+let info = client.initialize().await?;
+// inspect info.capabilities, info.server_info, ...
+client.initialized().await?;
+```
+
+### Tool calls
+
+```rust
+client.list_tools().await?;                      // Vec<ToolInfo>
+client.call_tool_raw(name, args).await?;          // ToolResponse, isError passthrough
+client.call_tool(name, args).await?;              // Err(ToolFailed) on isError: true
+```
+
+`args` is any `Serialize` value — typed structs work directly, no manual JSON
+construction required. `call_tool` maps `isError: true` into
+`McpfitError::ToolFailed(ToolResponse)`; `call_tool_raw` hands the response
+back unchanged so callers can inspect tool-reported failures themselves.
+
+### Progress and cancellation
+
+Progress-enabled calls use a separate handle-style API. mcpfit generates a
+progress token, injects it into `tools/call.params._meta.progressToken`, and
+routes matching `notifications/progress` to a per-call channel:
+
+```rust
+let mut call = client
+    .call_tool_with_progress("work", json!({"n": 100}))
+    .start()
+    .await?;
+
+while let Some(event) = call.progress().recv().await {
+    println!("{}/{:?}: {:?}", event.progress, event.total, event.message);
+}
+
+let response = call.await?;             // ToolResponse, errors on isError
+// or, to abort early:
+// call.cancel().await?;                // sends notifications/cancelled
+```
+
+The per-call progress channel is bounded; if a slow consumer can't keep up the
+router drops events rather than blocking and bumps a missed counter exposed as
+`call.missed_progress_count()`. Plain `call_tool` futures don't auto-cancel on
+drop — use `ToolCallHandle::cancel` explicitly when you want the server
+notified.
+
+### Raw notifications
+
+`client.notifications()` returns a `broadcast::Receiver<InboundNotification>`
+delegating to the underlying fittings subscription — useful for
+`notifications/tools/list_changed` and debugging.
