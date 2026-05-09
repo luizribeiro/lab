@@ -42,6 +42,13 @@ where
         serde_json::from_value(result)
             .map_err(|e| McpfitError::internal(format!("decode initialize result: {e}")))
     }
+
+    pub async fn initialized(&self) -> Result<(), McpfitError> {
+        self.inner
+            .notify("notifications/initialized", serde_json::json!({}))
+            .await
+            .map_err(|e| McpfitError::internal(format!("send initialized notification: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +196,32 @@ mod tests {
         );
 
         server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn initialized_sends_notification_without_id() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        client
+            .initialized()
+            .await
+            .expect("initialized notification succeeds");
+
+        let frame = server_transport
+            .recv()
+            .await
+            .expect("initialized notification frame");
+        let request = parse_request_fixture(&frame).expect("decode notification");
+        assert_eq!(request.method, "notifications/initialized");
+        assert!(
+            request.id.is_none(),
+            "notifications/initialized must not carry an id, got: {:?}",
+            request.id
+        );
+        assert_eq!(request.params, Some(json!({})));
     }
 
     #[tokio::test]
