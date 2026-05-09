@@ -14,7 +14,10 @@ fn passes_with_two_plugins_and_distinct_plugin_dirs() {
     let a = canonical("github.com/acme:alpha@1.0.0");
     let b = canonical("github.com/acme:beta@1.0.0");
     let lock = lock_with(
-        vec![(a.clone(), entry(&["alpha"], false, None)), (b.clone(), entry(&["beta"], false, None))],
+        vec![
+            (a.clone(), entry(&["alpha"], false, None)),
+            (b.clone(), entry(&["beta"], false, None)),
+        ],
         SessionTable::default(),
     );
     let ctx = ctx_for(&[&a, &b]);
@@ -26,7 +29,10 @@ fn missing_plugin_dir_for_installed_plugin_is_rejected() {
     let a = canonical("github.com/acme:alpha@1.0.0");
     let b = canonical("github.com/acme:beta@1.0.0");
     let lock = lock_with(
-        vec![(a.clone(), entry(&["alpha"], false, None)), (b.clone(), entry(&["beta"], false, None))],
+        vec![
+            (a.clone(), entry(&["alpha"], false, None)),
+            (b.clone(), entry(&["beta"], false, None)),
+        ],
         SessionTable::default(),
     );
     let ctx = ctx_for(&[&a]);

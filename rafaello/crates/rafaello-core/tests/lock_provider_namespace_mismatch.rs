@@ -29,12 +29,7 @@ fn lock_provider_namespace_mismatched_id_is_rejected() {
 #[test]
 fn lock_provider_namespace_non_provider_is_rejected() {
     let a = canonical("github.com/acme:alpha@1.0.0");
-    let plug = entry_with_publishes(
-        &["alpha"],
-        false,
-        None,
-        &["provider.openai.tool_request"],
-    );
+    let plug = entry_with_publishes(&["alpha"], false, None, &["provider.openai.tool_request"]);
     let lock = lock_with(vec![(a.clone(), plug)], SessionTable::default());
     let ctx = ctx_for(&[&a]);
     assert!(matches!(

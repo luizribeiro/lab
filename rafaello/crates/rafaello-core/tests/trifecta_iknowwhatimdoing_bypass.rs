@@ -30,9 +30,8 @@ fn make_entry(grant: Grant, flags: LockFlags) -> PluginEntry {
         entry: SafePath::parse("bin/x.js").unwrap(),
         digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             .to_owned(),
-        manifest_digest:
-            "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-                .to_owned(),
+        manifest_digest: "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            .to_owned(),
         granted_at: Utc.with_ymd_and_hms(2026, 1, 15, 8, 30, 0).unwrap(),
         grant,
         bindings: Bindings::default(),

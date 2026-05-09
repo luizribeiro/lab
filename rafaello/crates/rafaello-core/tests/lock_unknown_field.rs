@@ -6,7 +6,10 @@ use rafaello_core::lock::Lock;
 fn unknown_top_level_field_rejected() {
     let err = Lock::from_toml(r#"some_extra_table = 42"#).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("unknown field") || msg.contains("some_extra_table"), "got: {msg}");
+    assert!(
+        msg.contains("unknown field") || msg.contains("some_extra_table"),
+        "got: {msg}"
+    );
 }
 
 #[test]
@@ -21,7 +24,10 @@ mystery = "field"
 "#;
     let err = Lock::from_toml(toml).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("unknown field") || msg.contains("mystery"), "got: {msg}");
+    assert!(
+        msg.contains("unknown field") || msg.contains("mystery"),
+        "got: {msg}"
+    );
 }
 
 #[test]

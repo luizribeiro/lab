@@ -124,13 +124,16 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
     let mut tool_claims: BTreeMap<&str, Vec<&CanonicalId>> = BTreeMap::new();
     for (canonical, entry) in &lock.plugins {
         for tool in &entry.bindings.tools {
-            tool_claims.entry(tool.as_str()).or_default().push(canonical);
+            tool_claims
+                .entry(tool.as_str())
+                .or_default()
+                .push(canonical);
         }
     }
 
     for (tool_name, owner_str) in &lock.session.tool_owner {
-        let owner_id = CanonicalId::parse(owner_str)
-            .map_err(|_| ValidationError::ToolOwnerUnknownPlugin)?;
+        let owner_id =
+            CanonicalId::parse(owner_str).map_err(|_| ValidationError::ToolOwnerUnknownPlugin)?;
         let Some(owner_entry) = lock.plugins.get(&owner_id) else {
             return Err(ValidationError::ToolOwnerUnknownPlugin);
         };
@@ -186,9 +189,7 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
         }
 
         for (bundle_key, bundle) in &entry.grant.bundles {
-            if bundle_key != "default"
-                && !entry.bindings.tools.iter().any(|t| t == bundle_key)
-            {
+            if bundle_key != "default" && !entry.bindings.tools.iter().any(|t| t == bundle_key) {
                 return Err(ValidationError::LockUnknownBundleKey);
             }
             if let Some(net) = &bundle.network {
@@ -255,8 +256,8 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
     }
 
     if let Some(active_str) = &lock.session.provider_active {
-        let active_id = CanonicalId::parse(active_str)
-            .map_err(|_| ValidationError::ProviderActiveUnknown)?;
+        let active_id =
+            CanonicalId::parse(active_str).map_err(|_| ValidationError::ProviderActiveUnknown)?;
         let Some(active_entry) = lock.plugins.get(&active_id) else {
             return Err(ValidationError::ProviderActiveUnknown);
         };

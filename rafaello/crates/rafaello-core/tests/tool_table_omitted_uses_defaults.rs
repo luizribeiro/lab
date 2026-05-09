@@ -79,10 +79,10 @@ fn omitted_tool_table_snapshots_inferred_defaults() {
 
     let entry = PluginEntry {
         entry: SafePath::parse("bin/grep.js").expect("safepath"),
-        digest:
-            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
-        manifest_digest:
-            "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_owned(),
+        digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .to_owned(),
+        manifest_digest: "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            .to_owned(),
         granted_at: Utc.with_ymd_and_hms(2026, 1, 15, 8, 30, 0).unwrap(),
         grant,
         bindings,
@@ -111,19 +111,24 @@ fn omitted_tool_table_snapshots_inferred_defaults() {
         .get("grep")
         .expect("tool_meta.grep present");
 
-    assert!(snapshot.sinks_inferred, "tool table omitted → inferred = true");
+    assert!(
+        snapshot.sinks_inferred,
+        "tool table omitted → inferred = true"
+    );
     assert_eq!(
         snapshot.sinks, inferred_sinks,
         "snapshotted sinks match infer_defaults over the effective bundle"
     );
-    assert!(snapshot.grant_match.is_none(), "grant_match defaults to None");
+    assert!(
+        snapshot.grant_match.is_none(),
+        "grant_match defaults to None"
+    );
     assert!(!snapshot.always_confirm, "always_confirm defaults to false");
 
-    let recomputed = infer_defaults(&effective_grant(&parsed
-        .plugins
-        .get(&id)
-        .unwrap()
-        .grant, "grep"), &None);
+    let recomputed = infer_defaults(
+        &effective_grant(&parsed.plugins.get(&id).unwrap().grant, "grep"),
+        &None,
+    );
     assert_eq!(
         recomputed, snapshot.sinks,
         "recomputing inference over the round-tripped grant matches the snapshot"

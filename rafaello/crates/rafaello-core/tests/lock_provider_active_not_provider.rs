@@ -49,7 +49,10 @@ fn provider_active_provider_with_provider_id_passes() {
         provider_active: Some("github.com/acme:alpha@1.0.0".into()),
         tool_owner: Default::default(),
     };
-    let lock = lock_with(vec![(a.clone(), entry(&[], true, Some("anthropic")))], session);
+    let lock = lock_with(
+        vec![(a.clone(), entry(&[], true, Some("anthropic")))],
+        session,
+    );
     let ctx = ctx_for(&[&a]);
     validate::lock(&lock, &ctx).expect("provider_active resolves to a real provider");
 }

@@ -67,8 +67,8 @@ fn override_compiles_explicit_leaf_hits() {
     );
     assert!(lock.flags.allow_credential_paths_active);
 
-    let netrc = compile_against(&bundle_with_read_path("${home}/.netrc"), &id, &ctx(), true)
-        .unwrap();
+    let netrc =
+        compile_against(&bundle_with_read_path("${home}/.netrc"), &id, &ctx(), true).unwrap();
     assert_eq!(netrc.read_paths, vec![PathBuf::from("/home/u/.netrc")]);
     assert!(netrc.flags.allow_credential_paths_active);
 }

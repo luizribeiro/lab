@@ -3,7 +3,7 @@
 //! Variants are skeleton placeholders; structured fields land in
 //! the commits that construct them. The variant *names* are the
 //! contract here so subsequent commits can `?`-propagate through
-//! the top-level [`Error`] without churn.
+//! the top-level [`enum@Error`] without churn.
 
 use thiserror::Error;
 
@@ -268,7 +268,11 @@ pub enum TrifectaError {}
 #[non_exhaustive]
 pub enum CollisionError {
     #[error("topic-id collision between `{a}` and `{b}` on prefix `{prefix}`")]
-    TopicIdCollision { a: String, b: String, prefix: String },
+    TopicIdCollision {
+        a: String,
+        b: String,
+        prefix: String,
+    },
 }
 
 #[derive(Debug, Error)]

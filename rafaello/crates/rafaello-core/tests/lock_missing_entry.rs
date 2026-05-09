@@ -12,5 +12,8 @@ granted_at = "2026-01-15T08:30:00Z"
 "#;
     let err = Lock::from_toml(toml).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("entry") || msg.contains("missing"), "got: {msg}");
+    assert!(
+        msg.contains("entry") || msg.contains("missing"),
+        "got: {msg}"
+    );
 }

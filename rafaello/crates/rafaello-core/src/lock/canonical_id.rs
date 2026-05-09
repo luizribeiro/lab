@@ -28,16 +28,16 @@ pub struct CanonicalId {
 
 impl CanonicalId {
     pub fn parse(s: &str) -> Result<Self, LockError> {
-        let (source, rest) = s
-            .split_once(':')
-            .ok_or_else(|| LockError::CanonicalIdMissingNameSeparator {
-                input: s.to_owned(),
-            })?;
-        let (name, version) = rest.split_once('@').ok_or_else(|| {
-            LockError::CanonicalIdMissingVersionSeparator {
-                input: s.to_owned(),
-            }
-        })?;
+        let (source, rest) =
+            s.split_once(':')
+                .ok_or_else(|| LockError::CanonicalIdMissingNameSeparator {
+                    input: s.to_owned(),
+                })?;
+        let (name, version) =
+            rest.split_once('@')
+                .ok_or_else(|| LockError::CanonicalIdMissingVersionSeparator {
+                    input: s.to_owned(),
+                })?;
 
         validate_source(source)?;
         if !is_tool_name(name) {
@@ -45,10 +45,11 @@ impl CanonicalId {
                 name: name.to_owned(),
             });
         }
-        let version = Version::parse(version).map_err(|err| LockError::CanonicalIdInvalidVersion {
-            version: version.to_owned(),
-            source: err,
-        })?;
+        let version =
+            Version::parse(version).map_err(|err| LockError::CanonicalIdInvalidVersion {
+                version: version.to_owned(),
+                source: err,
+            })?;
 
         Ok(CanonicalId {
             source: source.to_owned(),
@@ -89,10 +90,9 @@ fn validate_source(source: &str) -> Result<(), LockError> {
                 segment: seg.to_owned(),
             });
         }
-        if !seg
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
-        {
+        if !seg.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
+        }) {
             return Err(LockError::CanonicalIdIllegalSourceSegment {
                 segment: seg.to_owned(),
             });

@@ -20,10 +20,7 @@ fn tool_owner_without_conflict_is_redundant() {
         provider_active: None,
         tool_owner,
     };
-    let lock = lock_with(
-        vec![(a.clone(), entry(&["grep"], false, None))],
-        session,
-    );
+    let lock = lock_with(vec![(a.clone(), entry(&["grep"], false, None))], session);
     let ctx = ctx_for(&[&a]);
     assert!(matches!(
         validate::lock(&lock, &ctx).unwrap_err(),

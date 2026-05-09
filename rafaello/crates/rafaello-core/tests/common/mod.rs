@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use rafaello_core::lock::{
-    Bindings, CanonicalId, Grant, Lock, LoadPolicy, LockFlags, PluginEntry, SessionTable,
+    Bindings, CanonicalId, Grant, LoadPolicy, Lock, LockFlags, PluginEntry, SessionTable,
 };
 use rafaello_core::manifest::SafePath;
 use rafaello_core::validate::LockValidationContext;
@@ -20,7 +20,8 @@ pub fn entry(tools: &[&str], provider: bool, provider_id: Option<&str>) -> Plugi
     PluginEntry {
         entry: SafePath::parse("bin/main.js").unwrap(),
         digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
-        manifest_digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
+        manifest_digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            .into(),
         granted_at,
         grant: Grant::default(),
         bindings: Bindings {

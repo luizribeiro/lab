@@ -64,10 +64,7 @@ fn default_and_named_bundle_union() {
         GrantBundle {
             filesystem: Some(GrantFilesystem {
                 read_dirs: vec!["${project}/src".to_owned()],
-                write_dirs: vec![
-                    "${project}/out".to_owned(),
-                    "${project}/dist".to_owned(),
-                ],
+                write_dirs: vec!["${project}/out".to_owned(), "${project}/dist".to_owned()],
                 ..GrantFilesystem::default()
             }),
             network: Some(GrantNetwork {

@@ -57,17 +57,14 @@ pub struct FilesystemPlan {
     pub exec_dirs: Vec<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NetworkPlan {
+    #[default]
     Deny,
     AllowAll,
-    Proxy { allow_hosts: Vec<String> },
-}
-
-impl Default for NetworkPlan {
-    fn default() -> Self {
-        NetworkPlan::Deny
-    }
+    Proxy {
+        allow_hosts: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -357,8 +354,8 @@ fn resolve_one(template: &str, ctx: &PathContext) -> Result<PathBuf, CompileErro
     if let Some(kind) = root_kind_for(template) {
         paths::resolve_under_root(template, ctx, kind).map_err(map_path_err)
     } else {
-        let expanded = placeholders::expand(template, ctx)
-            .map_err(|_| CompileError::UnknownPlaceholder)?;
+        let expanded =
+            placeholders::expand(template, ctx).map_err(|_| CompileError::UnknownPlaceholder)?;
         Ok(PathBuf::from(expanded))
     }
 }
@@ -487,12 +484,7 @@ pub(crate) fn spot_check_v3(
             *tool_claims.entry(tool.as_str()).or_default() += 1;
         }
     }
-    let resolved: BTreeSet<&str> = lock
-        .session
-        .tool_owner
-        .keys()
-        .map(String::as_str)
-        .collect();
+    let resolved: BTreeSet<&str> = lock.session.tool_owner.keys().map(String::as_str).collect();
     for (tool, claims) in &tool_claims {
         if *claims > 1 && !resolved.contains(tool) {
             return Err(CompileError::ValidationNotRun);

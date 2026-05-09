@@ -39,9 +39,7 @@ pub fn evaluate(lock: &Lock, canonical: &CanonicalId, ctx: &PathContext) -> Trif
     let bundles: Vec<&GrantBundle> = entry.grant.bundles.values().collect();
 
     let any_own_network_open = bundles.iter().any(|b| network_open(b));
-    let reads_outside_project = bundles
-        .iter()
-        .any(|b| bundle_reads_outside_project(b, ctx));
+    let reads_outside_project = bundles.iter().any(|b| bundle_reads_outside_project(b, ctx));
     let subscribes_session_signal = entry.grant.subscribes.iter().any(|pat| {
         pattern_matches_topic(pat, "core.session.tool_result")
             || pattern_matches_topic(pat, "core.session.assistant_message")
@@ -58,10 +56,8 @@ pub fn evaluate(lock: &Lock, canonical: &CanonicalId, ctx: &PathContext) -> Trif
             .is_some_and(|fs| !fs.write_dirs.is_empty())
     });
 
-    let refuse = reads_untrusted
-        && has_outbound
-        && has_workspace_write
-        && !entry.flags.i_know_what_im_doing;
+    let refuse =
+        reads_untrusted && has_outbound && has_workspace_write && !entry.flags.i_know_what_im_doing;
 
     TrifectaState {
         reads_untrusted,
@@ -91,11 +87,7 @@ fn bundle_reads_outside_project(bundle: &GrantBundle, ctx: &PathContext) -> bool
         })
 }
 
-fn other_plugin_one_hop_outbound(
-    lock: &Lock,
-    canonical: &CanonicalId,
-    own_grant: &Grant,
-) -> bool {
+fn other_plugin_one_hop_outbound(lock: &Lock, canonical: &CanonicalId, own_grant: &Grant) -> bool {
     if own_grant.publishes.is_empty() {
         return false;
     }
@@ -161,8 +153,7 @@ mod tests {
             digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .to_owned(),
             manifest_digest:
-                "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-                    .to_owned(),
+                "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_owned(),
             granted_at: Utc.with_ymd_and_hms(2026, 1, 15, 8, 30, 0).unwrap(),
             grant: Grant {
                 bundles,

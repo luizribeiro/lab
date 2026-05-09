@@ -11,22 +11,17 @@ use serde::{Deserialize, Serialize, Serializer};
 
 const LOAD_VARIANTS: &[&str] = &["eager", "boot", "manual", "lazy"];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum LoadPolicy {
     Eager,
     Boot,
+    #[default]
     Manual,
     Lazy {
         event: Vec<String>,
         command: Vec<String>,
         kind: Vec<String>,
     },
-}
-
-impl Default for LoadPolicy {
-    fn default() -> Self {
-        LoadPolicy::Manual
-    }
 }
 
 impl<'de> Deserialize<'de> for LoadPolicy {

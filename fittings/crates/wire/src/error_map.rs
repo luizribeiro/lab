@@ -153,7 +153,9 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
 const METHOD_KEY: &str = "method";
 
 fn synthesise_method_into_data(method: Option<String>, data: Option<Value>) -> Option<Value> {
-    let Some(method) = method else { return data; };
+    let Some(method) = method else {
+        return data;
+    };
     let mut map = match data {
         Some(Value::Object(map)) => map,
         _ => serde_json::Map::new(),

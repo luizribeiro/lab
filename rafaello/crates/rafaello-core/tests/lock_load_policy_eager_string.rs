@@ -17,5 +17,8 @@ fn eager_string_decodes_as_eager() {
 fn unknown_string_rejected() {
     let err = toml::from_str::<Wrap>(r#"load = "ferocious""#).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("ferocious") || msg.contains("unknown"), "got: {msg}");
+    assert!(
+        msg.contains("ferocious") || msg.contains("unknown"),
+        "got: {msg}"
+    );
 }

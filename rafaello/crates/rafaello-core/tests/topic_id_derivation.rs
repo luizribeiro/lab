@@ -32,5 +32,7 @@ fn derive_prefix_shape() {
     assert!(id.starts_with("id_"));
     let body = &id[3..];
     assert_eq!(body.len(), 16);
-    assert!(body.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(body
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
 }

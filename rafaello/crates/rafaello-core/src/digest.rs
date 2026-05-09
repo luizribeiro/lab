@@ -53,8 +53,7 @@ fn walk(
     stack: &mut Vec<PathBuf>,
     files: &mut Vec<(String, Vec<u8>)>,
 ) -> Result<(), DigestError> {
-    let mut entries: Vec<fs::DirEntry> =
-        fs::read_dir(real_dir)?.collect::<Result<Vec<_>, _>>()?;
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(real_dir)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|e| e.file_name());
 
     for entry in entries {

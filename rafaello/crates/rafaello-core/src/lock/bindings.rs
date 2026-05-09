@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::lock::load_policy::LoadPolicy;
 use crate::manifest::safepath::SafePath;
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Bindings {
     #[serde(default)]
@@ -22,19 +22,6 @@ pub struct Bindings {
     pub tool_meta: BTreeMap<String, ToolMeta>,
     #[serde(default)]
     pub load: LoadPolicy,
-}
-
-impl Default for Bindings {
-    fn default() -> Self {
-        Bindings {
-            provider: false,
-            provider_id: None,
-            tools: Vec::new(),
-            renderer_kinds: Vec::new(),
-            tool_meta: BTreeMap::new(),
-            load: LoadPolicy::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -20,10 +20,7 @@ fn tool_owner_plugin_does_not_declare_tool_is_rejected() {
         provider_active: None,
         tool_owner,
     };
-    let lock = lock_with(
-        vec![(a.clone(), entry(&["other"], false, None))],
-        session,
-    );
+    let lock = lock_with(vec![(a.clone(), entry(&["other"], false, None))], session);
     let ctx = ctx_for(&[&a]);
     assert!(matches!(
         validate::lock(&lock, &ctx).unwrap_err(),

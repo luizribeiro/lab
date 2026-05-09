@@ -114,9 +114,7 @@ async fn predefined_error_variants_round_trip_message_and_data_byte_equal() {
         let (message, data) = match &error {
             FittingsError::Parse { message, data } => (message.clone(), data.clone()),
             FittingsError::InvalidRequest { message, data } => (message.clone(), data.clone()),
-            FittingsError::MethodNotFound { message, data, .. } => {
-                (message.clone(), data.clone())
-            }
+            FittingsError::MethodNotFound { message, data, .. } => (message.clone(), data.clone()),
             FittingsError::InvalidParams { message, data } => (message.clone(), data.clone()),
             FittingsError::Internal { message, data } => (message.clone(), data.clone()),
             other => panic!("[{}] unexpected variant: {other:?}", case.name),

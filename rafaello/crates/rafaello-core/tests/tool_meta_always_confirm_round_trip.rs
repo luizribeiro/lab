@@ -12,10 +12,10 @@ use std::path::PathBuf;
 use chrono::{TimeZone, Utc};
 use rafaello_core::compile::compile_plugin;
 use rafaello_core::digest::RecomputedDigests;
+use rafaello_core::lock::grant::Grant;
 use rafaello_core::lock::{
     Bindings, CanonicalId, Lock, LockFlags, PluginEntry, SessionTable, ToolMeta,
 };
-use rafaello_core::lock::grant::Grant;
 use rafaello_core::manifest::safepath::SafePath;
 use rafaello_core::paths::PathContext;
 
@@ -44,9 +44,8 @@ fn fixture_lock() -> Lock {
         entry: SafePath::parse("bin/grep.js").expect("safepath"),
         digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             .to_owned(),
-        manifest_digest:
-            "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-                .to_owned(),
+        manifest_digest: "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            .to_owned(),
         granted_at: Utc.with_ymd_and_hms(2026, 1, 15, 8, 30, 0).unwrap(),
         grant: Grant::default(),
         bindings,

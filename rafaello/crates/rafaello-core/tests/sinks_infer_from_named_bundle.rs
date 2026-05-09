@@ -14,28 +14,31 @@ use rafaello_core::sinks::{effective_grant, infer_defaults};
 fn named_bundle_write_dirs_lift_into_effective_for_inference() {
     let mut grant = Grant::default();
 
-    grant.bundles.insert("default".to_owned(), GrantBundle {
-        filesystem: Some(GrantFilesystem {
-            read_paths: vec!["${project}/**".to_owned()],
-            ..GrantFilesystem::default()
-        }),
-        ..GrantBundle::default()
-    });
+    grant.bundles.insert(
+        "default".to_owned(),
+        GrantBundle {
+            filesystem: Some(GrantFilesystem {
+                read_paths: vec!["${project}/**".to_owned()],
+                ..GrantFilesystem::default()
+            }),
+            ..GrantBundle::default()
+        },
+    );
 
-    grant.bundles.insert("format".to_owned(), GrantBundle {
-        filesystem: Some(GrantFilesystem {
-            write_dirs: vec!["${project}/src".to_owned()],
-            ..GrantFilesystem::default()
-        }),
-        ..GrantBundle::default()
-    });
+    grant.bundles.insert(
+        "format".to_owned(),
+        GrantBundle {
+            filesystem: Some(GrantFilesystem {
+                write_dirs: vec!["${project}/src".to_owned()],
+                ..GrantFilesystem::default()
+            }),
+            ..GrantBundle::default()
+        },
+    );
 
     let effective = effective_grant(&grant, "format");
 
-    let fs = effective
-        .filesystem
-        .as_ref()
-        .expect("union has filesystem");
+    let fs = effective.filesystem.as_ref().expect("union has filesystem");
     assert_eq!(fs.read_paths, vec!["${project}/**".to_owned()]);
     assert_eq!(fs.write_dirs, vec!["${project}/src".to_owned()]);
 
@@ -50,14 +53,19 @@ fn named_bundle_write_dirs_lift_into_effective_for_inference() {
 fn unrelated_named_bundle_is_not_unioned_into_other_tool() {
     let mut grant = Grant::default();
 
-    grant.bundles.insert("default".to_owned(), GrantBundle::default());
-    grant.bundles.insert("format".to_owned(), GrantBundle {
-        filesystem: Some(GrantFilesystem {
-            write_dirs: vec!["${project}/src".to_owned()],
-            ..GrantFilesystem::default()
-        }),
-        ..GrantBundle::default()
-    });
+    grant
+        .bundles
+        .insert("default".to_owned(), GrantBundle::default());
+    grant.bundles.insert(
+        "format".to_owned(),
+        GrantBundle {
+            filesystem: Some(GrantFilesystem {
+                write_dirs: vec!["${project}/src".to_owned()],
+                ..GrantFilesystem::default()
+            }),
+            ..GrantBundle::default()
+        },
+    );
 
     let effective_for_grep = effective_grant(&grant, "grep");
     assert!(

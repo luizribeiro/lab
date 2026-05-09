@@ -1137,7 +1137,6 @@ exercised at least once.
 | `broker_acl_extraction.rs` | Two-plugin lock; `broker_acl::compile` emits per-plugin `publish_topics`, `subscribe_patterns`, the auto-inserted `plugin.<topic-id>.tool_request` self-subscribe, and the bound provider id (for the provider plugin). |
 | `carveout_default_workspace_decomposition.rs` | `read_dirs = ["${project}"]` decomposes to immediate non-hidden children of a fixture project root (K3); the per-plugin private state dir is added separately by C5 (also asserted via the `compile_private_state_grant.rs` test). |
 | `carveout_workspace_excludes_rafaello_dot_dirs.rs` | `read_dirs = ["${project}"]` against a project that contains `.rafaello/` decomposes around the carve-out (no entry covering `.rafaello/`). |
-| `digest_match_compiles.rs` | Lock's `digest` matches recomputed `content_digest`; lock's `manifest_digest` matches recomputed `manifest_digest`; compile succeeds. |
 | `digest_content_deterministic.rs` | Two invocations of `content_digest` against the same fixture tree return the same value; constructing the tree in a different order doesn't change the digest. |
 | `trifecta_two_plugins_one_hop.rs` | Plugin A has workspace_write + reads_untrusted but `network.mode = "deny"`; plugin B subscribes to A's published topic and has `network.mode = "proxy"`. A's `has_outbound` evaluates true via the one-hop check; combined with A's other booleans, the trifecta refusal fires. |
 | `trifecta_iknowwhatimdoing_bypass.rs` | Same fixture; `flags.i_know_what_im_doing = true`; trifecta refusal suppressed; compile succeeds. |

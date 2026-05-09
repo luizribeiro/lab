@@ -55,7 +55,7 @@ pub fn reject_reserved(
 }
 
 fn is_reserved(name: &str) -> bool {
-    RESERVED_ENV_VARS.iter().any(|r| *r == name)
+    RESERVED_ENV_VARS.contains(&name)
 }
 
 fn is_secret(name: &str) -> bool {

@@ -23,9 +23,7 @@ pub fn derive(canonical_id: &str) -> String {
     out
 }
 
-pub fn collisions_with_prefixes(
-    pairs: &[(CanonicalId, String)],
-) -> Result<(), CollisionError> {
+pub fn collisions_with_prefixes(pairs: &[(CanonicalId, String)]) -> Result<(), CollisionError> {
     for i in 0..pairs.len() {
         for j in (i + 1)..pairs.len() {
             let (a, prefix_a) = &pairs[i];

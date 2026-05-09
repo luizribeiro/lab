@@ -87,7 +87,11 @@ fn default_bundle_flattens_into_compiled_plugin() {
     let topic = topic_id::derive(&id.to_string());
     let private_state = project.join(".rafaello-plugin-data").join(&topic);
 
-    let mut expected_read_dirs = vec![project.join("docs"), project.join("src"), private_state.clone()];
+    let mut expected_read_dirs = vec![
+        project.join("docs"),
+        project.join("src"),
+        private_state.clone(),
+    ];
     expected_read_dirs.sort();
     assert_eq!(plan.filesystem.read_dirs, expected_read_dirs);
 

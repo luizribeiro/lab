@@ -7,9 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use rafaello_core::error::ValidationError;
-use rafaello_core::lock::{
-    Grant, GrantBundle, GrantFilesystem, GrantNetwork, SessionTable,
-};
+use rafaello_core::lock::{Grant, GrantBundle, GrantFilesystem, GrantNetwork, SessionTable};
 use rafaello_core::manifest::capabilities::NetworkMode;
 use rafaello_core::topic_id;
 use rafaello_core::validate;
@@ -164,5 +162,8 @@ fn carveout_refusal_surfaces_through_v3() {
     let ctx = ctx_for(&[&id]);
 
     let err = validate::lock(&lock, &ctx).unwrap_err();
-    assert!(matches!(err, ValidationError::CarveOutRefused), "got {err:?}");
+    assert!(
+        matches!(err, ValidationError::CarveOutRefused),
+        "got {err:?}"
+    );
 }

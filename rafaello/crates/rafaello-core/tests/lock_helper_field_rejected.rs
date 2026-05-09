@@ -13,20 +13,23 @@ granted_at = "2026-01-15T08:30:00Z"
 
 #[test]
 fn bindings_helpers_field_rejected() {
-    let toml = format!(
-        "{BASE}\n[plugin.\"local:foo@1.0.0\".bindings]\nhelpers = [\"helper.a\"]\n"
-    );
+    let toml = format!("{BASE}\n[plugin.\"local:foo@1.0.0\".bindings]\nhelpers = [\"helper.a\"]\n");
     let err = Lock::from_toml(&toml).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("unknown field") || msg.contains("helpers"), "got: {msg}");
+    assert!(
+        msg.contains("unknown field") || msg.contains("helpers"),
+        "got: {msg}"
+    );
 }
 
 #[test]
 fn bindings_helper_for_field_rejected() {
-    let toml = format!(
-        "{BASE}\n[plugin.\"local:foo@1.0.0\".bindings]\nhelper_for = \"some-tool\"\n"
-    );
+    let toml =
+        format!("{BASE}\n[plugin.\"local:foo@1.0.0\".bindings]\nhelper_for = \"some-tool\"\n");
     let err = Lock::from_toml(&toml).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("unknown field") || msg.contains("helper_for"), "got: {msg}");
+    assert!(
+        msg.contains("unknown field") || msg.contains("helper_for"),
+        "got: {msg}"
+    );
 }
