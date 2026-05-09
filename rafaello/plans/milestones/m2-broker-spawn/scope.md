@@ -216,7 +216,7 @@ test matrix.
     locks do not poison, which simplifies the broker's
     error surface (pi-2 non-blocking #2).
   - `anyhow = "1"` — `SpawnError::SandboxBuild.source` is
-    `anyhow::Error` because lockin's `SandboxBuilder::command`
+    `anyhow::Error` because lockin's `SandboxBuilder::tokio_command`
     returns `anyhow::Result` (pi-2 §3).
 - **W1 (dev-deps).** Added to `[workspace.dependencies]` so any
   workspace member can pick them up:
@@ -849,8 +849,8 @@ the socketpair plumbing that authenticates the bus connection.
   non-blocking #1 — it covers `set_nonblocking` /
   `UnixStream::from_std` failures during SP4 step 14, distinct
   from `Spawn` and from `FittingsBuild`.)
-  - `lockin` returns `anyhow::Result` from `command(...)`;
-    `Lockin.source` is `anyhow::Error` (pi-1 §19 #3, §155).
+  - `lockin` returns `anyhow::Result` from `tokio_command(...)`;
+    `SandboxBuild.source` is `anyhow::Error` (pi-1 §19 #3, §155).
   - `fittings_core::error::FittingsError` is the canonical
     type (pi-1 §19 #4).
   - `Socketpair.source` is `nix::errno::Errno` for nix 0.29
