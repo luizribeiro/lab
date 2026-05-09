@@ -5,7 +5,12 @@
 //! contract here so subsequent commits can `?`-propagate through
 //! the top-level [`enum@Error`] without churn.
 
+use std::path::PathBuf;
+
+use fittings_core::error::FittingsError;
 use thiserror::Error;
+
+use crate::lock::CanonicalId;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -275,6 +280,197 @@ pub enum CollisionError {
     },
 }
 
+/// Identifies the source of a publish/subscribe call (scope §B2).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Publisher {
+    Core,
+    Plugin(CanonicalId),
+}
+
+/// Why an `in_reply_to` field on a publish was rejected (scope §B2).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum InReplyToReason {
+    Missing,
+    EmptyArray,
+    UnexpectedMultiple,
+}
+
+/// Errors raised by the in-process broker (scope §B2).
+///
+/// Intentionally `Debug + Error` only — not `Clone`, not `PartialEq`,
+/// because future variants may carry non-cloneable sources.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum BrokerError {
+    #[error("plugin `{0}` not in broker ACL")]
+    NotInAcl(CanonicalId),
+    #[error("plugin `{0}` not registered with broker")]
+    NotRegistered(CanonicalId),
+    #[error("plugin `{0}` already registered with broker")]
+    AlreadyRegistered(CanonicalId),
+    #[error("publisher {publisher:?} subscribed to unknown namespace: `{topic}`")]
+    UnknownNamespace { publisher: Publisher, topic: String },
+    #[error("publisher {publisher:?} attempted publish on reserved namespace: `{topic}`")]
+    PublishOnReservedNamespace { publisher: Publisher, topic: String },
+    #[error("plugin `{canonical}` published outside its grant: `{topic}`")]
+    PublishOutsideGrant {
+        canonical: CanonicalId,
+        topic: String,
+    },
+    #[error("publisher {publisher:?} sent invalid topic `{topic}`: {reason}")]
+    InvalidTopic {
+        publisher: Publisher,
+        topic: String,
+        reason: String,
+    },
+    #[error("invalid subscribe pattern: {reason}")]
+    InvalidPattern { reason: String },
+    #[error("publisher {publisher:?} sent invalid payload: {reason}")]
+    InvalidPayload {
+        publisher: Publisher,
+        reason: String,
+    },
+    #[error("plugin `{canonical}` sent invalid in_reply_to on `{topic}`: {reason:?}")]
+    InvalidInReplyTo {
+        canonical: CanonicalId,
+        topic: String,
+        reason: InReplyToReason,
+    },
+    #[error("internal broker error: {detail}")]
+    Internal { detail: String },
+}
+
+/// Which path-shaped field of a compiled plan was malformed (scope §SP3).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum PathKind {
+    ReadPath,
+    ReadDir,
+    WritePath,
+    WriteDir,
+    ExecPath,
+    ExecDir,
+    EntryAbsolute,
+    ProjectRoot,
+    PrivateStateDir,
+}
+
+/// Why a compiled plan failed structural validation at spawn time
+/// (scope §SP3).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum InvalidPlanReason {
+    NonAbsolutePath {
+        kind: PathKind,
+        path: PathBuf,
+    },
+    ControlCharsInPath {
+        kind: PathKind,
+        path: PathBuf,
+    },
+    TopicIdMismatch {
+        expected: String,
+        got: String,
+    },
+    NetworkAllowHostsInvalid {
+        source: outpost::DomainPatternParseError,
+    },
+    ProviderNotInM2 {
+        provider_id: String,
+    },
+}
+
+/// How a previously-spawned plugin process exited (scope §SP3).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ReaperOutcome {
+    Exited(std::process::ExitStatus),
+    WaitFailed(std::io::Error),
+    ReaperPanicked,
+}
+
+/// Cloneable shareable shape of a shutdown failure (scope §B2 / pi-2).
+///
+/// Mirrors `std::io::Error` into kind + message so the value can be
+/// passed across `tokio::sync::watch` channels.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ShutdownFailure {
+    SignalSendFailed(nix::errno::Errno),
+    WaitFailed {
+        kind: std::io::ErrorKind,
+        message: String,
+    },
+    ReaperPanicked,
+}
+
+/// Errors raised by the spawn pipeline (scope §SP3).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SpawnError {
+    #[error("plugin `{0}` not in spawn ACL")]
+    NotInAcl(CanonicalId),
+    #[error("plugin `{0}` already registered with spawn supervisor")]
+    AlreadyRegistered(CanonicalId),
+    #[error("invalid compiled plan for `{canonical}`: {reason:?}")]
+    InvalidPlan {
+        canonical: CanonicalId,
+        reason: InvalidPlanReason,
+    },
+    #[error("entry path `{path}` for `{canonical}` is not executable")]
+    EntryNotExecutable {
+        canonical: CanonicalId,
+        path: PathBuf,
+    },
+    #[error("sandbox build failed for `{canonical}`: {source}")]
+    SandboxBuild {
+        canonical: CanonicalId,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("spawn failed for `{canonical}`: {source}")]
+    Spawn {
+        canonical: CanonicalId,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("proxy start failed for `{canonical}`: {source}")]
+    ProxyStart {
+        canonical: CanonicalId,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("socketpair failed for `{canonical}`: {source}")]
+    Socketpair {
+        canonical: CanonicalId,
+        #[source]
+        source: nix::errno::Errno,
+    },
+    #[error("fittings build failed for `{canonical}`: {source}")]
+    FittingsBuild {
+        canonical: CanonicalId,
+        #[source]
+        source: FittingsError,
+    },
+    #[error("compiled plan for `{canonical}` requested reserved env var `{var}`")]
+    ReservedEnvInPlan { canonical: CanonicalId, var: String },
+    #[error("transport setup failed for `{canonical}`: {source}")]
+    TransportSetup {
+        canonical: CanonicalId,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("private state dir `{path}` create failed for `{canonical}`: {source}")]
+    PrivateStateDirCreate {
+        canonical: CanonicalId,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -296,4 +492,8 @@ pub enum Error {
     Path(#[from] PathError),
     #[error(transparent)]
     Collision(#[from] CollisionError),
+    #[error(transparent)]
+    Broker(#[from] BrokerError),
+    #[error(transparent)]
+    Spawn(#[from] SpawnError),
 }

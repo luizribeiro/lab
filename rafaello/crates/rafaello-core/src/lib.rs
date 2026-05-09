@@ -19,6 +19,7 @@ pub use compile::{
     NetworkPlan, ToolMeta,
 };
 pub use error::{
-    CarveOutError, CollisionError, CompileError, DigestError, Error, LockError, ManifestError,
-    PathError, TrifectaError, ValidationError,
+    BrokerError, CarveOutError, CollisionError, CompileError, DigestError, Error, InReplyToReason,
+    InvalidPlanReason, LockError, ManifestError, PathError, PathKind, Publisher, ReaperOutcome,
+    ShutdownFailure, SpawnError, TrifectaError, ValidationError,
 };
