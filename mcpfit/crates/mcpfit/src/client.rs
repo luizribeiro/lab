@@ -1,4 +1,8 @@
-use fittings::{client::Client as FittingsClient, core::transport::Connector};
+use std::ffi::OsStr;
+
+use fittings::{
+    client::Client as FittingsClient, core::transport::Connector, SubprocessConnector,
+};
 
 use crate::error::McpfitError;
 use crate::protocol::{ClientInfo, InitializeParams, InitializeResult};
@@ -55,6 +59,12 @@ where
             .notify("notifications/initialized", serde_json::json!({}))
             .await
             .map_err(|e| McpfitError::internal(format!("send initialized notification: {e}")))
+    }
+}
+
+impl Client<SubprocessConnector> {
+    pub async fn spawn(command: impl AsRef<OsStr>) -> Result<Self, McpfitError> {
+        Self::connect(SubprocessConnector::new(command)).await
     }
 }
 
@@ -332,5 +342,73 @@ mod tests {
         );
 
         server.await.expect("server task joins");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod spawn_tests {
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::Client;
+    use super::MCP_PROTOCOL_VERSION;
+
+    fn unique_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mcpfit-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn write_executable_script(path: &Path, content: &str) {
+        fs::write(path, content).expect("write script fixture");
+        let mut perms = fs::metadata(path)
+            .expect("read script metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("set executable permissions");
+    }
+
+    #[tokio::test]
+    async fn spawn_runs_full_handshake_against_subprocess() {
+        let script_path = unique_path("client-spawn");
+        write_executable_script(
+            &script_path,
+            &format!(
+                r#"#!/bin/sh
+if [ "$FITTINGS" != "1" ]; then
+  exit 90
+fi
+if [ "$1" != "serve" ]; then
+  exit 91
+fi
+if [ -n "$2" ]; then
+  exit 92
+fi
+IFS= read -r init_line || exit 1
+id=$(printf '%s' "$init_line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":"{ver}","capabilities":{{"tools":{{"listChanged":true}}}},"serverInfo":{{"name":"spawn-srv","version":"0.0.0"}}}}}}\n' "$id"
+IFS= read -r notif_line || exit 1
+case "$notif_line" in
+  *notifications/initialized*) ;;
+  *) exit 93 ;;
+esac
+exec cat > /dev/null
+"#,
+                ver = MCP_PROTOCOL_VERSION,
+            ),
+        );
+
+        let client = Client::spawn(&script_path)
+            .await
+            .expect("Client::spawn should perform full handshake");
+        drop(client);
+
+        let _ = fs::remove_file(script_path);
     }
 }
