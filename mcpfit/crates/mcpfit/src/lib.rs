@@ -4,6 +4,7 @@ extern crate self as mcpfit;
 
 pub use mcpfit_macros::{StructuredObject, tool};
 
+mod client;
 mod content;
 mod context;
 mod error;
@@ -16,6 +17,7 @@ mod service;
 mod structured;
 mod tool;
 
+pub use client::Client;
 pub use content::{EmbeddedResource, ToolContent};
 pub use context::Cx;
 pub use error::McpfitError;
