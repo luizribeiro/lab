@@ -1,22 +1,71 @@
+use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::sync::{Arc, Mutex};
 
 use fittings::{
     client::{Client as FittingsClient, InboundNotification},
     core::transport::Connector,
     tokio::{
-        sync::broadcast,
+        sync::{broadcast, mpsc},
         task::JoinHandle,
     },
     SubprocessConnector,
 };
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::error::McpfitError;
 use crate::protocol::{
-    ClientInfo, InitializeParams, InitializeResult, ToolInfo, ToolsCallParams, ToolsListResult,
+    ClientInfo, InitializeParams, InitializeResult, ProgressNotificationParams, ToolInfo,
+    ToolsCallParams, ToolsListResult,
 };
 use crate::response::ToolResponse;
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ProgressToken {
+    String(String),
+    Number(i64),
+}
+
+#[allow(dead_code)]
+impl ProgressToken {
+    pub(crate) fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::String(s) => Some(Self::String(s.clone())),
+            Value::Number(n) => n.as_i64().map(Self::Number),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) type ProgressSender = mpsc::Sender<ProgressNotificationParams>;
+
+#[allow(dead_code)]
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ProgressRegistry {
+    inner: Arc<Mutex<HashMap<ProgressToken, ProgressSender>>>,
+}
+
+#[allow(dead_code)]
+impl ProgressRegistry {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ProgressToken, ProgressSender>> {
+        self.inner.lock().expect("progress registry lock poisoned")
+    }
+
+    pub(crate) fn register(&self, token: ProgressToken, sender: ProgressSender) {
+        self.lock().insert(token, sender);
+    }
+
+    pub(crate) fn remove(&self, token: &ProgressToken) -> Option<ProgressSender> {
+        self.lock().remove(token)
+    }
+
+    pub(crate) fn get(&self, token: &ProgressToken) -> Option<ProgressSender> {
+        self.lock().get(token).cloned()
+    }
+}
 
 const MCP_PROTOCOL_VERSION: &str = "2025-01-01";
 
@@ -26,6 +75,8 @@ where
 {
     inner: FittingsClient<C>,
     router: Option<JoinHandle<()>>,
+    #[allow(dead_code)]
+    progress: ProgressRegistry,
 }
 
 impl<C> Drop for Client<C>
@@ -54,10 +105,12 @@ where
         let inner = FittingsClient::connect(connector)
             .await
             .map_err(|e| McpfitError::internal(format!("fittings connect: {e}")))?;
-        let router = spawn_notification_router(inner.subscribe_notifications());
+        let progress = ProgressRegistry::default();
+        let router = spawn_notification_router(inner.subscribe_notifications(), progress.clone());
         Ok(Self {
             inner,
             router: Some(router),
+            progress,
         })
     }
 
@@ -131,6 +184,11 @@ where
         self.inner.subscribe_notifications()
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn progress_registry(&self) -> &ProgressRegistry {
+        &self.progress
+    }
+
     pub async fn initialized(&self) -> Result<(), McpfitError> {
         self.inner
             .notify("notifications/initialized", serde_json::json!({}))
@@ -147,6 +205,7 @@ impl Client<SubprocessConnector> {
 
 fn spawn_notification_router(
     mut rx: broadcast::Receiver<InboundNotification>,
+    _progress: ProgressRegistry,
 ) -> JoinHandle<()> {
     fittings::tokio::spawn(async move {
         loop {
@@ -768,6 +827,127 @@ mod tests {
             .expect("second notification arrives within timeout")
             .expect("broadcast not closed");
         assert_eq!(second.method, "notifications/progress");
+    }
+
+    #[tokio::test]
+    async fn progress_token_from_value_accepts_string_and_number() {
+        use super::ProgressToken;
+
+        assert_eq!(
+            ProgressToken::from_value(&json!("tok-1")),
+            Some(ProgressToken::String("tok-1".into())),
+        );
+        assert_eq!(
+            ProgressToken::from_value(&json!(42)),
+            Some(ProgressToken::Number(42)),
+        );
+        assert_eq!(ProgressToken::from_value(&json!(null)), None);
+        assert_eq!(ProgressToken::from_value(&json!({"x": 1})), None);
+        assert_eq!(ProgressToken::from_value(&json!(1.5)), None);
+    }
+
+    #[tokio::test]
+    async fn progress_registry_register_then_remove_round_trips_sender() {
+        use fittings::tokio::sync::mpsc;
+
+        use super::{ProgressRegistry, ProgressToken};
+        use crate::protocol::ProgressNotificationParams;
+
+        let registry = ProgressRegistry::default();
+        let token = ProgressToken::String("call-1".into());
+        let (tx, mut rx) = mpsc::channel::<ProgressNotificationParams>(4);
+
+        registry.register(token.clone(), tx);
+
+        let sender = registry
+            .get(&token)
+            .expect("registered sender should be retrievable");
+        sender
+            .send(ProgressNotificationParams {
+                progress_token: json!("call-1"),
+                progress: 0.5,
+                total: None,
+                message: None,
+            })
+            .await
+            .expect("send through registered sender");
+        let event = rx.recv().await.expect("receive routed progress event");
+        assert_eq!(event.progress, 0.5);
+
+        let removed = registry
+            .remove(&token)
+            .expect("remove should return previously registered sender");
+        drop(removed);
+        assert!(
+            registry.get(&token).is_none(),
+            "token must be absent after remove",
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_registry_isolates_distinct_tokens() {
+        use fittings::tokio::sync::mpsc;
+
+        use super::{ProgressRegistry, ProgressToken};
+        use crate::protocol::ProgressNotificationParams;
+
+        let registry = ProgressRegistry::default();
+        let token_a = ProgressToken::String("a".into());
+        let token_b = ProgressToken::Number(7);
+        let (tx_a, mut rx_a) = mpsc::channel::<ProgressNotificationParams>(4);
+        let (tx_b, mut rx_b) = mpsc::channel::<ProgressNotificationParams>(4);
+
+        registry.register(token_a.clone(), tx_a);
+        registry.register(token_b.clone(), tx_b);
+
+        registry
+            .get(&token_a)
+            .expect("token a present")
+            .send(ProgressNotificationParams {
+                progress_token: json!("a"),
+                progress: 1.0,
+                total: None,
+                message: None,
+            })
+            .await
+            .expect("send to token a");
+
+        let received_a = rx_a.recv().await.expect("rx_a receives");
+        assert_eq!(received_a.progress, 1.0);
+        assert!(
+            rx_b.try_recv().is_err(),
+            "rx_b must not observe rx_a's event",
+        );
+
+        registry.remove(&token_a);
+        assert!(registry.get(&token_a).is_none());
+        assert!(
+            registry.get(&token_b).is_some(),
+            "removing token a must not affect token b",
+        );
+    }
+
+    #[tokio::test]
+    async fn client_exposes_progress_registry_clone_shared_with_router() {
+        use fittings::tokio::sync::mpsc;
+
+        use super::ProgressToken;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, _server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let registry = client.progress_registry().clone();
+        let token = ProgressToken::Number(99);
+        let (tx, _rx) = mpsc::channel::<ProgressNotificationParams>(1);
+        registry.register(token.clone(), tx);
+
+        assert!(
+            client.progress_registry().get(&token).is_some(),
+            "registry handed out by accessor must share state with the Client",
+        );
     }
 
     #[tokio::test]
