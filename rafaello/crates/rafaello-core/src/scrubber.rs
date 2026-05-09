@@ -20,7 +20,14 @@ pub const SECRET_PATTERNS: &[&str] = &[
     "ANTHROPIC_*",
 ];
 
-const RESERVED_ENV_VARS: &[&str] = &["RFL_BUS_FD", "RFL_PLUGIN"];
+const RESERVED_ENV_VARS: &[&str] = &[
+    "RFL_BUS_FD",
+    "RFL_PLUGIN",
+    "RFL_HELPER_FD",
+    "RFL_TOPIC_ID",
+    "RFL_PROJECT_ROOT",
+    "RFL_PRIVATE_STATE_DIR",
+];
 
 /// Scope §Sc2: scrub an `env.pass` list against `SECRET_PATTERNS`.
 /// With `i_know_what_im_doing == true`, returns `env_pass` verbatim.
