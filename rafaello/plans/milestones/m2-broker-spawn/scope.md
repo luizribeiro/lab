@@ -1,9 +1,13 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-8 draft. Pi round-7 returned **ratifiable**
-> with 0 blocking + 6 non-blocking polish items, which are
-> inlined here. Awaiting owner ratification — `commits.md` and
-> Phase 3 work do not start until the owner says go.
+> **Status:** round-10 draft. Round 9 dropped the blanket
+> Linux-only test gate per owner direction. Round 10 inlines
+> the four cheap framing tweaks from the pi runtime-extensibility
+> discussion (`runtime-extensibility-discussion.md`):
+> peer-admission-vs-fd-inheritance framing, `SpawnError::Lockin`
+> renamed to `SandboxBuild`, outpost policy-vs-enforcement
+> distinction, TMPDIR-isn't-plugin-ABI clarification. Pi
+> verification round pending. Awaiting owner ratification.
 > Trajectory: 555 → 14 → 8 → 8 → 6 → 3 → 0 blocking.
 
 ## Goal
@@ -135,11 +139,20 @@ deviation.
     see no TMPDIR/TMP/TEMP unless they fall under a granted
     write_dir; system /tmp is not in the grant. See SP4 step
     12 for the documented deviation.
-- Outpost: `outpost::NetworkPolicy::from_allowed_hosts(...)`
-  for parse-time validation (m1 already uses it),
-  `outpost_proxy::start(policy).await -> std::io::Result<ProxyHandle>`
-  (an async function — pi-2 non-blocking #1) with
-  `ProxyHandle::listen_addr() -> SocketAddr`.
+- Outpost: **`outpost::NetworkPolicy` is the durable shared
+  network-policy vocabulary** (pi runtime-extensibility) —
+  manifest authors and the m1 grant compiler speak in
+  `NetworkPolicy::from_allowed_hosts(...)` host terms
+  regardless of backend. **`outpost-proxy` is m2's lockin
+  enforcement backend** (HTTP CONNECT proxy on a loopback
+  port) — a future capsa/VM runtime would enforce the same
+  `NetworkPolicy` at the packet/VM boundary instead.
+  m1 already uses `from_allowed_hosts(...)` for parse-time
+  validation. m2 calls `outpost_proxy::start(policy).await
+  -> std::io::Result<ProxyHandle>` (async — pi-2 non-blocking
+  #1) with `ProxyHandle::listen_addr() -> SocketAddr` only
+  when `NetworkPlan::Proxy` is selected for a lockin-backed
+  spawn.
 - fittings real coordinates verified (pi-1 §1, §3, §4, §92;
   pi-3 §4 corrected paths):
   - Crate paths: `fittings/crates/{wire, core, server, client,
@@ -202,7 +215,7 @@ test matrix.
     `Mutex<BrokerState>` (pi-2 §3). chosen because `parking_lot`
     locks do not poison, which simplifies the broker's
     error surface (pi-2 non-blocking #2).
-  - `anyhow = "1"` — `SpawnError::Lockin.source` is
+  - `anyhow = "1"` — `SpawnError::SandboxBuild.source` is
     `anyhow::Error` because lockin's `SandboxBuilder::command`
     returns `anyhow::Result` (pi-2 §3).
 - **W1 (dev-deps).** Added to `[workspace.dependencies]` so any
@@ -596,6 +609,26 @@ The supervisor owns child processes, lockin sandboxes, the
 outpost proxy lifecycle (when proxy mode is configured), and
 the socketpair plumbing that authenticates the bus connection.
 
+> **Architectural framing — peer admission, not "the runtime"**
+> (pi runtime-extensibility discussion). The load-bearing
+> invariant is **core binds an authenticated bus connection
+> to a principal it spawned/attached** (see overview §3 +
+> §4.1). The lockin + socketpair + `RFL_BUS_FD` pipeline
+> below is **the v1 backend implementation** of that
+> invariant; future runtimes (capsa VM via vsock, helper
+> attach, external frontend attach) will inherit the same
+> Broker / `PeerHandle` boundary but may not literally
+> inherit a Unix fd into a child process. m2 deliberately
+> does NOT introduce a `RuntimeBackend` trait — designing
+> one before the second concrete consumer (capsa) exists
+> would either bake in lockin's quirks or produce a
+> too-abstract surface. The seam to widen later is "peer
+> admission" (whatever spawn/attach mechanism returns a
+> registered principal + `PeerHandle`); the broker / plan
+> types / bus protocol / manifest+lock+grant compiler
+> already work for any such mechanism. m2 retrospective
+> records this framing.
+
 - **SP1.** New module `rafaello_core::supervisor`. Public
   surface (pi-1 §17, §29, §100, §138, §368):
   ```rust
@@ -766,7 +799,12 @@ the socketpair plumbing that authenticates the bus connection.
       AlreadyRegistered(CanonicalId),
       InvalidPlan { canonical: CanonicalId, reason: InvalidPlanReason },
       EntryNotExecutable { canonical: CanonicalId, path: PathBuf },
-      Lockin { canonical: CanonicalId, source: anyhow::Error },
+      // Backend-neutral name (pi runtime-extensibility):
+      // future runtimes (capsa, etc.) fold their own
+      // sandbox-build errors into this variant. The
+      // anyhow::Error inside is whatever the active backend
+      // returned — for m2 it's lockin's tokio_command result.
+      SandboxBuild { canonical: CanonicalId, source: anyhow::Error },
       Spawn { canonical: CanonicalId, source: std::io::Error },
       ProxyStart { canonical: CanonicalId, source: std::io::Error },
       Socketpair { canonical: CanonicalId, source: nix::errno::Errno },
@@ -948,7 +986,7 @@ the socketpair plumbing that authenticates the bus connection.
       `private_state_dir = project_root.join(".rafaello-plugin-data").join(&plan.topic_id)`
       explicitly.
   12. `builder.tokio_command(&plan.entry_absolute).map_err(|e|
-      Lockin { canonical, source: e })?` →
+      SandboxBuild { canonical, source: e })?` →
       `lockin::tokio::SandboxedCommand` (pi-6 §1: must be
       `tokio_command`, NOT `command` — the latter returns the
       sync variant which would not typecheck against the
@@ -961,9 +999,15 @@ the socketpair plumbing that authenticates the bus connection.
       // sandbox-owned private tmp. Lockin does NOT currently
       // expose a public accessor for the private tmp path
       // before spawn (pi-2 §5), so m2 cannot re-inject those
-      // vars. Plugins that need a temp dir create one under
-      // their granted write_dirs or use system /tmp (which is
-      // not in the sandbox grant, so it will be denied — a
+      // vars. **This is NOT a plugin ABI guarantee** (pi
+      // runtime-extensibility): plugins that need durable
+      // scratch/state use `RFL_PRIVATE_STATE_DIR` (the
+      // per-plugin write grant the supervisor injects);
+      // a portable cross-runtime `RFL_TEMP_DIR` ABI can be
+      // added later if a real plugin needs it. For m2,
+      // plugins that specifically need a temp dir create
+      // one under their granted write_dirs; system /tmp is
+      // not in the sandbox grant and will be denied (a
       // behavioural change vs. lockin defaults). m2's
       // retrospective records this as a known deviation; a
       // future small lockin API addition (Sandbox::private_tmp
