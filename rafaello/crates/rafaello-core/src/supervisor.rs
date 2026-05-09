@@ -166,6 +166,11 @@ pub struct TestHooks {
     pub outpost_starts: std::sync::atomic::AtomicUsize,
     pub socketpair_creates: std::sync::atomic::AtomicUsize,
     pub child_spawns: std::sync::atomic::AtomicUsize,
+    /// Last loopback port bound by `outpost_proxy::start` during a
+    /// spawn under proxy mode. `0` if no proxy was started. Lets
+    /// tests poll for asynchronous `ProxyHandle` unbind without
+    /// reaching into private supervisor state.
+    pub last_proxy_port: std::sync::atomic::AtomicU16,
 }
 
 /// Test-only factory for additional `core.fixture.*` services
@@ -329,9 +334,107 @@ impl PluginSupervisor {
             });
         }
 
+        let (core_fd, child_fd) = nix::sys::socket::socketpair(
+            nix::sys::socket::AddressFamily::Unix,
+            nix::sys::socket::SockType::Stream,
+            None,
+            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+        )
+        .map_err(|source| SpawnError::Socketpair {
+            canonical: plan.canonical.clone(),
+            source,
+        })?;
+        #[cfg(any(test, feature = "test-fixture"))]
+        self.test_hooks
+            .socketpair_creates
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let (proxy, proxy_port): (Option<ProxyHandle>, u16) = match &plan.network {
+            NetworkPlan::Proxy { allow_hosts } => {
+                let policy = outpost::NetworkPolicy::from_allowed_hosts(
+                    allow_hosts.iter().map(String::as_str),
+                )
+                .map_err(|source| SpawnError::InvalidPlan {
+                    canonical: plan.canonical.clone(),
+                    reason: InvalidPlanReason::NetworkAllowHostsInvalid { source },
+                })?;
+                let handle = outpost_proxy::start(policy).await.map_err(|source| {
+                    SpawnError::ProxyStart {
+                        canonical: plan.canonical.clone(),
+                        source,
+                    }
+                })?;
+                #[cfg(any(test, feature = "test-fixture"))]
+                self.test_hooks
+                    .outpost_starts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let port = handle.listen_addr().port();
+                #[cfg(any(test, feature = "test-fixture"))]
+                self.test_hooks
+                    .last_proxy_port
+                    .store(port, std::sync::atomic::Ordering::SeqCst);
+                (Some(handle), port)
+            }
+            _ => (None, 0),
+        };
+
+        let mut builder = lockin::Sandbox::builder();
+        for p in &plan.filesystem.read_paths {
+            builder = builder.read_path(p);
+        }
+        for p in &plan.filesystem.read_dirs {
+            builder = builder.read_dir(p);
+        }
+        for p in &plan.filesystem.write_paths {
+            builder = builder.write_path(p);
+        }
+        for p in &plan.filesystem.write_dirs {
+            builder = builder.write_dir(p);
+        }
+        for p in &plan.filesystem.exec_paths {
+            builder = builder.exec_path(p);
+        }
+        for p in &plan.filesystem.exec_dirs {
+            builder = builder.exec_dir(p);
+        }
+        builder = match &plan.network {
+            NetworkPlan::Deny => builder.network_deny(),
+            NetworkPlan::AllowAll => builder.network_allow_all(),
+            NetworkPlan::Proxy { .. } => builder.network_proxy(proxy_port),
+        };
+        builder = builder
+            .max_cpu_time(plan.limits.max_cpu_time)
+            .max_open_files(plan.limits.max_open_files)
+            .disable_core_dumps();
+        if let Some(n) = plan.limits.max_address_space {
+            builder = builder.max_address_space(n);
+        }
+        if let Some(n) = plan.limits.max_processes {
+            builder = builder.max_processes(n);
+        }
+        builder = builder.inherit_fd_as(child_fd, RFL_BUS_FD_NUMBER as std::os::fd::RawFd);
+
+        if let Err(source) = std::fs::create_dir_all(&paths.private_state_dir) {
+            return Err(SpawnError::PrivateStateDirCreate {
+                canonical: plan.canonical.clone(),
+                path: paths.private_state_dir.clone(),
+                source,
+            });
+        }
+
+        let cmd = builder
+            .tokio_command(&plan.entry_absolute)
+            .map_err(|source| SpawnError::SandboxBuild {
+                canonical: plan.canonical.clone(),
+                source,
+            })?;
+
+        drop(cmd);
+        drop(proxy);
+        drop(core_fd);
         Err(SpawnError::SandboxBuild {
             canonical: plan.canonical.clone(),
-            source: anyhow::anyhow!("Phase A step 8 not yet implemented"),
+            source: anyhow::anyhow!("Phase B step 13+ not yet implemented"),
         })
     }
 
