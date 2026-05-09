@@ -47,7 +47,6 @@ impl ProgressToken {
 
 pub(crate) type ProgressSender = mpsc::Sender<ProgressNotificationParams>;
 
-#[allow(dead_code)]
 pub(crate) const PROGRESS_CHANNEL_CAPACITY: usize = 64;
 
 #[derive(Debug, Default)]
@@ -124,8 +123,8 @@ where
 {
     inner: FittingsClient<C>,
     router: Option<JoinHandle<()>>,
-    #[allow(dead_code)]
     progress: ProgressRegistry,
+    next_progress_token: AtomicU64,
 }
 
 impl<C> Drop for Client<C>
@@ -161,6 +160,7 @@ where
             inner,
             router: Some(router),
             progress,
+            next_progress_token: AtomicU64::new(0),
         })
     }
 
@@ -230,6 +230,21 @@ where
             .map_err(|e| McpfitError::internal(format!("decode tools/call result: {e}")))
     }
 
+    pub fn call_tool_with_progress<A>(
+        &self,
+        name: impl Into<String>,
+        args: A,
+    ) -> ProgressCallBuilder<'_, C, A>
+    where
+        A: Serialize,
+    {
+        ProgressCallBuilder {
+            client: self,
+            name: name.into(),
+            args,
+        }
+    }
+
     pub fn notifications(&self) -> broadcast::Receiver<InboundNotification> {
         self.inner.subscribe_notifications()
     }
@@ -247,7 +262,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 pub struct ToolCallHandle {
     pending: PendingCall,
     progress_rx: mpsc::Receiver<ProgressNotificationParams>,
@@ -255,7 +269,6 @@ pub struct ToolCallHandle {
 }
 
 impl ToolCallHandle {
-    #[allow(dead_code)]
     pub(crate) fn new(
         pending: PendingCall,
         progress_rx: mpsc::Receiver<ProgressNotificationParams>,
@@ -268,12 +281,10 @@ impl ToolCallHandle {
         }
     }
 
-    #[allow(dead_code)]
     pub fn progress(&mut self) -> &mut mpsc::Receiver<ProgressNotificationParams> {
         &mut self.progress_rx
     }
 
-    #[allow(dead_code)]
     pub fn missed_progress_count(&self) -> u64 {
         self.missed.load(Ordering::Relaxed)
     }
@@ -296,6 +307,47 @@ impl IntoFuture for ToolCallHandle {
             }
             Ok(response)
         })
+    }
+}
+
+pub struct ProgressCallBuilder<'a, C, A>
+where
+    C: Connector + Send + Sync + 'static,
+{
+    client: &'a Client<C>,
+    name: String,
+    args: A,
+}
+
+impl<'a, C, A> ProgressCallBuilder<'a, C, A>
+where
+    C: Connector + Send + Sync + 'static,
+    A: Serialize,
+{
+    pub async fn start(self) -> Result<ToolCallHandle, McpfitError> {
+        let arguments = serde_json::to_value(self.args)
+            .map_err(|e| McpfitError::internal(format!("encode tools/call arguments: {e}")))?;
+        let token_n = self
+            .client
+            .next_progress_token
+            .fetch_add(1, Ordering::Relaxed);
+        let token_str = format!("mcpfit-{token_n}");
+        let params = ToolsCallParams {
+            name: self.name,
+            arguments,
+            meta: Some(serde_json::json!({"progressToken": &token_str})),
+        };
+        let params_value = serde_json::to_value(&params)
+            .map_err(|e| McpfitError::internal(format!("encode tools/call params: {e}")))?;
+        let (tx, rx) = mpsc::channel::<ProgressNotificationParams>(PROGRESS_CHANNEL_CAPACITY);
+        // Register before sending so a fast server can't deliver progress
+        // notifications before the routing entry exists.
+        let missed = self
+            .client
+            .progress
+            .register(ProgressToken::String(token_str), tx);
+        let pending = self.client.inner.start_call("tools/call", params_value);
+        Ok(ToolCallHandle::new(pending, rx, missed))
     }
 }
 
@@ -1362,6 +1414,81 @@ mod tests {
         assert_eq!(handle.missed_progress_count(), 0);
         missed.store(7, Ordering::Relaxed);
         assert_eq!(handle.missed_progress_count(), 7);
+    }
+
+    #[tokio::test]
+    async fn call_tool_with_progress_injects_token_and_routes_progress_to_handle() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let mut handle = client
+            .call_tool_with_progress("work", json!({"n": 5}))
+            .start()
+            .await
+            .expect("start progress-enabled call");
+
+        let frame = server_transport.recv().await.expect("tools/call request");
+        let request = parse_request_fixture(&frame).expect("decode request");
+        assert_eq!(request.method, "tools/call");
+        let id = request.id.expect("tools/call must carry id");
+        let params = request.params.expect("tools/call must carry params");
+        assert_eq!(params.get("name"), Some(&json!("work")));
+        assert_eq!(params.get("arguments"), Some(&json!({"n": 5})));
+        let token = params
+            .get("_meta")
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+            .expect("_meta.progressToken must be injected by builder");
+        assert!(
+            !token.is_null(),
+            "injected progress token must not be null, got: {token:?}",
+        );
+
+        let token_json = serde_json::to_string(&token).expect("encode token");
+        let progress_frame = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":{token_json},\"progress\":0.25}}}}\n"
+        );
+        server_transport
+            .send(progress_frame.as_bytes())
+            .await
+            .expect("send progress frame");
+
+        let event = timeout(Duration::from_secs(1), handle.progress().recv())
+            .await
+            .expect("progress arrives within timeout")
+            .expect("progress channel not closed");
+        assert_eq!(event.progress, 0.25);
+        assert_eq!(event.progress_token, token);
+
+        let response_line = success_response_line(
+            id,
+            json!({
+                "content": [{"type": "text", "text": "done"}],
+                "isError": false,
+            }),
+        )
+        .expect("encode response");
+        server_transport
+            .send(&response_line)
+            .await
+            .expect("send tools/call response");
+
+        let response = handle.await.expect("handle resolves to ToolResponse");
+        assert_eq!(
+            response,
+            ToolResponse {
+                content: vec![ToolContent::text("done")],
+                structured_content: None,
+                is_error: false,
+            }
+        );
     }
 
     #[tokio::test]
