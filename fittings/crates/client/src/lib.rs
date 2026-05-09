@@ -10,7 +10,9 @@ pub type ProcessTransport = SubprocessTransport;
 
 use std::{
     collections::HashMap,
+    future::{Future, IntoFuture},
     marker::PhantomData,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
@@ -35,7 +37,7 @@ use fittings_wire::{
 };
 use serde_json::Value;
 use tokio::{
-    sync::{mpsc, mpsc::error::TryRecvError, oneshot},
+    sync::{broadcast, mpsc, mpsc::error::TryRecvError, oneshot},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -46,11 +48,18 @@ type NotificationHandlerSlot = Arc<RwLock<Option<NotificationHandler>>>;
 
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboundNotification {
+    pub method: String,
+    pub params: Option<Value>,
+}
+
 pub struct Client<C>
 where
     C: Connector + Send + Sync + 'static,
 {
     request_tx: mpsc::UnboundedSender<ClientCommand>,
+    notification_tx: broadcast::Sender<InboundNotification>,
     next_id: AtomicU64,
     worker: JoinHandle<()>,
     peer: PeerHandle,
@@ -64,12 +73,20 @@ where
     C: Connector + Send + Sync + 'static,
 {
     pub async fn connect(connector: C) -> Result<Self, FittingsError> {
+        Self::connect_inner(connector, DEFAULT_NOTIFICATION_CAPACITY).await
+    }
+
+    async fn connect_inner(
+        connector: C,
+        notification_capacity: usize,
+    ) -> Result<Self, FittingsError> {
         let transport = connector.connect().await?;
         let (request_tx, request_rx) = mpsc::unbounded_channel();
         let (notify_tx, notify_rx) =
             mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
         let (outbound_request_tx, outbound_request_rx) =
             mpsc::unbounded_channel::<OutboundRequest>();
+        let (notification_tx, _) = broadcast::channel(notification_capacity);
         let pending_outbound = PendingOutbound::new();
         let id_allocator = Arc::new(IdAllocator::client());
         let closed_token = CancellationToken::new();
@@ -93,12 +110,14 @@ where
             pending_outbound,
             service.clone(),
             notification_handler.clone(),
+            notification_tx.clone(),
             peer.clone(),
             closed_token,
         ));
 
         Ok(Self {
             request_tx,
+            notification_tx,
             next_id: AtomicU64::new(1),
             worker,
             peer,
@@ -127,12 +146,23 @@ where
         self
     }
 
+    /// Subscribe to all inbound notifications received by the client. Each
+    /// subscriber gets an independent receiver on a bounded broadcast channel;
+    /// slow subscribers observe `RecvError::Lagged(n)` rather than blocking
+    /// the read loop or other subscribers. Subscribers and any handler
+    /// registered via `with_notification_handler` both receive every
+    /// notification — dual delivery is intentional.
+    pub fn subscribe_notifications(&self) -> broadcast::Receiver<InboundNotification> {
+        self.notification_tx.subscribe()
+    }
+
     /// Register a synchronous handler for inbound peer-originated
     /// *notifications* (server-side `PeerHandle::notify`). The handler is
     /// invoked inside a `tokio::spawn` so it does not block the client read
     /// loop and a panic in one invocation cannot affect subsequent
-    /// notifications or response correlation. If no handler is registered,
-    /// inbound notifications are dropped silently (scope §K2).
+    /// notifications, broadcast subscribers, or response correlation. If no
+    /// handler is registered, inbound notifications are still fanned out to
+    /// `subscribe_notifications` subscribers (scope §K2).
     pub fn with_notification_handler<F>(self, handler: F) -> Self
     where
         F: Fn(String, Value) + Send + Sync + 'static,
@@ -144,22 +174,32 @@ where
         self
     }
 
-    pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
+    /// Enqueue a call synchronously and return a `PendingCall` future that
+    /// resolves to the response. The JSON-RPC id is allocated immediately and
+    /// available via `PendingCall::id()` before the call completes. Enqueue
+    /// failures (worker shut down) surface through the returned future, not
+    /// the call itself.
+    pub fn start_call(&self, method: &str, params: Value) -> PendingCall {
         let id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
+        let command = ClientCommand::Call {
+            id: id.clone(),
+            method: method.to_string(),
+            params,
+            response_tx,
+        };
 
-        self.request_tx
-            .send(ClientCommand::Call {
-                id,
-                method: method.to_string(),
-                params,
-                response_tx,
-            })
-            .map_err(|_| FittingsError::internal("client is not connected"))?;
+        if let Err(mpsc::error::SendError(ClientCommand::Call { response_tx, .. })) =
+            self.request_tx.send(command)
+        {
+            let _ = response_tx.send(Err(FittingsError::internal("client is not connected")));
+        }
 
-        response_rx
-            .await
-            .map_err(|_| FittingsError::internal("client request canceled"))?
+        PendingCall::new(id, response_rx)
+    }
+
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
+        self.start_call(method, params).await
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), FittingsError> {
@@ -173,6 +213,36 @@ where
 
     fn next_request_id(&self) -> JsonRpcId {
         JsonRpcId::from(self.next_id.fetch_add(1, Ordering::Relaxed).to_string())
+    }
+}
+
+pub struct PendingCall {
+    id: JsonRpcId,
+    rx: oneshot::Receiver<Result<Value, FittingsError>>,
+}
+
+impl PendingCall {
+    pub(crate) fn new(id: JsonRpcId, rx: oneshot::Receiver<Result<Value, FittingsError>>) -> Self {
+        Self { id, rx }
+    }
+
+    pub fn id(&self) -> &JsonRpcId {
+        &self.id
+    }
+
+    pub async fn result(self) -> Result<Value, FittingsError> {
+        self.rx
+            .await
+            .map_err(|_| FittingsError::internal("client request canceled"))?
+    }
+}
+
+impl IntoFuture for PendingCall {
+    type Output = Result<Value, FittingsError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(self.result())
     }
 }
 
@@ -217,6 +287,7 @@ async fn run_client_loop<T>(
     pending_outbound: PendingOutbound,
     service: ServiceSlot,
     notification_handler: NotificationHandlerSlot,
+    notification_tx: broadcast::Sender<InboundNotification>,
     peer: PeerHandle,
     closed_token: CancellationToken,
 ) where
@@ -295,6 +366,7 @@ async fn run_client_loop<T>(
                             &mut pending,
                             &service,
                             &notification_handler,
+                            &notification_tx,
                             &inbound_response_tx,
                             peer.clone(),
                         );
@@ -364,11 +436,13 @@ where
     transport.send(&encoded).await
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_inbound_frame(
     frame: Vec<u8>,
     pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
     service: &ServiceSlot,
     notification_handler: &NotificationHandlerSlot,
+    notification_tx: &broadcast::Sender<InboundNotification>,
     inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
 ) {
@@ -377,6 +451,7 @@ fn handle_inbound_frame(
             frame,
             service,
             notification_handler,
+            notification_tx,
             inbound_response_tx,
             peer,
         );
@@ -399,6 +474,7 @@ fn spawn_inbound_request(
     frame: Vec<u8>,
     service: &ServiceSlot,
     notification_handler: &NotificationHandlerSlot,
+    notification_tx: &broadcast::Sender<InboundNotification>,
     inbound_response_tx: &mpsc::UnboundedSender<Vec<u8>>,
     peer: PeerHandle,
 ) {
@@ -407,6 +483,13 @@ fn spawn_inbound_request(
         Err(_) => return,
     };
     let Some(id) = envelope.id.clone() else {
+        // Broadcast first so subscribers observe the notification regardless
+        // of any handler panic. Lag affects only subscribers; the registered
+        // handler runs in its own task.
+        let _ = notification_tx.send(InboundNotification {
+            method: envelope.method.clone(),
+            params: envelope.params.clone(),
+        });
         let handler = notification_handler
             .read()
             .expect("notification handler slot poisoned")
@@ -532,8 +615,8 @@ mod tests {
         error_response_line, parse_request_fixture, success_response_line,
     };
     use fittings_testkit::memory_transport::MemoryTransport;
-    use serde_json::json;
-    use tokio::sync::Mutex;
+    use serde_json::{json, Value};
+    use tokio::sync::{broadcast::error::RecvError, mpsc, Mutex};
 
     use super::Client;
 
@@ -571,7 +654,7 @@ mod tests {
         }
 
         async fn recv(&mut self) -> Result<Vec<u8>, FittingsError> {
-            Err(FittingsError::transport("simulated recv failure"))
+            std::future::pending().await
         }
     }
 
@@ -934,6 +1017,207 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worker_reads_notifications_when_no_calls_are_pending() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+        let mut subscriber = client.subscribe_notifications();
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"event/tick\",\"params\":{\"n\":1}}\n")
+            .await
+            .expect("send notification");
+
+        let received = subscriber
+            .recv()
+            .await
+            .expect("subscriber should receive notification");
+        assert_eq!(received.method, "event/tick");
+        assert_eq!(received.params, Some(json!({"n": 1})));
+    }
+
+    #[tokio::test]
+    async fn slow_notification_subscribers_observe_lag_without_blocking_worker() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(64);
+        let client = Client::connect_inner(OneShotConnector::new(client_transport), 4)
+            .await
+            .expect("client should connect");
+        let mut slow = client.subscribe_notifications();
+
+        let server = tokio::spawn(async move {
+            for n in 0..16 {
+                let frame = format!(
+                    "{{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{{\"n\":{n}}}}}\n"
+                );
+                server_transport
+                    .send(frame.as_bytes())
+                    .await
+                    .expect("send notification");
+            }
+
+            let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
+                .expect("decode request");
+            let response = success_response_line(
+                request.id.as_ref().expect("request should carry an id"),
+                json!({"ok": true}),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send response");
+        });
+
+        let result = client
+            .call("ping", json!({}))
+            .await
+            .expect("call should succeed after notifications drain");
+        assert_eq!(result, json!({"ok": true}));
+
+        let lag = slow
+            .recv()
+            .await
+            .expect_err("slow subscriber should observe lag");
+        assert!(matches!(lag, RecvError::Lagged(n) if n >= 12));
+
+        server.await.expect("server task should join");
+    }
+
+    #[tokio::test]
+    async fn with_notification_handler_receives_server_notifications() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
+        let client = client.with_notification_handler(move |method, params| {
+            notify_tx
+                .send((method, params))
+                .expect("test receiver still open");
+        });
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"event/tick\",\"params\":{\"n\":7}}\n")
+            .await
+            .expect("send notification");
+
+        let (method, params) = tokio::time::timeout(Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("handler should fire within timeout")
+            .expect("handler should forward notification");
+        assert_eq!(method, "event/tick");
+        assert_eq!(params, json!({"n": 7}));
+
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn pending_call_exposes_id_before_result_resolves() {
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-7".to_string());
+        let pending = super::PendingCall::new(id.clone(), rx);
+        assert_eq!(pending.id(), &id);
+    }
+
+    #[tokio::test]
+    async fn pending_call_result_resolves_when_sender_completes() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-1".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        tx.send(Ok(json!({"ok": true}))).expect("send response");
+
+        let result = pending.result().await.expect("pending call should resolve");
+        assert_eq!(result, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn pending_call_into_future_awaits_via_dot_await() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let id = fittings_wire::types::JsonRpcId::from("req-await".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        tx.send(Ok(json!({"awaited": true})))
+            .expect("send response");
+
+        let result = pending.await.expect("await should resolve");
+        assert_eq!(result, json!({"awaited": true}));
+    }
+
+    #[tokio::test]
+    async fn pending_call_result_reports_cancellation_when_sender_dropped() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Value, FittingsError>>();
+        let id = fittings_wire::types::JsonRpcId::from("req-drop".to_string());
+        let pending = super::PendingCall::new(id, rx);
+
+        drop(tx);
+
+        let error = pending
+            .result()
+            .await
+            .expect_err("dropping the sender should surface a cancellation error");
+        assert!(matches!(
+            error,
+            FittingsError::Internal { message, .. } if message == "client request canceled"
+        ));
+    }
+
+    #[tokio::test]
+    async fn start_call_exposes_id_matching_outgoing_request_before_response() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let pending = client.start_call("work", json!({"n": 1}));
+        let pending_id = pending.id().clone();
+
+        let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
+            .expect("decode request");
+        let wire_id = request.id.clone().expect("call should carry an id");
+        assert_eq!(wire_id, pending_id);
+        assert_eq!(request.method, "work");
+        assert_eq!(request.params, Some(json!({"n": 1})));
+
+        let response =
+            success_response_line(&wire_id, json!({"ok": true})).expect("encode response");
+        server_transport
+            .send(&response)
+            .await
+            .expect("send response");
+
+        let result = pending.await.expect("pending call should resolve");
+        assert_eq!(result, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn start_call_after_worker_shutdown_surfaces_error_via_pending_result() {
+        let (client_transport, server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        drop(server_transport);
+
+        let initial = client
+            .call("will-fail", json!({}))
+            .await
+            .expect_err("initial call should fail when transport closes");
+        assert!(matches!(initial, FittingsError::Transport(_)));
+
+        let pending = client.start_call("after-shutdown", json!({}));
+        let error = pending
+            .await
+            .expect_err("start_call after shutdown should surface enqueue failure");
+        assert!(matches!(
+            error,
+            FittingsError::Internal { message, .. } if message == "client is not connected"
+        ));
+    }
+
+    #[tokio::test]
     async fn fatal_send_error_is_propagated_to_queued_calls() {
         let client = Client::connect(FailingConnector)
             .await
@@ -952,5 +1236,77 @@ mod tests {
                 FittingsError::Transport(message) if message == "simulated write failure"
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn handler_panic_does_not_break_subscribers_or_subsequent_calls() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let (invocation_tx, mut invocation_rx) = mpsc::unbounded_channel();
+        let client = client.with_notification_handler(move |method, _params| {
+            let _ = invocation_tx.send(method);
+            panic!("intentional handler panic for isolation test");
+        });
+
+        let mut subscriber = client.subscribe_notifications();
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"event/one\",\"params\":{\"n\":1}}\n")
+            .await
+            .expect("send notification 1");
+
+        let received_one = tokio::time::timeout(Duration::from_secs(1), subscriber.recv())
+            .await
+            .expect("subscriber should receive notification 1 despite handler panic")
+            .expect("subscriber recv ok");
+        assert_eq!(received_one.method, "event/one");
+
+        let invoked_one = tokio::time::timeout(Duration::from_secs(1), invocation_rx.recv())
+            .await
+            .expect("handler should fire for notification 1")
+            .expect("handler invocation channel still open");
+        assert_eq!(invoked_one, "event/one");
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"event/two\",\"params\":{\"n\":2}}\n")
+            .await
+            .expect("send notification 2 after panic");
+
+        let received_two = tokio::time::timeout(Duration::from_secs(1), subscriber.recv())
+            .await
+            .expect("subscriber should still receive notification 2 after handler panic")
+            .expect("subscriber recv ok");
+        assert_eq!(received_two.method, "event/two");
+
+        let invoked_two = tokio::time::timeout(Duration::from_secs(1), invocation_rx.recv())
+            .await
+            .expect("handler should fire for notification 2")
+            .expect("handler invocation channel still open");
+        assert_eq!(invoked_two, "event/two");
+
+        let server = tokio::spawn(async move {
+            let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
+                .expect("decode request");
+            let response = success_response_line(
+                request.id.as_ref().expect("request should carry an id"),
+                json!({"ok": true}),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send response");
+        });
+
+        let result = client
+            .call("ping", json!({}))
+            .await
+            .expect("call should succeed despite prior handler panics");
+        assert_eq!(result, json!({"ok": true}));
+
+        server.await.expect("server task should join");
     }
 }

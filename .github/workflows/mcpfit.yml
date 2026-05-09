@@ -1,0 +1,47 @@
+name: mcpfit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mcpfit/**"
+      - "fittings/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/mcpfit.yml"
+  pull_request:
+    paths:
+      - "mcpfit/**"
+      - "fittings/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/mcpfit.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+        with:
+          determinate: true
+
+      - uses: DeterminateSystems/magic-nix-cache-action@c6a5746789488c8753af0d61fc6b5d79a80391f3
+        with:
+          use-flakehub: false
+
+      - name: Run tests
+        run: |
+          nix develop .#mcpfit --impure -L --command \
+            cargo test --manifest-path mcpfit/Cargo.toml --workspace

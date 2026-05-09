@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/mcpfit", "crates/mcpfit-macros", "example"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"

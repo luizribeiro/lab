@@ -1,0 +1,21 @@
+[package]
+name = "mcpfit-macros"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["derive", "full"] }
+
+[dev-dependencies]
+mcpfit = { path = "../mcpfit" }
+schemars = { version = "0.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+trybuild = "1"
+
+[lints]
+workspace = true

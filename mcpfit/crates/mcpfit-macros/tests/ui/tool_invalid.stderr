@@ -1,0 +1,39 @@
+error: #[tool] functions require a non-empty doc comment
+ --> tests/ui/tool_invalid.rs:5:1
+  |
+5 | #[tool]
+  | ^^^^^^^
+  |
+  = note: this error originates in the attribute macro `tool` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[tool] functions require a non-empty doc comment
+  --> tests/ui/tool_invalid.rs:11:1
+   |
+11 | #[tool]
+   | ^^^^^^^
+   |
+   = note: this error originates in the attribute macro `tool` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[tool] functions must be async
+  --> tests/ui/tool_invalid.rs:18:1
+   |
+18 | fn not_async(args: ()) -> Result<()> {
+   | ^^
+
+error: #[tool] functions must return `Result<T>`
+  --> tests/ui/tool_invalid.rs:24:1
+   |
+24 | async fn no_return(args: ()) {}
+   | ^^^^^
+
+error: #[tool] functions must take `args: A` or `args: A, cx: Cx`
+  --> tests/ui/tool_invalid.rs:28:19
+   |
+28 | async fn zero_args() -> Result<()> {
+   |                   ^^
+
+error: #[tool] functions must take `args: A` or `args: A, cx: Cx`
+  --> tests/ui/tool_invalid.rs:34:20
+   |
+34 | async fn three_args(a: (), b: (), c: ()) -> Result<()> {
+   |                    ^^^^^^^^^^^^^^^^^^^^^

@@ -1,5 +1,5 @@
 {
-  "name": "fittings-mcp-server-check",
+  "name": "mcpfit-server-check",
   "private": true,
   "type": "module",
   "scripts": {
