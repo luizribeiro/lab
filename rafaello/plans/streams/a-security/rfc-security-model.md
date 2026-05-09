@@ -1170,6 +1170,14 @@ adopted: ship in v1.
 
 ### 7.5 Project scope and per-plugin private state
 
+> **v1 path-key clarification:** the `<plugin-id>` references
+> below resolve to the **topic-id** form per `decisions.md`
+> row 37 (refines row 16):
+> `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` where
+> `<topic-id>` is the hashed segment defined in §5.1. The raw
+> canonical id `<source>:<name>@<version>` is not a safe
+> filesystem segment. m1 retrospective added this banner.
+
 `${PROJECT_ROOT}` resolves to the directory containing
 `rafaello.lock`. The compiler implements "workspace access" as
 described in §7.3.1 (immediate non-hidden children, plus the

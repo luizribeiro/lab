@@ -807,21 +807,25 @@ rather than section-by-section rewrites.
   to CI per scope's "no platform-specific code" carve-out;
   if the CI run for the `rafaello-v0.1` tip fails on macOS,
   m1's acceptance flips red.
-- ⚠️ `cargo test --manifest-path fittings/Cargo.toml
+- ⏳ `cargo test --manifest-path fittings/Cargo.toml
   --workspace` — m1 retrospective re-run: 1 failure
   reproduces the m0-known flake
   `mcp-server::stdio_e2e::stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list`
-  on the first attempt; passes on a re-run (3 attempts: FAIL,
-  FAIL, PASS). This is the m0 retrospective §5.2 documented
-  pre-existing race in the mcp-server test harness (write-all-then-read
-  vs read-then-write on `tools/list` after `tools/register`).
-  **Waiver**: m1 inherits the m0 documented flake; the §W
-  cutover itself doesn't touch the test or its harness; the
-  flake is a pre-existing harness bug owned by the mcp-server
-  test infrastructure, not the fittings library. Recorded
-  here AND in §5.1 below; same posture as m0's acceptance
-  closing line. Recommend the next milestone driver land the
-  read-then-write fix proposed in m0 retrospective §5.2.
+  on attempts 1 and 2; passes on attempt 3 (FAIL, FAIL, PASS).
+  This is the m0 retrospective §5.2 documented pre-existing race
+  in the mcp-server test harness (write-all-then-read vs
+  read-then-write on `tools/list` after `tools/register`). The
+  §W cutover doesn't touch the test or its harness; the flake
+  is a pre-existing harness bug owned by mcp-server's test
+  infrastructure, not the fittings library. **Waiver request,
+  pending explicit owner ratification at retrospective sign-off**:
+  per pi review-3+4 of this retrospective, a self-declared waiver
+  in the retrospective is not equivalent to satisfying the
+  ratified acceptance criterion; the owner-ratification step is
+  the natural place to either approve the waiver (m1 closes) or
+  require the fix from m0 retrospective §5.2 land before m1
+  closes. The 228 other fittings tests (including the §W targeted
+  regression test) all pass.
 - ✅ `cargo doc --manifest-path rafaello/Cargo.toml -p
   rafaello-core --no-deps` warning-free (§5.2 — fixed in
   commit `823e8bb`).
@@ -843,13 +847,14 @@ rather than section-by-section rewrites.
   landed in overview §5.5 + glossary + new decisions row 37
   (refines row 16) (§2.5 + commit `93761c8`).
 
-m1 is **done.** The core deliverable (the `rafaello-core` crate
-with 269 tests green) has landed; the §W fittings cutover has
-landed (228 fittings tests green except the m0-known harness
-flake which is explicitly waived above and recorded in §5.1);
-all documentation reconciliation listed in §"Follow-up commits
-on this branch" has landed before sign-off per pi review-1+2+3.
-Open follow-ups for m2 / future milestones: fix the m0 harness
-flake (m0 retrospective §5.2 has the proposed fix); patch the
-remaining pre-m1 architectural-doc rough edges as they surface
-(none currently named).
+m1 is **done pending one owner decision**: approve the fittings
+flake waiver (above) — at which point all acceptance gates are
+met and m1 closes — or direct the milestone driver to land the
+m0 retrospective §5.2 mcp-server harness fix before m1 closes.
+The core deliverable (the `rafaello-core` crate with 269 tests
+green) has landed; the §W fittings cutover has landed (228
+fittings tests green; one m0-known-flake test under owner
+review); all documentation reconciliation listed in §"Follow-up
+commits on this branch" has landed; security RFC §7.5
+private-state path-key banner landed alongside this revision.
+No open architectural-doc rough edges currently named.

@@ -38,9 +38,18 @@ The repo has no root `Cargo.toml`, so `--manifest-path` is mandatory
 
 ## 2. `cargo test --manifest-path fittings/Cargo.toml --workspace`
 
+c37 capture (single run):
 ```
 $ cargo test --manifest-path fittings/Cargo.toml --workspace
 ... 229 passed; 1 failed; 0 ignored ...
+```
+
+m1-retrospective re-run (3 attempts):
+```
+$ for i in 1 2 3; do cargo test ... -p mcp-server stdio_e2e_runtime_registry_mutation_emits; done
+run 1: FAILED
+run 2: FAILED
+run 3: ok
 ```
 
 The single failure is the pre-existing m0 flake documented in
@@ -58,45 +67,36 @@ Same race as m0: `tools/list` is observed before the preceding
 is not in either m0 or m1's acceptance test matrix, and has nothing
 to do with the §W enum cutover that motivates this validation step
 (the cutover targets `MethodNotFound::method`, not server-side
-registry mutation). All other 229 tests pass — including the
-targeted regression test for the §W enum cutover
+registry mutation). All other 228 fittings tests pass — including
+the targeted regression test for the §W enum cutover
 (`method_not_found_typed_method_round_trip.rs`) — confirming the
 cutover's blast radius across the fittings workspace is clean.
 
-The flake is a known m0 retrospective follow-up (m0
-manual-validation.md §2 / "Known follow-up"); it is **not** a m1
-acceptance gap.
+**Acceptance posture (pi retrospective review-1+2+3+4):** the
+ratified `scope.md` §"Acceptance summary" requires this command
+to be green. The retrospective records this as a **waiver request
+pending explicit owner ratification** rather than a unilateral
+pass — the m0 retrospective §5.2 documented the same flake and
+proposed a fix (read-then-write in the mcp-server test harness)
+that has not yet landed. The §W cutover in m1 doesn't touch the
+flaky test; the flake is a pre-existing harness bug owned by
+mcp-server's test infrastructure. The retrospective owner
+ratification step is the natural place to either (a) approve the
+waiver, or (b) require the fix land before m1 closes.
 
 ## 3. `cargo doc -p rafaello-core --no-deps`
 
 ```
 $ cargo doc --manifest-path rafaello/Cargo.toml -p rafaello-core --no-deps
-warning: `Error` is both an enum and a derive macro
- --> crates/rafaello-core/src/error.rs:6:21
-  |
-6 | //! the top-level [`Error`] without churn.
-  |                     ^^^^^ ambiguous link
-  |
-  = note: `#[warn(rustdoc::broken_intra_doc_links)]` on by default
-help: to link to the enum, prefix with `enum@`
-warning: `rafaello-core` (lib doc) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.58s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in <…>s
 ```
 
-`cargo doc` completes successfully and emits HTML, but with **one
-broken-intra-doc-links warning** in `src/error.rs:6`: the
-module-level docstring writes ``[`Error`]`` and rustdoc cannot
-disambiguate between the enum `Error` and the `thiserror::Error`
-derive-macro re-export in scope. The fix is a one-character disambig
-(`` [`enum@Error`] ``); see follow-up §F1 below.
-
-This is a documentation-comment hygiene issue; the public API surface
-itself (the m2-consumer-facing types in §C / §G / §V) is not
-affected. Recording rather than fixing in c37 per the c37 acceptance
-language ("any tooling/CI/Nix follow-ups discovered while exercising
-it land alongside") — the fix is a one-line edit and lives most
-naturally in c38 retrospective alongside any other doc-warning
-sweeps, rather than expanding c37's scope.
+Warning-free. The c37 capture had one broken-intra-doc-links warning
+on `src/error.rs:6`'s ``[`Error`]`` link (rustdoc couldn't
+disambiguate the enum from the `thiserror::Error` re-export); fixed in
+the m1 retrospective sweep (commit `823e8bb`) by changing to
+``[`enum@Error`]``. Pi review-1 of the retrospective flagged the
+warning as a then-pending acceptance gap; pi-2 confirmed it landed.
 
 ## 4. `cargo test -p rafaello-core --release`
 
@@ -133,16 +133,16 @@ against whatever `cargo` happens to be on `$PATH`.
 
 The macOS leg is delegated to CI per scope.
 
-## 6. Fixture surface dump
+## 6. Test surface dump
 
-Scope calls for `tree rafaello/crates/rafaello-core/tests/fixtures`.
-**The directory does not exist**: m1 tests carry their fixture
-material inline (via string literals and `serde_json::json!`
-constructors) rather than via on-disk fixture files, matching the
-scope §"Out of scope" guidance that "m1 fixtures don't project from
-[disk]" (see e.g. `tests/tool_table_omitted_uses_defaults.rs:1` and
-`tests/tool_meta_always_confirm_round_trip.rs:1` for explicit
-references to that out-of-scope clause).
+Scope §"Manual validation" was reworded in the retrospective sweep
+(post-pi review-2 finding 3) to ask for `find
+rafaello/crates/rafaello-core/tests -type f -name '*.rs' | sort`
+rather than `tree .../tests/fixtures` — the latter pointed at a
+directory that doesn't exist. m1 tests carry their fixture material
+inline (string literals + `serde_json::json!` + `tempfile::TempDir`)
+rather than as on-disk fixture files; that's the deliberate v1
+choice (no separate `tests/fixtures/` directory).
 
 The closest available surface is the integration-test directory
 itself, which is the analogue artefact m2 would consume to discover
