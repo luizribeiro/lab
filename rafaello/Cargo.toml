@@ -13,6 +13,21 @@ semver = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 outpost = { path = "../outpost/crates/outpost" }
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+fittings-core = { path = "../fittings/crates/core" }
+fittings-server = { path = "../fittings/crates/server" }
+fittings-client = { path = "../fittings/crates/client" }
+fittings-transport = { path = "../fittings/crates/transport" }
+lockin = { path = "../lockin/crates/sandbox", features = ["tokio"] }
+outpost-proxy = { path = "../outpost/crates/outpost-proxy" }
+nix = { version = "0.29", features = ["socket", "fs", "signal", "process"] }
+parking_lot = "0.12"
+anyhow = "1"
+serial_test = "3"
+tracing-test = "0.2"
 
 [profile.dist]
 inherits = "release"
