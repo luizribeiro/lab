@@ -1,32 +1,69 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-1 draft. Pi review pending. Not yet
+> **Status:** round-2 draft, addressing pi-review-1 (~555 findings,
+> 18-item required rewrite). Pi round-2 review pending. Not yet
 > owner-ratified. The `commits.md` and Phase 3 work do not start
-> until this document ratifies.
+> until this document ratifies. Anticipate 4+ further rounds (m1
+> precedent: 6 rounds on scope, surface size predicts rounds).
 
 ## Goal
 
-Land the **first runtime** of rafaello: a bus broker plus a
-plugin supervisor that spawns subprocess plugins inside lockin
-sandboxes, with the broker enforcing publish/subscribe authority
-from m1's `BrokerAcl`. The broker authenticates publishers from
-the connection identity (set at spawn time), not from message
-bodies. The supervisor refuses to spawn anything that does not
-correspond to a lock entry — there is no hardcoded bypass path.
+Land the **first runtime** of rafaello: an in-process bus broker
+plus a plugin supervisor that spawns subprocess plugins inside
+lockin sandboxes, with the broker enforcing publish/subscribe
+authority from m1's `BrokerAcl`. The broker authenticates
+publishers from the connection identity (set at spawn time via
+the inherited socketpair fd), not from message bodies. The
+supervisor's only entry point is `spawn(plan: &CompiledPlugin)`;
+there is no debug bypass, no `spawn_unsandboxed`, no `RFL_INSECURE`.
 
 m2 is the structural moment where m1's pure data-transformation
 becomes a running system. Every later milestone (m3 TUI, m4
 provider + agent loop, m5 confirmation/sinks) layers on the
 broker + supervisor primitive m2 ships.
 
-The deliverable is a small set of new modules in the existing
-`rafaello-core` crate (m1 owns the crate; m2 grows it), one new
-in-tree fixture-plugin binary used by the integration tests, and
-the workspace dependencies that wire fittings + lockin + outpost
-into `rafaello-core`. Exercised primarily by `cargo test
---manifest-path rafaello/Cargo.toml -p rafaello-core` (unit +
-integration). No new behaviour lands in the `rafaello`-bin
-(`rfl chat` is m3).
+The deliverable is:
+1. New modules in the existing `rafaello-core` crate (m1 owns
+   the crate; m2 grows it): `bus`, `supervisor`, plus error
+   surface additions.
+2. A new `[[bin]]` target `rfl-bus-fixture` **inside the
+   `rafaello-core` crate** (so `env!("CARGO_BIN_EXE_rfl-bus-fixture")`
+   resolves from `rafaello-core`'s integration tests — pi-1 §5/§62/§63).
+   The binary is test-only (`required-features = ["test-fixture"]`
+   and the test runner enables the feature); not shipped in any
+   release artifact.
+3. Workspace dependencies wiring fittings + lockin + outpost +
+   tokio + nix into `rafaello-core`.
+4. Integration tests under `rafaello/crates/rafaello-core/tests/`
+   exercising broker + supervisor end-to-end.
+
+No new behaviour lands in the `rafaello`-bin (`rfl chat` is m3).
+
+### Lock-correspondence claim, scoped honestly (pi-1 §22, §83, §84)
+
+The "no hardcoded bypass" property holds at the **API surface
+level**: `PluginSupervisor::spawn` accepts only `&CompiledPlugin`
+and consults a `Broker` constructed from `BrokerAcl`. There is
+no path that constructs a child process from a raw entry path.
+
+It does **not** hold against a caller who hand-mutates a
+`CompiledPlugin` value (the struct fields are `pub` by m1's
+choice). The supervisor performs `InvalidPlan` spot-checks for
+the cases that would otherwise crash the lockin builder
+(non-absolute paths, reserved env vars, topic-id ↔ canonical
+mismatch), but it does not re-run V3/digest/grant validation —
+that contract sits with `compile::compile_plugin` and m1's
+`validate::lock`. The supervisor trusts a well-formed
+`CompiledPlugin` the way m1's `compile_plugin` trusts a
+prior-validated `Lock`. Production callers that obtain a
+`CompiledPlugin` exclusively from `compile_plugin` get the full
+guarantee; test code that hand-constructs values is responsible
+for staying within the spot-check set.
+
+The retrospective records this as a v1 contract; tightening to
+an opaque/validated plan type is a v2 nice-to-have and is
+explicitly listed in §"Acceptance summary" as a known scoped
+deviation.
 
 ## Inputs
 
@@ -37,264 +74,413 @@ integration). No new behaviour lands in the `rafaello`-bin
   outputs the supervisor consumes — m2 reads the plan, doesn't
   produce it), §15.6 (PeerHandle).
 - `rafaello/plans/decisions.md` rows **3, 4, 5, 13, 17, 22, 32,
-  37, 38** (load-bearing for m2). Row 3 (broker = core,
-  transport = fittings) is the layering rule m2 must not
-  collapse. Row 4 fixes the four namespaces. Row 5 fixes the
-  topic-id derivation m2 uses literally on every publish ACL
-  check. Row 13 fixes bus authentication = inherited
-  socketpair fd. Row 22 promotes `PeerHandle` (notify + call
-  in both directions) to v1. Row 32 says lockin is configured
-  via the Rust API at spawn time, with m1's `CompiledPlugin`
-  as the structured source. Row 37 fixes the topic-id form of
-  the per-plugin private-state path.
+  37, 38**.
 - `rafaello/plans/streams/a-security/rfc-security-model.md`
-  §5 end-to-end (bus ACL, transport, confirmation reservations,
-  frontend principal reservation), §7.2.6 (`in_reply_to`
-  enforcement table — the m2 enforcement set is a strict
-  subset, see §B6 below), §6 (attack scenarios — m2 closes
-  6.4, 6.5, 6.8, partial 6.9; m2 does NOT yet close 6.1, 6.2,
-  6.3, 6.10 since those depend on m4/m5/m1 surfaces already
-  landed). Read the §5.7 + §7.4.1 v1-status banners — frontend
-  external attach and helper plugins are deferred and m2 must
-  not introduce surfaces for them.
+  §5 end-to-end (with the §5.7 v1-status banner), §6.4 / §6.5 /
+  §6.8 / §6.9 (m2 closes), §7.2.6 `in_reply_to` enforcement
+  table (m2 enforces a strict subset, see §B6), §7.4.1 v1-status
+  banner (helpers deferred — m2 must not introduce surfaces).
 - `rafaello/plans/streams/b-fittings/rfc-fittings-notifications.md`
-  for `PeerHandle` shape; m0 already landed it. m2 is the first
-  in-tree consumer of `Server::peer()` / `Client::peer()` /
-  `Client::with_service()` outside fittings' own tests.
+  for the `PeerHandle` / `Server` / `Client` / `with_service`
+  surface m0 landed.
 - `rafaello/plans/glossary.md`.
-- m1's existing `rafaello-core` surface — `compile::CompiledPlugin`,
-  `broker_acl::{BrokerAcl, PluginAcl}`, `topic_id::derive`,
-  `validate::topic::{validate_topic, validate_pattern}`,
-  `lock::canonical_id::CanonicalId`, the typed errors
-  enumerated in `error::*`. m2 calls into these; it does not
-  modify them.
-- Lockin's public Rust API for the v1 sandbox backend
-  (`lockin/crates/sandbox/src/lib.rs`):
-  - `Sandbox::builder() -> SandboxBuilder` with
-    `read_path`/`read_dir`/`write_path`/`write_dir`/
-    `exec_path`/`exec_dir`/`network`/`network_deny`/
-    `network_allow_all`/`network_proxy(loopback_port: u16)`/
-    `inherit_fd`/`inherit_fd_as`/`max_cpu_time`/
-    `max_open_files`/`max_address_space`/`max_processes`/
-    `disable_core_dumps`/`allow_kvm`/
-    `allow_interactive_tty`/`allow_non_pie_exec`/
-    `raw_seatbelt_rule`.
+- m1's existing `rafaello-core` surface: `compile::CompiledPlugin`
+  (incl. `topic_id`, `entry_absolute`, `filesystem`, `network`,
+  `env`, `limits`, `subscribe_patterns`, `publish_topics`,
+  `auto_subscribes`, `tool_meta`, `provider_id`, `load`, `flags`),
+  `broker_acl::{BrokerAcl, PluginAcl}` (incl. `tool_routes` —
+  m2 stores it in the broker but does not yet route),
+  `topic_id::derive`, `validate::topic::{validate_topic,
+  validate_pattern, pattern_matches_topic}` (the matcher already
+  exists and is re-exported — pi-1 §6 + §68), `lock::canonical_id::CanonicalId`,
+  the typed errors in `error::*`.
+- Lockin's public Rust API. Verified package coordinates
+  (pi-1 §1):
+  - Crate `lockin/crates/sandbox`, **package name `lockin`**
+    (not `lockin-sandbox`).
+  - `lockin::Sandbox::builder() -> SandboxBuilder` with all
+    builder methods named in m1 scope.
   - `SandboxBuilder::command(self, program: &Path) ->
-    Result<SandboxedCommand>` consumes the builder.
-  - `SandboxedCommand::env`/`envs`/`env_remove`/`env_clear`
-    apply env to the prepared command (after builder is
-    consumed). `spawn() -> Result<SandboxedChild>`,
-    `SandboxedChild::{wait,try_wait,kill,id,as_child,
-    as_child_mut,into_parts}`.
-- `outpost::NetworkPolicy` (already used by m1 for parse-time
-  dry-run) plus `outpost_proxy::start(policy) -> ProxyHandle`
-  / `ProxyHandle::listen_addr()` for runtime proxy startup.
+    anyhow::Result<SandboxedCommand>` consumes the builder.
+  - `SandboxBuilder::inherit_fd_as(self, fd: OwnedFd, child_fd:
+    RawFd) -> Self` consumes the `OwnedFd` (pi-1 §24).
+  - `SandboxedCommand::env`/`envs`/`env_remove`/`env_clear`/
+    `current_dir` apply env + cwd to the prepared command;
+    `spawn() -> std::io::Result<SandboxedChild>`.
+  - `SandboxedChild::{wait, try_wait, kill, id, as_child,
+    as_child_mut, into_parts}`. `kill()` sends `SIGKILL`,
+    not `SIGTERM`; graceful termination uses `nix` (pi-1 §28).
+  - `SandboxedCommand::env_clear()` documented to remove
+    `TMPDIR`/`TMP`/`TEMP` pointing at the sandbox private tmp
+    (pi-1 §27); m2 explicitly re-injects them after env_clear
+    (see §SP4.3).
+- Outpost: `outpost::NetworkPolicy::from_allowed_hosts(...)`
+  for parse-time validation (m1 already uses it),
+  `outpost_proxy::start(policy) -> std::io::Result<ProxyHandle>`
+  with `ProxyHandle::listen_addr() -> SocketAddr`.
+- fittings real coordinates verified (pi-1 §1, §3, §4, §92):
+  - Crate paths: `fittings/crates/{wire, core, server, client,
+    transport, spawn, macros}`. Package names match.
+  - `fittings_core::message::JsonRpcId` is the canonical type
+    re-exported by `fittings_wire`.
+  - `fittings_core::error::FittingsError` is the canonical
+    error.
+  - `fittings_server::Server::new(service, transport)` builds
+    a server; `Server::peer()` exposes the connection-scoped
+    `PeerHandle`; `Server::serve(self) -> Future` runs the
+    loop.
+  - `fittings_client::Client::connect(connector)` connects;
+    `Client::with_service(svc)` registers an inbound service;
+    `Client::with_notification_handler(handler)` registers a
+    notification handler (per the fittings RFC); `Client::peer()`
+    exposes outbound notify/call.
+  - `fittings_transport` provides `StdioTransport::new(reader,
+    writer, max_frame_bytes)` over any `AsyncRead + AsyncWrite`.
+    m2 uses it over the split halves of a `tokio::net::UnixStream`.
 
 ## In scope
 
-The work decomposes into module groups in `rafaello-core` plus
-one new fixture binary. Per-commit granularity is the driver's
-call when drafting `commits.md`; this section names the public
-API surface and the negatives the test matrix asserts.
+Per-commit granularity is the driver's call when drafting
+`commits.md`; this section names public API surface and the
+test matrix.
 
 ### W — workspace dependencies
 
 - **W1.** Add to `rafaello/Cargo.toml`'s `[workspace.dependencies]`
-  (introduced in m1 c01):
+  (introduced in m1 c01). Verified coordinates per pi-1 §1, §2:
   - `tokio = { version = "1", features = ["rt-multi-thread",
-    "macros", "io-util", "net", "sync", "time", "process"] }`
+    "macros", "io-util", "net", "sync", "time"] }`
   - `tracing = "0.1"`
-  - `fittings-core = { path = "../fittings/crates/fittings-core" }`
-  - `fittings-server = { path = "../fittings/crates/fittings-server" }`
-  - `fittings-client = { path = "../fittings/crates/fittings-client" }`
-  - `fittings-wire = { path = "../fittings/crates/fittings-wire" }`
-  - `lockin-sandbox = { path = "../lockin/crates/sandbox", package = "lockin-sandbox" }`
-    (verify the actual crate name; the m1 scope doc names the
-    re-export root as `lockin::Sandbox::builder()` but the
-    workspace may publish the leaf crate name)
+  - `tracing-subscriber = { version = "0.3", features = ["env-filter"] }`
+    (dev-only — used by the `#[tracing_test::traced_test]`
+    pattern in tests + by manual-validation; pi-1 §197–§199)
+  - `async-trait = "0.1"` (every fittings `Service` impl needs
+    it; pi-1 §2)
+  - `fittings-core = { path = "../fittings/crates/core" }`
+  - `fittings-server = { path = "../fittings/crates/server" }`
+  - `fittings-client = { path = "../fittings/crates/client" }`
+  - `fittings-transport = { path = "../fittings/crates/transport" }`
+    (pi-1 §2 + §4 — needed for `StdioTransport`)
+  - **No** `fittings-wire`: m2 uses only `JsonRpcId` and
+    `FittingsError` from `fittings-core`'s re-exports (pi-1 §136).
+  - `lockin = { path = "../lockin/crates/sandbox", features = ["tokio"] }`
+    — package name confirmed as `lockin`; the `tokio` feature
+    enables `lockin::tokio` async wait helpers used by SP5
+    (pi-1 §1, §165, §166).
   - `outpost-proxy = { path = "../outpost/crates/outpost-proxy" }`
-  - `nix = { version = "0.27", features = ["socket", "fs"] }`
-    (for `socketpair(2)` — there is no stable `std::os::unix`
-    socketpair helper; lockin uses `nix` for the same reason)
-  - dev-deps: `tempfile = { workspace = true }` already in m1;
-    add `assert_cmd = "2"` for the fixture-plugin binary
-    integration tests.
-- **W2.** `rafaello-core/Cargo.toml` `[dependencies]` adds the
-  m2 deps from W1 (`workspace = true`). `[dev-dependencies]`
-  adds the fixture-plugin path-dep (W3). m1's existing deps
-  stay.
-- **W3.** New in-tree binary crate
-  `rafaello/crates/fixtures/rfl-bus-fixture/` (added to
-  `[workspace.members]`). Tiny self-contained subprocess
-  plugin: speaks the m2 bus protocol over `RFL_BUS_FD`, used
-  exclusively by m2 integration tests. NOT installed by `rfl`
-  end users; the `Cargo.toml` carries `publish = false` and a
-  README pointer back to m2 scope. Built unconditionally by
-  the workspace so per-commit `cargo test` can call it. The
-  test harness resolves the binary path via
-  `env!("CARGO_BIN_EXE_rfl-bus-fixture")` (cargo's standard
-  bin-test integration; no manual build steps).
-- **W4.** No new top-level workspace deps beyond W1. `serde`,
-  `serde_json`, `thiserror` already in workspace.dependencies
-  from m1 c01.
+  - `nix = { version = "0.29", features = ["socket", "fs", "signal", "process"] }`
+    — `signal` for `kill(SIGTERM)`; `process` for `Pid` /
+    `WaitStatus` typing (pi-1 §2, §28). Verify version
+    consistency against lockin's nix dep at `commits.md` time.
+- **W1 (dev-deps).** Added to `[workspace.dependencies]` so any
+  workspace member can pick them up:
+  - `tempfile = "3"` (already in m1)
+  - `serial_test = "3"` — env-mutating tests serialise via
+    `#[serial(env)]` (pi-1 §60, §137, §332)
+  - `tracing-test = "0.2"` — `#[traced_test]` for capturing
+    broker `tracing::warn!` output in tests
+- **W2.** `rafaello-core/Cargo.toml`:
+  - `[dependencies]` adds the runtime W1 entries with
+    `workspace = true`.
+  - `[dev-dependencies]` adds `tempfile`, `serial_test`,
+    `tracing-test`, `tracing-subscriber` with `workspace = true`.
+  - `[features]` adds `test-fixture = []` (the gate for the
+    fixture binary — see W3).
+  - `[[bin]]` declares the fixture target inline: `name =
+    "rfl-bus-fixture"`, `path = "src/bin/rfl_bus_fixture.rs"`,
+    `required-features = ["test-fixture"]`.
+- **W3.** Test-only fixture binary inside `rafaello-core`
+  (pi-1 §5, §62, §63, §394–§403). Rationale:
+  - Putting the fixture as a `[[bin]]` of `rafaello-core` is
+    the **only** approach where `env!("CARGO_BIN_EXE_rfl-bus-fixture")`
+    is reliably resolved by Cargo at integration-test compile
+    time. A separate workspace-member crate is not built
+    automatically when `cargo test -p rafaello-core` runs and
+    Cargo does not export the env var across packages.
+  - The `required-features = ["test-fixture"]` gate ensures
+    the binary is **not** built by default `cargo build` in
+    release contexts; `cargo test -p rafaello-core --features
+    test-fixture` is the canonical test invocation.
+  - The binary is small (~200 lines) and has no production
+    runtime path. It is an artefact of the m2 acceptance
+    harness, equivalent in spirit to the fittings examples
+    used for m0 testing.
+- **W4.** No other top-level workspace deps. `serde`,
+  `serde_json`, `thiserror` already in `[workspace.dependencies]`
+  from m1.
 
 ### B — bus broker (`rafaello_core::bus`)
 
 The broker is the in-process publish/subscribe layer. It owns
 no transport: each plugin connection is a `fittings`
 `PeerHandle` registered with the broker via the supervisor.
-The broker's job is publish-authority enforcement, subscribe
-ACL, fan-out, and topic-grammar revalidation.
 
 - **B1.** New module `rafaello_core::bus`. Public surface:
-  - `pub struct Broker` — owns the live registry of plugin
-    connections + the `BrokerAcl` it was constructed from.
-    Cheap-to-clone `Arc<BrokerInner>` shape so multiple
-    fittings `Service` impls can hold a clone.
+  - `pub struct Broker` — cheap-clone handle wrapping
+    `Arc<BrokerInner>`. Cloning `Broker` is the *only* sharing
+    primitive; supervisor takes a `Broker` by value, not
+    `Arc<Broker>` (pi-1 §87, §138). Internal state uses
+    `parking_lot::Mutex<BrokerState>` over a `BTreeMap<CanonicalId,
+    PluginConn>` for deterministic ordering (pi-1 §46, §522).
   - `Broker::new(acl: BrokerAcl) -> Self`.
-  - `Broker::register_plugin(canonical: CanonicalId, peer:
-    PeerHandle) -> Result<RegisteredPlugin, BrokerError>` —
-    called by the supervisor immediately after spawn (before
-    the child has had a chance to publish anything; the spawn
-    sequencing is §SP3). Returns a `RegisteredPlugin` RAII
-    guard whose `Drop` unregisters the plugin from the
-    broker. Errors:
-    - `BrokerError::NotInAcl(canonical)` — canonical not
-      present in `BrokerAcl::plugins`.
-    - `BrokerError::AlreadyRegistered(canonical)` —
-      duplicate registration.
-  - `Broker::publish_core(topic: &str, payload: Value) ->
-    Result<(), BrokerError>` — core-side publish; `topic`
-    must start with `"core."` and pass topic-grammar
-    revalidation (§B5). Used by m2 only in tests + a single
-    `BootSummary` event; m4/m5 grow the call sites.
-  - `Broker::handle_plugin_publish(canonical: &CanonicalId,
-    msg: PublishMsg) -> Result<(), BrokerError>` — called
-    from the per-plugin fittings Service impl on inbound
-    `bus.publish` notifications. Validates publisher-vs-topic
-    authority (§B3), grammar (§B5), payload shape (§B4),
-    `in_reply_to` (§B6), then fans out (§B7).
-  - `pub struct PublishMsg { topic: String, payload: Value,
-    in_reply_to: Option<Vec<JsonRpcId>>, taint:
-    Option<Vec<TaintEntry>> }` — the on-wire shape for
-    `bus.publish` notification params; serde-derived;
-    deny_unknown_fields.
-  - `pub struct TaintEntry { source: String, detail: Option<String> }`
-    — m2 round-trips the field; m4 enforces the populated-by-core
-    rule. m2 stores plugin-supplied taint verbatim (no
-    synthesis, no superset check; both are m4 work).
+  - `Broker::register_plugin(&self, canonical: CanonicalId,
+    peer: PeerHandle) -> Result<RegisteredPlugin, BrokerError>`.
+    Returns an RAII guard. Errors `NotInAcl(canonical)` or
+    `AlreadyRegistered(canonical)` (pi-1 §11, §139). The guard
+    is `!Clone`, `!Send` (it carries an `Arc<BrokerInner>`
+    backref + a teardown closure); on drop it removes the
+    entry from `plugins` and closes the in-flight notification
+    channel for that plugin.
+  - `Broker::publish_core(&self, topic: &str, payload: Value)
+    -> Result<(), BrokerError>`. Topic must start with `core.`
+    (parsed structurally per §B3) and pass grammar revalidation.
+    No publisher exclusion (core publishes to itself = no-op
+    since core is not registered as a subscriber; pi-1 §128).
+    For lifecycle/observability, m2 uses this to emit
+    `core.lifecycle.publish_rejected` (see §B9) and a single
+    `core.lifecycle.boot` event after `Broker::new` completes
+    (no-op if no subscribers; the latter is m2's sole
+    "BootSummary" — pi-1 §45). Both events have explicit
+    schemas (§B9).
+  - `Broker::handle_plugin_publish(&self, canonical: &CanonicalId,
+    raw_params: &Value) -> Result<(), BrokerError>`. Takes
+    `raw_params` (the raw JSON `params` of the inbound
+    `bus.publish` notification) so payload-decode errors
+    surface as `BrokerError::InvalidPayload` from the broker
+    itself (pi-1 §12). Decoding to `PublishMsg` with
+    `deny_unknown_fields` happens inside this function. Also
+    requires the canonical to be currently **registered**
+    (returns `NotRegistered` if not — pi-1 §140, §141, §526),
+    so a stale service whose guard already dropped cannot
+    publish.
+  - `Broker::contains_plugin(&self, canonical: &CanonicalId) -> bool`
+    — supervisor's defence-in-depth precheck (pi-1 §86).
+  - `Broker::shutdown(&self)` — drains and unregisters every
+    plugin; idempotent. Used by `PluginSupervisor::shutdown`.
 - **B2.** `BrokerError` typed enum (lives in
-  `rafaello_core::error`, mirror of the m1 pattern):
-  - `NotInAcl(CanonicalId)`
-  - `AlreadyRegistered(CanonicalId)`
+  `rafaello_core::error`):
+  - `NotInAcl(CanonicalId)` — canonical absent from the static
+    `BrokerAcl`.
+  - `NotRegistered(CanonicalId)` — canonical present in ACL
+    but no live registration.
+  - `AlreadyRegistered(CanonicalId)`.
+  - `UnknownNamespace { canonical: Option<CanonicalId>, topic: String }`
+    — top-level segment is not one of `{core, provider, plugin,
+    frontend}`. `canonical` is `None` for `publish_core`
+    misuse, `Some(_)` for plugin publish (pi-1 §7, §251, §471).
   - `PublishOnReservedNamespace { canonical: CanonicalId,
-    topic: String }` — plugin tried to publish `core.*`,
-    `provider.*`, `frontend.*`, or another plugin's
-    `plugin.<other-topic-id>.*`.
-  - `PublishOutsideGrant { canonical: CanonicalId, topic:
-    String }` — plugin published a `plugin.<own-topic-id>.*`
-    topic that wasn't in its lock-granted `publishes` set.
-  - `InvalidTopic { topic: String, reason: String }` —
-    grammar revalidation (§B5).
-  - `InvalidPayload { reason: String }` — params decode
-    failure or `bus.publish` body shape violation (§B4).
-  - `MissingInReplyTo { canonical: CanonicalId, topic:
-    String }` — plugin published a class that requires
-    `in_reply_to` without one (§B6 m2 subset).
+    topic: String }` — plugin published `core.*`, `provider.*`,
+    `frontend.*`, or another plugin's `plugin.<other-topic-id>.*`
+    (pi-1 §470).
+  - `PublishOutsideGrant { canonical: CanonicalId, topic: String }`
+    — plugin published a `plugin.<own-topic-id>.*` topic not in
+    its lock-granted `publish_topics` set (exact-string set
+    membership; pi-1 §98).
+  - `InvalidTopic { topic: String, source: ValidationError }`
+    — grammar revalidation. Wraps the typed `ValidationError`
+    instead of a free string (pi-1 §124).
+  - `InvalidPayload { canonical: Option<CanonicalId>, reason: String }`
+    — params decode failure (`serde_json` error mapped to
+    `String`) or body shape violation. `canonical` because
+    rejection events need it.
+  - `InvalidInReplyTo { canonical: CanonicalId, topic: String,
+    reason: InReplyToReason }` — covers both missing and wrong
+    arity (pi-1 §43). `InReplyToReason = Missing | EmptyArray |
+    UnexpectedMultiple` enum.
   - `Internal { detail: String }` — broker-internal failures
-    (channel send error, etc.); not a security boundary.
-- **B3.** **Publish-authority enforcement** (the core
-  invariant). For each `handle_plugin_publish`:
-  1. Compute `expected_self = format!("plugin.{}.",
-     plugin_acl.topic_id)`.
-  2. If `topic` starts with `core.`, `provider.`, or
-     `frontend.` → `PublishOnReservedNamespace`.
-  3. If `topic` starts with `plugin.<X>.` where `<X> !=
-     plugin_acl.topic_id` → `PublishOnReservedNamespace`
-     (cross-plugin masquerade attempt).
-  4. If `topic` starts with `plugin.<own-topic-id>.` and is
-     not in `plugin_acl.publish_topics ∪
-     plugin_acl.auto_subscribes` → `PublishOutsideGrant`.
-     (Note: `auto_subscribes` is the implicit
-     `plugin.<topic-id>.tool_request` self-subscribe; a
-     plugin publishing on its own subscribed-to topic is a
-     no-op nonsense case that m2 lets through to the
-     subscribe layer, which will then drop it because the
-     plugin is not its own subscriber. **Decision held over
-     for pi**: should publish-on-own-auto-subscribe be a
-     validation error rather than a delivery no-op? The
-     conservative choice is to error; m2 takes it.)
-  5. Otherwise authorised; proceed.
-- **B4.** **`bus.publish` payload shape**. The m2 wire shape
-  for the `bus.publish` notification's `params` is exactly
-  `PublishMsg` (B1). Decode with
-  `#[serde(deny_unknown_fields)]` so a plugin sending extra
-  keys gets `InvalidPayload`. Required fields: `topic` (string),
-  `payload` (any JSON value, including `null`). Optional:
-  `in_reply_to` (array of `JsonRpcId` per fittings-wire's
-  type — string | number | null), `taint` (array of
-  `TaintEntry`).
-- **B5.** **Topic-grammar revalidation.** Every publish
-  (plugin or core) re-runs `validate::topic::validate_topic`
-  against the publish topic. The lock-time grant's
-  `publishes` list was already validated at compile, but a
-  plugin can construct any string at runtime; the broker is
-  the runtime-authority gate. Symmetric for the (currently
-  absent) runtime subscribe path. Failure →
-  `InvalidTopic`.
+    (lock poisoning, channel send during shutdown). Not a
+    security boundary.
+  Top-level `Error` enum gets `#[from]` arms for `BrokerError`
+  and `SpawnError`. `BrokerError` derives `Debug`, `Clone`,
+  `PartialEq` (pi-1 §125 — facilitates `assert_eq!` in tests;
+  no source error inside a variant blocks this since
+  `ValidationError` is already `Clone + PartialEq` per m1).
+- **B3.** **Publish-authority enforcement (structural).**
+  Per pi-1 §7, §8, §97, the broker parses topics
+  structurally (split by `.`) instead of using `starts_with`.
+  Pseudocode for `handle_plugin_publish`:
+  1. Decode `raw_params` to `PublishMsg`. On error →
+     `InvalidPayload`.
+  2. Run `validate::topic::validate_topic(&msg.topic)`. On
+     error → `InvalidTopic`. (Grammar before namespace; pi-1 §97.)
+  3. Split `msg.topic` into segments. Look at `segments[0]`:
+     - Not in `{core, provider, plugin, frontend}` →
+       `UnknownNamespace`.
+     - `core` / `provider` / `frontend` → `PublishOnReservedNamespace`
+       (plugins never publish on these in m2).
+     - `plugin`:
+       - If `segments.len() < 3` (e.g. `plugin.<id>` two-segment
+         only) → `PublishOnReservedNamespace` (pi-1 §8). Two-
+         segment `plugin.<id>` is grammar-valid but semantically
+         empty; treat as outside any plugin's authority.
+       - If `segments[1] != publisher_acl.topic_id` →
+         `PublishOnReservedNamespace` (cross-plugin masquerade).
+       - Else: check `msg.topic` is exact-string-member of
+         `publisher_acl.publish_topics`. If not →
+         `PublishOutsideGrant`.
+  4. Per-topic-class checks (§B6).
+  5. Otherwise authorised; proceed to fan-out (§B7).
+  
+  **`auto_subscribes` is NOT publish authority** (pi-1 §9, §69,
+  §248). It is a subscribe grant only. Publishing on a topic
+  in `auto_subscribes` and not in `publish_topics` is
+  `PublishOutsideGrant`.
+- **B4.** **`bus.publish` notification params shape.** The
+  on-wire type:
+  ```rust
+  #[derive(Debug, Clone, Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub struct PublishMsg {
+      pub topic: String,
+      pub payload: serde_json::Value,
+      #[serde(default)]
+      pub in_reply_to: Option<Vec<JsonRpcId>>,
+      #[serde(default)]
+      pub taint: Option<Vec<TaintEntry>>,
+  }
+  
+  #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+  #[serde(deny_unknown_fields)]  // pi-1 §44, §309
+  pub struct TaintEntry {
+      pub source: String,
+      pub detail: Option<String>,
+  }
+  ```
+  Required: `topic` (string), `payload` (any JSON value
+  including `null` — pi-1 §312). `in_reply_to` and `taint` are
+  optional; absent fields are `None`. **`request_id` is not
+  carried in m2 events** (pi-1 §41, §95, §145): every fittings
+  notification already has a connection-implicit message id
+  the transport layer assigns; the overview §4.5 envelope
+  `request_id` field is meaningful only for events that
+  themselves are responses to something, which m4 introduces.
+  m2's retrospective records this staging.
+- **B5.** **Topic-grammar revalidation.** Run before any
+  ACL check (pi-1 §97). For `publish_core`, topic must start
+  with `core.` after grammar — and per pi-1 §128, `publish_core`
+  performs the same structural namespace check as plugin
+  publishes, just with `Some` instead of `None` for publisher
+  identity.
 - **B6.** **`in_reply_to` enforcement (m2 subset).** Per
-  security RFC §7.2.6, the v1 enforcement table is large.
-  m2 ships the **two enforceable-in-isolation entries** and
-  defers the rest to m4 (which introduces the provider +
-  tool dispatch surface they reference):
-  - `plugin.<id>.tool_result` → `in_reply_to` required,
-    exactly one entry. m2 enforces presence + arity; m2
-    does NOT yet enforce that the referenced id matches a
-    real prior `tool_request` (no tool dispatch yet → no
-    correlation map → that check is m4's).
-  - `plugin.<id>.rpc_reply` → `in_reply_to` required,
-    exactly one entry. Same scope: m2 enforces presence +
-    arity; m2 does NOT yet enforce that the referenced id
-    matches a real prior `rpc_call` (no plugin-to-plugin
-    RPC routing in m2).
-  Other entries from §7.2.6 (`provider.<id>.tool_request`,
-  `provider.<id>.assistant_message`,
-  `frontend.<id>.confirm_answer`,
-  `frontend.<id>.user_message`, `plugin.<id>.progress`)
-  do not apply to m2 because the publishers don't exist
-  yet (no provider, no frontend, no tool dispatch). The
-  optional `plugin.<id>.*` superset rule is m4 territory;
-  m2 stores `in_reply_to` verbatim without superset
-  checks.
-- **B7.** **Fan-out.** For each registered plugin, check the
+  security RFC §7.2.6 and pi-1 §43, §307:
+  - `plugin.<id>.tool_result` and `plugin.<id>.rpc_reply`:
+    `in_reply_to` MUST be present, MUST be exactly one entry.
+    Missing → `InvalidInReplyTo { reason: Missing }`. Empty
+    array → `InvalidInReplyTo { reason: EmptyArray }`. ≥ 2
+    entries → `InvalidInReplyTo { reason: UnexpectedMultiple }`.
+    m2 does **not** validate that the referenced id exists
+    (no correlation map yet — m4 adds it).
+  - All other `plugin.<id>.*` topics: `in_reply_to` is
+    optional. If present, m2 stores it verbatim and does NOT
+    superset-check taint (m4 territory).
+  - `provider.*`, `frontend.*`, `core.*` from plugins: rejected
+    earlier in §B3, never reach this check.
+- **B7.** **Fan-out.** After authorisation (§B3) and class
+  checks (§B6), construct a `BusEvent` (§B8), then for each
+  registered plugin **other than** the publisher, check the
   set `subscribe_patterns ∪ auto_subscribes` against the
-  delivered topic using a fresh pattern-matcher
-  (`validate::pattern::matches(pattern, topic)` — m2 adds
-  this small helper since m1 only validated patterns syntactically).
-  If matched, call `peer.notify("bus.event", BusEvent {
-  topic, payload, in_reply_to, taint })` on that plugin's
-  `PeerHandle`. The publishing plugin is **excluded from its
-  own fan-out** (no echo): even if its grant subscribes to a
-  pattern that matches its own publish, the broker does not
-  loop the event back. Fan-out errors are logged via
-  `tracing::warn!` with the target canonical id but do NOT
-  fail the publish call (best-effort delivery; per `notifications-rfc`
-  §3b a slow consumer drops to the sink, not the publisher).
-  - **`bus.event` is m2's chosen outbound notification
-    method.** Plugins distinguish events from any other
-    incoming notifications by method name. `bus.publish`
-    is plugin→core; `bus.event` is core→plugin. Both are
-    fittings notifications (no response).
-- **B8.** **Pattern matcher.** `rafaello_core::validate::pattern`
-  gains `pub fn matches(pattern: &str, topic: &str) -> bool`.
-  Implements the security-RFC §5.1 rules:
-  - `*` matches exactly one segment.
-  - `**` (final pseg only) matches one or more trailing
-    segments.
-  - Other psegs match by exact string equality.
-  Inputs are assumed pre-validated (caller must have run
-  `validate_pattern` / `validate_topic`). Tested as a unit
-  with the §5.1 example matrix.
+  topic using `validate::topic::pattern_matches_topic` (the
+  existing m1 helper — pi-1 §6). If matched, call
+  `peer.notify("bus.event", &bus_event)` on that plugin's
+  `PeerHandle`. The publishing plugin is excluded from its own
+  fan-out (pi-1 §245, §247). Fan-out uses a snapshot of the
+  registry (clone the `PeerHandle` list under lock, release
+  lock, then iterate; pi-1 §46, §1022) so notify cannot
+  deadlock against `RegisteredPlugin::drop`.
+  - **Result-routing protection (pi-1 §14).** Topics
+    `plugin.<id>.tool_result` and `plugin.<id>.rpc_reply` are
+    **NOT** delivered to other plugin subscribers in m2. Their
+    publish authority + arity check still runs (so plugins
+    that hand-craft these get the same broker-level diagnostics
+    m4 will see), but the fan-out path is a no-op log
+    (`tracing::debug!`). m4 wires the canonical re-emission
+    (`core.session.tool_result`) and that path is the only
+    thing other plugins observe. This preserves the security
+    RFC §5.4.1 invariant that direct delivery of
+    `plugin.<id>.tool_result` is forbidden, without m2 having
+    to ship the validation+re-emission machinery.
+  - `peer.notify` returning `Ok(())` does NOT mean delivered —
+    the bounded notify sink may have dropped the frame
+    silently per fittings semantics (pi-1 §47, §1030). Tests
+    that need observation use round-trip patterns, not raw
+    counts.
+  - `peer.notify` returning `Err(_)` (transport closed) is
+    logged at `tracing::warn!` and does NOT fail the publish.
+    Best-effort delivery (pi-1 §47, §89).
+  - `bus.event` is m2's chosen outbound notification method
+    name (vs. the inbound `bus.publish`). The asymmetry is
+    intentional: outbound carries publisher identity (§B8) and
+    is a different schema; reusing `bus.publish` would
+    conflate directions.
+- **B8.** **`BusEvent` outbound type** (pi-1 §13, §527–§534):
+  ```rust
+  #[derive(Debug, Clone, Serialize)]
+  pub struct BusEvent {
+      pub topic: String,
+      pub payload: serde_json::Value,
+      pub publisher: PublisherIdentity,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub in_reply_to: Option<Vec<JsonRpcId>>,
+      #[serde(skip_serializing_if = "Option::is_none")]
+      pub taint: Option<Vec<TaintEntry>>,
+  }
+  
+  #[derive(Debug, Clone, Serialize)]
+  #[serde(tag = "kind", rename_all = "snake_case")]
+  pub enum PublisherIdentity {
+      Core,
+      Plugin {
+          canonical: String,  // CanonicalId rendered to wire string
+          topic_id: String,
+      },
+      // Future m4 / m5 / m3:
+      // Provider { canonical, provider_id },
+      // Frontend { attach_id },
+  }
+  ```
+  Tests asserting "publish authority was the fixture's
+  canonical id" inspect `event.publisher` (pi-1 §13, §186).
+- **B9.** **`core.lifecycle.publish_rejected` event.** Emitted
+  by the broker after every rejection (`UnknownNamespace`,
+  `PublishOnReservedNamespace`, `PublishOutsideGrant`,
+  `InvalidTopic`, `InvalidInReplyTo`). Schema:
+  ```json
+  {
+    "canonical": "<canonical-id-or-null>",
+    "topic": "<topic-or-null-if-decode-failed>",
+    "code": "<machine-readable-error-code>",
+    "message": "<human-readable-detail>"
+  }
+  ```
+  - `code` is one of `unknown_namespace`,
+    `publish_on_reserved_namespace`, `publish_outside_grant`,
+    `invalid_topic`, `invalid_in_reply_to_missing`,
+    `invalid_in_reply_to_empty`,
+    `invalid_in_reply_to_multiple`, `invalid_payload` (pi-1
+    §122, §178).
+  - `topic: null` only for `invalid_payload` decode failures
+    that happened before topic extraction (pi-1 §178, §179).
+    For best-effort topic recovery on decode failure, the
+    broker tries a permissive `Value`-level extraction first
+    and includes the topic only if it parses as a string.
+  - The rejection event is published via an internal
+    `publish_core_internal` path (pi-1 §15) that bypasses the
+    structural namespace re-check (the broker has already
+    constructed it correctly); it still runs grammar
+    revalidation and fan-out. Subscribers of `core.lifecycle.**`
+    receive it. **No recursion possible**: rejection-event
+    construction does not itself call rejection emission.
+  - `core.lifecycle.boot` schema: `{ "version": "<rafaello-core
+    version>", "plugin_count": <n> }`. Emitted by `Broker::new`
+    after registry init.
+- **B10.** **`Broker::new` defence-in-depth pattern validation**
+  (pi-1 §70, §99, §270). On construction, re-run
+  `validate_topic` against every `publish_topics` entry and
+  `validate_pattern` against every `subscribe_patterns` /
+  `auto_subscribes` entry across the supplied `BrokerAcl`. On
+  failure, return `Result<Self, BrokerError>` with `InvalidTopic`
+  / `InvalidPattern`. This catches hand-constructed `BrokerAcl`
+  values that bypassed `broker_acl::compile`.
 
 ### SP — plugin supervisor (`rafaello_core::supervisor`)
 
@@ -303,578 +489,908 @@ outpost proxy lifecycle (when proxy mode is configured), and
 the socketpair plumbing that authenticates the bus connection.
 
 - **SP1.** New module `rafaello_core::supervisor`. Public
-  surface:
-  - `pub struct PluginSupervisor`. Holds an `Arc<Broker>`
-    and an internal `Vec<SpawnedPlugin>` registry.
-  - `PluginSupervisor::new(broker: Arc<Broker>) -> Self`.
-  - `PluginSupervisor::spawn(&mut self, plan: &CompiledPlugin)
-    -> Result<&SpawnedPlugin, SpawnError>` — async (called
-    from inside a tokio runtime). Sequencing in §SP3.
-  - `PluginSupervisor::shutdown(self) -> Result<(),
-    SpawnError>` — sends SIGTERM to every spawned child,
-    waits up to a configurable grace period (default 5 s),
-    then SIGKILLs survivors. Drops the `Broker`'s registered
-    handles. m2 does NOT yet implement the per-plugin
-    `rfl plugin stop` CLI; this is a library function.
-  - `pub struct SpawnedPlugin { canonical: CanonicalId,
-    topic_id: String, child_pid: u32, peer: PeerHandle, ... }`
-    — opaque-ish view; the public fields are the ones tests
-    need (`canonical`, `topic_id`, `child_pid`, `peer`).
-- **SP2.** `SpawnError` typed enum:
-  - `NotInAcl(CanonicalId)` — broker rejected registration.
-  - `Lockin { canonical, source: lockin_sandbox::Error }` —
-    `SandboxBuilder::command(...)` failed (e.g. missing syd
-    on Linux).
-  - `Spawn { canonical, source: std::io::Error }` —
-    `SandboxedChild::spawn()` failed.
-  - `ProxyStart { canonical, source: std::io::Error }` —
-    `outpost_proxy::start` failed (port bind failure, etc.).
-  - `Socketpair { source: nix::Error }` —
-    `socketpair(AF_UNIX, SOCK_STREAM, 0)` failed.
-  - `FittingsBuild { canonical, source: fittings_core::Error }`
-    — failed to build the per-connection `Server` /
-    `Client` from the inherited fd.
-  - `EntryNotExecutable { canonical, path: PathBuf }` —
-    pre-spawn sanity check on `plan.entry_absolute`.
-- **SP3.** **Spawn sequencing.** This is the load-bearing
-  sequence. Order matters because the broker must accept the
-  fd before the child has a chance to publish:
-  1. Verify `plan.canonical` is in `broker.acl.plugins`;
-     else `SpawnError::NotInAcl`. (Defence in depth — same
-     check the broker repeats at registration. Up-front
-     check produces a clean error before any resources are
-     allocated.)
-  2. `socketpair(AF_UNIX, SOCK_STREAM, 0)` → `(core_fd,
-     child_fd)`. Both `OwnedFd`. CLOEXEC defaults are
-     irrelevant here because lockin's `inherit_fd` mechanism
-     deliberately survives the CLOEXEC sweep.
-  3. If `plan.network` is `NetworkPlan::Proxy { allow_hosts }`,
-     synthesise an `outpost::NetworkPolicy::from_allowed_hosts`
-     and call `outpost_proxy::start(policy).await` to obtain
-     a `ProxyHandle`. Capture `proxy.listen_addr().port()`.
-  4. Build `SandboxBuilder` from `plan.filesystem` /
-     `plan.network` / `plan.limits`:
-     - For each `read_paths` / `read_dirs` /
-       `write_paths` / `write_dirs` / `exec_paths` /
-       `exec_dirs` from `FilesystemPlan`, call the
-       matching `SandboxBuilder` method. Order does not
-       matter; the resulting policy is order-independent.
-     - `NetworkPlan::Deny` → `network_deny()`.
-     - `NetworkPlan::AllowAll` → `network_allow_all()`.
-       (Used only by `--i-know-what-im-doing` overrides;
-       m2 carries it because the plan supports it.)
-     - `NetworkPlan::Proxy { allow_hosts: _ }` →
-       `network_proxy(loopback_port)` from step 3.
-     - `LimitsPlan` → `max_cpu_time`, `max_open_files`,
-       `max_address_space` (only if `Some`), `max_processes`
-       (only if `Some`). `disable_core_dumps()` is set
-       unconditionally on lockin Linux (defensive default).
-       The other lockin builder knobs (`allow_kvm`,
-       `allow_interactive_tty`, `allow_non_pie_exec`,
-       `raw_seatbelt_rule`) are NOT exposed by `CompiledPlugin`
-       and the supervisor does not call them. This is
-       intentional: m2 ships the conservative default only;
-       knobs return when a v1 plugin needs them, with a
-       matching plan field added.
-  5. `inherit_fd_as(child_fd, RFL_BUS_FD_NUMBER)` —
-     **`RFL_BUS_FD_NUMBER` is fixed = `3`** in v1 (the first
-     fd above stdio). The plugin then learns the number from
-     the env var (§SP6). Choosing a fixed number simplifies
-     the lockin policy (no need to communicate the dynamic
-     fd number into the sandbox) and matches the convention
-     systemd / fittings-spawn use.
-  6. `SandboxBuilder::command(&plan.entry_absolute)` →
-     `SandboxedCommand`. If `plan.entry_absolute` is not an
-     executable file, return `SpawnError::EntryNotExecutable`
-     before consuming the builder. (Spot check; the kernel
-     would also reject at exec time, but a typed error
-     before the spawn is friendlier and easier to test.)
-  7. **Apply env to the prepared command** (after the
-     builder is consumed):
-     - `env_clear()` first — start from nothing.
-     - Inject the reserved vars: `RFL_BUS_FD = "3"`,
-       `RFL_PLUGIN = canonical.to_string()`. Per
-       security-RFC §5.5.1, these are NEVER user-supplied
-       (m1's env scrubber already strips them from `pass`).
-     - For each `plan.env.pass` key, look it up in the
-       parent process env (`std::env::var_os`), and forward
-       only if present. Missing keys are silently skipped
-       (m2 carries m1's behavior; presence is a deployment
-       concern, not a spawn-time error).
-     - For each `(k, v)` in `plan.env.set`, `env(k, v)`.
-     - Order: `pass` before `set`, so `set` overrides on
-       collision (matches m1 compile behavior).
-  8. `command.spawn()` → `SandboxedChild`. The child has
-     `child_fd` open at fd 3 and the env above; nothing
-     else.
-  9. **Drop `child_fd` on the parent side.** It was passed
-     by `inherit_fd_as` (which takes ownership of the fd
-     internally — verify against lockin's `OwnedFd` API).
-     The parent retains `core_fd` only.
-  10. Build a fittings transport from `core_fd` (an
-      `AsyncFd<UnixStream>` wrapper) and construct a
-      `Server` + `Client` over it (per §15.6 each peer
-      runs both halves).
-  11. Build the `Service` impl that handles inbound
-      `bus.publish` notifications by calling
-      `broker.handle_plugin_publish(&canonical, msg)`. The
-      Service belongs to the per-connection fittings server.
-  12. Call `broker.register_plugin(canonical, peer)` with
-      the `Server::peer()` handle for outbound `bus.event`
-      delivery. Hold the returned `RegisteredPlugin` guard
-      inside `SpawnedPlugin` so dropping a SpawnedPlugin
-      tears the broker registration down.
-  13. Spawn the fittings server's serve loop on the tokio
-      runtime; store its `JoinHandle` inside `SpawnedPlugin`
-      for shutdown.
-  14. Return `&SpawnedPlugin`.
-  Steps 1–9 are synchronous. Steps 3 + 10–13 use tokio.
-  Failure at any step before broker registration tears down
-  resources allocated by earlier steps (proxy handle, child
-  fd, child process via SIGKILL on `SandboxedChild::kill`).
-  This is the unwinding contract the negative-test matrix
-  exercises.
-- **SP4.** **No hardcoded bypass.** `PluginSupervisor::spawn`
-  has exactly one entry point. There is no `spawn_unsandboxed`,
-  no debug flag, no `RFL_INSECURE` env var. The fixture
-  plugin is spawned through the same path as any other
-  plugin — its lock entry is constructed by the test fixture
-  helper at the start of each integration test. This is the
-  invariant pi review must guard.
-- **SP5.** **Lifecycle ownership.** `Drop` for `SpawnedPlugin`
-  sends SIGTERM to the child (best-effort), drops the proxy
-  handle (which shuts the proxy down), drops the
-  `RegisteredPlugin` guard (which unregisters from the
-  broker), and aborts the serve-loop join handle. The
-  bookkeeping is RAII: tests can construct a `PluginSupervisor`,
-  spawn a fixture, drop the supervisor at end-of-test, and
-  not leak processes or proxies. `PluginSupervisor::shutdown`
-  is the cooperative-shutdown variant that waits for SIGTERM
-  to take effect before falling back to SIGKILL.
-- **SP6.** **Reserved env vars.** Per security-RFC §5.5.1, m2
-  injects `RFL_BUS_FD` and `RFL_PLUGIN`. m1's compile-time
-  env scrubber already rejects these in `env.set` /
-  `env.pass`. m2 adds a defence-in-depth assertion at spawn
-  time: if `plan.env.set` or `plan.env.pass` contains
-  `RFL_BUS_FD` / `RFL_PLUGIN` / `RFL_HELPER_FD` (the helper
-  var is reserved per §5.5.1 even though helpers are deferred
-  per row 26), `SpawnError::Internal { detail: "compile
-  output contained reserved env var X — V3 should have
-  rejected" }` returns. This is the m1-spot-check pattern
-  (compile.rs already does similar `ValidationNotRun`
-  asserts).
+  surface (pi-1 §17, §29, §100, §138, §368):
+  ```rust
+  pub struct PluginSupervisor { /* private */ }
+  
+  pub struct SupervisorConfig {
+      pub shutdown_grace: Duration,        // default 200ms
+      pub fittings_max_frame_bytes: usize, // default 1 MiB
+  }
+  impl Default for SupervisorConfig { ... }
+  
+  impl PluginSupervisor {
+      pub fn new(broker: Broker, config: SupervisorConfig) -> Self;
+      pub async fn spawn(&self, plan: &CompiledPlugin)
+          -> Result<SpawnHandle, SpawnError>;
+      pub async fn shutdown(self) -> ShutdownReport;
+  
+      // Test-only escape hatch — see §SP2 below.
+      #[cfg(any(test, feature = "test-fixture"))]
+      pub fn with_extra_service(broker: Broker,
+          config: SupervisorConfig,
+          factory: ExtraServiceFactory) -> Self;
+  }
+  
+  pub struct SpawnHandle { /* Arc-shared inside */ }
+  impl SpawnHandle {
+      pub fn canonical(&self) -> &CanonicalId;
+      pub fn topic_id(&self) -> &str;
+      pub fn child_pid(&self) -> u32;
+      pub fn peer(&self) -> &PeerHandle;
+      pub async fn wait(&self) -> std::io::Result<ExitStatus>;
+      pub fn try_wait(&self) -> std::io::Result<Option<ExitStatus>>;
+  }
+  
+  pub struct ShutdownReport {
+      pub clean: Vec<CanonicalId>,
+      pub forced: Vec<CanonicalId>,         // SIGKILLed after grace
+      pub failed: Vec<(CanonicalId, ShutdownFailure)>,
+  }
+  pub enum ShutdownFailure { SignalSendFailed(nix::errno::Errno),
+                             WaitFailed(std::io::Error) }
+  ```
+  - `&self` (not `&mut self`) on `spawn` so multi-spawn tests
+    just hold multiple `SpawnHandle`s without lifetime games
+    (pi-1 §17). Internal state guarded by `parking_lot::Mutex`.
+  - `SpawnHandle` is cloneable (`Arc`-backed); the *underlying
+    process* is killed when the **last** `SpawnHandle` clone
+    plus the supervisor's internal handle both drop (pi-1 §54,
+    §364, §510). Supervisor holds one clone in its registry;
+    callers hold others. RAII intent: dropping the supervisor
+    or removing from its registry triggers cleanup if nobody
+    else holds a handle.
+  - `wait` / `try_wait` give tests deterministic exit-status
+    access (pi-1 §18). Implementation uses a per-spawn reaper
+    task that owns the `SandboxedChild` (`tokio::task::spawn_blocking`
+    wrapping `child.wait()` since lockin's `SandboxedChild`
+    is `std::process::Child`-backed; the `lockin/tokio` feature
+    provides an async wrapper if available — pi-1 §165, §166).
+    The reaper publishes the `ExitStatus` to a broadcast
+    channel; `wait` resolves on the next observation.
+  - `shutdown(self)` is the cooperative path: SIGTERM every
+    live plugin; wait up to `config.shutdown_grace`; SIGKILL
+    survivors. Returns a `ShutdownReport` instead of a single
+    `Result` so per-plugin partial failures are visible
+    (pi-1 §102, §371). Consumes `self` deliberately — once
+    initiated, the supervisor is gone.
+  - `Drop` for `PluginSupervisor` is best-effort
+    **synchronous** SIGKILL only (pi-1 §28, §371): it cannot
+    `await`, so it sends SIGKILL via `nix::sys::signal::kill`
+    and lets the OS reap. Tests that want graceful shutdown
+    call `shutdown(self).await`.
+- **SP2.** **Test-only `ExtraServiceFactory` hook**
+  (pi-1 §117, §169, §428, §515–§518). The per-connection
+  fittings `Service` impl built by the supervisor handles
+  `bus.publish` (notification, `bus.publish` only). Tests need
+  to additionally serve `core.fixture.*` request methods so
+  the fixture's `peer.call` round-trips have a counterparty.
+  
+  Production `PluginSupervisor::new` builds a service that
+  returns `MethodNotFound` for anything other than
+  `bus.publish`. The test-only `with_extra_service`
+  constructor takes a factory:
+  ```rust
+  type ExtraServiceFactory =
+      Arc<dyn Fn(CanonicalId) -> Box<dyn Service + Send + Sync>
+          + Send + Sync>;
+  ```
+  The factory is invoked once per spawn; the resulting service
+  is composed via a small router: `bus.publish` →
+  broker; `core.fixture.*` → factory's service; everything
+  else → `MethodNotFound`.
+  
+  Gated `#[cfg(any(test, feature = "test-fixture"))]` so it
+  is unreachable from a release `rafaello-core`. m4 will need
+  a real "compose extra services" mechanism for renderer
+  invocations; m2 ships the test-only seed.
+- **SP3.** `SpawnError` typed enum (pi-1 §19, §28, §85,
+  §154, §475–§479):
+  ```rust
+  #[non_exhaustive]
+  pub enum SpawnError {
+      NotInAcl(CanonicalId),
+      AlreadyRegistered(CanonicalId),
+      InvalidPlan { canonical: CanonicalId, reason: InvalidPlanReason },
+      EntryNotExecutable { canonical: CanonicalId, path: PathBuf },
+      Lockin { canonical: CanonicalId, source: anyhow::Error },
+      Spawn { canonical: CanonicalId, source: std::io::Error },
+      ProxyStart { canonical: CanonicalId, source: std::io::Error },
+      Socketpair { canonical: CanonicalId, source: nix::errno::Errno },
+      FittingsBuild { canonical: CanonicalId, source: FittingsError },
+      ReservedEnvInPlan { canonical: CanonicalId, var: String },
+  }
+  
+  pub enum InvalidPlanReason {
+      NonAbsolutePath { kind: PathKind, path: PathBuf },
+      TopicIdMismatch { expected: String, got: String },
+      ReservedEnvVar { var: String },        // also covered by variant above for clarity
+      NetworkAllowHostsInvalid { source: outpost::DomainPatternParseError },
+  }
+  
+  pub enum PathKind { ReadPath, ReadDir, WritePath, WriteDir,
+                       ExecPath, ExecDir, EntryAbsolute }
+  ```
+  - `lockin` returns `anyhow::Result` from `command(...)`;
+    `Lockin.source` is `anyhow::Error` (pi-1 §19 #3, §155).
+  - `fittings_core::error::FittingsError` is the canonical
+    type (pi-1 §19 #4).
+  - `Socketpair.source` is `nix::errno::Errno` for nix 0.29
+    (pi-1 §154); verify at `commits.md` time.
+  - `Spawn.source` and `ProxyStart.source` are
+    `std::io::Error` (pi-1 §163, §483).
+- **SP4.** **Spawn sequencing.** All cheap validation runs
+  first; resource allocation only after the plan passes
+  defence-in-depth checks (pi-1 §156, §157, §266, §489). The
+  rewritten sequence:
+  
+  **Phase A — validate plan (synchronous, no resources):**
+  1. `broker.contains_plugin(&plan.canonical)` → false ⇒
+     `NotInAcl`.
+  2. Look up `plan.canonical` in `broker_acl.plugins`,
+     compare ACL's `topic_id` against `plan.topic_id`. Mismatch
+     ⇒ `InvalidPlan { reason: TopicIdMismatch }` (pi-1 §260,
+     §488).
+  3. For each path field in `plan.filesystem` and
+     `plan.entry_absolute`: assert absolute. Non-absolute ⇒
+     `InvalidPlan { reason: NonAbsolutePath }` (pi-1 §489).
+  4. Iterate `plan.env.set` keys + `plan.env.pass` entries:
+     if any equals `RFL_BUS_FD` / `RFL_PLUGIN` / `RFL_HELPER_FD`
+     / `RFL_PROJECT_ROOT` / `RFL_PRIVATE_STATE_DIR` ⇒
+     `ReservedEnvInPlan { var }` (pi-1 §157, §266, §319, §320).
+  5. If `plan.network` is `NetworkPlan::Proxy { allow_hosts }`,
+     dry-run `outpost::NetworkPolicy::from_allowed_hosts(...)`.
+     Failure ⇒ `InvalidPlan { reason: NetworkAllowHostsInvalid }`
+     (pi-1 §287, §490).
+  6. `metadata(&plan.entry_absolute).is_file() &&
+     metadata.permissions().mode() & 0o111 != 0`. Otherwise
+     ⇒ `EntryNotExecutable`. Symlinks are followed
+     (`fs::metadata` not `fs::symlink_metadata`) per pi-1
+     §113, §1653.
+  7. `broker.acl_entry_grants_publish_or_subscribe_or_provider_only(...)`:
+     m2 deliberately rejects spawning a plugin whose lock
+     marks it as a provider (`bindings.provider = true`),
+     because m2 has no provider authority wiring (pi-1 §10,
+     §132, §214). Return `InvalidPlan { reason: ProviderNotInM2 }`
+     with a clear message pointing to m4. (Adds a variant to
+     `InvalidPlanReason`.) The fixture lock NEVER sets
+     `provider = true`. m2 retrospective notes this as a
+     deliberate staged restriction.
+  
+  **Phase B — allocate child resources (async):**
+  8. `socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)` →
+     `(core_fd, child_fd)`, both `OwnedFd`. `SOCK_CLOEXEC`
+     prevents accidental leaks (pi-1 §31, §503).
+  9. If proxy mode: `outpost_proxy::start(policy).await` →
+     `ProxyHandle`. Capture `proxy.listen_addr().port()`.
+  10. Build `SandboxBuilder`. Methods consume `self` and
+      return `Self`; reassign in loops (pi-1 §161, §162):
+      ```rust
+      let mut builder = lockin::Sandbox::builder();
+      for p in &plan.filesystem.read_paths { builder = builder.read_path(p); }
+      // ... write_path, write_dir, read_dir, exec_path, exec_dir
+      builder = match &plan.network {
+          NetworkPlan::Deny => builder.network_deny(),
+          NetworkPlan::AllowAll => builder.network_allow_all(),
+          NetworkPlan::Proxy { .. } => builder.network_proxy(proxy_port),
+      };
+      builder = builder.max_cpu_time(plan.limits.max_cpu_time)
+                       .max_open_files(plan.limits.max_open_files)
+                       .disable_core_dumps();  // pi-1 §381 — call always
+      if let Some(n) = plan.limits.max_address_space {
+          builder = builder.max_address_space(n);
+      }
+      if let Some(n) = plan.limits.max_processes {
+          builder = builder.max_processes(n);
+      }
+      builder = builder.inherit_fd_as(child_fd, RFL_BUS_FD_NUMBER);
+      // child_fd MOVED into builder (OwnedFd consumed). No further drop.
+      ```
+      The `child_fd` `OwnedFd` is **moved** into the builder
+      and is no longer accessible by name (pi-1 §24, §375).
+  11. **Ensure private-state directory exists.** Compute the
+      private-state path from `plan.filesystem.write_dirs`
+      (m1 injected exactly one entry under
+      `<project>/.rafaello-plugin-data/<topic-id>/`; the
+      supervisor identifies it by the segment pattern). Create
+      it with `fs::create_dir_all` (pi-1 §278, §279, §283).
+      If creation fails ⇒ `Spawn { source: io::Error }` (the
+      spawn cannot proceed without the directory writable).
+      Also compute `RFL_PROJECT_ROOT` (the parent of
+      `.rafaello-plugin-data`) and `RFL_PRIVATE_STATE_DIR`
+      (the per-plugin path) for env injection in step 12.
+  12. `builder.command(&plan.entry_absolute).map_err(|e|
+      Lockin { source: e })?` → `SandboxedCommand`.
+      Apply env to the command (pi-1 §266, §1928):
+      ```rust
+      cmd.env_clear();                      // step (a)
+      cmd.env("TMPDIR", sandbox.private_tmp());  // restore lockin-private tmp (pi-1 §27, §19)
+      cmd.env("TMP", sandbox.private_tmp());
+      cmd.env("TEMP", sandbox.private_tmp());
+      // — note: SandboxedCommand exposes the private tmp via
+      //   the Sandbox handle returned by builder.command(); the
+      //   exact API access is verified at commits.md time.
+      for key in &plan.env.pass {           // step (b)
+          if let Some(val) = std::env::var_os(key) {
+              cmd.env(key, val);
+          }
+      }
+      for (k, v) in &plan.env.set { cmd.env(k, v); }  // step (c)
+      if let NetworkPlan::Proxy { .. } = plan.network {  // step (d)
+          let proxy_url = format!("http://127.0.0.1:{}", proxy_port);
+          for key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                      "http_proxy", "https_proxy", "all_proxy"] {
+              cmd.env(key, &proxy_url);
+          }
+          for key in ["NO_PROXY", "no_proxy"] {
+              cmd.env(key, "");  // empty ⇒ no host bypass
+          }
+      }
+      cmd.env("RFL_BUS_FD", RFL_BUS_FD_NUMBER.to_string());  // step (e), reserved LAST
+      cmd.env("RFL_PLUGIN", plan.canonical.to_string());
+      cmd.env("RFL_PROJECT_ROOT", project_root);
+      cmd.env("RFL_PRIVATE_STATE_DIR", private_state_dir);
+      cmd.current_dir(project_root);        // step (f), pi-1 §36, §882
+      ```
+      Reserved `RFL_*` vars go LAST so they unconditionally
+      override any prior collision (pi-1 §266, §267). The
+      Phase A SP4.4 check guarantees no collision in normal
+      flow; this is belt-and-suspenders.
+  13. `cmd.spawn().map_err(Spawn)?` → `SandboxedChild`.
+  14. **Build fittings transport.** Convert `core_fd` (still
+      owned by parent) to `tokio::net::UnixStream`:
+      ```rust
+      let std_stream = std::os::unix::net::UnixStream::from(core_fd);
+      std_stream.set_nonblocking(true)?;
+      let stream = tokio::net::UnixStream::from_std(std_stream)?;
+      let (reader, writer) = stream.into_split();
+      let transport = fittings_transport::StdioTransport::new(
+          reader, writer, config.fittings_max_frame_bytes);
+      ```
+      (pi-1 §4, §348, §349.)
+  15. Build the per-connection `Service` impl. In production
+      mode this is `BusPublishService { broker, canonical }`
+      handling `bus.publish` (notification only; rejecting
+      requests with `MethodNotFound`; pi-1 §49, §1051,
+      §1054). In test mode with `with_extra_service`, compose
+      via a router as in §SP2.
+  16. `let server = Server::new(service, transport);`
+      `let peer = server.peer();`
+  17. `let registered = broker.register_plugin(canonical.clone(),
+      peer.clone())?` — see pi-1 §88 on cloning. On failure
+      (`AlreadyRegistered`) ⇒ unwind: kill child via
+      SIGKILL, drop proxy. Map to
+      `SpawnError::AlreadyRegistered`.
+  18. Spawn the reaper task: `tokio::spawn(async move {
+      child.wait().await })` (using the lockin/tokio feature
+      or `spawn_blocking` fallback); it owns the
+      `SandboxedChild` and publishes `ExitStatus` to the
+      broadcast channel inside the `SpawnHandle`'s shared
+      state (pi-1 §367, §1903).
+  19. Spawn the serve loop: `tokio::spawn(server.serve())`.
+      Store its `JoinHandle` in the shared state for
+      shutdown (pi-1 §1903).
+  20. Insert the new `SpawnHandle` into supervisor's
+      registry. Return a clone.
+  
+  **Race contract (pi-1 §20, §339, §342, §343):** the broker
+  registration (step 17) happens **before** the serve loop
+  starts (step 19). Inbound `bus.publish` frames the child
+  may have written between socket creation (step 8) and
+  registration (step 17) sit in the kernel socket buffer
+  unread; the serve loop at step 19 begins draining them
+  only after registration is in place. So the broker is
+  guaranteed to see the canonical as registered when the
+  first publish is processed. The earlier round-1 sentence
+  "before the child has had a chance to publish" is corrected
+  to "before any inbound frame is processed". This is the
+  invariant tests rely on.
+- **SP5.** **Lifecycle.** Per-plugin teardown:
+  - On final `SpawnHandle` drop OR explicit per-plugin removal
+    OR supervisor shutdown:
+    1. Drop the `RegisteredPlugin` guard (broker stops
+       fan-out to this peer immediately).
+    2. SIGTERM the child via `nix::sys::signal::kill(Pid::from_raw(
+       pid as i32), Signal::SIGTERM)` — graceful path, called
+       only by `shutdown` (pi-1 §28, §721). Wait up to
+       `config.shutdown_grace` for the reaper task to observe
+       exit. On timeout, SIGKILL via the same nix call (Drop's
+       fallback path uses SIGKILL directly).
+    3. Drop the proxy `ProxyHandle` (pi-1 §103, §104, §540).
+       Proxy drop **after** child is dead so a misbehaving
+       plugin can't observe the proxy disappear and panic
+       differently. For SIGKILL'd children this race is
+       irrelevant (kill is instant).
+    4. Abort the serve-loop `JoinHandle` (drops the transport
+       and closes the core-side fd) (pi-1 §374).
+  - `Drop` on `PluginSupervisor` calls best-effort SIGKILL +
+    abort serve-loops on every handle in the registry,
+    synchronously. No grace period (Drop can't await).
+  - **Process tree (pi-1 §105, §327).** lockin/syd kills the
+    direct child only; descendants spawned via `exec_paths`
+    are not tracked by m2. The scope explicitly does NOT
+    claim closure of attack 6.9; the retrospective records
+    this gap. Tests do not assert subprocess containment.
+- **SP6.** **No hardcoded bypass (pi-1 §32, §57).** The only
+  spawn entry points are `PluginSupervisor::spawn` and (in
+  test/feature mode) `with_extra_service` which differs only
+  in service composition. There is no `spawn_unsandboxed`,
+  no `RFL_INSECURE` env override, no debug feature. The
+  fixture binary spawned through the same path as any other
+  plugin, including a copy of its binary into a temp
+  plugin_dir + manifest + openrpc.json + computed digests
+  (see §H below). pi review **must** continue to defend this
+  invariant on every round.
+- **SP7.** **`RFL_BUS_FD_NUMBER = 3`** is a `pub const` in
+  the supervisor module (pi-1 §499) so the fixture and tests
+  can reference it without magic numbers. fd 3 is the first
+  fd above stdio; lockin's `inherit_fd_as` maps the inherited
+  fd to this number deterministically (pi-1 §502, §1156).
 
-### F — fixture plugin (`rfl-bus-fixture` binary)
+### H — test harness (`rafaello-core/tests/common/m2_harness.rs`)
 
-Tiny standalone subprocess plugin used exclusively by the m2
-integration tests. It exercises the bus protocol from the
-plugin side, in the conditions a real plugin would face. It
-does NOT pretend to be a useful plugin; m4 ships the first
-real one (`read-file`).
+The test harness owns the non-trivial work of constructing
+plausible lock entries pointing at the fixture binary, since
+m1's compile contract requires entries inside the plugin_dir
+and digests recomputed against the on-disk content.
 
-- **F1.** Crate `rafaello/crates/fixtures/rfl-bus-fixture/`,
-  `publish = false`. Single binary entry point (`src/main.rs`).
-  Workspace member; built unconditionally so test binaries
-  can locate it via `env!("CARGO_BIN_EXE_rfl-bus-fixture")`.
-- **F2.** Behavior controlled by env vars the test sets via
-  `plan.env.set` (the fixture's lock entry). Each var enables
-  one assertion path:
-  - `RFL_FIXTURE_PUBLISH=plugin.<topic-id>.hello` — on
-    startup, send one `bus.publish` notification with that
-    topic and payload `{"msg": "hello"}`.
-  - `RFL_FIXTURE_PUBLISH_BAD_NAMESPACE=core.session.user_message`
-    — on startup, attempt one `bus.publish` on the named
-    forbidden topic; do not exit on error (the broker
-    silently rejects notifications since they have no
-    response; the assertion is on the broker side, not
-    here).
-  - `RFL_FIXTURE_RESPOND_PEER_CALL=core.fixture.echo` — register
-    a fittings `Service` impl that handles a `core.fixture.echo`
-    request by echoing the params back. Used by the
-    core→plugin `peer.call` round-trip test.
-  - `RFL_FIXTURE_CALL_CORE=core.fixture.ping` — on startup,
-    issue one `peer.call("core.fixture.ping", {"n": 42})`
-    and exit 0 on a successful response, exit 2 on error.
-    Used by the plugin→core `peer.call` round-trip test.
-  - `RFL_FIXTURE_OPEN_FILE=/etc/passwd` — on startup,
-    attempt `std::fs::read(path)`. Used by the
-    "lockin denies file open outside grant" negative.
-    The fixture does not assert; the test reads the
-    fixture's exit code (or watches stderr) and asserts
-    the lockin sandbox kept the file unreachable.
-  - `RFL_FIXTURE_PUBLISH_BAD_GRAMMAR=plugin.id_xxx.UPPERCASE`
-    — invalid topic grammar; broker rejects.
-  - `RFL_FIXTURE_PUBLISH_BAD_REPLY_TO=plugin.<topic-id>.tool_result`
-    — publishes a `tool_result` topic with no `in_reply_to`;
-    broker rejects with `MissingInReplyTo`.
-  - `RFL_FIXTURE_HOLD_OPEN=1` — after performing the above
-    behaviors, sleep until SIGTERM. Used by the lifecycle
-    test that asserts `Drop` of the supervisor kills the
-    child.
-  - **`RFL_FIXTURE_HOLD_OPEN` defaults to 0**; without it
-    the fixture exits 0 once the configured behaviours
-    complete. This keeps tests fast.
-- **F3.** Wire format: the fixture uses fittings-core to
-  build a `Client` (for outbound `bus.publish` and
-  `peer.call`) and a `Server` (for inbound
-  `core.fixture.*` requests). The bus fd is read from
-  `RFL_BUS_FD` (`u32`, parsed from env), wrapped in
-  `tokio::net::UnixStream::from_std(...)` after
-  `set_nonblocking(true)`. Both halves run on the same
-  fd via fittings' `PeerHandle`.
-- **F4.** No `tracing` setup, no logging output beyond
-  `eprintln!` for hard failures. The fixture is reaped
-  immediately by tests; verbose logging would clutter
-  test output.
+- **H1.** Module path: `rafaello/crates/rafaello-core/tests/common/m2_harness.rs`,
+  re-exported as `mod common; use common::m2_harness as h;` from
+  every integration test file. Sibling helpers `m1_*` from m1
+  remain untouched.
+- **H2.** `FixtureLockBuilder` (pi-1 §394, §402, §405):
+  - Constructs a `tempfile::TempDir` representing the project
+    root.
+  - For each fixture instance, creates a sub-directory
+    `<project>/plugins/<canonical-name>/` (the plugin_dir)
+    containing:
+    - A copy of the `rfl-bus-fixture` binary at `bin/fixture`
+      (preserving exec bit per pi-1 §398).
+    - A minimal `rafaello.toml` declaring `name = <canonical-name>`,
+      `version = ...`, `entry = "bin/fixture"`, plus the
+      `[provides]`, `[capabilities.default]`, `[bus]`, `[load]`
+      sections needed for the test scenario. Helper builders
+      (`with_publish_topic`, `with_subscribe_pattern`,
+      `with_env_set`, `with_read_dir`, etc.) construct the
+      manifest fields.
+    - A minimal valid `openrpc.json` sibling (m1 row 31; pi-1
+      §403). m2 carries a single canonical "no-op" sibling
+      shipped in `tests/common/empty_openrpc.json`; the
+      manifest never names methods (m1 row 31 dropped `[rpc]`),
+      so the same sibling works for every fixture.
+  - Programmatically constructs the `Lock` value with proper
+    `granted_capabilities`, `bindings`, recomputed `digest`
+    fields via m1's `digest::recompute_*` helpers (pi-1 §395,
+    §404). Does NOT copy code; uses the m1 public API.
+  - Runs `validate::lock(&lock, &path_context)` to satisfy
+    `compile_plugin`'s precondition (pi-1 §405, §406). Then
+    runs `compile_plugin` for each entry to produce
+    `CompiledPlugin` plans; runs `broker_acl::compile(&lock)`
+    for the `BrokerAcl`.
+  - Returns `(BrokerAcl, Vec<CompiledPlugin>, ProjectLayout)`.
+- **H3.** `Spawn` helper:
+  - Takes `BrokerAcl + Vec<CompiledPlugin> + Vec<ExtraService>`.
+  - Constructs `Broker::new(acl)?`, then
+    `PluginSupervisor::with_extra_service(broker.clone(), config,
+    factory)`. The factory map keys on canonical so per-fixture
+    extra services compose.
+  - For each plan, calls `supervisor.spawn(plan).await`. Returns
+    `(Broker, PluginSupervisor, Vec<SpawnHandle>)`.
+- **H4.** `Observer` helper (pi-1 §74, §170, §387, §417):
+  - Spawns one fixture instance configured as
+    `RFL_FIXTURE_MODE=observer` (which holds open until
+    SIGTERM and forwards every `bus.event` notification it
+    receives back to core via `peer.call("core.fixture.observed",
+    event)`). The harness registers a `core.fixture.observed`
+    extra service that pushes the event into a
+    `tokio::sync::mpsc::Receiver` returned to the test.
+  - Tests await events on this receiver with a bounded
+    timeout. Receivers are flushed on observer drop.
+  - Subscribe pattern: the observer's lock grants explicit
+    namespace patterns like `core.**`, `plugin.**`, etc. — NEVER
+    bare `**` (pi-1 §33, §463). Helper `Observer::watch_all`
+    builds the multi-namespace grant.
+- **H5.** **Readiness handshake** (pi-1 §21, §333, §385,
+  §386). To eliminate publish-before-observer-ready races,
+  every fixture mode that publishes on startup waits for an
+  inbound `core.fixture.start` request before publishing. The
+  harness calls
+  `spawn_handle.peer().call("core.fixture.start", ()).await`
+  on each publishing fixture **after** the observer fixture
+  is registered and its `core.fixture.observed` service is
+  installed. The fixture's `start` handler returns immediately;
+  the harness then awaits the expected events on the observer
+  channel. This makes every test schedule-deterministic.
 
-### I — integration test suite (`rafaello-core/tests/`)
+### F — fixture binary (`rafaello-core` `[[bin]] rfl-bus-fixture`)
 
-Every test lives under `rafaello/crates/rafaello-core/tests/`
-unless otherwise noted. Each test is one `#[tokio::test(flavor
-= "multi_thread")]` (the rt-multi-thread flavor matches the
-real `rfl chat` runtime; tests must be deterministic across
-schedules).
+Test-only subprocess binary inside `rafaello-core`. Behaviour
+is fully controlled by env vars set by the harness via
+`plan.env.set` (which the supervisor honours in SP4 step 12).
 
-Test fixtures (lock + project layout) are constructed
-programmatically with `tempfile::tempdir()` per the m1 pattern
-— no on-disk fixtures directory.
+- **F1.** Single binary entry point at
+  `crates/rafaello-core/src/bin/rfl_bus_fixture.rs`. Built
+  only with `--features test-fixture`. Depends on
+  `fittings-core`, `fittings-client`, `fittings-transport`,
+  `tokio`, `serde_json`, `async-trait` from
+  `rafaello-core`'s test/feature deps (pi-1 §114).
+- **F2.** **Mode dispatch via `RFL_FIXTURE_MODE`** (replaces
+  the round-1 grab-bag of independent env vars per pi-1 §412,
+  §415–§418):
+  - `publish_one` — wait for `core.fixture.start`, then
+    publish one `bus.publish` notification with topic from
+    `RFL_FIXTURE_TOPIC` and payload from
+    `RFL_FIXTURE_PAYLOAD_JSON` (parsed); exit 0.
+  - `publish_bad_namespace` — wait for `start`, publish
+    `core.session.user_message` (or `RFL_FIXTURE_TOPIC` if
+    set); exit 0 regardless of broker rejection.
+  - `publish_bad_grammar` — wait for `start`, publish topic
+    `plugin.<own-topic-id>.UPPERCASE` (own topic-id taken
+    from `RFL_PLUGIN`-derived hash provided to fixture via
+    `RFL_TOPIC_ID` reserved env var the supervisor now also
+    injects — see SP4 update below); exit 0.
+  - `publish_outside_grant` — wait for `start`, publish
+    `plugin.<own-topic-id>.ungranted`; exit 0.
+  - `publish_bad_in_reply_to_missing` — wait for `start`,
+    publish `plugin.<own-topic-id>.tool_result` with no
+    `in_reply_to` field; exit 0.
+  - `publish_bad_in_reply_to_empty` — same with `in_reply_to:
+    []`; exit 0.
+  - `publish_bad_in_reply_to_multiple` — same with
+    `in_reply_to: ["a", "b"]`; exit 0.
+  - `respond_peer_call` — register a fittings `Service` impl
+    handling:
+    - `core.fixture.start` → empty response.
+    - `core.fixture.echo` → echoes params.
+    - `core.fixture.dump_env` → returns
+      `{ "env": { "<key>": "<value>", ... } }` over **only the
+      keys allow-listed via `RFL_FIXTURE_ENV_KEYS`** (comma-
+      separated). Includes `RFL_BUS_FD`, `RFL_PLUGIN`, etc.
+      when listed.
+    - `core.fixture.write_private_state` → writes
+      `{ marker: <random> }` to `<RFL_PRIVATE_STATE_DIR>/marker`,
+      returns `{ "wrote": "<absolute-path>" }`.
+    - `core.fixture.report_open_result` → attempts
+      `std::fs::read(path)` for `RFL_FIXTURE_OPEN_PATH`,
+      returns `{ "ok": true }` on success or `{ "ok": false,
+      "errno": <int> }` on failure (pi-1 §37, §895).
+    - `core.fixture.try_write_path` → attempts
+      `std::fs::write(path, b"x")` for
+      `RFL_FIXTURE_WRITE_PATH`, returns errno on failure
+      (used by lockin write-denial test).
+    - Sleeps until SIGTERM. **Holds open by default**
+      (pi-1 §415, §417 — service modes always hold).
+  - `call_core_then_exit` — wait for `start`, call
+    `peer.call("core.fixture.ping", { "n": 42 })` once; exit
+    0 on response, exit 2 on error.
+  - `observer` — register `core.fixture.observed`-pushing
+    notification handler (`Client::with_notification_handler`,
+    pi-1 §170, §172, §2015): on every inbound `bus.event`
+    notification, call `peer.call("core.fixture.observed",
+    event_payload)` to forward upstream. Wait for `start`
+    (no-op other than ack), then sleep until SIGTERM.
+- **F3.** **Wire setup.** Parse `RFL_BUS_FD` as `RawFd`
+  (negative ⇒ exit 3, pi-1 §500). Convert exactly once via
+  `OwnedFd::from_raw_fd(fd)` inside an `unsafe` block (pi-1
+  §59, §1166). Wrap as `std::os::unix::net::UnixStream::from(owned)`,
+  `set_nonblocking(true)`, then `tokio::net::UnixStream::from_std(...)`.
+  Split into `(reader, writer)`; build
+  `fittings_transport::StdioTransport::new(reader, writer,
+  1 << 20)`; build `Client::connect(transport)` (pi-1 §346 —
+  use the connector form fittings exposes; m2 picks the
+  `Client::from_transport` shape if available, otherwise
+  `Connector` impl wrapping the prepared transport). Register
+  service via `with_service` for inbound requests in modes
+  that need it; register notification handler for `observer`
+  mode. Use `Client::peer()` for outbound.
+- **F4.** Logging: `eprintln!` only for hard failures (parse,
+  fd setup). No `tracing` setup (pi-1 §198 — keep fixture
+  output clean).
+- **F5.** **Reserved `RFL_TOPIC_ID` and `RFL_PRIVATE_STATE_DIR`
+  env vars** (pi-1 §35, §283, §285) join `RFL_BUS_FD` and
+  `RFL_PLUGIN` in the reserved set:
+  - `RFL_TOPIC_ID` — the hashed topic-id form derived from
+    canonical at compile time. Fixture uses it to construct
+    its own `plugin.<id>.*` topics without re-implementing
+    base32 hashing.
+  - `RFL_PRIVATE_STATE_DIR` — absolute path to the per-plugin
+    private state dir. Fixture writes there in the
+    `write_private_state` mode.
+  - `RFL_PROJECT_ROOT` — the project root (parent of
+    `.rafaello-plugin-data`). Useful for tests that read
+    relative paths.
+  All three added to the SP4.4 reserved-env-in-plan rejection
+  set so plugin authors can't accidentally collide.
 
-A small shared helper module
-`rafaello/crates/rafaello-core/tests/common/m2_harness.rs`
-(carved next to m1's `common/`) provides:
-- `harness::FixtureLockBuilder` — builds a one-plugin or
-  multi-plugin lock entry pointing at the
-  `rfl-bus-fixture` binary path; wraps `compile_plugin` and
-  `broker_acl::compile`.
-- `harness::Spawn` — spawns a `PluginSupervisor` with the
-  configured fixture(s), returns handles + a one-shot
-  receiver for inbound `bus.event` deliveries from a
-  test-side subscriber plugin (the harness adds a second
-  fixture instance that subscribes to `**` for observation
-  purposes).
+### I — integration test suite
 
-The harness IS test code; it does not leak into
-`rafaello-core`'s public API.
+Tests live under `rafaello/crates/rafaello-core/tests/`. Most
+are `#[tokio::test(flavor = "multi_thread")]`; the pure
+pattern-matcher tests are plain `#[test]` (pi-1 §431). Tests
+needing parent env mutation use
+`#[serial_test::serial(env)]`. Tests needing process/fd
+inspection use `#[serial_test::serial(proc)]`. Each test uses
+`tempfile::tempdir()` for transient state (m1 pattern).
 
-### Demo bar — see "Demo bar" section below.
+All spawn-bearing tests are
+`#[cfg(target_os = "linux")]` (pi-1 §220, §221). The pure
+unit tests run on every platform.
+
+#### Positive integration tests
+
+| Test file | Exercises |
+|-----------|-----------|
+| `bus_pattern_matches.rs` | Re-exports m1's `pattern_matches_topic` cases; adds zero-trailing negatives (`core.session.**` does NOT match `core.session`; `plugin.id_x.**` does NOT match `plugin.id_x`) per pi-1 §91. Pure unit test. |
+| `broker_new_emits_boot_event.rs` | `Broker::new(acl)` followed by `register_plugin(observer)` then re-emit of `core.lifecycle.boot` (since the observer wasn't registered when `new` fired, the event is re-published explicitly by an `init_post_register` API call OR the test asserts the `boot` event fires on the **first** subsequent register — pi-1 §45 + §99). Final wording picked at commits.md. Asserts schema `{ version, plugin_count }`. |
+| `broker_register_unregister.rs` | Register canonical present in ACL → ok; drop guard → `contains_plugin` still true (canonical stays in ACL) but `handle_plugin_publish` returns `NotRegistered` (pi-1 §11, §139, §185). |
+| `broker_publish_core_happy_path.rs` | `publish_core("core.lifecycle.boot", payload)` with one registered observer subscribed to `core.lifecycle.**` → observer's `peer` receives one `bus.event` whose `publisher = PublisherIdentity::Core`. |
+| `broker_publish_core_invalid_topic_rejected.rs` | `publish_core("plugin.x.y", ...)` → `BrokerError::PublishOnReservedNamespace` (core publishing on a non-core namespace). `publish_core("core.Bad", ...)` → `InvalidTopic` (pi-1 §71, §1278). `publish_core("evil.foo", ...)` → `UnknownNamespace`. |
+| `bus_event_schema_round_trip.rs` | Build a `BusEvent` with each `PublisherIdentity` variant; serialise with `serde_json`; deserialise back into a permissive test struct; assert all fields preserved. Verifies the wire shape m4 will need. |
+| `supervisor_spawn_fixture_happy_path.rs` | Headline test. Two fixtures: A in `publish_one` mode publishing `plugin.<A>.hello` with payload `{"msg":"hi"}`; B in `observer` mode subscribed to `plugin.**`. Harness handshake (§H5). Observer receives the event; assertion: `event.topic == "plugin.<A>.hello"`, `event.payload == {"msg":"hi"}`, `event.publisher == Plugin { canonical: A, topic_id: <A's id> }`. |
+| `supervisor_peer_call_core_to_plugin.rs` | A in `respond_peer_call` mode. Test calls `spawn_a.peer().call("core.fixture.echo", json!({"x":1})).await` → response `{"x":1}`. |
+| `supervisor_peer_call_plugin_to_core.rs` | A in `call_core_then_exit` mode. Harness extra service registers `core.fixture.ping` (echoes params + 1). Wait for fixture exit; `wait().await?.code() == Some(0)` (pi-1 §18, §117). |
+| `supervisor_bus_publish_round_trip_two_plugins.rs` | A in `publish_one`, B with subscribe grant on `plugin.<A>.greet`. B in observer-like mode forwards via `core.fixture.observed` extra service. After handshake, B receives A's event. Asserts cross-plugin fan-out via lock grants. |
+| `supervisor_lifecycle_drop_kills_child.rs` | Spawn A in `respond_peer_call` (holds open). Drop the `SpawnHandle` and the supervisor's internal copy by calling `shutdown(self).await`. After completion, `shutdown_report.clean.contains(A)`. The reaper task observed the exit; the test does NOT use `kill -0` (pi-1 §367, §731). |
+| `supervisor_proxy_starts_and_env_injected.rs` | A in `respond_peer_call` with `NetworkPlan::Proxy { allow_hosts: ["example.com"] }`. Harness calls `core.fixture.dump_env` requesting `RFL_FIXTURE_ENV_KEYS=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,ALL_PROXY,RFL_BUS_FD`. Assertions: `HTTP_PROXY` is `http://127.0.0.1:<port>`; same for `HTTPS_PROXY`/`ALL_PROXY` + lowercase; `NO_PROXY = ""`; `RFL_BUS_FD = "3"`. The proxy port is non-zero and `<= u16::MAX`. (pi-1 §26, §107, §108, §325, §496, §542.) |
+| `supervisor_env_pass_set_applied.rs` | `#[serial(env)]`. Plan with `env.pass = ["FAKE_PUBLIC_ENV"]` and `env.set = {"FOO": "bar"}` (using a non-secret-pattern key per pi-1 §409). Test sets `FAKE_PUBLIC_ENV=abc` in parent env, dumps from fixture, asserts both keys present plus reserved `RFL_*`. |
+| `supervisor_env_set_overrides_pass.rs` | `#[serial(env)]`. Plan with `env.pass = ["FOO_VAR"]` and `env.set = {"FOO_VAR": "set-wins"}`. Parent has `FOO_VAR=pass-loses`. Dump: `FOO_VAR == "set-wins"` (pi-1 §321). |
+| `supervisor_env_clear_strips_unrelated.rs` | `#[serial(env)]`. Parent has `RANDOM_PARENT_VAR=secret` (not in pass/set). Dump asserts `RANDOM_PARENT_VAR` is absent (pi-1 §323). |
+| `supervisor_private_state_dir_writable.rs` | A in `respond_peer_call`. Harness calls `core.fixture.write_private_state`; fixture writes to `<RFL_PRIVATE_STATE_DIR>/marker`; test verifies file exists and the directory path includes the topic-id form per row 37 (pi-1 §35, §286, §326). The supervisor created the dir at SP4 step 11 before spawn. |
+| `supervisor_taint_round_trip.rs` | A in `publish_one` with payload that includes `taint: [{"source": "test", "detail": "x"}]` in the `bus.publish` params. Observer receives event; `event.taint == Some(...)` byte-equal (pi-1 §308, §356). |
+
+#### Negative integration tests
+
+| Test file | Asserts |
+|-----------|---------|
+| `broker_publish_unknown_namespace_rejected.rs` | `handle_plugin_publish` with topic `"evil.foo"` from a registered plugin → `UnknownNamespace`. Also test `"random.thing.bar"` (pi-1 §7, §305). |
+| `broker_publish_short_plugin_topic_rejected.rs` | Topics `"plugin.<own-id>"` and `"plugin.<other-id>"` (two-segment) → `PublishOnReservedNamespace` (pi-1 §8, §306). |
+| `broker_publish_core_namespace_rejected.rs` | Plugin publishes `"core.session.user_message"` → `PublishOnReservedNamespace`. Asserts `core.lifecycle.publish_rejected` event fires with `code: "publish_on_reserved_namespace"`. |
+| `broker_publish_provider_namespace_rejected.rs` | Plugin publishes `"provider.openai.tool_request"` → `PublishOnReservedNamespace` (m2 staged: even provider-bound plugins are rejected because m2's spawn refuses to register provider plugins per SP4 #7; pi-1 §10). |
+| `broker_publish_frontend_namespace_rejected.rs` | Plugin publishes `"frontend.tui.confirm_answer"` → `PublishOnReservedNamespace`. |
+| `broker_publish_other_plugin_namespace_rejected.rs` | Plugin A publishes `"plugin.<B-topic-id>.tool_result"` → `PublishOnReservedNamespace`. |
+| `broker_publish_outside_grant_rejected.rs` | Plugin A publishes `"plugin.<A-topic-id>.ungranted"` (A's grant lists only `"plugin.<A>.granted"`) → `PublishOutsideGrant`. |
+| `broker_publish_invalid_topic_grammar_rejected.rs` | Three sub-cases (each a separate `#[test]` in one file): `"plugin.<id>.UPPERCASE"`, `"plugin.<id>.has spaces"`, `""` → `InvalidTopic` with the respective `ValidationError`. |
+| `broker_publish_extra_field_rejected.rs` | Service receives `bus.publish` notification whose `params` JSON has an extra unknown key → `InvalidPayload`. Test goes through the per-connection Service so decoding actually happens (pi-1 §314). |
+| `broker_tool_result_in_reply_to_missing_rejected.rs` | Plugin publishes `plugin.<id>.tool_result` with no `in_reply_to` → `InvalidInReplyTo { reason: Missing }`. |
+| `broker_tool_result_in_reply_to_empty_rejected.rs` | Same with `in_reply_to: []` → `InvalidInReplyTo { reason: EmptyArray }`. |
+| `broker_tool_result_in_reply_to_multiple_rejected.rs` | Same with two ids → `InvalidInReplyTo { reason: UnexpectedMultiple }`. |
+| `broker_rpc_reply_in_reply_to_missing_rejected.rs` | Same shape for `plugin.<id>.rpc_reply`. |
+| `broker_publishing_plugin_excluded_from_own_fanout.rs` | Plugin A's grant subscribes to `plugin.<A-topic-id>.**` AND publishes `plugin.<A-topic-id>.foo`. The publishing plugin does NOT receive the event back; observer plugin B subscribed to the same pattern DOES (pi-1 §245, §247). |
+| `broker_unsubscribed_plugin_does_not_receive.rs` | A publishes `plugin.<A>.foo`; B subscribed only to `core.**` does NOT receive it (pi-1 §298, §299). |
+| `broker_tool_result_not_fanned_out_to_other_plugins.rs` | A publishes `plugin.<A>.tool_result` with valid `in_reply_to`; B subscribed to `plugin.**` does NOT receive it (the result-routing protection of §B7; pi-1 §14). Asserts the `tracing::debug!` message via `traced_test`. |
+| `broker_register_canonical_not_in_acl_rejected.rs` | `register_plugin(canonical_not_in_acl, peer)` → `BrokerError::NotInAcl` (pi-1 §302). |
+| `broker_register_duplicate_rejected.rs` | Register A; register A again → `AlreadyRegistered` (pi-1 §301). |
+| `broker_invalid_acl_rejected_at_construction.rs` | Hand-build a `BrokerAcl` containing an invalid pattern (e.g. `"**"`); `Broker::new(acl)` returns `Err(InvalidPattern)` (pi-1 §70, §270). |
+| `supervisor_spawn_canonical_not_in_acl_refused.rs` | Hand-mutate a `CompiledPlugin.canonical` to a value not in the broker's ACL. `spawn` → `SpawnError::NotInAcl`. No socketpair, no proxy started (verified by counting `outpost_proxy` start calls via dependency-injection in test mode — see §H6 below). |
+| `supervisor_spawn_topic_id_mismatch_refused.rs` | Hand-mutate `CompiledPlugin.topic_id` to a wrong value. → `SpawnError::InvalidPlan { reason: TopicIdMismatch }`. |
+| `supervisor_spawn_relative_path_refused.rs` | Hand-mutate `CompiledPlugin.entry_absolute` to a relative path. → `SpawnError::InvalidPlan { reason: NonAbsolutePath { kind: EntryAbsolute, .. } }` (pi-1 §489). |
+| `supervisor_spawn_entry_not_executable_refused.rs` | Plan points to a regular file with no exec bit (created by harness via `chmod 0644`). → `SpawnError::EntryNotExecutable`. Phase A sequencing means no proxy started yet (pi-1 §156). |
+| `supervisor_spawn_reserved_env_in_set_refused.rs` | Plan with `env.set = {"RFL_BUS_FD": "99"}`. → `SpawnError::ReservedEnvInPlan { var: "RFL_BUS_FD" }`. |
+| `supervisor_spawn_reserved_env_in_pass_refused.rs` | Plan with `env.pass = ["RFL_PLUGIN"]`. → `SpawnError::ReservedEnvInPlan { var: "RFL_PLUGIN" }`. |
+| `supervisor_spawn_reserved_env_helper_refused.rs` | Plan with `env.set = {"RFL_HELPER_FD": "..."}`. → `SpawnError::ReservedEnvInPlan { var: "RFL_HELPER_FD" }` (defence in depth even though m1 doesn't yet reject this — pi-1 §23, §270). |
+| `supervisor_spawn_provider_lock_refused.rs` | Lock has `bindings.provider = true`. `spawn` → `SpawnError::InvalidPlan { reason: ProviderNotInM2 }` (pi-1 §10, §132). |
+| `supervisor_spawn_duplicate_canonical_refused.rs` | Spawn A successfully; attempt to spawn A again → `SpawnError::AlreadyRegistered`. The second attempt's allocated socketpair, proxy (if any), and child are torn down before return. Verified via `harness::TestHooks::*_drop_count()` (see §H6). |
+| `supervisor_lockin_denies_outside_grant_read.rs` | A in `respond_peer_call` with grant `read_dirs = [<project-root>]` only. `RFL_FIXTURE_OPEN_PATH=/etc/passwd`. Test calls `core.fixture.report_open_result`; assertion: `ok == false`, `errno` indicates kernel denial (typically `EPERM` per syd's policy — exact errno asserted with `matches!` not `==` since lockin's specific errno mapping may differ across syd versions). |
+| `supervisor_lockin_denies_outside_grant_write.rs` | Same shape; A's `write_dirs = [<private-state>]` only. `RFL_FIXTURE_WRITE_PATH=<project-root>/forbidden`. Calls `core.fixture.try_write_path`; asserts denial; verifies `<project-root>/forbidden` does not exist after. |
+
+#### Manual validation in `manual-validation.md`
+
+Path: `rafaello/plans/milestones/m2-broker-spawn/manual-validation.md`
+(pi-1 §194). Captured items:
+
+- `nix develop --impure --command cargo test --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --features test-fixture`
+  green inside the devshell on Linux. (Tests gated on
+  `target_os = "linux"` skip outside.)
+- `nix develop --impure --command cargo test --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --features test-fixture
+  -- --test supervisor_spawn_fixture_happy_path --nocapture`
+  with `RUST_LOG=rafaello_core=debug` set, showing the broker
+  registration trace + fan-out. Test uses `tracing-subscriber`
+  init via `tracing_test::traced_test` or explicit setup
+  (pi-1 §197).
+- `find rafaello/crates/rafaello-core/src -name '*.rs' | sort`
+  showing the new modules `bus.rs`, `bus/publish_msg.rs`,
+  `supervisor.rs`, `supervisor/lifecycle.rs`,
+  `bin/rfl_bus_fixture.rs`, plus the additions to `error.rs`
+  / `lib.rs`.
+- `ls /proc/<fixture-pid>/fd/` snapshot during a
+  `respond_peer_call` fixture run. Documented invariants
+  (NOT exact-count assertions per pi-1 §32, §553):
+  - fd 3 exists and is `socket:[...]`.
+  - The parent (`cargo test` process) does not have a
+    duplicate of the same socket inode in its `/proc/self/fd`
+    snapshot (i.e. the child-side half of the socketpair
+    is not leaked back into the parent).
+  - The Tokio-runtime fds present (eventfd, epoll) are
+    expected; not enumerated.
+- `nix develop --impure --command cargo doc --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --no-deps` warning-free
+  (pi-1 §196, §223).
+- `nix develop --impure --command cargo build --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --features test-fixture
+  --bin rfl-bus-fixture` green, demonstrating the fixture
+  binary builds (pi-1 §224).
+
+### H6 — test-only supervisor hooks
+
+Pi-1 §107, §191, §552 flagged the proxy/spawn-call-count
+assertions as unobservable through the public API. m2 adds a
+`#[cfg(any(test, feature = "test-fixture"))]` `TestHooks` API
+exposing:
+
+- `outpost_starts() -> usize` — count of `outpost_proxy::start`
+  invocations across the supervisor's lifetime.
+- `socketpair_creates() -> usize`.
+- `child_spawns() -> usize`.
+
+The supervisor wraps these resource allocations in
+`#[cfg]`-gated counters (`AtomicUsize`). Negative tests assert
+counters increase exactly the expected amount across a failed
+spawn. Production builds compile out the counters entirely.
 
 ### E — error-surface additions
 
 m2 grows `rafaello_core::error`:
-- `pub enum BrokerError { ... }` (variants enumerated in §B2).
-- `pub enum SpawnError { ... }` (variants enumerated in §SP2).
-- Both re-exported from `lib.rs`. Both `#[non_exhaustive]`,
-  `thiserror`-derived. The top-level `Error` enum gains
-  `#[from]` arms.
+
+- `pub enum BrokerError { ... }` (variants enumerated in §B2),
+  `#[non_exhaustive]`, `thiserror`-derived, `Debug + Clone +
+  PartialEq`.
+- `pub enum SpawnError { ... }` (variants enumerated in §SP3),
+  `#[non_exhaustive]`, `thiserror`-derived. Source-error
+  variants are NOT `Clone`/`PartialEq` (pi-1 §126); tests
+  use `matches!` on the variant.
+- `pub enum InvalidPlanReason { ... }` companion enum.
+- Both error types re-exported from `lib.rs`. Top-level
+  `Error` enum gains `#[from]` arms.
 
 ## Out of scope
 
 The following are explicitly NOT in m2 and are not allowed to
-sneak in via "while I'm here" implementation drift:
+sneak in via "while I'm here" implementation drift. Items are
+mapped to the milestone or RFC that owns them.
 
-- **`rfl chat` / any CLI surface.** m3 ships the binary glue
-  that constructs a `PluginSupervisor` from `rafaello.lock`.
-  m2's only entry points are library functions called from
-  tests.
-- **Frontends.** `frontend.<attach-id>.*` namespace is
-  reserved (`decisions.md` row 27); m2 has no frontend
-  registration path, no UDS attach socket, no
-  `frontend.hello`. The TUI is m3.
+- **`rfl chat` / any CLI surface.** m3.
+- **Frontends.** No registration path, no UDS attach socket,
+  no `frontend.hello`. m3.
 - **Provider plugins.** `provider.<provider-id>.*` namespace
-  is reserved by name; m2's broker rejects publishes on
-  it (a plugin's `bindings.provider = true` does NOT grant
-  `provider.*` publish authority — m2 ignores `provider`
-  bindings entirely; m4 wires the provider role into
-  publish authority). The fixture plugin is NOT a provider.
+  is reserved by name; m2's spawn explicitly refuses lock
+  entries with `bindings.provider = true` (`SpawnError::InvalidPlan
+  { reason: ProviderNotInM2 }`). m4 wires the provider role
+  into broker publish authority.
 - **Tool dispatch.** No `core.session.tool_request` →
-  `plugin.<id>.tool_request` routing. The
-  `auto_subscribes` field from m1's `BrokerAcl` is honoured
-  for fan-out (so the routing path will work in m4 without
-  m2 retro-fits) but no tool is registered, no provider
-  proposes one.
-- **Sink confirmation, `user_grants`, taint synthesis.**
-  m4 (taint envelope + read-only tool) and m5 (sinks +
-  confirmation + `user_grants`) own these.
-- **Core re-emission of `provider.*` → `core.session.*`.**
-  No provider, no re-emission.
-- **Session persistence.** No SQLite, no entry log. m3
-  territory.
-- **Renderer model.** No render tree, no `Entry`. m3.
+  `plugin.<id>.tool_request` routing. The `auto_subscribes`
+  field from m1's `BrokerAcl` is honoured for fan-out; no tool
+  is registered, no provider proposes one.
+- **Sink confirmation, `user_grants`, taint synthesis, taint
+  superset enforcement.** m4 + m5.
+- **Core re-emission of `provider.*` / `plugin.<id>.tool_result`
+  → `core.session.*`.** m4. The §B7 result-routing
+  protection (no fan-out for `plugin.<id>.tool_result` /
+  `plugin.<id>.rpc_reply`) is the m2 placeholder that
+  preserves the security RFC §5.4.1 invariant until m4 wires
+  re-emission.
+- **`request_id` field on bus events.** m4 introduces it
+  alongside tool dispatch (pi-1 §41, §145). m2 retrospective
+  records the staging.
+- **Session persistence.** m3.
+- **Renderer model.** m3.
 - **`bus.subscribe` runtime request.** Subscribes are derived
-  entirely from the lock at registration time. The
-  overview-§4.1 sketch of a runtime `bus.subscribe` request
-  is reserved for future need; m2 does not need it (no
-  dynamic subscription change in v1's design — the lock IS
-  the ACL).
+  entirely from the lock at registration time. m2's bus
+  service rejects `bus.subscribe` requests with
+  `MethodNotFound` for now; pi-1 §241 — a dedicated rejection
+  test is not added (the generic `MethodNotFound` path is
+  fittings-shipped behavior).
 - **Helper plugins.** `helper_for` / `RFL_HELPER_FD` deferred
-  to v2 (`decisions.md` row 26); m1 already rejects them at
-  parse time. m2 must not add a spawn path for them. SP6's
-  `RFL_HELPER_FD` reserved-name check is *defence in depth*
-  — the spawn path itself does not consult the var.
-- **Eager / boot / event / command / kind lazy-load
-  triggers.** m2's supervisor exposes the synchronous
-  `spawn(plan)` primitive; the lazy-load orchestrator that
-  reads `LoadPolicy` and decides when to spawn lives in m3
-  (when there's a session loop to drive it). m2 spawns from
-  test code only.
-- **macOS support.** The lockin sandbox compiles on macOS,
-  but m2's integration tests rely on Linux specifics (syd
-  for lockin, `/etc/passwd` as a denied-read target). The
-  test suite runs Linux-only; macOS CI is skipped for m2
-  with a `#[cfg_attr(target_os = "macos", ignore)]` on each
-  spawn-bearing integration test. m6 polish revisits.
-- **Cross-plugin RPC routing (`plugin.<a>.rpc_call.<b>` etc.).**
-  Not in v1's design; m2 doesn't need it. The broker's
-  publisher-vs-namespace rule already prevents the
-  cross-plugin masquerade case (B3 #3).
-- **`core.lifecycle.*` rejection events.** Per security-RFC
-  §5.4.1 broker rejection should publish
-  `core.lifecycle.tool_result_rejected` etc. m2 emits a
-  single event class — `core.lifecycle.publish_rejected`
-  with `{ canonical, topic, reason }` — when the broker
-  rejects a plugin publish. The full lifecycle vocabulary
-  (per-event-class rejection topics) is m4 territory once
-  there are more event classes.
-- **`PeerHandle::call` correlation across plugin shutdown.**
-  m2's lifecycle drops the `PeerHandle` on plugin exit; any
-  in-flight `peer.call` resolves with
-  `FittingsError::Transport` per fittings' contract. m2
-  does not ship a higher-level "the plugin died, retry the
-  call" abstraction.
-
-## Demo bar
-
-Tests live under `rafaello/crates/rafaello-core/tests/`. Every
-test is `#[tokio::test(flavor = "multi_thread")]` and uses
-`tempfile` for transient state. Tests are Linux-only as noted
-above.
-
-### Positive integration tests
-
-| Test file | Exercises |
-|-----------|-----------|
-| `bus_pattern_matches.rs` | Unit suite for `validate::pattern::matches` against the §5.1 example matrix (`*`, `**`, exact match, multi-segment `**`). |
-| `broker_register_plugin.rs` | `Broker::register_plugin` happy path: a canonical present in the ACL registers, returns the RAII guard; dropping the guard removes the registration; `Broker::handle_plugin_publish` after drop returns `NotInAcl`. |
-| `broker_publish_core.rs` | `Broker::publish_core("core.lifecycle.boot", ...)` with one registered plugin whose grant subscribes to `core.lifecycle.**` delivers the event via `peer.notify` on the plugin's `PeerHandle`. |
-| `supervisor_spawn_fixture.rs` | The **headline test**: `PluginSupervisor::spawn(plan)` for the `rfl-bus-fixture` plan with `RFL_FIXTURE_PUBLISH=plugin.<topic-id>.hello` set. The fixture publishes one event; the harness's observer fixture (subscribed to `**`) receives it. Asserts `topic`, `payload`, and that the publish authority was the fixture's canonical id. |
-| `supervisor_peer_call_core_to_plugin.rs` | Fixture has `RFL_FIXTURE_RESPOND_PEER_CALL=core.fixture.echo`. Test calls `spawned.peer.call("core.fixture.echo", json!({"x":1})).await` and asserts the response is `{"x":1}`. |
-| `supervisor_peer_call_plugin_to_core.rs` | Fixture has `RFL_FIXTURE_CALL_CORE=core.fixture.ping`. The supervisor's per-connection fittings `Server` registers a `Service` that responds to `core.fixture.ping` by echoing `+1`. The test waits for the fixture to exit 0 (success). |
-| `supervisor_bus_publish_round_trip.rs` | Two-fixture topology: fixture A publishes `plugin.<A-topic-id>.greet` once; fixture B subscribed to `plugin.<A-topic-id>.greet` (granted in B's lock) receives the event and acks via a side-channel `peer.call` to a test-only `Service`. Exercises broker fan-out across multiple plugins. |
-| `supervisor_lifecycle_drop_kills_child.rs` | Spawn fixture with `RFL_FIXTURE_HOLD_OPEN=1`. Drop the `PluginSupervisor`. After a bounded wait (≤ grace period), the child PID is no longer alive (`kill -0` returns ESRCH). |
-| `supervisor_proxy_starts_for_proxy_plan.rs` | Construct a `CompiledPlugin` with `NetworkPlan::Proxy { allow_hosts: ["example.com"] }`. Supervisor.spawn → `outpost_proxy::start` is called once; the proxy listens on a loopback port; the lockin policy gets `network_proxy(port)`. The fixture does not actually issue a CONNECT (no real network in tests); the assertion is on the proxy startup + port plumbing. |
-| `supervisor_env_pass_set_applied.rs` | Plan with `env.pass = ["FAKE_API_KEY"]` and `env.set = {"FOO": "bar"}`. Test sets `FAKE_API_KEY=abc` in the parent process before spawn (uses `temp_env::with_var` or equivalent). Fixture echoes its own env via `RFL_FIXTURE_RESPOND_PEER_CALL=core.fixture.dump_env`; test calls and asserts both keys present with expected values, plus `RFL_BUS_FD=3` and `RFL_PLUGIN=<canonical>`. |
-| `supervisor_private_state_dir_writable.rs` | Plan compiled from a lock entry with the m1-injected private-state grant. Fixture has `RFL_FIXTURE_RESPOND_PEER_CALL=core.fixture.write_private_state`; on call, it writes a known byte to `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/marker`. Test verifies the file lands on disk and the path uses the **topic-id** form (not the canonical id) per `decisions.md` row 37. |
-
-### Negative integration tests
-
-| Test file | Asserts |
-|-----------|---------|
-| `broker_publish_core_namespace_rejected.rs` | Plugin publishes `core.session.user_message` → broker returns `BrokerError::PublishOnReservedNamespace`; a `core.lifecycle.publish_rejected` event fires; no fan-out. |
-| `broker_publish_provider_namespace_rejected.rs` | Plugin publishes `provider.openai.tool_request` → same `PublishOnReservedNamespace` (m2 reserves `provider.*` for m4 provider-plugin authority). |
-| `broker_publish_frontend_namespace_rejected.rs` | Plugin publishes `frontend.tui.confirm_answer` → same. |
-| `broker_publish_other_plugin_namespace_rejected.rs` | Plugin A publishes `plugin.<B-topic-id>.tool_result` → `PublishOnReservedNamespace`. The cross-plugin masquerade case. |
-| `broker_publish_outside_grant_rejected.rs` | Plugin A publishes `plugin.<A-topic-id>.greet` when its lock-granted `publishes` list is `["plugin.<A-topic-id>.progress"]` → `PublishOutsideGrant`. |
-| `broker_publish_invalid_topic_grammar_rejected.rs` | Plugin publishes `plugin.<topic-id>.UPPERCASE` (invalid pseg per §5.1) → `InvalidTopic`. Includes a sub-case for `plugin.<topic-id>.has spaces` and one for an empty topic. |
-| `broker_publish_extra_field_rejected.rs` | Plugin sends `bus.publish` with an extra unknown field in `params` → `InvalidPayload` from `deny_unknown_fields`. |
-| `broker_tool_result_missing_in_reply_to_rejected.rs` | Plugin publishes `plugin.<topic-id>.tool_result` without `in_reply_to` → `MissingInReplyTo`. |
-| `broker_rpc_reply_missing_in_reply_to_rejected.rs` | Same for `plugin.<topic-id>.rpc_reply`. |
-| `broker_publishing_plugin_excluded_from_own_fanout.rs` | Plugin A's grant subscribes to `plugin.<A-topic-id>.**` (a defensive self-subscribe configured in the lock) AND publishes `plugin.<A-topic-id>.foo`. The publishing plugin does NOT receive the event back; only other subscribers do. |
-| `supervisor_spawn_canonical_not_in_acl_refused.rs` | Construct a `CompiledPlugin` whose canonical id is not present in the `BrokerAcl` (e.g. by compiling against a lock that only contains a different plugin, then mutating the canonical). `supervisor.spawn(plan)` → `SpawnError::NotInAcl`. No process is spawned (verifiable via process-table observation; or by the absence of the proxy port if the plan's network is `Proxy`). |
-| `supervisor_spawn_entry_not_executable.rs` | `plan.entry_absolute` points at a regular file with no exec bit → `SpawnError::EntryNotExecutable` BEFORE `SandboxBuilder::command` is consumed. |
-| `supervisor_lockin_denies_outside_grant_read.rs` | Spawn fixture with grant `read_dirs = ["${PROJECT_ROOT}"]` only (no `/etc`). Fixture has `RFL_FIXTURE_OPEN_FILE=/etc/passwd` and `RFL_FIXTURE_RESPOND_PEER_CALL=core.fixture.report_open_result`. Test calls `report_open_result`; fixture replies with the `errno` from the failed open. Assertion: open failed (typically `EPERM` or `ENOENT` depending on lockin's syd policy). The kernel sandbox is the enforcer; this is the integration assertion that the supervisor wired lockin correctly. |
-| `supervisor_lockin_denies_outside_grant_write.rs` | Same shape with `write_dirs = ["${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>"]` and the fixture attempting to write to `${PROJECT_ROOT}/forbidden`. Write fails with the lockin error; the file does not exist after the fixture exits. |
-| `supervisor_reserved_env_in_set_refused.rs` | Construct a `CompiledPlugin` with `env.set = {"RFL_BUS_FD": "99"}` (bypass m1's V3 by hand-constructing the plan). `supervisor.spawn` → `SpawnError::Internal { detail: "compile output contained reserved env var ..." }`. Defence-in-depth assertion that the spawn path checks even if V3 was skipped. |
-| `supervisor_drop_during_spawn_unwinds.rs` | Force a failure at SP3 step 8 (e.g. `entry_absolute` points at `/usr/bin/false` so the child exits immediately, or use a chmod-busy spawn-failure path). Assertion: any allocated proxy handle, any open `core_fd`, any partially-registered broker entry are all torn down before `spawn()` returns the error. (Verifiable via fd count under `/proc/self/fd` before and after.) |
-
-### Manual validation in `manual-validation.md`
-
-The driver runs and captures, in addition to `cargo test
---manifest-path rafaello/Cargo.toml -p rafaello-core` green
-on Linux:
-
-- One end-to-end manual run of the fixture spawning under
-  `cargo test -p rafaello-core --test supervisor_spawn_fixture
-  -- --nocapture`, with `RUST_LOG=rafaello_core=debug`, to
-  show the broker registration trace + the fixture's
-  `bus.publish` round-trip in human-readable form.
-- A `find rafaello/crates/rafaello-core/src -name '*.rs' |
-  sort` capture demonstrating the m2 module additions
-  (`bus.rs`, `supervisor.rs`, `validate/pattern.rs` extension)
-  versus m1's surface.
-- A `ls /proc/<pid>/fd/` snapshot of a running fixture
-  showing exactly fds 0/1/2 (stdio inherited from cargo
-  test) plus fd 3 (the bus socket). Demonstrates the
-  socketpair + inherit_fd_as plumbing matches §SP3.
-- `cargo doc --manifest-path rafaello/Cargo.toml -p
-  rafaello-core --no-deps` warning-free.
-- `nix develop --impure --command cargo test --manifest-path
-  rafaello/Cargo.toml -p rafaello-core` green inside the
-  devshell. (Per `plans/README.md` `nix develop` invocations
-  always need `--impure`.)
+  (`decisions.md` row 26). m1 already rejects `helper_for` at
+  parse time. m2 must not add a spawn path. SP4.4's
+  `RFL_HELPER_FD` reserved-name check is *defence in depth*.
+- **Lazy-load orchestrator.** m3.
+- **macOS spawn-bearing tests.** Linux-only, gated `#[cfg(target_os
+  = "linux")]`. m6 polish revisits.
+- **Cross-plugin RPC routing (`plugin.<a>.rpc_call.<b>`).**
+  Not in v1. m2 enforces `rpc_reply` arity but does not route
+  `rpc_call`; cross-plugin `rpc_call` topics go through
+  generic event fan-out (which the lock would have to grant).
+- **Process-tree containment.** SIGTERM / SIGKILL kills the
+  direct child only. Subprocess containment is a security RFC
+  §6.9 residual risk; m2 does not claim closure (pi-1 §57,
+  §105).
+- **Lockin builder knobs not in `CompiledPlugin`.** `allow_kvm`,
+  `allow_interactive_tty`, `allow_non_pie_exec`,
+  `raw_seatbelt_rule` are not surfaced. m2 ships the
+  conservative default; a v1 plugin that needs these triggers
+  a m1 plan-field addition.
+- **`PluginSupervisor::shutdown` for individual plugins.**
+  m2 supports drop-the-handle teardown and supervisor-wide
+  `shutdown`. Per-plugin cooperative stop is m3 territory
+  (when a CLI consumer needs `rfl plugin stop`).
+- **Real CONNECT through the outpost proxy.** m2 starts the
+  proxy and injects `HTTP_PROXY`/etc. but no test issues a
+  real CONNECT. m4 (with the bundled `rfl-openai` provider)
+  exercises the full network path. m2's claim is "proxy is
+  wired and the env reaches the child"; m2 does NOT claim
+  "proxy enforces hostnames" (pi-1 §3, §232, §543).
 
 ## Risks
 
-1. **Lockin's macOS implementation is untested by m2.** All
-   spawn-bearing tests are Linux-only; macOS coverage waits
-   for m6. Risk: a Linux-only assumption sneaks into the
-   supervisor (e.g. `/proc/self/fd` introspection in tests
-   leaks into non-test code). Mitigation: keep `/proc`
-   peeking strictly inside `tests/` files; the supervisor
-   itself uses only portable lockin/nix primitives.
-2. **Fittings `PeerHandle` outside-handler usage in
-   production code.** m0 added `Server::peer()` /
-   `Client::peer()` for outside-handler use; m0's tests
-   exercised it. m2 is the first non-test consumer. Risk:
-   subtle correlator-id collisions or wakeup-loss bugs that
-   m0's smaller tests didn't surface. Mitigation: the m2
-   integration tests explicitly cover bidirectional
-   `peer.call` (`supervisor_peer_call_*`) and the
-   "publishing plugin excluded from own fan-out" topology
-   exercises notification fan-out under registry mutation.
-3. **Outpost proxy startup time vs. spawn synchronicity.**
-   `outpost_proxy::start` is async; the fixture starts
-   immediately after spawn. Risk: a fixture that issues a
-   CONNECT before the proxy is listening hangs or races.
-   Mitigation: m2 tests do not exercise real CONNECT calls
-   (the proxy is a startup smoke test only); m4 proves
-   real network plumbing under the bundled provider.
-4. **Test isolation: parallel cargo tests sharing parent
-   env vars.** `supervisor_env_pass_set_applied.rs` mutates
-   the parent process env to test `env.pass`. Cargo runs
-   tests in threads, not subprocesses. Risk: env-mutation
-   test races a sibling. Mitigation: gate env-mutating
-   tests on a `serial_test` mutex or run them in a
-   dedicated `#[serial]` group; alternatively spawn a
-   helper subprocess per test. `commits.md` picks the
-   strategy.
-5. **lockin requires syd on Linux.** The spawn path needs
-   `syd` discoverable via `LOCKIN_SYD_PATH` or `PATH`. The
-   devshell already provides it (lockin's tests rely on
-   the same); m2 tests will fail outside the devshell.
-   Mitigation: the manual-validation entry uses `nix
-   develop --impure`; CI runs in the devshell. m2's
-   `cargo test` invocation outside the devshell is not
-   supported.
-6. **`socketpair` ownership semantics across `inherit_fd_as`.**
-   lockin's `inherit_fd_as` takes `OwnedFd`. After the
-   builder is consumed and the child is spawned, the
-   parent retains `core_fd` only. Risk: accidental
-   double-close, or fd leaked across the spawn boundary,
-   or the child inherits the parent half. Mitigation: the
-   `supervisor_spawn_fixture.rs` test asserts `/proc/<pid>/fd`
-   on the child shows exactly `0,1,2,3`; the supervisor
-   side asserts `core_fd` is still readable post-spawn.
-7. **CompiledPlugin mutation between compile and spawn.**
-   Nothing prevents test code from constructing a
-   `CompiledPlugin` literal with values that V3 would
-   reject. SP6 catches the reserved-env case; SP3.1
-   catches the not-in-ACL case; the rest is best-effort
-   (the supervisor trusts that the plan came from
-   `compile_plugin` after a successful `validate::lock`).
-   Risk: production code that bypasses validate. Mitigation:
-   the public API takes `&CompiledPlugin`; the only
-   constructor is via `compile::compile_plugin`; the
-   `pub` fields exist for read access only and the
-   compiler doesn't expose a mutation API.
+1. **Fixture binary built only via `--features test-fixture`
+   gate.** If `cargo test -p rafaello-core` (without the
+   feature) is run, integration tests will fail to compile
+   (`env!("CARGO_BIN_EXE_rfl-bus-fixture")` errors). Mitigation:
+   document the canonical command everywhere, including in
+   the per-commit agent prompt template. Optionally make the
+   feature default (`default = ["test-fixture"]`) — decided
+   at commits.md.
+2. **`PeerHandle` outside-handler usage in production.** m0
+   added the API and tested it; m2 is the first non-test
+   in-tree consumer. Subtle correlator-id bugs may surface
+   under the bidirectional load m2 introduces. Mitigation:
+   the `supervisor_peer_call_*` tests directly cover both
+   directions; the `traced_test` infra captures any internal
+   warnings.
+3. **lockin requires syd on Linux.** Tests fail outside the
+   devshell. Mitigation: every `cargo test` invocation in
+   `manual-validation.md` is `nix develop --impure`-prefixed.
+   CI runs in the devshell. The acceptance summary is scoped
+   to "green inside `nix develop --impure`" (pi-1 §61, §234).
+4. **Test isolation: parent env mutation.** Cargo runs tests
+   in threads. `supervisor_env_*` tests use `#[serial(env)]`
+   to serialise (pi-1 §60, §332). Other tests that allocate
+   fds/processes do not need this gate.
+5. **Reaper task vs `wait` race.** The reaper task owns the
+   `SandboxedChild`; `SpawnHandle::wait` resolves on the
+   broadcast channel the reaper publishes to. If `wait` is
+   called after the reaper already published, the broadcast
+   stores the latest value and `wait` resolves immediately.
+   Verified by `supervisor_peer_call_plugin_to_core.rs`.
+6. **Private-state directory creation race.** Supervisor
+   creates `<project>/.rafaello-plugin-data/<topic-id>/`
+   before spawn (SP4 step 11). If the parent dir doesn't
+   exist (project root somewhere else), `create_dir_all`
+   creates intermediate dirs. The harness controls the
+   project root via `tempdir`, so this is straightforward;
+   real-world `rfl chat` (m3) will own this same path
+   already.
+7. **Tracing subscriber init in tests.** `tracing-test`
+   provides per-test setup; without it, `tracing::warn!`
+   output is invisible. Tests asserting log content (via
+   `logs_assert`) include the `#[traced_test]` attribute.
+8. **`outpost-proxy` direct dep brings in `tokio`.** Already
+   in W1; no new top-level dep.
+9. **`SpawnHandle::Drop` and `PluginSupervisor::Drop` may
+   double-signal.** Mitigation: the kill operation is
+   idempotent (an already-dead pid returns ESRCH which is
+   ignored), and the broker registration drop is single-shot
+   via the `Option` shape on the guard.
+10. **The "ProviderNotInM2" refusal cascades into m4's lock
+    layout.** m4 will need to remove this refusal when it
+    introduces provider authority. This is an intentional
+    staged restriction that m2's retrospective documents.
 
 ## Internal split (driver guidance for `commits.md`)
 
 Suggested grouping; `commits.md` picks final granularity. Pi
-review-2/-3 may reshape these; m1's reshuffles came from
-phase-boundary discoveries (parse-vs-validate boundary moves)
-that m2 can pre-empt by scoping the boundaries here.
+review-2 may reshape these.
 
-1. **Workspace deps + crate skeleton** (W1, W2, W3): one
-   commit for `[workspace.dependencies]` additions + the
-   fixture binary scaffold (empty `main` returning 0). ~2
-   commits.
-2. **Pattern matcher** (B8): pure function with the §5.1
-   example-matrix unit tests. Foundational dep for B7. ~1
-   commit.
-3. **Broker types + registration** (B1, B2): `Broker::new`,
-   `register_plugin`, `RegisteredPlugin` RAII guard, the
-   broker error enum. No publish path yet. Tests:
-   `broker_register_plugin.rs`. ~2 commits.
-4. **Broker publish path** (B3, B4, B5, B6, B7): `handle_plugin_publish`
-   end-to-end with all the rejection rules + fan-out. Plus
-   `publish_core`. Tests: every `broker_publish_*` and
-   `broker_publishing_plugin_excluded_from_own_fanout.rs`
-   plus `broker_publish_core.rs`. The lifecycle event
-   `core.lifecycle.publish_rejected` lands here. ~3-5
-   commits depending on how the matrix splits.
-5. **Supervisor scaffolding + sequencing** (SP1, SP2, SP3
-   steps 1, 6, 7, 8, 9): supervisor type, error enum,
-   non-network spawn path (no proxy startup yet). Fixture
-   binary grows to wire up RFL_BUS_FD reading + minimal
-   fittings client/server. Tests:
-   `supervisor_spawn_fixture.rs`,
-   `supervisor_peer_call_core_to_plugin.rs`,
-   `supervisor_peer_call_plugin_to_core.rs`,
-   `supervisor_env_pass_set_applied.rs`,
-   `supervisor_spawn_entry_not_executable.rs`,
-   `supervisor_spawn_canonical_not_in_acl_refused.rs`,
-   `supervisor_reserved_env_in_set_refused.rs`. ~4-6 commits.
-6. **Supervisor lifecycle + drop** (SP5, SP6, the
-   `supervisor_drop_during_spawn_unwinds.rs` and
-   `supervisor_lifecycle_drop_kills_child.rs` tests): RAII
-   teardown rules. Tests as named. ~2 commits.
-7. **Supervisor + lockin denial proofs** (SP3 step 4
-   filesystem mapping): integrate
-   `supervisor_lockin_denies_outside_grant_read.rs` /
-   `supervisor_lockin_denies_outside_grant_write.rs` /
-   `supervisor_private_state_dir_writable.rs`. ~2 commits.
-8. **Supervisor + outpost proxy startup** (SP3 step 3):
-   `supervisor_proxy_starts_for_proxy_plan.rs`. ~1 commit.
-9. **Two-plugin round-trip + manual validation** (the
-   `supervisor_bus_publish_round_trip.rs` test +
-   `manual-validation.md`). ~1 commit.
+1. **Workspace deps + crate skeleton + fixture bin scaffold +
+   reserved-env additions** (W1, W2, W3, F1 empty `main`):
+   ~2-3 commits.
+2. **Reserved env var additions to m1 scrubber** (extending
+   m1's `RESERVED_ENV_VARS` to include `RFL_HELPER_FD`,
+   `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`, `RFL_PRIVATE_STATE_DIR`
+   — pi-1 §23). Tiny m1 patch landed in m2's branch with a
+   migration note in the commit body; m2 retrospective
+   records the small back-reach. ~1 commit.
+3. **Bus types + error enum** (B1 types only, B2, B4, B8, E):
+   no behaviour yet, just the public type surface; build-only
+   tests like m1's `error_surface_compiles.rs`. ~2 commits.
+4. **Broker registration + lifecycle** (B1 register/unregister,
+   B10 ACL validation, `broker_register_*` tests). ~2 commits.
+5. **Broker publish path** (B3, B5, B6, B7, B9 lifecycle
+   rejection event; the entire `broker_publish_*` matrix).
+   Largest single group. ~4-5 commits, possibly split by
+   error class (namespace rejection / grammar rejection /
+   in_reply_to / fan-out).
+6. **Supervisor plan validation (Phase A)** (SP1 type, SP3
+   error enum, SP4 phase A; the `supervisor_spawn_*_refused`
+   tests for in-ACL / topic-id-mismatch / non-absolute /
+   not-executable / reserved-env / provider-refused cases).
+   ~3 commits.
+7. **Supervisor resource allocation (Phase B)** (SP4 phase B
+   except service composition, SP7 const, the
+   `supervisor_spawn_fixture_happy_path` and
+   `supervisor_peer_call_*` tests). ~3-4 commits.
+8. **Supervisor lifecycle + drop + shutdown** (SP5,
+   `supervisor_lifecycle_drop_kills_child`,
+   `supervisor_spawn_duplicate_canonical_refused`). ~2 commits.
+9. **Supervisor proxy startup + env injection**
+   (`supervisor_proxy_starts_and_env_injected`). ~1 commit.
+10. **Supervisor lockin denial proofs**
+    (`supervisor_lockin_denies_*`). ~1 commit.
+11. **Cross-plugin scenarios + manual validation**
+    (`supervisor_bus_publish_round_trip_two_plugins`,
+    private-state, taint round-trip, manual-validation.md).
+    ~2 commits.
 
-Realistic total: **~18–25 commits, sequential**. Smaller than
-m1 (37 rows) by surface area but larger than m0's m0a-only
-slice. The driver should NOT pre-emptively split m2 into
-m2a/m2b unless something blocking surfaces during pi review;
-the broker + supervisor are tightly coupled and a split would
-make the demo bar split too.
+Realistic total: **~22-30 commits, sequential**. Comparable
+to m1's 37-row plan despite smaller surface area, because
+m2's commits each integrate broker + supervisor + fittings +
+lockin + outpost in one slice and per-commit greenness
+pressure tends to grow them. The driver should NOT pre-emptively
+split m2 into m2a/m2b unless something blocking surfaces
+during pi review.
 
 ## Acceptance summary
 
 m2 is done when:
 
-- Every named test in the *Positive integration tests* and
-  *Negative integration tests* matrices above is implemented
-  and passes. Tests may split or merge during `commits.md`
-  drafting as long as the named behaviours are all covered.
-- `cargo test --manifest-path rafaello/Cargo.toml -p
-  rafaello-core` green on Linux.
-- `cargo build -p rfl-bus-fixture` green (built by the
-  workspace; cargo bin-test integration locates it).
-- `cargo doc --manifest-path rafaello/Cargo.toml -p
-  rafaello-core --no-deps` warning-free.
-- `manual-validation.md` records the items in the *Manual
-  validation* section above.
-- `retrospective.md` is written, with any drift surfaced
-  during implementation landing in `overview.md` /
-  `decisions.md` / stream RFCs as deltas (per
-  `plans/README.md`'s authoring conventions). Anticipated
-  drift items already known at scoping time:
-  - The reserved-namespace list `provider.*` / `frontend.*`
-    rejection in m2 (B3 #2) treats both as "not-yours" for
-    every plugin; `decisions.md` doesn't yet pin the
-    "provider role grants `provider.*` publish authority"
-    rule, only that the bound provider plugin gets it. m4
-    is the right milestone to pin this; m2's retrospective
-    flags the open-question.
-  - The `core.lifecycle.publish_rejected` event class is
-    introduced by m2 but not enumerated in the security RFC.
-    The retrospective should propose adding a single
-    `core.lifecycle.*` schema entry to the v1 security
-    surface (per `decisions.md` row 23, payload schemas
-    are Stream A's responsibility).
-  - `bus.event` as the outbound notification method name
-    (vs. the inbound `bus.publish`) is m2's call; if pi
-    or the m3 driver finds the asymmetry awkward, the
-    retrospective records the decision-or-rename.
-- No follow-up Stream RFC drift is owed by m2 beyond the
-  items above; m2 does not modify Stream A or B RFC bodies
-  (those would be m1-style retrospective patches and m1
-  already landed its banner-based reconciliation).
+- Every named test in the *Positive* and *Negative* matrices
+  above is implemented and passes. Tests may split or merge
+  during `commits.md` drafting as long as the named
+  behaviours are all covered.
+- `nix develop --impure --command cargo test --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --features test-fixture`
+  green on Linux inside the devshell (pi-1 §61, §234).
+- `nix develop --impure --command cargo build --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --features test-fixture
+  --bin rfl-bus-fixture` green.
+- `nix develop --impure --command cargo doc --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --no-deps` warning-free.
+- `manual-validation.md` (path:
+  `rafaello/plans/milestones/m2-broker-spawn/manual-validation.md`)
+  records the items in the *Manual validation* section above.
+- `retrospective.md` (path:
+  `rafaello/plans/milestones/m2-broker-spawn/retrospective.md`)
+  written, with anticipated drift items addressed:
+  - **Provider-rejection staging.** m2's
+    `SpawnError::InvalidPlan { reason: ProviderNotInM2 }`
+    refuses lock entries with `bindings.provider = true`.
+    m4 must remove this refusal and route `provider.<id>.*`
+    publish authority. Decisions row addition or m4 scope
+    cross-reference (pi-1 §10, §132, §437).
+  - **`request_id` omission in `BusEvent`.** Overview §4.5
+    enumerates `request_id` as part of the bus envelope; m2
+    omits it because m4's tool-dispatch flow is the only
+    consumer. Update overview §4.5 with a "v1 staging:
+    request_id field is m4" note (pi-1 §41, §145, §438).
+  - **`core.lifecycle.publish_rejected` schema.** m2
+    introduces this event; the security RFC has no entry for
+    it. Add a §"core.lifecycle.* events" section to the
+    security RFC body OR a banner referring to m2's scope
+    §B9 (Stream A owns payload schemas per `decisions.md`
+    row 23) (pi-1 §15, §122, §178, §437).
+  - **`core.lifecycle.boot` schema.** Same.
+  - **`bus.event` outbound method name + `BusEvent` shape.**
+    m2 fixes the outbound notification method as `bus.event`
+    and the schema as in §B8. Stream A retrospective drift
+    item.
+  - **`PublisherIdentity` enum.** Same — Stream A schema
+    addition.
+  - **m1 reserved-env-var list extended (`RFL_HELPER_FD`,
+    `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`, `RFL_PRIVATE_STATE_DIR`).**
+    Single small m1 patch landed in m2 (commit group 2);
+    decisions row addition or note in retrospective (pi-1
+    §23, §270).
+  - **Lock-correspondence claim is API-level, not
+    forge-proof** (pi-1 §22, §83). m2 retrospective records
+    that `CompiledPlugin`'s public fields permit hand-mutation
+    and the supervisor spot-checks (Phase A) the cases that
+    would otherwise crash the lockin builder. Tightening to
+    an opaque/validated plan type is a v2 nice-to-have.
+  - **Result-routing protection.** m2 adds a m4-anticipating
+    behaviour (no fan-out of `plugin.<id>.tool_result` /
+    `rpc_reply`). The retrospective points m4 at the §B7
+    handover; m4 replaces the `tracing::debug!` no-op with
+    the canonical re-emission path.
+  - **m1 manifest validation may permit unknown top-level
+    namespaces in `publishes` grants** (pi-1 §254, §255,
+    §409). m2's broker rejects them at runtime; m1 should
+    arguably reject them at parse/V3 time. m2 retrospective
+    files the gap as a m3-or-m4 follow-up patch to m1, NOT
+    a m2 in-scope item.
+- No follow-up Stream RFC drift is owed by m2 BEYOND the
+  items above. m2 does not modify Stream A or B RFC bodies
+  in this branch (m1's banner-based reconciliation is the
+  precedent; further patches accumulate as retrospective
+  deltas).
