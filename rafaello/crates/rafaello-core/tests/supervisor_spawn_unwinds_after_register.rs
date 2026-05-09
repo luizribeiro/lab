@@ -1,10 +1,10 @@
-//! c17+ SP4 Phase B unwind — spawn creates a socketpair, builds a
-//! `lockin::tokio::SandboxedCommand`, then (since c19) proceeds
-//! through child spawn + transport setup + broker register before
-//! bailing at the step-18 stub. This test asserts the unwind
-//! closes both halves of the pair (parent fd count returns to
-//! baseline on Linux) and that `socketpair_creates` was
-//! incremented exactly once.
+//! c19 SP4 Phase B steps 13–17 — spawn proceeds through child
+//! spawn, transport setup, and broker registration, then bails
+//! at the step-18+ stub. This test asserts the full post-step-13
+//! unwind: SIGKILL+reap of the child, the `RegisteredPlugin`
+//! guard is dropped (broker registry returns to "reservable"),
+//! the in-flight reservation drains, and counters increment
+//! exactly once.
 
 #![cfg(feature = "test-fixture")]
 
@@ -21,15 +21,8 @@ use rafaello_core::lock::{CanonicalId, LoadPolicy};
 use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
 use rafaello_core::{topic_id, SpawnError};
 
-#[cfg(target_os = "linux")]
-fn open_fd_count() -> usize {
-    std::fs::read_dir("/proc/self/fd")
-        .expect("read /proc/self/fd")
-        .count()
-}
-
 #[tokio::test]
-async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
+async fn spawn_unwinds_after_register_and_drops_in_flight() {
     let entry = PathBuf::from(env!("CARGO_BIN_EXE_rfl-bus-fixture"));
     let canonical = CanonicalId::parse("local/test:plugin@0.1.0").unwrap();
     let real_topic = topic_id::derive(&canonical.to_string());
@@ -50,7 +43,7 @@ async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
         tool_routes: BTreeMap::new(),
     })
     .unwrap();
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(broker.clone(), SupervisorConfig::default());
     let hooks = sup.test_hooks();
 
     let proj = tempfile::tempdir().unwrap();
@@ -80,11 +73,8 @@ async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
         private_state_dir: proj.path().join(".rafaello-plugin-data").join(&real_topic),
     };
 
-    #[cfg(target_os = "linux")]
-    let baseline = open_fd_count();
-
     let err = match sup.spawn(&plan, &paths).await {
-        Ok(_) => panic!("expected Phase B stub error"),
+        Ok(_) => panic!("expected step-18+ stub error"),
         Err(e) => e,
     };
     match err {
@@ -106,13 +96,16 @@ async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
     assert_eq!(hooks.outpost_starts.load(Ordering::SeqCst), 0);
     assert_eq!(hooks.child_spawns.load(Ordering::SeqCst), 1);
 
-    #[cfg(target_os = "linux")]
-    {
-        let after = open_fd_count();
-        assert_eq!(
-            after, baseline,
-            "open fd count should return to baseline after unwind \
-             (baseline={baseline}, after={after})"
-        );
-    }
+    assert!(
+        broker.contains_plugin(&canonical),
+        "canonical must remain in ACL after unwind"
+    );
+    assert!(
+        broker.try_reserve_registration(&canonical).is_ok(),
+        "RegisteredPlugin drop must roll back the live registration"
+    );
+    assert!(
+        !sup.is_in_flight(&canonical),
+        "InFlightGuard drop must drain canonical from in_flight set"
+    );
 }

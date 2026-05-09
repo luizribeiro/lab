@@ -23,7 +23,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
+use fittings_core::context::ServiceContext;
+use fittings_core::error::FittingsError;
+use fittings_core::message::{JsonRpcId, Request, Response};
+use fittings_core::service::Service;
+use fittings_server::Server;
 use parking_lot::Mutex;
+use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::bus::{Broker, PeerHandle, RegisteredPlugin};
@@ -161,7 +168,7 @@ struct ManagedSpawn {
 /// All wired so callers can read real values; later commits
 /// increment them as the spawn pipeline lights up.
 #[cfg(any(test, feature = "test-fixture"))]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TestHooks {
     pub outpost_starts: std::sync::atomic::AtomicUsize,
     pub socketpair_creates: std::sync::atomic::AtomicUsize,
@@ -171,6 +178,39 @@ pub struct TestHooks {
     /// tests poll for asynchronous `ProxyHandle` unbind without
     /// reaching into private supervisor state.
     pub last_proxy_port: std::sync::atomic::AtomicU16,
+    /// Pid stored by the supervisor's post-spawn unwind path when a
+    /// failure after `cmd.spawn()` triggers SIGKILL + reap. `-1`
+    /// means "no reap has fired yet". Stored as `AtomicI64` so a
+    /// `u32` pid plus the "none" sentinel both round-trip.
+    pub last_reaped_pid: std::sync::atomic::AtomicI64,
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+impl Default for TestHooks {
+    fn default() -> Self {
+        Self {
+            outpost_starts: std::sync::atomic::AtomicUsize::new(0),
+            socketpair_creates: std::sync::atomic::AtomicUsize::new(0),
+            child_spawns: std::sync::atomic::AtomicUsize::new(0),
+            last_proxy_port: std::sync::atomic::AtomicU16::new(0),
+            last_reaped_pid: std::sync::atomic::AtomicI64::new(-1),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+impl TestHooks {
+    /// Convert the `AtomicI64` reap sentinel into an `Option<u32>`.
+    pub fn last_reaped_pid(&self) -> Option<u32> {
+        let raw = self
+            .last_reaped_pid
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if raw < 0 {
+            None
+        } else {
+            Some(raw as u32)
+        }
+    }
 }
 
 /// Test-only factory for additional `core.fixture.*` services
@@ -225,12 +265,21 @@ impl PluginSupervisor {
         Arc::clone(&self.test_hooks)
     }
 
+    /// Test-only inspection of the `in_flight` reservation set
+    /// (scope §SP4 step 1a). Lets integration tests assert that
+    /// post-failure unwind drained the canonical without exposing
+    /// the field publicly.
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn is_in_flight(&self, canonical: &CanonicalId) -> bool {
+        self.in_flight.lock().contains(canonical)
+    }
+
     pub async fn spawn(
         &self,
         plan: &CompiledPlugin,
         paths: &SpawnPaths,
     ) -> Result<SpawnHandle, SpawnError> {
-        let _in_flight = InFlightGuard::acquire(Arc::clone(&self.in_flight), &plan.canonical)?;
+        let in_flight_guard = InFlightGuard::acquire(Arc::clone(&self.in_flight), &plan.canonical)?;
 
         self.broker
             .try_reserve_registration(&plan.canonical)
@@ -465,13 +514,141 @@ impl PluginSupervisor {
         cmd.env("RFL_TOPIC_ID", &plan.topic_id);
         cmd.current_dir(&paths.project_root);
 
-        drop(cmd);
+        // Step 13: spawn the child. After this point every error
+        // path must SIGKILL + `child.wait().await` to reap before
+        // returning, per the post-spawn unwind contract (scope §SP4
+        // Phase B).
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(source) => {
+                drop(proxy);
+                drop(core_fd);
+                return Err(SpawnError::Spawn {
+                    canonical: plan.canonical.clone(),
+                    source,
+                });
+            }
+        };
+        #[cfg(any(test, feature = "test-fixture"))]
+        self.test_hooks
+            .child_spawns
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let cached_pid = child.id();
+
+        // Step 14: convert core_fd → tokio UnixStream.
+        let std_stream = std::os::unix::net::UnixStream::from(core_fd);
+        if let Err(source) = std_stream.set_nonblocking(true) {
+            self.kill_and_reap(&mut child, cached_pid).await;
+            drop(proxy);
+            return Err(SpawnError::TransportSetup {
+                canonical: plan.canonical.clone(),
+                source,
+            });
+        }
+        let stream = match tokio::net::UnixStream::from_std(std_stream) {
+            Ok(s) => s,
+            Err(source) => {
+                self.kill_and_reap(&mut child, cached_pid).await;
+                drop(proxy);
+                return Err(SpawnError::TransportSetup {
+                    canonical: plan.canonical.clone(),
+                    source,
+                });
+            }
+        };
+
+        // Step 15: split + build StdioTransport.
+        let (reader, writer) = stream.into_split();
+        let transport = fittings_transport::stdio::StdioTransport::new(
+            reader,
+            writer,
+            self.config.fittings_max_frame_bytes,
+        );
+
+        // Step 16: per-connection service.
+        let service = self.build_connection_service(plan.canonical.clone());
+
+        // Step 17: build server, capture peer, register with broker.
+        let server = Server::new(service, transport);
+        let peer = server.peer();
+        let registered = match self.broker.register_plugin(plan.canonical.clone(), peer) {
+            Ok(r) => r,
+            Err(BrokerError::NotInAcl(c)) => {
+                self.kill_and_reap(&mut child, cached_pid).await;
+                drop(server);
+                drop(proxy);
+                return Err(SpawnError::NotInAcl(c));
+            }
+            Err(BrokerError::AlreadyRegistered(c)) => {
+                self.kill_and_reap(&mut child, cached_pid).await;
+                drop(server);
+                drop(proxy);
+                return Err(SpawnError::AlreadyRegistered(c));
+            }
+            Err(other) => {
+                self.kill_and_reap(&mut child, cached_pid).await;
+                drop(server);
+                drop(proxy);
+                return Err(SpawnError::SandboxBuild {
+                    canonical: plan.canonical.clone(),
+                    source: anyhow::anyhow!(other),
+                });
+            }
+        };
+
+        // Registration is now the source of truth — drop the
+        // in-flight reservation immediately (scope §SP4 step 17,
+        // pi-6 non-blocking #5).
+        drop(in_flight_guard);
+
+        // Steps 18–20 (reaper task, serve loop, registry insert)
+        // land in c20–c21. For c19 the function returns the
+        // step-18+ stub after unwinding all post-step-13 resources
+        // per the post-spawn contract.
+        self.kill_and_reap(&mut child, cached_pid).await;
+        drop(registered);
+        drop(server);
         drop(proxy);
-        drop(core_fd);
         Err(SpawnError::SandboxBuild {
             canonical: plan.canonical.clone(),
-            source: anyhow::anyhow!("Phase B step 13+ not yet implemented"),
+            source: anyhow::anyhow!("Phase B step 18+ not yet implemented"),
         })
+    }
+
+    fn build_connection_service(&self, canonical: CanonicalId) -> SupervisorConnectionService {
+        let bus = BusPublishService {
+            broker: self.broker.clone(),
+            canonical: canonical.clone(),
+        };
+        #[cfg(any(test, feature = "test-fixture"))]
+        let extra = self
+            .extra_service_factory
+            .as_ref()
+            .map(|factory| factory(canonical));
+        #[cfg(any(test, feature = "test-fixture"))]
+        return SupervisorConnectionService { bus, extra };
+        #[cfg(not(any(test, feature = "test-fixture")))]
+        SupervisorConnectionService { bus }
+    }
+
+    async fn kill_and_reap(
+        &self,
+        child: &mut lockin::tokio::SandboxedChild,
+        cached_pid: Option<u32>,
+    ) {
+        if let Some(pid) = cached_pid {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        let _ = child.wait().await;
+        #[cfg(any(test, feature = "test-fixture"))]
+        if let Some(pid) = cached_pid {
+            self.test_hooks
+                .last_reaped_pid
+                .store(pid as i64, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     pub async fn shutdown(self) -> ShutdownReport {
@@ -547,6 +724,61 @@ fn validate_path(path: &Path, kind: PathKind, canonical: &CanonicalId) -> Result
         });
     }
     Ok(())
+}
+
+/// Per-connection `bus.publish` notification handler (scope §SP4
+/// step 16, pi-1 c19). Real `fittings_core::service::Service` impl
+/// — `bus.publish` notifications dispatch to the broker; every
+/// other inbound method (and any `bus.publish` *request*) returns
+/// `MethodNotFound`.
+struct BusPublishService {
+    broker: Broker,
+    canonical: CanonicalId,
+}
+
+#[async_trait]
+impl Service for BusPublishService {
+    async fn call(&self, req: Request, _ctx: ServiceContext) -> Result<Response, FittingsError> {
+        if req.method == "bus.publish" && req.id.is_none() {
+            // Notification: result is swallowed by the server; any
+            // BrokerError is already surfaced via the broker's
+            // lifecycle event emission (§B9).
+            let _ = self
+                .broker
+                .handle_plugin_publish(&self.canonical, &req.params);
+            return Ok(Response {
+                id: JsonRpcId::Null,
+                result: Value::Null,
+                metadata: Default::default(),
+            });
+        }
+        Err(FittingsError::method_not_found(req.method))
+    }
+}
+
+/// Routing facade for the per-connection service (scope §SP4 step
+/// 16). In production the bus handler is the only branch; in test
+/// mode the supervisor's `with_extra_service` factory contributes
+/// additional services that handle every method other than
+/// `bus.publish`.
+struct SupervisorConnectionService {
+    bus: BusPublishService,
+    #[cfg(any(test, feature = "test-fixture"))]
+    extra: Option<Box<dyn Service + Send + Sync>>,
+}
+
+#[async_trait]
+impl Service for SupervisorConnectionService {
+    async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError> {
+        if req.method == "bus.publish" {
+            return self.bus.call(req, ctx).await;
+        }
+        #[cfg(any(test, feature = "test-fixture"))]
+        if let Some(extra) = &self.extra {
+            return extra.call(req, ctx).await;
+        }
+        Err(FittingsError::method_not_found(req.method))
+    }
 }
 
 // Type plumbing: a watch channel initialised to `None` so

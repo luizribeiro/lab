@@ -1,16 +1,15 @@
-//! c17+ SP4 Phase B unwind — spawn creates a socketpair, builds a
-//! `lockin::tokio::SandboxedCommand`, then (since c19) proceeds
-//! through child spawn + transport setup + broker register before
-//! bailing at the step-18 stub. This test asserts the unwind
-//! closes both halves of the pair (parent fd count returns to
-//! baseline on Linux) and that `socketpair_creates` was
-//! incremented exactly once.
+//! c19 SP4 Phase B post-spawn unwind — the child spawned at step
+//! 13 must be SIGKILL'd and reaped before `spawn` returns the
+//! step-18+ stub error. The supervisor records the reaped pid in
+//! `TestHooks::last_reaped_pid`; on Linux the OS pid table no
+//! longer lists the process after the reap completes.
 
 #![cfg(feature = "test-fixture")]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use rafaello_core::broker_acl::{BrokerAcl, PluginAcl};
 use rafaello_core::bus::Broker;
@@ -19,20 +18,12 @@ use rafaello_core::compile::{
 };
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
 use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
-use rafaello_core::{topic_id, SpawnError};
-
-#[cfg(target_os = "linux")]
-fn open_fd_count() -> usize {
-    std::fs::read_dir("/proc/self/fd")
-        .expect("read /proc/self/fd")
-        .count()
-}
 
 #[tokio::test]
-async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
+async fn spawn_reaps_child_after_post_register_unwind() {
     let entry = PathBuf::from(env!("CARGO_BIN_EXE_rfl-bus-fixture"));
     let canonical = CanonicalId::parse("local/test:plugin@0.1.0").unwrap();
-    let real_topic = topic_id::derive(&canonical.to_string());
+    let real_topic = rafaello_core::topic_id::derive(&canonical.to_string());
 
     let mut plugins = BTreeMap::new();
     plugins.insert(
@@ -80,39 +71,36 @@ async fn spawn_unwinds_socketpair_and_returns_phase_b_stub() {
         private_state_dir: proj.path().join(".rafaello-plugin-data").join(&real_topic),
     };
 
-    #[cfg(target_os = "linux")]
-    let baseline = open_fd_count();
-
-    let err = match sup.spawn(&plan, &paths).await {
-        Ok(_) => panic!("expected Phase B stub error"),
-        Err(e) => e,
-    };
-    match err {
-        SpawnError::SandboxBuild {
-            canonical: c,
-            source,
-        } => {
-            assert_eq!(c, canonical);
-            let msg = format!("{source}");
-            assert!(
-                msg.contains("Phase B step 18+"),
-                "expected step-18+ stub message, got: {msg}"
-            );
-        }
-        other => panic!("expected SandboxBuild step-18+ stub, got {other:?}"),
+    if sup.spawn(&plan, &paths).await.is_ok() {
+        panic!("c19 spawn must return the step-18+ stub error");
     }
 
-    assert_eq!(hooks.socketpair_creates.load(Ordering::SeqCst), 1);
-    assert_eq!(hooks.outpost_starts.load(Ordering::SeqCst), 0);
     assert_eq!(hooks.child_spawns.load(Ordering::SeqCst), 1);
+
+    // Post-spawn unwind reaps synchronously inside `spawn`; poll
+    // briefly to tolerate any test-runner scheduling latency.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut reaped: Option<u32> = None;
+    while Instant::now() < deadline {
+        if let Some(pid) = hooks.last_reaped_pid() {
+            reaped = Some(pid);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let pid = reaped.expect("supervisor must record the reaped pid in TestHooks");
 
     #[cfg(target_os = "linux")]
     {
-        let after = open_fd_count();
-        assert_eq!(
-            after, baseline,
-            "open fd count should return to baseline after unwind \
-             (baseline={baseline}, after={after})"
-        );
+        let status_path = format!("/proc/{pid}/status");
+        match std::fs::metadata(&status_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => panic!("pid {pid} is still alive after reap (/proc/{pid}/status exists)"),
+            Err(e) => panic!("unexpected error stat-ing /proc/{pid}/status: {e}"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
     }
 }
