@@ -59,9 +59,9 @@ fn read(error: &FittingsError) -> (&str, Option<&Value>) {
     match error {
         FittingsError::Parse { message, data }
         | FittingsError::InvalidRequest { message, data }
-        | FittingsError::MethodNotFound { message, data }
         | FittingsError::InvalidParams { message, data }
         | FittingsError::Internal { message, data } => (message.as_str(), data.as_ref()),
+        FittingsError::MethodNotFound { message, data, .. } => (message.as_str(), data.as_ref()),
         other => panic!("expected predefined variant, got {other:?}"),
     }
 }

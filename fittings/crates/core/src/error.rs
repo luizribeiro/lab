@@ -17,6 +17,7 @@ pub enum FittingsError {
     },
     #[error("method not found: {message}")]
     MethodNotFound {
+        method: Option<String>,
         message: String,
         data: Option<Value>,
     },
@@ -71,6 +72,7 @@ impl FittingsError {
 
     pub fn method_not_found(message: impl Into<String>) -> Self {
         Self::MethodNotFound {
+            method: None,
             message: message.into(),
             data: None,
         }
@@ -78,8 +80,20 @@ impl FittingsError {
 
     pub fn method_not_found_with_data(message: impl Into<String>, data: Value) -> Self {
         Self::MethodNotFound {
+            method: None,
             message: message.into(),
             data: Some(data),
+        }
+    }
+
+    pub fn method_not_found_with_method(
+        method: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::MethodNotFound {
+            method: Some(method.into()),
+            message: message.into(),
+            data: None,
         }
     }
 
@@ -149,7 +163,7 @@ mod tests {
         ));
         assert!(matches!(
             FittingsError::method_not_found("unknown"),
-            FittingsError::MethodNotFound { message, data: None } if message == "unknown"
+            FittingsError::MethodNotFound { method: None, message, data: None } if message == "unknown"
         ));
         assert!(matches!(
             FittingsError::invalid_params("wrong type"),
