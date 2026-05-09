@@ -1,13 +1,11 @@
 # m2-broker-spawn — commits
 
-> **Status:** round-4 draft, inlining pi commits round-3
-> (2 blocking + 3 non-blocking — c20 set_nonblocking,
-> c20 install-service-then-ready ordering, c30 four→five
-> count, fixture-test filename unification, `drop(take())`
-> syntax). Pi round-4 verification pending. Trajectory:
-> 7+many → 8+5 → 2+3 — convergence signal fired in
-> round 3 ("very close"). Phase 3 per-commit agent work
-> begins after ratification.
+> **Status:** round-5 draft. Pi round-4 returned **ratifiable**
+> (0 blocking + 2 non-blocking polish, both inlined here:
+> c16 six→five count, c20 "two tests" wording).
+> Trajectory: 7+many → 8+5 → 2+3 → 0+2. Awaiting owner
+> ratification — Phase 3 per-commit agent work begins
+> after the owner says go.
 
 Ordered commit list for m2, derived from `scope.md` (round 11,
 ratified 2026-05-09). Each commit is one logical idea **and
@@ -678,9 +676,9 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 - **Why.** scope §SP4 4–7, pi-1 B4 (add invalid_allow_hosts
   test).
 - **Depends on.** c15.
-- **Acceptance.** **Six** new tests (pi-1 c16 finding —
-  was incorrectly listed as "four"; was missing
-  invalid_allow_hosts test):
+- **Acceptance.** **Five** new tests (pi-4 N1 — count
+  corrected; pi-1 had said "four", pi-2 over-corrected to
+  six):
   - `tests/supervisor_spawn_reserved_env_in_set_refused.rs`
     — table-driven over all six reserved names (pi-1 c16 —
     "table-test all reserved env names, not just three"):
@@ -925,9 +923,10 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
   `Command::new(env!("CARGO_BIN_EXE_rfl-bus-fixture"))` with
   manual env to verify the fixture's standalone behaviour
   WITHOUT going through the supervisor).
-- **Acceptance.** Two new tests that exercise the fixture
-  WITHOUT the supervisor (the supervisor cannot complete a
-  spawn until c21):
+- **Acceptance.** One new test + verification that the c03
+  unknown-mode regression still passes (pi-4 N2 — wording
+  clarified). Both exercise the fixture WITHOUT the
+  supervisor (which cannot complete a spawn until c21):
   - `tests/fixture_responds_to_ready_then_holds_open.rs` —
     create a socketpair via `nix`, fork via
     `Command::new(env!(...)).env("RFL_BUS_FD", ...)`
