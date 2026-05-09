@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 //! Plugin supervisor scaffolding (scope §SP1, §SP2, §SP7).
 //!
 //! c14 lands the resource-ownership shape with the
@@ -16,7 +17,8 @@
 //! supervisor as ready.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,7 +27,9 @@ use tokio::sync::watch;
 
 use crate::bus::{Broker, PeerHandle, RegisteredPlugin};
 use crate::compile::CompiledPlugin;
-use crate::error::{ReaperOutcome, ShutdownFailure, SpawnError};
+use crate::error::{
+    BrokerError, InvalidPlanReason, PathKind, ReaperOutcome, ShutdownFailure, SpawnError,
+};
 use crate::lock::CanonicalId;
 
 use outpost_proxy::ProxyHandle;
@@ -163,11 +167,9 @@ pub type ExtraServiceFactory = Arc<
 >;
 
 pub struct PluginSupervisor {
-    #[allow(dead_code)] // wired in c15+.
     broker: Broker,
     #[allow(dead_code)]
     config: SupervisorConfig,
-    #[allow(dead_code)]
     in_flight: Arc<Mutex<HashSet<CanonicalId>>>,
     #[allow(dead_code)]
     managed: Mutex<BTreeMap<CanonicalId, ManagedSpawn>>,
@@ -211,11 +213,69 @@ impl PluginSupervisor {
     pub async fn spawn(
         &self,
         plan: &CompiledPlugin,
-        _paths: &SpawnPaths,
+        paths: &SpawnPaths,
     ) -> Result<SpawnHandle, SpawnError> {
+        let _in_flight = InFlightGuard::acquire(Arc::clone(&self.in_flight), &plan.canonical)?;
+
+        self.broker
+            .try_reserve_registration(&plan.canonical)
+            .map_err(|e| match e {
+                BrokerError::NotInAcl(c) => SpawnError::NotInAcl(c),
+                BrokerError::AlreadyRegistered(c) => SpawnError::AlreadyRegistered(c),
+                other => SpawnError::SandboxBuild {
+                    canonical: plan.canonical.clone(),
+                    source: anyhow::anyhow!(other),
+                },
+            })?;
+
+        match self.broker.plugin_acl(&plan.canonical) {
+            Some(acl) => {
+                if acl.topic_id != plan.topic_id {
+                    return Err(SpawnError::InvalidPlan {
+                        canonical: plan.canonical.clone(),
+                        reason: InvalidPlanReason::TopicIdMismatch {
+                            expected: acl.topic_id,
+                            got: plan.topic_id.clone(),
+                        },
+                    });
+                }
+            }
+            None => return Err(SpawnError::NotInAcl(plan.canonical.clone())),
+        }
+
+        validate_path(
+            &plan.entry_absolute,
+            PathKind::EntryAbsolute,
+            &plan.canonical,
+        )?;
+        validate_path(&paths.project_root, PathKind::ProjectRoot, &plan.canonical)?;
+        validate_path(
+            &paths.private_state_dir,
+            PathKind::PrivateStateDir,
+            &plan.canonical,
+        )?;
+        for p in &plan.filesystem.read_paths {
+            validate_path(p, PathKind::ReadPath, &plan.canonical)?;
+        }
+        for p in &plan.filesystem.read_dirs {
+            validate_path(p, PathKind::ReadDir, &plan.canonical)?;
+        }
+        for p in &plan.filesystem.write_paths {
+            validate_path(p, PathKind::WritePath, &plan.canonical)?;
+        }
+        for p in &plan.filesystem.write_dirs {
+            validate_path(p, PathKind::WriteDir, &plan.canonical)?;
+        }
+        for p in &plan.filesystem.exec_paths {
+            validate_path(p, PathKind::ExecPath, &plan.canonical)?;
+        }
+        for p in &plan.filesystem.exec_dirs {
+            validate_path(p, PathKind::ExecDir, &plan.canonical)?;
+        }
+
         Err(SpawnError::SandboxBuild {
             canonical: plan.canonical.clone(),
-            source: anyhow::anyhow!("supervisor not yet implemented — c15+"),
+            source: anyhow::anyhow!("Phase A step 4 not yet implemented"),
         })
     }
 
@@ -228,6 +288,66 @@ impl Drop for PluginSupervisor {
     fn drop(&mut self) {
         // Real best-effort SIGKILL teardown lands in c26.
     }
+}
+
+/// RAII reservation for the supervisor `in_flight` set.
+///
+/// Acquired at SP4 step 1a; on every Phase A/B failure the
+/// guard's `Drop` removes the canonical from `in_flight`,
+/// allowing retry. On full spawn success the guard is dropped
+/// after broker registration becomes the source of truth.
+struct InFlightGuard {
+    set: Arc<Mutex<HashSet<CanonicalId>>>,
+    canonical: CanonicalId,
+}
+
+impl InFlightGuard {
+    fn acquire(
+        set: Arc<Mutex<HashSet<CanonicalId>>>,
+        canonical: &CanonicalId,
+    ) -> Result<Self, SpawnError> {
+        let inserted = set.lock().insert(canonical.clone());
+        if !inserted {
+            return Err(SpawnError::AlreadyRegistered(canonical.clone()));
+        }
+        Ok(Self {
+            set,
+            canonical: canonical.clone(),
+        })
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.set.lock().remove(&self.canonical);
+    }
+}
+
+fn validate_path(path: &Path, kind: PathKind, canonical: &CanonicalId) -> Result<(), SpawnError> {
+    if !path.is_absolute() {
+        return Err(SpawnError::InvalidPlan {
+            canonical: canonical.clone(),
+            reason: InvalidPlanReason::NonAbsolutePath {
+                kind,
+                path: path.to_path_buf(),
+            },
+        });
+    }
+    if path
+        .as_os_str()
+        .as_bytes()
+        .iter()
+        .any(|b| *b < 0x20 || *b == 0x7f)
+    {
+        return Err(SpawnError::InvalidPlan {
+            canonical: canonical.clone(),
+            reason: InvalidPlanReason::ControlCharsInPath {
+                kind,
+                path: path.to_path_buf(),
+            },
+        });
+    }
+    Ok(())
 }
 
 // Type plumbing: a watch channel initialised to `None` so
