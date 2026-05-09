@@ -262,10 +262,22 @@ where
     }
 }
 
+pub(crate) struct HandleCleanup {
+    registry: ProgressRegistry,
+    token: ProgressToken,
+}
+
+impl Drop for HandleCleanup {
+    fn drop(&mut self) {
+        self.registry.remove(&self.token);
+    }
+}
+
 pub struct ToolCallHandle {
     pending: PendingCall,
     progress_rx: mpsc::Receiver<ProgressNotificationParams>,
     missed: Arc<AtomicU64>,
+    _cleanup: Option<HandleCleanup>,
 }
 
 impl ToolCallHandle {
@@ -273,11 +285,13 @@ impl ToolCallHandle {
         pending: PendingCall,
         progress_rx: mpsc::Receiver<ProgressNotificationParams>,
         missed: Arc<AtomicU64>,
+        cleanup: Option<HandleCleanup>,
     ) -> Self {
         Self {
             pending,
             progress_rx,
             missed,
+            _cleanup: cleanup,
         }
     }
 
@@ -295,8 +309,10 @@ impl IntoFuture for ToolCallHandle {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let ToolCallHandle { pending, .. } = self;
         Box::pin(async move {
+            let ToolCallHandle {
+                pending, _cleanup, ..
+            } = self;
             let value = pending
                 .await
                 .map_err(|e| McpfitError::internal(format!("tools/call call failed: {e}")))?;
@@ -340,14 +356,16 @@ where
         let params_value = serde_json::to_value(&params)
             .map_err(|e| McpfitError::internal(format!("encode tools/call params: {e}")))?;
         let (tx, rx) = mpsc::channel::<ProgressNotificationParams>(PROGRESS_CHANNEL_CAPACITY);
+        let token = ProgressToken::String(token_str);
         // Register before sending so a fast server can't deliver progress
         // notifications before the routing entry exists.
-        let missed = self
-            .client
-            .progress
-            .register(ProgressToken::String(token_str), tx);
+        let missed = self.client.progress.register(token.clone(), tx);
         let pending = self.client.inner.start_call("tools/call", params_value);
-        Ok(ToolCallHandle::new(pending, rx, missed))
+        let cleanup = HandleCleanup {
+            registry: self.client.progress.clone(),
+            token,
+        };
+        Ok(ToolCallHandle::new(pending, rx, missed, Some(cleanup)))
     }
 }
 
@@ -1321,7 +1339,7 @@ mod tests {
         );
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed);
+        let handle = ToolCallHandle::new(pending, rx, missed, None);
 
         let response = handle.await.expect("handle resolves to ToolResponse");
 
@@ -1376,7 +1394,7 @@ mod tests {
         );
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed);
+        let handle = ToolCallHandle::new(pending, rx, missed, None);
 
         let err = handle
             .await
@@ -1409,7 +1427,7 @@ mod tests {
         let pending = fittings_client.start_call("tools/call", json!({}));
         let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
         let missed = Arc::new(AtomicU64::new(0));
-        let handle = ToolCallHandle::new(pending, rx, missed.clone());
+        let handle = ToolCallHandle::new(pending, rx, missed.clone(), None);
 
         assert_eq!(handle.missed_progress_count(), 0);
         missed.store(7, Ordering::Relaxed);
@@ -1635,6 +1653,93 @@ mod tests {
         );
 
         server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn awaiting_progress_handle_removes_registry_entry() {
+        use super::ProgressToken;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let handle = client
+            .call_tool_with_progress("work", json!({}))
+            .start()
+            .await
+            .expect("start progress-enabled call");
+
+        let frame = server_transport.recv().await.expect("tools/call request");
+        let request = parse_request_fixture(&frame).expect("decode request");
+        let id = request.id.expect("tools/call must carry id");
+        let token = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+            .expect("progress token injected");
+        let progress_token =
+            ProgressToken::from_value(&token).expect("token convertible");
+        assert!(
+            client.progress_registry().get(&progress_token).is_some(),
+            "registry must hold token while handle is alive",
+        );
+
+        let response_line = success_response_line(
+            id,
+            json!({"content": [{"type": "text", "text": "done"}], "isError": false}),
+        )
+        .expect("encode response");
+        server_transport
+            .send(&response_line)
+            .await
+            .expect("send response");
+
+        let _response = handle.await.expect("handle resolves");
+        assert!(
+            client.progress_registry().get(&progress_token).is_none(),
+            "registry entry must be removed after handle completes",
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_progress_handle_removes_registry_entry() {
+        use super::ProgressToken;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let handle = client
+            .call_tool_with_progress("work", json!({}))
+            .start()
+            .await
+            .expect("start progress-enabled call");
+
+        let frame = server_transport.recv().await.expect("tools/call request");
+        let request = parse_request_fixture(&frame).expect("decode request");
+        let token = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+            .expect("progress token injected");
+        let progress_token =
+            ProgressToken::from_value(&token).expect("token convertible");
+        assert!(
+            client.progress_registry().get(&progress_token).is_some(),
+            "registry must hold token while handle is alive",
+        );
+
+        drop(handle);
+        assert!(
+            client.progress_registry().get(&progress_token).is_none(),
+            "registry entry must be removed when handle is dropped without awaiting",
+        );
     }
 }
 
