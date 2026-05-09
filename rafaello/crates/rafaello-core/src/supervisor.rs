@@ -422,12 +422,48 @@ impl PluginSupervisor {
             });
         }
 
-        let cmd = builder
+        let mut cmd = builder
             .tokio_command(&plan.entry_absolute)
             .map_err(|source| SpawnError::SandboxBuild {
                 canonical: plan.canonical.clone(),
                 source,
             })?;
+
+        // NOTE per scope §SP4: lockin's env_clear removes TMPDIR/TMP/TEMP; lockin's
+        // SandboxedCommand does not expose private_tmp pre-spawn (pi-2 §5), so m2 cannot
+        // re-inject those vars. Plugins use RFL_PRIVATE_STATE_DIR for scratch (NOT a
+        // plugin ABI guarantee per pi runtime-extensibility — m2 retrospective records).
+        cmd.env_clear();
+        for key in &plan.env.pass {
+            if let Some(val) = std::env::var_os(key) {
+                cmd.env(key, val);
+            }
+        }
+        for (k, v) in &plan.env.set {
+            cmd.env(k, v);
+        }
+        if let NetworkPlan::Proxy { .. } = &plan.network {
+            let proxy_url = format!("http://127.0.0.1:{}", proxy_port);
+            for key in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                cmd.env(key, &proxy_url);
+            }
+            for key in ["NO_PROXY", "no_proxy"] {
+                cmd.env(key, "");
+            }
+        }
+        cmd.env("RFL_BUS_FD", RFL_BUS_FD_NUMBER.to_string());
+        cmd.env("RFL_PLUGIN", plan.canonical.to_string());
+        cmd.env("RFL_PROJECT_ROOT", &paths.project_root);
+        cmd.env("RFL_PRIVATE_STATE_DIR", &paths.private_state_dir);
+        cmd.env("RFL_TOPIC_ID", &plan.topic_id);
+        cmd.current_dir(&paths.project_root);
 
         drop(cmd);
         drop(proxy);
