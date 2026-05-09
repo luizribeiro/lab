@@ -584,12 +584,16 @@ deferred to v2 pending real usage data.
 ### 5.5 Per-plugin private state
 
 Every plugin automatically receives a recursive read+write
-grant on `${PROJECT_ROOT}/.rafaello-plugin-data/<plugin-id>/`,
-with no manifest request and no user prompt. This is where
-plugins persist caches, audit logs, and indexes. Other plugins
-cannot read it. The grant **does not count toward
+grant on `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/`
+(the hashed form per `decisions.md` row 5; the raw
+`<source>:<name>@<version>` canonical id is not path-safe), with
+no manifest request and no user prompt. This is where plugins
+persist caches, audit logs, and indexes. Other plugins cannot
+read it. The grant **does not count toward
 `has_workspace_write`** for trifecta purposes (security RFC
-§7.1, §7.2.5).
+§7.1, §7.2.5). Topic-id form ratified in `decisions.md` row 37
+(refines row 16); landed in m1's `compile::compile_plugin` per
+scope §C5.
 
 ## 6. The grant compiler and tool-call gate
 
@@ -987,7 +991,7 @@ ownership, attached frontends, and `user_grants`.
 - Persistence: SQLite under `${PROJECT_ROOT}/.rafaello/state/`
   storing entries, attached-frontend log, and audit events.
   Plugin private state lives in
-  `${PROJECT_ROOT}/.rafaello-plugin-data/<id>/` (§5.5).
+  `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (§5.5).
 - Branching is **not v1**: sessions are linear in v1 and v2
   inherits the model. The entry schema's `parent` field is
   reserved for v2 branching; v1 leaves it `null`.

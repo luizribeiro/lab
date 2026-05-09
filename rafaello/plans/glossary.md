@@ -37,7 +37,7 @@ a `streams/` RFC. Keep definitions to one line where possible.
 | Lock (`rafaello.lock`) | Project-root TOML file recording, per installed plugin, the granted capabilities + content digest + manifest-snapshot digest + bindings; mutated only by `rfl` install/grant/revoke/update. |
 | Lockin | The OS-level process-tree sandbox used in v1; consumes a per-spawn `lockin.toml` policy compiled from the lock. |
 | Manifest (`rafaello.toml`) | Plugin author's request, shipped at the plugin root; declares identity, methods, subscribed/published topics, capability bundles, renderer registrations, lazy-load triggers. |
-| Per-plugin private state | `${PROJECT_ROOT}/.rafaello-plugin-data/<plugin-id>/`; recursively read+write granted automatically; excluded from `has_workspace_write`. |
+| Per-plugin private state | `${PROJECT_ROOT}/.rafaello-plugin-data/<topic-id>/` (the hashed form per `decisions.md` row 5; canonical id is not path-safe — `decisions.md` row 37 refines row 16); recursively read+write granted automatically; excluded from `has_workspace_write`. |
 | Pattern (topic) | A subscribe pattern using `*` (one segment) or `**` (final, one or more trailing segments) on top of the topic grammar; distinct syntactic category from a topic. |
 | Plugin id, canonical | `<source>:<name>@<version>` (e.g. `github:acme/grep@1.4.2`); retained in the lock and human-facing logs. |
 | Plugin id, topic-id | `id_<base32-no-pad-lower(sha256(canonical))[0..16]>`; the form used inside bus topic segments. Collision-checked at install. |
