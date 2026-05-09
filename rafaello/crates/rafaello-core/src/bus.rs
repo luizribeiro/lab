@@ -12,7 +12,7 @@ pub use fittings_core::message::JsonRpcId;
 use crate::broker_acl::{BrokerAcl, PluginAcl};
 use crate::error::{BrokerError, InReplyToReason};
 use crate::lock::canonical_id::CanonicalId;
-use crate::validate::topic::{validate_pattern, validate_topic};
+use crate::validate::topic::{pattern_matches_topic, validate_pattern, validate_topic};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -217,6 +217,68 @@ impl Broker {
                 });
             }
         }
+
+        let event = BusEvent {
+            topic: msg.topic.clone(),
+            payload: msg.payload.clone(),
+            publisher: PublisherIdentity::Plugin {
+                canonical: canonical.to_string(),
+                topic_id: publisher_acl.topic_id.clone(),
+            },
+            in_reply_to: msg.in_reply_to.clone(),
+            taint: msg.taint.clone(),
+        };
+
+        if last == "tool_result" || last == "rpc_reply" {
+            tracing::debug!(
+                topic = %msg.topic,
+                publisher = %canonical,
+                "result-routing protection: skipping per-subscriber fan-out"
+            );
+            let _ = event;
+            return Ok(());
+        }
+
+        let value =
+            serde_json::to_value(&event).expect("BusEvent always serialises to a JSON value");
+
+        let recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)> = {
+            let state = self.0.state.lock();
+            state
+                .registry
+                .iter()
+                .filter(|(c, _)| *c != canonical)
+                .filter_map(|(c, conn)| {
+                    self.0.acl.plugins.get(c).map(|acl| {
+                        let patterns: Vec<String> = acl
+                            .subscribe_patterns
+                            .iter()
+                            .chain(acl.auto_subscribes.iter())
+                            .cloned()
+                            .collect();
+                        (c.clone(), conn.peer.clone(), patterns)
+                    })
+                })
+                .collect()
+        };
+
+        for (recipient, peer, patterns) in recipients {
+            let matches = patterns
+                .iter()
+                .any(|pat| pattern_matches_topic(pat, &msg.topic));
+            if !matches {
+                continue;
+            }
+            if let Err(e) = peer.notify("bus.event", value.clone()) {
+                tracing::warn!(
+                    recipient = %recipient,
+                    topic = %msg.topic,
+                    error = ?e,
+                    "bus.event fan-out notify failed"
+                );
+            }
+        }
+
         Ok(())
     }
 
