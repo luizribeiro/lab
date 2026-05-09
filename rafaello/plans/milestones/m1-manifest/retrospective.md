@@ -42,7 +42,7 @@ substituted.
 
 ### Positive matrix verification
 
-All 47 scope-named positive tests are present and pass under the
+All 37 scope-named positive tests (counted via `awk '/^### Positive integration tests/,/^### Negative/'  scope.md | grep -c '^|.*\.rs.*|'` — pi review-1 corrected the round-1 draft's false "47" count) are present and pass under the
 c37 capture (`manual-validation.md` §1: 269 tests / 0 failed).
 Spot checks against the trace table:
 
@@ -70,7 +70,7 @@ Spot checks against the trace table:
 
 ### Negative matrix verification
 
-All 71 scope-named negative tests are present and pass. Spot
+All 86 scope-named negative tests (counted via `awk '/^### Negative integration tests/,/^### Manual/' scope.md | grep -c '^|.*\.rs.*|'` — pi review-1 corrected the round-1 draft's false "71" count; some rows under the negative heading are positive-behaviour assertions of refusal-with-override or pass-on-positive variants of negative fixtures, so the file count is lower than 86 but every named row maps to assertions in landed test files) are present and pass. Spot
 checks across the four security-sensitive layers — manifest
 grammar, lock-side mirrors, carve-outs, compile-time path
 resolver — confirm the trace table maps onto landed git
@@ -138,7 +138,7 @@ All extras are additive; none replace a scope-named test.
 
 ### Coverage verdict
 
-**No gaps.** Every scope-named positive (47) and negative (71)
+**No gaps.** Every scope-named positive (37 rows) and negative (86 rows)
 test is implemented and passes; the c37 capture reports 269
 `rafaello-core` tests passing. The §W cutover tests pass against
 the full fittings workspace (one pre-existing m0 flake aside,
@@ -258,12 +258,17 @@ is dead). No code references `requires_confirmation` anywhere
 the only hit in the tree is `overview.md:1193`'s historical
 note about the rename).
 
-**Canonical fix.** No RFC patch. Per `plans/README.md` the RFC
-is a historical artefact; the rename is already pinned in
-`overview.md` §15.1's "Renaming note (pi review 2 finding 2)"
-and tracked in `decisions.md` row 31 / overview §15.1 item 1.
-The retrospective records the rename as resolved-by-design;
-nothing further to do.
+**Canonical fix.** No RFC patch needed for the rename itself —
+the RFC's §9 #2 mention is in "X replaces Y" rename-note
+framing, not as a live field name; the live name is already
+`always_confirm`. Pi review-1 of this retrospective flagged a
+factual error in the round-1 draft's grep claim; the corrected
+state is: `requires_confirmation` appears in the security RFC
+exactly once, in the §9 #2 rename note (line `:1197`), and in
+`rfc-camel-on-v1.md:229` (CaMeL is v2 territory; not m1's
+problem); no other RFC body references. Recorded as
+resolved-by-design; the m1-retrospective Stream A patches
+landed at §2.3 / §2.4 below cover the genuine drift.
 
 ### 2.3 Security RFC §7.4.1 — helper plugins drift
 
@@ -274,14 +279,20 @@ still describes the full helper-plugin design (`bindings.helper_for`,
 (2026-05-08) defers helper plugins to v2 and reverses
 decision #14.
 
-**Canonical fix.** No RFC patch (Stream A is not Stream F).
-m1's manifest-side enforcement is already in place — `M2`
-rejects `helper_for` at parse time as `ManifestError::ReservedField`
+**Canonical fix.** Patch the RFC body with a v1-status
+deferral banner at the top of §7.4.1 pointing at
+`decisions.md` row 26 (pi review-1 of this retrospective:
+the round-1 "no Stream A patch" wording contradicted
+`milestones/README.md` §"Stream RFC drift" which explicitly
+assigns this drift to m1's retrospective). The body is
+preserved as the historical-as-of-2026-05-07 design; the
+banner makes the v1 reader unambiguous. m1's manifest-side
+enforcement is already in place — `M2` rejects `helper_for`
+at parse time as `ManifestError::ReservedField`
 (`tests/manifest_helper_for_field.rs`); `L4` lock schema has
 no `helpers` / `helper_for` fields and rejects them
-(`tests/lock_helper_field_rejected.rs`). The drift is purely
-RFC-text-vs-decision-row; future readers reach the live
-position via `decisions.md` row 26. Recorded; no action.
+(`tests/lock_helper_field_rejected.rs`). Banner landed in
+commit `8d0a28c`.
 
 ### 2.4 Security RFC §5.7 — external attach drift
 
@@ -293,10 +304,14 @@ only frontend in v1; the `frontend.<attach-id>.*` namespace is
 "reserved" only in the external-attach sense — the TUI itself
 uses it).
 
-**Canonical fix.** No RFC patch. m1 has no frontend code; the
-drift is consumed by m3 (which lands the local-spawned TUI per
-row 34) and m3's retrospective owns any further reconciliation.
-Recorded; no action.
+**Canonical fix.** Patch the RFC body with a v1-status
+deferral banner at the top of §5.7 pointing at `decisions.md`
+row 27 (same reasoning as §2.3: pi review-1 caught the
+README's explicit assignment of this drift to m1). The body
+is preserved as historical-as-of-2026-05-07; the banner
+clarifies that v1 ships TUI-only (local-spawned per §5.7.1's
+first bullet). m3 owns the TUI implementation per row 34.
+Banner landed in commit `8d0a28c` (same commit as §2.3).
 
 ### 2.5 Private-state path-key — `<plugin-id>` → `<topic-id>` clarification
 
@@ -353,23 +368,43 @@ worth a standalone commit.
 
 ### 2.7 Verdict
 
-Three pieces of action-required drift, all landing as follow-up
-commits on this branch after `retrospective.md`:
+Five pieces of action-required drift, **all landed as
+follow-up commits on this branch BEFORE the retrospective
+ratifies** (per pi review-1 of this retrospective: the README
++ scope require Stream A patches too — the round-1 draft
+incorrectly punted them as "no RFC patch"):
 
-1. `streams/f-manifest/rfc-manifest-schema.md` — fold §15.1
-   items 1–4 (§2.1).
-2. `overview.md` §5.5 / `decisions.md` row 16 / `glossary.md`
-   — private-state topic-id clarification + scope.md duplicate
-   row strike (§2.5 + §2.6).
+1. ✅ `streams/a-security/rfc-security-model.md` §5.7 + §7.4.1
+   — v1-status deferral banners pointing at `decisions.md` rows
+   26 / 27 (commit `8d0a28c`).
+2. ✅ `streams/f-manifest/rfc-manifest-schema.md` — top-of-RFC
+   v1-status banner mapping body sections to live position
+   (overview §15.1 + decisions rows 26/30/31/32/17/24); commit
+   `5677dae`. Per the README's "RFCs are historical artefacts"
+   policy, the body is preserved with a banner rather than
+   rewritten section-by-section. The live schema is the union
+   of (RFC body) MINUS deferrals MINUS overrides PLUS overview
+   §15.1 normative-delta items 1–4.
+3. ✅ `overview.md` §5.5 + `glossary.md` "Per-plugin private
+   state" — `<plugin-id>` → `<topic-id>` clarification;
+   `decisions.md` row 37 added (refines row 16, append-only
+   per the decisions log preamble); commit `93761c8`.
+4. ✅ `scope.md` duplicate `digest_match_compiles.rs` row
+   struck; commit `823e8bb`.
+5. ✅ `cargo doc` broken-intra-doc-link on `Error` fixed in
+   `rafaello/crates/rafaello-core/src/error.rs`; clippy
+   `derivable_impls` (3 sites) + `manual_contains` (1 site)
+   cleaned up; rustfmt re-applied across rafaello + fittings;
+   commit `823e8bb`.
 
-Two pieces of recorded-only drift (§2.3, §2.4) — Stream A
-historical artefact text. The `requires_confirmation` rename
-(§2.2) is resolved-by-design; no action.
+The `requires_confirmation` rename (§2.2 below) is
+resolved-by-design — the RFC's only mention is in §9 #2 in
+"X replaces Y" rename-note framing, not as a live field name.
 
-No `decisions.md` rows added by m1 itself: every drift item
-above was already pinned in an existing decisions row or
-overview §15.1 item before m1 started. m1's job was to
-reconcile docs, not to re-decide.
+m1 added one new `decisions.md` row (37, refining row 16) for
+the private-state path-key clarification; everything else was
+already pinned in an existing decisions row or overview §15.1
+item before m1 started.
 
 ---
 
@@ -651,28 +686,18 @@ the `mcp-server` test harness (read-then-write instead of
 write-all-then-read), per m0 retrospective §5.2's "proposed
 fix location".
 
-### 5.2 New issue introduced by m1: `cargo doc` broken-intra-doc-link in `rafaello-core` error module
+### 5.2 ✅ Resolved: `cargo doc` broken-intra-doc-link in `rafaello-core` error module
 
 Captured as `manual-validation.md` §3 + §"Follow-ups" F1.
-`crates/rafaello-core/src/error.rs:6` writes ``[`Error`]``;
-rustdoc cannot disambiguate between the `Error` enum and the
-`thiserror::Error` derive-macro re-export in scope. One-character
-fix: change to ``[`enum@Error`]``. Trips the
-`rustdoc::broken_intra_doc_links` warn-by-default lint.
-Doesn't fail `cargo doc`, but `scope.md` §"Acceptance
-summary" requires `cargo doc … --no-deps` warning-free, and
-this single warning means that bullet is *technically* unmet.
-
-**Severity.** Cosmetic: the public API HTML is fine; the doc
-link target just falls back to the macro. No consumer broken.
-
-**Fix.** Land as a separate follow-up commit on this branch
-alongside the §2 doc patches:
-
-> `docs(rafaello-core): disambiguate Error doc link as enum@Error`
-
-Should land before the milestone retrospective is signed off
-so the acceptance gate goes from "technically unmet" to met.
+`crates/rafaello-core/src/error.rs:6` originally wrote
+``[`Error`]``; rustdoc couldn't disambiguate between the
+`Error` enum and the `thiserror::Error` derive-macro re-export
+in scope. Fixed by changing to ``[`enum@Error`]``. Landed in
+commit `823e8bb` (alongside the §2 doc patches and the
+clippy-derivable_impls / manual_contains cleanups).
+`cargo doc --manifest-path rafaello/Cargo.toml -p
+rafaello-core --no-deps` now warning-free; the scope
+§"Acceptance summary" doc bullet is met.
 
 ### 5.3 Scope wording on the fixtures directory
 
@@ -760,33 +785,41 @@ authoring-conventions rule).
   to CI per scope's "no platform-specific code" carve-out;
   if the CI run for the `rafaello-v0.1` tip fails on macOS,
   m1's acceptance flips red.
-- ✅ `cargo test --manifest-path fittings/Cargo.toml
-  --workspace` green for the §W cutover, modulo the
-  pre-existing m0 flake (`manual-validation.md` §2 — explicitly
-  not an m1 acceptance gap per the §"Acceptance summary"
-  pi-5 finding 5 commitment that the test doesn't have to be
-  flake-free, only that the cutover's blast radius is clean
-  across the workspace).
-- ⚠️ `cargo doc --manifest-path rafaello/Cargo.toml -p
-  rafaello-core --no-deps` warning-free. **Technically unmet**
-  by one rustdoc::broken_intra_doc_links warning in
-  `crates/rafaello-core/src/error.rs:6` (§5.2). Fix is the
-  follow-up commit listed above; one-character edit. Will
-  flip green before sign-off.
+- ⚠️ `cargo test --manifest-path fittings/Cargo.toml
+  --workspace` — m1 retrospective re-run: 1 failure
+  reproduces the m0-known flake
+  `mcp-server::stdio_e2e::stdio_e2e_runtime_registry_mutation_emits_list_changed_and_updates_tools_list`
+  on the first attempt; passes on a re-run (3 attempts: FAIL,
+  FAIL, PASS). This is the m0 retrospective §5.2 documented
+  pre-existing race in the mcp-server test harness (write-all-then-read
+  vs read-then-write on `tools/list` after `tools/register`).
+  **Waiver**: m1 inherits the m0 documented flake; the §W
+  cutover itself doesn't touch the test or its harness; the
+  flake is a pre-existing harness bug owned by the mcp-server
+  test infrastructure, not the fittings library. Recorded
+  here AND in §5.1 below; same posture as m0's acceptance
+  closing line. Recommend the next milestone driver land the
+  read-then-write fix proposed in m0 retrospective §5.2.
+- ✅ `cargo doc --manifest-path rafaello/Cargo.toml -p
+  rafaello-core --no-deps` warning-free (§5.2 — fixed in
+  commit `823e8bb`).
 - ✅ `manual-validation.md` records the items in scope's
-  Manual-validation list (`c8cd1af` — last m1 commit).
-- ⏳ `retrospective.md` written with drift surfaced as
-  deltas. (This file; the four follow-up commits listed
-  above are queued.)
-- ⏳ Stream F drift items 1–4 patched into the manifest RFC
-  body. (Follow-up #1.)
-- ⏳ Security RFC `requires_confirmation` rename — resolved
-  by design; recorded only (§2.2).
-- ⏳ Helper / external-attach drift recorded; no patches
-  needed per `plans/README.md` authoring conventions
-  (§2.3 + §2.4).
-- ⏳ Private-state `<plugin-id>` → `<topic-id>` clarification
-  in overview / decisions / glossary. (Follow-up #2.)
+  Manual-validation list (`c8cd1af` — landed at end of
+  Phase 3).
+- ✅ `retrospective.md` written with drift surfaced as
+  deltas. (This file.)
+- ✅ Stream F RFC body — v1-status banner landed (§2.1 + commit
+  `5677dae`). Per `plans/README.md` "RFCs are historical
+  artefacts" policy, the body itself is not section-rewritten;
+  the banner maps every RFC text to the live position.
+- ✅ Security RFC `requires_confirmation` rename — resolved
+  by design (§2.2).
+- ✅ Helper plugins / external-attach drift — v1-status
+  banners landed in §7.4.1 + §5.7 of the security RFC
+  (§2.3 + §2.4 + commit `8d0a28c`).
+- ✅ Private-state `<plugin-id>` → `<topic-id>` clarification
+  landed in overview §5.5 + glossary + new decisions row 37
+  (refines row 16) (§2.5 + commit `93761c8`).
 
 m1 is **done pending the four follow-up commits** above. The
 core deliverable (the `rafaello-core` crate with 269 tests
