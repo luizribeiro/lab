@@ -7,6 +7,12 @@
 > merge) recorded in §"Acceptance summary check". m1 closes;
 > m2 scoping starts when the owner says go.
 >
+> **Update 2026-05-09:** `mcpfit-v0.1` merged into
+> `rafaello-v0.1` (merge commit on `test-rafaello-merge`
+> fast-forwarded). The flake waiver is now closed: see the
+> §"Acceptance summary check" §W bullet for the
+> post-merge confirmation.
+>
 > Originally drafted 2026-05-08 after all 36 m1 git commits
 > (`ba66f05` → `c8cd1af`) landed on `rafaello-v0.1` (worktree
 > `/home/luiz/lab-wt/m1-retro-claude`); this revision folds in
@@ -836,6 +842,17 @@ rather than section-by-section rewrites.
   in its new home — the m1 acceptance gate becomes naturally
   green. The 228 other fittings tests (including the §W
   targeted regression test) all pass at current HEAD.
+  **Confirmed 2026-05-09 post-merge:** the prediction held.
+  The merge investigation surfaced an additional, distinct
+  fittings-client flake — `fatal_send_error_is_propagated_to_queued_calls`
+  raced because `FailingSendTransport::recv()` errored
+  immediately, racing `tokio::select` against `request_rx.recv()`
+  with no `biased` annotation; mcpfit's variant of the same
+  helper uses `std::future::pending().await`, removing the race
+  deterministically. The merged client adopts mcpfit's helper.
+  Across 5 reruns of `cargo test -p fittings-client` and 3 full
+  reruns of all three workspaces (fittings 62 groups, mcpfit 9,
+  rafaello 138) post-merge, zero failures and zero flakes.
 - ✅ `cargo doc --manifest-path rafaello/Cargo.toml -p
   rafaello-core --no-deps` warning-free (§5.2 — fixed in
   commit `823e8bb`).
@@ -861,7 +878,9 @@ m1 is **done.** Owner approved the fittings-flake waiver
 2026-05-08 with the rationale that `mcpfit-v0.1` merges
 self-resolve the flake (the test moves out of the fittings
 workspace AND no longer races under the mcpfit
-reimplementation). All other acceptance gates are met. The
+reimplementation). **Confirmed 2026-05-09:** the merge
+landed and the rationale held — see §"Acceptance summary
+check" §W for the post-merge cross-workspace test results. All other acceptance gates are met. The
 core deliverable (the `rafaello-core` crate with 269 tests
 green) has landed; the §W fittings cutover has landed (228
 fittings tests green); all documentation reconciliation
