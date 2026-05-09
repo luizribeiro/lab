@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +27,7 @@ use parking_lot::Mutex;
 use tokio::sync::watch;
 
 use crate::bus::{Broker, PeerHandle, RegisteredPlugin};
-use crate::compile::CompiledPlugin;
+use crate::compile::{CompiledPlugin, NetworkPlan};
 use crate::error::{
     BrokerError, InvalidPlanReason, PathKind, ReaperOutcome, ShutdownFailure, SpawnError,
 };
@@ -37,6 +38,15 @@ use outpost_proxy::ProxyHandle;
 /// File descriptor number the lockin sandbox maps the
 /// inherited bus socket to inside the child (scope §SP7).
 pub const RFL_BUS_FD_NUMBER: i32 = 3;
+
+const RESERVED_ENV_VARS: &[&str] = &[
+    "RFL_BUS_FD",
+    "RFL_PLUGIN",
+    "RFL_HELPER_FD",
+    "RFL_PROJECT_ROOT",
+    "RFL_PRIVATE_STATE_DIR",
+    "RFL_TOPIC_ID",
+];
 
 /// Supervisor-wide tunables (scope §SP1).
 #[derive(Debug, Clone)]
@@ -228,7 +238,7 @@ impl PluginSupervisor {
                 },
             })?;
 
-        match self.broker.plugin_acl(&plan.canonical) {
+        let acl_provider_id = match self.broker.plugin_acl(&plan.canonical) {
             Some(acl) => {
                 if acl.topic_id != plan.topic_id {
                     return Err(SpawnError::InvalidPlan {
@@ -239,9 +249,10 @@ impl PluginSupervisor {
                         },
                     });
                 }
+                acl.provider_id
             }
             None => return Err(SpawnError::NotInAcl(plan.canonical.clone())),
-        }
+        };
 
         validate_path(
             &plan.entry_absolute,
@@ -273,9 +284,54 @@ impl PluginSupervisor {
             validate_path(p, PathKind::ExecDir, &plan.canonical)?;
         }
 
+        for key in plan.env.set.keys() {
+            if is_reserved_env(key) {
+                return Err(SpawnError::ReservedEnvInPlan {
+                    canonical: plan.canonical.clone(),
+                    var: key.clone(),
+                });
+            }
+        }
+        for name in &plan.env.pass {
+            if is_reserved_env(name) {
+                return Err(SpawnError::ReservedEnvInPlan {
+                    canonical: plan.canonical.clone(),
+                    var: name.clone(),
+                });
+            }
+        }
+
+        if let NetworkPlan::Proxy { allow_hosts } = &plan.network {
+            if let Err(source) =
+                outpost::NetworkPolicy::from_allowed_hosts(allow_hosts.iter().map(String::as_str))
+            {
+                return Err(SpawnError::InvalidPlan {
+                    canonical: plan.canonical.clone(),
+                    reason: InvalidPlanReason::NetworkAllowHostsInvalid { source },
+                });
+            }
+        }
+
+        match std::fs::metadata(&plan.entry_absolute) {
+            Ok(md) if md.is_file() && md.permissions().mode() & 0o111 != 0 => {}
+            _ => {
+                return Err(SpawnError::EntryNotExecutable {
+                    canonical: plan.canonical.clone(),
+                    path: plan.entry_absolute.clone(),
+                });
+            }
+        }
+
+        if let Some(provider_id) = acl_provider_id {
+            return Err(SpawnError::InvalidPlan {
+                canonical: plan.canonical.clone(),
+                reason: InvalidPlanReason::ProviderNotInM2 { provider_id },
+            });
+        }
+
         Err(SpawnError::SandboxBuild {
             canonical: plan.canonical.clone(),
-            source: anyhow::anyhow!("Phase A step 4 not yet implemented"),
+            source: anyhow::anyhow!("Phase A step 8 not yet implemented"),
         })
     }
 
@@ -321,6 +377,10 @@ impl Drop for InFlightGuard {
     fn drop(&mut self) {
         self.set.lock().remove(&self.canonical);
     }
+}
+
+fn is_reserved_env(name: &str) -> bool {
+    RESERVED_ENV_VARS.contains(&name)
 }
 
 fn validate_path(path: &Path, kind: PathKind, canonical: &CanonicalId) -> Result<(), SpawnError> {
