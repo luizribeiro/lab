@@ -92,6 +92,12 @@ impl ProgressRegistry {
         self.lock().missed.get(token).cloned()
     }
 
+    pub(crate) fn close_all(&self) {
+        let mut inner = self.lock();
+        inner.senders.clear();
+        inner.missed.clear();
+    }
+
     fn deliver(&self, token: &ProgressToken, params: ProgressNotificationParams) {
         let inner = self.lock();
         let Some(sender) = inner.senders.get(token) else {
@@ -128,6 +134,7 @@ where
         if let Some(handle) = self.router.take() {
             handle.abort();
         }
+        self.progress.close_all();
     }
 }
 
@@ -256,6 +263,7 @@ fn spawn_notification_router(
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
+        progress.close_all();
     })
 }
 
@@ -1136,6 +1144,36 @@ mod tests {
         );
 
         drop(rx);
+    }
+
+    #[tokio::test]
+    async fn client_drop_closes_active_progress_streams() {
+        use std::time::Duration;
+
+        use fittings::tokio::sync::mpsc;
+        use tokio::time::timeout;
+
+        use super::ProgressToken;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, _server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let token = ProgressToken::String("call-1".into());
+        let (tx, mut rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        client.progress_registry().register(token, tx);
+
+        drop(client);
+
+        let received = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("progress receiver must observe close after Client drop");
+        assert!(
+            received.is_none(),
+            "progress channel must close when Client is dropped, got: {received:?}",
+        );
     }
 
     #[tokio::test]
