@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::future::{Future, IntoFuture};
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
 };
 
 use fittings::{
-    client::{Client as FittingsClient, InboundNotification},
+    client::{Client as FittingsClient, InboundNotification, PendingCall},
     core::transport::Connector,
     tokio::{
         sync::{broadcast, mpsc},
@@ -242,6 +244,58 @@ where
             .notify("notifications/initialized", serde_json::json!({}))
             .await
             .map_err(|e| McpfitError::internal(format!("send initialized notification: {e}")))
+    }
+}
+
+#[allow(dead_code)]
+pub struct ToolCallHandle {
+    pending: PendingCall,
+    progress_rx: mpsc::Receiver<ProgressNotificationParams>,
+    missed: Arc<AtomicU64>,
+}
+
+impl ToolCallHandle {
+    #[allow(dead_code)]
+    pub(crate) fn new(
+        pending: PendingCall,
+        progress_rx: mpsc::Receiver<ProgressNotificationParams>,
+        missed: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            pending,
+            progress_rx,
+            missed,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn progress(&mut self) -> &mut mpsc::Receiver<ProgressNotificationParams> {
+        &mut self.progress_rx
+    }
+
+    #[allow(dead_code)]
+    pub fn missed_progress_count(&self) -> u64 {
+        self.missed.load(Ordering::Relaxed)
+    }
+}
+
+impl IntoFuture for ToolCallHandle {
+    type Output = Result<ToolResponse, McpfitError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let ToolCallHandle { pending, .. } = self;
+        Box::pin(async move {
+            let value = pending
+                .await
+                .map_err(|e| McpfitError::internal(format!("tools/call call failed: {e}")))?;
+            let response: ToolResponse = serde_json::from_value(value)
+                .map_err(|e| McpfitError::internal(format!("decode tools/call result: {e}")))?;
+            if response.is_error {
+                return Err(McpfitError::ToolFailed(response));
+            }
+            Ok(response)
+        })
     }
 }
 
@@ -1174,6 +1228,140 @@ mod tests {
             received.is_none(),
             "progress channel must close when Client is dropped, got: {received:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn tool_call_handle_awaits_final_response_on_success() {
+        use std::sync::atomic::AtomicU64;
+
+        use fittings::{client::Client as FittingsClient, tokio::sync::mpsc};
+
+        use super::ToolCallHandle;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            assert_eq!(request.method, "tools/call");
+            let id = request.id.expect("tools/call must carry id");
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "ok"}],
+                    "isError": false,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let fittings_client = FittingsClient::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("fittings client connects");
+        let pending = fittings_client.start_call(
+            "tools/call",
+            json!({"name": "ping", "arguments": {}}),
+        );
+        let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        let missed = Arc::new(AtomicU64::new(0));
+        let handle = ToolCallHandle::new(pending, rx, missed);
+
+        let response = handle.await.expect("handle resolves to ToolResponse");
+
+        assert_eq!(
+            response,
+            ToolResponse {
+                content: vec![ToolContent::text("ok")],
+                structured_content: None,
+                is_error: false,
+            }
+        );
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn tool_call_handle_maps_is_error_to_tool_failed() {
+        use std::sync::atomic::AtomicU64;
+
+        use fittings::{client::Client as FittingsClient, tokio::sync::mpsc};
+
+        use super::ToolCallHandle;
+        use crate::error::McpfitError;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("tools/call must carry id");
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "boom"}],
+                    "isError": true,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let fittings_client = FittingsClient::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("fittings client connects");
+        let pending = fittings_client.start_call(
+            "tools/call",
+            json!({"name": "explode", "arguments": {}}),
+        );
+        let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        let missed = Arc::new(AtomicU64::new(0));
+        let handle = ToolCallHandle::new(pending, rx, missed);
+
+        let err = handle
+            .await
+            .expect_err("handle must surface isError as ToolFailed");
+
+        match err {
+            McpfitError::ToolFailed(response) => {
+                assert!(response.is_error);
+                assert_eq!(response.content, vec![ToolContent::text("boom")]);
+            }
+            other => panic!("expected ToolFailed, got: {other:?}"),
+        }
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn tool_call_handle_missed_progress_count_reads_shared_counter() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        use fittings::{client::Client as FittingsClient, tokio::sync::mpsc};
+
+        use super::ToolCallHandle;
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, _server_transport) = MemoryTransport::pair(8);
+        let fittings_client = FittingsClient::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("fittings client connects");
+        let pending = fittings_client.start_call("tools/call", json!({}));
+        let (_tx, rx) = mpsc::channel::<ProgressNotificationParams>(4);
+        let missed = Arc::new(AtomicU64::new(0));
+        let handle = ToolCallHandle::new(pending, rx, missed.clone());
+
+        assert_eq!(handle.missed_progress_count(), 0);
+        missed.store(7, Ordering::Relaxed);
+        assert_eq!(handle.missed_progress_count(), 7);
     }
 
     #[tokio::test]
