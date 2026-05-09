@@ -767,22 +767,34 @@ Core re-emits canonical `core.*` events as in §4.4.
 To preserve the "providers ship as plugins" goal (§1.1) and
 the trust model (§2), the default provider is **bundled but
 not built-in**: it is a real subprocess plugin named
-`rfl-litellm` whose binary ships in the rafaello release and
+`rfl-openai` whose binary ships in the rafaello release and
 whose manifest is shipped alongside, but which goes through
 the same lock/grant/sandbox/bus path as any third-party
-provider.
+provider. The plugin speaks the **OpenAI Chat Completions
+wire protocol**; the endpoint URL, the env-var name carrying
+the API key, and the host allowlist are all install-time
+configuration in the lock. *What* OpenAI-compatible endpoint
+the user points the plugin at — OpenAI's API, a LiteLLM
+proxy (the dev environment's choice; see `plans/README.md`
+§"Tooling notes"), vLLM, a local stub — is a deployment
+detail, not the plugin's identity (`decisions.md` row 38).
 
 Concretely:
 
 - `rfl init` materialises `rafaello.lock` with a default
-  entry for `rfl-litellm`, pre-populating bindings
-  (`provider = true`, `provider_id = "litellm"`),
-  `[session].provider_active = "<rfl-litellm-id>"`, and a
-  conservative grant: `network.mode = "proxy"` with
-  `allow_hosts = ["litellm.thepromisedlan.club"]` (the
-  endpoint from `plans/README.md` §"Tooling notes"),
+  entry for `rfl-openai`, pre-populating bindings
+  (`provider = true`, `provider_id = "openai"`),
+  `[session].provider_active = "<rfl-openai-id>"`, and a
+  conservative grant. The materialised defaults follow the
+  dev environment recorded in `plans/README.md`
+  §"Tooling notes": `network.mode = "proxy"` with
+  `allow_hosts = ["litellm.thepromisedlan.club"]`,
   `env.pass = ["LITELLM_API_KEY"]`, `read_dirs` /
   `write_dirs = []` apart from per-plugin private state.
+  In a different deployment the same plugin would be
+  install-configured with a different host and env-var
+  name (e.g. `api.openai.com` + `OPENAI_API_KEY`); the
+  plugin's source is unchanged.
 - The user is prompted at `rfl init` time to confirm the
   default grant (the same `rfl install` review flow), with
   a clearly-labelled "this is the bundled default provider"
@@ -792,10 +804,10 @@ Concretely:
 - Spawn, identity, taint, sink confirmation, and topic
   routing are **identical** to any other provider: lockin
   policy compiled from the lock, bus principal bound at
-  spawn, `provider.litellm.*` namespace, core re-emits
+  spawn, `provider.openai.*` namespace, core re-emits
   canonical `core.*`. There is no "well-known" path that
   bypasses these.
-- The `rfl-litellm` binary lives in the same release crate
+- The `rfl-openai` binary lives in the same release crate
   tree but is built and shipped as a plugin artifact, not
   linked into `rfl`. This is a single-binary-source
   release-engineering convenience; it does not change the
@@ -805,11 +817,16 @@ Reconciliation note: an earlier overview draft said the
 default provider was "built into core". Pi flagged this as
 incompatible with §1.1 goals 2–3 and the trust model.
 **Decision: bundled-plugin model.** This is the canonical v1
-shape; the LiteLLM client code lives in `rfl-litellm`, not in
-`rfl`'s core crate.
+shape; the OpenAI Chat Completions client code lives in
+`rfl-openai`, not in `rfl`'s core crate. A second
+reconciliation: an earlier draft named the plugin
+`rfl-litellm` and treated LiteLLM as a distinct provider
+type. `decisions.md` row 38 refines that — the plugin
+speaks an OpenAI-compatible wire protocol; LiteLLM is one
+deployment of that wire protocol.
 
 Third-party providers ship as plugins exactly like
-`rfl-litellm`.
+`rfl-openai`.
 
 ## 9. Helper plugins
 
@@ -1188,7 +1205,7 @@ schema delta Stream F must adopt before m1 implementation:
    ```toml
    [provides]
    tools    = ["grep", "rg"]                # zero or more tool names
-   provider = "litellm"                     # absent if not a provider; one provider-id per plugin
+   provider = "openai"                      # absent if not a provider; one provider-id per plugin
    helpers  = ["github:org/qllm@1.0.0"]     # canonical ids of helpers this plugin may spawn
 
    [provides.tool.grep]
@@ -1425,8 +1442,9 @@ by decomposition with loud override; default ratatui TUI as a
 local-spawned bus principal (single frontend, no external
 attach); CLI subcommands `rfl init / install / grant / revoke
 / update / provider use / status / chat` (no `rfl serve` in
-v1 — see `decisions.md` row 34); bundled `rfl-litellm` default
-provider plugin (§8.1); renderer model with semantic
+v1 — see `decisions.md` row 34); bundled `rfl-openai` default
+provider plugin (§8.1, `decisions.md` row 38); renderer model
+with semantic
 render-tree and server-side downgrade, **built-in Rust
 renderers only** (no subprocess plugin renderers in v1);
 turn-by-turn entries (`stream_state: "final"` only — patch ops
@@ -1486,9 +1504,11 @@ Beyond the cross-stream gaps in §15:
 5. **Secrets sigil semantics** (manifest RFC §11 #4).
    `${secret:<name>}` resolves against rafaello's keystore at
    spawn time; the keystore is a future stream — not blocking
-   v1 unless a built-in provider needs it (the default provider
-   reads `LITELLM_API_KEY` from env directly, not via the
-   sigil).
+   v1 unless a built-in provider needs it (the default
+   provider reads its API key from whatever env var the lock
+   declares in `env.pass` — `LITELLM_API_KEY` in the dev
+   environment, `OPENAI_API_KEY` in a vanilla OpenAI deploy
+   — directly, not via the sigil).
 6. **Manifest signing** (manifest RFC §11 #3). Deferred to v2
    per §16.
 
