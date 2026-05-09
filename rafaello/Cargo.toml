@@ -1,0 +1,7 @@
+[workspace]
+members = ["crates/rafaello"]
+resolver = "2"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
