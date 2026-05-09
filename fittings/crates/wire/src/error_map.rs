@@ -32,10 +32,14 @@ pub fn to_error_envelope(id: impl Into<JsonRpcId>, err: FittingsError) -> Respon
             message,
             data,
         },
-        FittingsError::MethodNotFound { message, data } => ErrorEnvelope {
-            code: METHOD_NOT_FOUND_CODE,
+        FittingsError::MethodNotFound {
+            method,
             message,
             data,
+        } => ErrorEnvelope {
+            code: METHOD_NOT_FOUND_CODE,
+            message,
+            data: synthesise_method_into_data(method, data),
         },
         FittingsError::InvalidParams { message, data } => ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
@@ -107,7 +111,14 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
             code: METHOD_NOT_FOUND_CODE,
             message,
             data,
-        } => FittingsError::MethodNotFound { message, data },
+        } => {
+            let (method, data) = extract_method_from_data(data);
+            FittingsError::MethodNotFound {
+                method,
+                message,
+                data,
+            }
+        }
         ErrorEnvelope {
             code: INVALID_PARAMS_CODE,
             message,
@@ -137,6 +148,38 @@ pub fn from_error_envelope(error: ErrorEnvelope) -> FittingsError {
         }),
         ErrorEnvelope { .. } => FittingsError::internal(INTERNAL_ERROR_MESSAGE),
     }
+}
+
+const METHOD_KEY: &str = "method";
+
+fn synthesise_method_into_data(method: Option<String>, data: Option<Value>) -> Option<Value> {
+    let Some(method) = method else { return data; };
+    let mut map = match data {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    map.insert(METHOD_KEY.to_string(), Value::String(method));
+    Some(Value::Object(map))
+}
+
+fn extract_method_from_data(data: Option<Value>) -> (Option<String>, Option<Value>) {
+    let Some(Value::Object(mut map)) = data else {
+        return (None, data);
+    };
+    let method = match map.remove(METHOD_KEY) {
+        Some(Value::String(s)) => Some(s),
+        Some(other) => {
+            map.insert(METHOD_KEY.to_string(), other);
+            None
+        }
+        None => None,
+    };
+    let data = if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    };
+    (method, data)
 }
 
 fn fittings_kind(data: Option<&Value>) -> Option<&str> {
@@ -275,8 +318,8 @@ mod tests {
         });
         assert!(matches!(
             method_not_found,
-            FittingsError::MethodNotFound { message, data }
-                if message == "missing" && data == Some(json!({"method": "x"}))
+            FittingsError::MethodNotFound { method: Some(m), message, data: None }
+                if m == "x" && message == "missing"
         ));
 
         let invalid_params = from_error_envelope(ErrorEnvelope {

@@ -26,10 +26,7 @@ fn cases() -> [VariantCase; 5] {
         },
         VariantCase {
             name: "MethodNotFound",
-            err: FittingsError::method_not_found_with_data(
-                "nope",
-                json!({"method": "math/double"}),
-            ),
+            err: FittingsError::method_not_found_with_method("math/double", "nope"),
             expected_message: "nope",
             expected_data: json!({"method": "math/double"}),
         },

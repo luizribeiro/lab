@@ -157,3 +157,7 @@ path = "../../tests/transport_bidirectional_regression.rs"
 [[test]]
 name = "spawn_peerhandle_round_trip"
 path = "../../tests/spawn_peerhandle_round_trip.rs"
+
+[[test]]
+name = "method_not_found_typed_method_round_trip"
+path = "../../tests/method_not_found_typed_method_round_trip.rs"
