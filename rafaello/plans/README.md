@@ -87,9 +87,19 @@ this prompt:
 
 > You're the milestone driver for rafaello milestone `m<N>`.
 >
-> 1. Read `rafaello/plans/README.md`, `overview.md`, `decisions.md`,
->    `glossary.md`, every file under `streams/`, and
->    `milestones/m<N>/scope.md` / `commits.md` if they exist.
+> 1. Read `rafaello/plans/README.md`, `milestones/README.md`,
+>    `overview.md`, `decisions.md`, `glossary.md`, every file
+>    under `streams/`, the previous milestone's `retrospective.md`
+>    (for any deferred-to-m<N> items), and
+>    `milestones/m<N>-<topic>/scope.md` / `commits.md` if they
+>    exist. **The milestone's name, topic, one-line goal, and
+>    demo are pre-ratified in the `milestones/README.md`
+>    roadmap table** — that's where you read what `m<N>` is.
+>    The directory name follows `m<N>-<topic>` where
+>    `<topic>` is the kebab-case short form of the roadmap
+>    row's name (m0-fittings, m1-manifest, m2-broker-spawn, …).
+>    Do not improvise the milestone topic from `overview.md` or
+>    retrospectives; the roadmap is the source of truth.
 > 2. If `scope.md` doesn't exist yet: spawn claude+pi tmux sessions per
 >    Phase 2 to draft and review it iteratively. Ping the project owner
 >    for ratification at convergence.
