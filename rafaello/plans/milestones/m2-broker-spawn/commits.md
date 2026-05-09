@@ -1,13 +1,13 @@
 # m2-broker-spawn — commits
 
-> **Status:** round-3 draft, addressing pi commits round-2 (8
-> blocking + 5 non-blocking — c19 Response shape, reaper/watcher
-> JoinHandle ownership, c25 mutex-across-await, c20
-> mode-before-fd, canonical headline test renamed/moved to c30,
-> c23 SafePath/LockFlags, c19 reaper test via TestHook, c22
-> start gate). Pi round-3 review pending. Trajectory:
-> 7+many → 8+5 → ?. Phase 3 per-commit agent work begins
-> after ratification.
+> **Status:** round-4 draft, inlining pi commits round-3
+> (2 blocking + 3 non-blocking — c20 set_nonblocking,
+> c20 install-service-then-ready ordering, c30 four→five
+> count, fixture-test filename unification, `drop(take())`
+> syntax). Pi round-4 verification pending. Trajectory:
+> 7+many → 8+5 → 2+3 — convergence signal fired in
+> round 3 ("very close"). Phase 3 per-commit agent work
+> begins after ratification.
 
 Ordered commit list for m2, derived from `scope.md` (round 11,
 ratified 2026-05-09). Each commit is one logical idea **and
@@ -882,22 +882,39 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
       proceed to fd setup below.
   - Parse `RFL_BUS_FD`; on missing/invalid → `eprintln!` +
     exit 3.
-  - `OwnedFd::from_raw_fd(fd)` once in `unsafe`; wrap as
-    `tokio::net::UnixStream::from_std(...)`.
+  - `OwnedFd::from_raw_fd(fd)` once in `unsafe`. Wrap with
+    explicit nonblocking step (pi-3 B1 — child fd inherits
+    blocking; supervisor uses `SOCK_CLOEXEC` not
+    `SOCK_NONBLOCK`; tokio `from_std` requires nonblocking):
+    ```rust
+    let std = std::os::unix::net::UnixStream::from(owned);
+    std.set_nonblocking(true)?;
+    let stream = tokio::net::UnixStream::from_std(std)?;
+    ```
   - Build `OneShotConnector` per scope §F3 (mirrors
     `fittings/crates/client/src/lib.rs:623`); construct
     `StdioTransport::new(reader, writer, 1 << 20)`; call
     `Client::connect(OneShotConnector::new(transport)).await`.
   - **`RFL_FIXTURE_MODE` dispatch** for c20:
-    - `scaffold_only` → exit 0 immediately (pre-Client setup
-      path; for c03 backward-compat).
-    - `respond_peer_call` — install service + notification
-      handler → call `client.call("core.fixture.ready",
-      json!({"mode":"respond_peer_call"})).await` → register
-      service handling `core.fixture.start` (empty ack),
-      `core.fixture.echo` (echo params); sleep until SIGTERM.
+    - `scaffold_only` → exit 0 immediately (handled in mode
+      dispatch above the fd setup, so this bullet is just a
+      reminder).
+    - `respond_peer_call` — **install service + notification
+      handler FIRST, then signal ready** (pi-3 B2: scope §H5
+      requires readiness only after the service registry is
+      installed so harness calls don't race into
+      `MethodNotFound`):
+      1. Register the fittings `Service` impl handling
+         `core.fixture.start` (empty ack) and
+         `core.fixture.echo` (echo params).
+      2. (No notification handler needed in this mode; observer
+         mode in c22 adds it.)
+      3. Call `client.call("core.fixture.ready",
+         json!({"mode":"respond_peer_call"})).await` ONCE.
+      4. Sleep until SIGTERM.
     - Unknown mode → `eprintln!` + exit 64 (matches c03
-      contract).
+      contract — handled in the mode dispatch above the fd
+      setup).
   - No tracing init (per scope §F4).
 - **Why.** scope §F1, §F2 (subset), §F3, §F4, §F5 (subset),
   pi-1 B3 (minimal fixture before c21 reaper test).
@@ -922,7 +939,8 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     `{"x":1}`; receive `{"x":1}` response; SIGTERM the
     child; verify exit. Linux-only via `#[cfg(target_os =
     "linux")]` (uses fork + fd inheritance).
-  - `tests/fixture_unknown_mode_exits_64.rs` — already exists
+  - `tests/fixture_binary_unknown_mode_exits_64.rs` (pi-3
+    N2 — same filename as c03) — already exists
     from c03; verify still passes after c20's mode dispatch
     extension.
 
@@ -1173,8 +1191,9 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
     ```
   - Then iterate over `drained` (no lock held). For each
     `(canonical, mut managed)`:
-    - `managed.registered.take().drop()` — broker fan-out
-      stops immediately.
+    - `drop(managed.registered.take())` (pi-3 N3 — `.drop()`
+      isn't Rust syntax; explicit `drop(...)` makes intent
+      readable). Broker fan-out stops immediately.
     - `nix::sys::signal::kill(Pid::from_raw(pid as i32),
       Signal::SIGTERM)`. On `Errno::ESRCH` treat as already
       exited.
@@ -1184,7 +1203,7 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
       **continue waiting on the watch** until it transitions
       (pi-1 B7 — must reap before returning the per-plugin
       result so `ShutdownReport` reflects actual state).
-    - `managed.proxy.take().drop()` — after child is dead.
+    - `drop(managed.proxy.take())` — after child is dead.
     - `managed.serve_join.take().abort()`.
     - `managed.watcher_join.take()` is intentionally NOT
       aborted — the watcher owns the reaper join handle and
@@ -1326,9 +1345,9 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
 
 ### c30 — test(rafaello-core): canonical happy-path + cross-plugin round-trip + private-state + taint + plugin-to-core peer call
 
-- **What.** Four integration tests (pi-2 N3 — c30 explicitly
-  owns all four; no agent-time split). All use the c23
-  harness:
+- **What.** Five integration tests (pi-2 N3 + pi-3 N1 —
+  c30 explicitly owns all five; no agent-time split). All
+  use the c23 harness:
   - `tests/supervisor_spawn_fixture_happy_path.rs` (canonical
     scope-named headline test — pi-2 B5: this is the scope's
     two-fixture publish/observer demo, not c21's
