@@ -1,10 +1,10 @@
 # m2 — rafaello-core broker + locked plugin spawn — scope
 
-> **Status:** round-3 draft, addressing pi-review-2 (14 blocking +
-> 4 non-blocking findings on the round-2 rewrite). Pi round-3
-> review pending. Not yet owner-ratified. The `commits.md` and
-> Phase 3 work do not start until this document ratifies.
-> Anticipate further rounds (m1 precedent: 6 rounds on scope).
+> **Status:** round-4 draft, addressing pi-review-3 (8 blocking +
+> 4 non-blocking — all localized cleanup of stale cross-references
+> introduced by the round-2/round-3 rewrites). Pi round-4 review
+> pending. Not yet owner-ratified. The `commits.md` and Phase 3
+> work do not start until this document ratifies.
 
 ## Goal
 
@@ -14,13 +14,18 @@ lockin sandboxes, with the broker enforcing publish/subscribe
 authority from m1's `BrokerAcl`. The broker authenticates
 publishers from the connection identity (set at spawn time via
 the inherited socketpair fd), not from message bodies. The
-supervisor's only entry point is `spawn(plan: &CompiledPlugin)`;
+supervisor's only entry point is `spawn(plan: &CompiledPlugin,
+paths: &SpawnPaths)`;
 there is no debug bypass, no `spawn_unsandboxed`, no `RFL_INSECURE`.
 
 m2 is the structural moment where m1's pure data-transformation
 becomes a running system. Every later milestone (m3 TUI, m4
 provider + agent loop, m5 confirmation/sinks) layers on the
-broker + supervisor primitive m2 ships.
+broker + supervisor primitive m2 ships. The supervisor's only
+spawn entry point is `PluginSupervisor::spawn(plan: &CompiledPlugin,
+paths: &SpawnPaths)` (pi-3 §1) — a two-argument call where
+`SpawnPaths` carries the project-root + private-state-dir the
+caller computed from its own layout knowledge.
 
 The deliverable is:
 1. New modules in the existing `rafaello-core` crate (m1 owns
@@ -42,9 +47,10 @@ No new behaviour lands in the `rafaello`-bin (`rfl chat` is m3).
 ### Lock-correspondence claim, scoped honestly (pi-1 §22, §83, §84)
 
 The "no hardcoded bypass" property holds at the **API surface
-level**: `PluginSupervisor::spawn` accepts only `&CompiledPlugin`
-and consults a `Broker` constructed from `BrokerAcl`. There is
-no path that constructs a child process from a raw entry path.
+level**: `PluginSupervisor::spawn` accepts only `&CompiledPlugin
++ &SpawnPaths` and consults a `Broker` constructed from
+`BrokerAcl`. There is no path that constructs a child process
+from a raw entry path.
 
 It does **not** hold against a caller who hand-mutates a
 `CompiledPlugin` value (the struct fields are `pub` by m1's
@@ -95,7 +101,11 @@ deviation.
   exists and is re-exported — pi-1 §6 + §68), `lock::canonical_id::CanonicalId`,
   the typed errors in `error::*`.
 - Lockin's public Rust API. Verified package coordinates
-  (pi-1 §1):
+  (pi-1 §1; the round-2 wording about "m2 explicitly re-injects
+  TMPDIR/TMP/TEMP after env_clear" was incorrect and is dropped
+  per pi-3 §8 — current lockin does not expose the private-tmp
+  path before spawn, so m2 cannot restore those vars; SP4
+  step 12 documents the resulting deviation):
   - Crate `lockin/crates/sandbox`, **package name `lockin`**
     (not `lockin-sandbox`).
   - `lockin::Sandbox::builder() -> SandboxBuilder` with all
@@ -112,20 +122,30 @@ deviation.
     not `SIGTERM`; graceful termination uses `nix` (pi-1 §28).
   - `SandboxedCommand::env_clear()` documented to remove
     `TMPDIR`/`TMP`/`TEMP` pointing at the sandbox private tmp
-    (pi-1 §27); m2 explicitly re-injects them after env_clear
-    (see §SP4.3).
+    (pi-1 §27). m2 cannot re-inject them: `SandboxedCommand`
+    does not expose the private-tmp path. Plugins consequently
+    see no TMPDIR/TMP/TEMP unless they fall under a granted
+    write_dir; system /tmp is not in the grant. See SP4 step
+    12 for the documented deviation.
 - Outpost: `outpost::NetworkPolicy::from_allowed_hosts(...)`
   for parse-time validation (m1 already uses it),
   `outpost_proxy::start(policy).await -> std::io::Result<ProxyHandle>`
   (an async function — pi-2 non-blocking #1) with
   `ProxyHandle::listen_addr() -> SocketAddr`.
-- fittings real coordinates verified (pi-1 §1, §3, §4, §92):
+- fittings real coordinates verified (pi-1 §1, §3, §4, §92;
+  pi-3 §4 corrected paths):
   - Crate paths: `fittings/crates/{wire, core, server, client,
     transport, spawn, macros}`. Package names match.
   - `fittings_core::message::JsonRpcId` is the canonical type
     re-exported by `fittings_wire`.
   - `fittings_core::error::FittingsError` is the canonical
     error.
+  - `fittings_core::transport::Connector` is the connector
+    trait (NOT `fittings_transport::Connector` — pi-3 §4).
+  - `fittings_transport::stdio::StdioTransport::new(reader,
+    writer, max_frame_bytes)` is the stdio transport's full
+    path (the crate root only declares `pub mod stdio` — pi-3
+    §4). Used over the split halves of a `tokio::net::UnixStream`.
   - `fittings_server::Server::new(service, transport)` builds
     a server; `Server::peer()` exposes the connection-scoped
     `PeerHandle`; `Server::serve(self) -> Future` runs the
@@ -133,11 +153,8 @@ deviation.
   - `fittings_client::Client::connect(connector)` connects;
     `Client::with_service(svc)` registers an inbound service;
     `Client::with_notification_handler(handler)` registers a
-    notification handler (per the fittings RFC); `Client::peer()`
-    exposes outbound notify/call.
-  - `fittings_transport` provides `StdioTransport::new(reader,
-    writer, max_frame_bytes)` over any `AsyncRead + AsyncWrite`.
-    m2 uses it over the split halves of a `tokio::net::UnixStream`.
+    notification handler; `Client::peer()` exposes outbound
+    notify/call.
 
 ## In scope
 
@@ -234,17 +251,9 @@ no transport: each plugin connection is a `fittings`
     (pi-2 §1). Construction runs the §B10 defence-in-depth
     pattern/topic revalidation. On failure: `InvalidTopic`,
     `InvalidPattern`, or any other validation-level
-    `BrokerError`. There is **no boot-event emission on
-    construction**: any subscriber would not be registered
-    yet. The `core.lifecycle.boot` event is emitted by an
-    explicit `Broker::publish_boot()` call the supervisor
-    invokes from `PluginSupervisor::new` after construction
-    AND from `PluginSupervisor::shutdown` (so a late observer
-    that registers after a quiescent boot can still call
-    `Broker::publish_boot()` directly to re-emit if desired).
-    `publish_boot` is just an internal sugar over
-    `publish_core("core.lifecycle.boot", json!({"version": ...,
-    "plugin_count": ...}))`.
+    `BrokerError`. **No event is emitted by construction
+    itself** (any subscriber would not be registered yet);
+    boot emission is the explicit `publish_boot` call below.
   - `Broker::register_plugin(&self, canonical: CanonicalId,
     peer: PeerHandle) -> Result<RegisteredPlugin, BrokerError>`.
     Returns an RAII guard. Errors `NotInAcl(canonical)` or
@@ -271,11 +280,19 @@ no transport: each plugin connection is a `fittings`
     No publisher exclusion (core publishes to itself = no-op
     since core is not registered as a subscriber; pi-1 §128).
     For lifecycle/observability, m2 uses this to emit
-    `core.lifecycle.publish_rejected` (see §B9) and a single
-    `core.lifecycle.boot` event after `Broker::new` completes
-    (no-op if no subscribers; the latter is m2's sole
-    "BootSummary" — pi-1 §45). Both events have explicit
-    schemas (§B9).
+    `core.lifecycle.publish_rejected` (see §B9). The
+    `core.lifecycle.boot` event is emitted via
+    `publish_boot` (next bullet), NOT automatically by
+    `Broker::new` (pi-3 §2).
+  - `Broker::publish_boot(&self) -> Result<(), BrokerError>`
+    — sugar over `publish_core("core.lifecycle.boot",
+    json!({"version": "<rafaello-core version>",
+    "plugin_count": <ACL plugin count>}))`. Tests call this
+    explicitly after registering observers.
+    `PluginSupervisor::new` ALSO calls it once after
+    constructing the broker for production observability
+    (errors logged at `tracing::warn!` and ignored — boot
+    emission must not fail supervisor construction).
   - `Broker::handle_plugin_publish(&self, canonical: &CanonicalId,
     raw_params: &Value) -> Result<(), BrokerError>`. Takes
     `raw_params` (the raw JSON `params` of the inbound
@@ -288,14 +305,16 @@ no transport: each plugin connection is a `fittings`
     so a stale service whose guard already dropped cannot
     publish.
   - `Broker::contains_plugin(&self, canonical: &CanonicalId) -> bool`
-    — supervisor's defence-in-depth precheck (pi-1 §86).
+    — checks ACL membership (NOT live registration; pi-3
+    non-blocking #3). Use `is_registered` for live-registry
+    checks if needed (m2 doesn't expose one publicly — only
+    `try_reserve_registration` returns the relevant signal).
   - `Broker::plugin_acl(&self, canonical: &CanonicalId) -> Option<PluginAcl>`
     — returns a clone of the per-plugin ACL entry for the
     supervisor's Phase A topic-id consistency + provider-id
-    inspection. Returns `None` if `canonical` not in ACL.
-  - `Broker::acl(&self) -> &BrokerAcl` — read-only access for
-    test helpers + manual inspection. Production code reaches
-    only through `contains_plugin` / `plugin_acl`.
+    inspection (pi-3 §5: this is the canonical lookup path;
+    test helpers MUST NOT reach for an `acl()` accessor). Returns
+    `None` if `canonical` not in ACL.
   - `Broker::shutdown(&self)` — drains and unregisters every
     plugin; idempotent. Used by `PluginSupervisor::shutdown`.
 - **B2.** `BrokerError` typed enum (lives in
@@ -531,8 +550,8 @@ no transport: each plugin connection is a `fittings`
     receive it. **No recursion possible**: rejection-event
     construction does not itself call rejection emission.
   - `core.lifecycle.boot` schema: `{ "version": "<rafaello-core
-    version>", "plugin_count": <n> }`. Emitted by `Broker::new`
-    after registry init.
+    version>", "plugin_count": <n> }`. Emitted only via the
+    explicit `Broker::publish_boot()` call (pi-3 §2).
 - **B10.** **`Broker::new` defence-in-depth pattern validation**
   (pi-1 §70, §99, §270). On construction, re-run
   `validate_topic` against every `publish_topics` entry and
@@ -559,9 +578,28 @@ the socketpair plumbing that authenticates the bus connection.
   }
   impl Default for SupervisorConfig { ... }
   
+  // Per-spawn paths the caller computes from its own layout
+  // knowledge (pi-2 §13, pi-3 §1). Both fields must be
+  // absolute (Phase A SP4.3 verifies). project_root is the
+  // process's cwd; private_state_dir is the per-plugin write
+  // grant the m1 compiler injected and the supervisor
+  // create_dir_alls before spawn. private_state_dir SHOULD
+  // be derivable from `project_root` + topic-id form (m1
+  // convention), but the supervisor does NOT enforce that
+  // relationship — the harness/m3 callers compute paths
+  // their way; supervisor only requires absolute + writable.
+  pub struct SpawnPaths {
+      pub project_root: PathBuf,
+      pub private_state_dir: PathBuf,
+  }
+  
   impl PluginSupervisor {
+      // PluginSupervisor::new does NOT return Result.
+      // It internally calls broker.publish_boot() once and
+      // logs (does not propagate) any error per §B1.
       pub fn new(broker: Broker, config: SupervisorConfig) -> Self;
-      pub async fn spawn(&self, plan: &CompiledPlugin)
+      pub async fn spawn(&self, plan: &CompiledPlugin,
+                         paths: &SpawnPaths)
           -> Result<SpawnHandle, SpawnError>;
       pub async fn shutdown(self) -> ShutdownReport;
   
@@ -602,7 +640,17 @@ the socketpair plumbing that authenticates the bus connection.
   ```
   - `&self` (not `&mut self`) on `spawn` so multi-spawn tests
     just hold multiple `SpawnHandle`s without lifetime games
-    (pi-1 §17). Internal state guarded by `parking_lot::Mutex`.
+    (pi-1 §17). Internal state guarded by `parking_lot::Mutex`,
+    plus a separate `parking_lot::Mutex<HashSet<CanonicalId>>
+    in_flight` set for duplicate-spawn protection on a
+    multi-thread runtime (pi-3 §7): Phase A inserts canonical
+    into `in_flight` (failing with `AlreadyRegistered` if
+    already present, *separately from* the broker registry's
+    own `try_reserve_registration` check); successful
+    `register_plugin` removes from `in_flight`; failure paths
+    also remove. This closes the concurrent-`spawn` race the
+    broker's lockless `try_reserve_registration` cannot
+    catch alone.
   - `SpawnHandle` is cloneable (`Arc`-backed); the *underlying
     process* is killed when the **last** `SpawnHandle` clone
     plus the supervisor's internal handle both drop (pi-1 §54,
@@ -728,17 +776,15 @@ the socketpair plumbing that authenticates the bus connection.
      ⇒ `EntryNotExecutable`. Symlinks are followed
      (`fs::metadata` not `fs::symlink_metadata`) per pi-1
      §113, §1653.
-  7. **Provider refusal (pi-2 §11).** If the plan's ACL entry
-     in `broker.acl().plugin_acl(&plan.canonical)` has
-     `provider_id.is_some()` (the public field on m1's
-     `PluginAcl`, fed from `bindings.provider = true` +
-     `bindings.provider_id`), reject with `InvalidPlan { reason:
-     ProviderNotInM2 { provider_id } }`. m2 has no provider
-     authority wiring; m4 removes this refusal. The fixture
-     lock NEVER sets `provider = true`. m2 retrospective
-     notes the staged restriction. (Public broker API used:
-     `Broker::plugin_acl(&CanonicalId) -> Option<&PluginAcl>` —
-     added in §B1 alongside `contains_plugin`.)
+  7. **Provider refusal (pi-2 §11).** If
+     `broker.plugin_acl(&plan.canonical)` returns a
+     `PluginAcl` with `provider_id.is_some()` (the public
+     field on m1's `PluginAcl`, fed from `bindings.provider
+     = true` + `bindings.provider_id`), reject with
+     `InvalidPlan { reason: ProviderNotInM2 { provider_id } }`.
+     m2 has no provider authority wiring; m4 removes this
+     refusal. The fixture lock NEVER sets `provider = true`.
+     m2 retrospective notes the staged restriction.
   
   **Phase B — allocate child resources (async):**
   8. `socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)` →
@@ -850,7 +896,7 @@ the socketpair plumbing that authenticates the bus connection.
       let stream = tokio::net::UnixStream::from_std(std_stream)
           .map_err(|e| TransportSetup { canonical, source: e })?;
       let (reader, writer) = stream.into_split();
-      let transport = fittings_transport::StdioTransport::new(
+      let transport = fittings_transport::stdio::StdioTransport::new(
           reader, writer, config.fittings_max_frame_bytes);
       ```
       (pi-1 §4, §348, §349; pi-2 §8 added the explicit
@@ -973,8 +1019,10 @@ and digests recomputed against the on-disk content.
       so the same sibling works for every fixture.
   - Programmatically constructs the `Lock` value with proper
     `granted_capabilities`, `bindings`, recomputed `digest`
-    fields via m1's `digest::recompute_*` helpers (pi-1 §395,
-    §404). Does NOT copy code; uses the m1 public API.
+    fields via m1's actual public surface — `digest::content_digest`
+    + `digest::manifest_digest` + `RecomputedDigests` (pi-3
+    non-blocking #1; the round-2 wording "digest::recompute_*"
+    was incorrect). Does NOT copy code.
   - Runs `validate::lock(&lock, &path_context)` to satisfy
     `compile_plugin`'s precondition (pi-1 §405, §406). Then
     runs `compile_plugin` for each entry to produce
@@ -1093,11 +1141,11 @@ is fully controlled by env vars set by the harness via
   §59, §1166). Wrap as `std::os::unix::net::UnixStream::from(owned)`,
   `set_nonblocking(true)`, then `tokio::net::UnixStream::from_std(...)`.
   Split into `(reader, writer)`; build
-  `fittings_transport::StdioTransport::new(reader, writer,
+  `fittings_transport::stdio::StdioTransport::new(reader, writer,
   1 << 20)`. **Connector wrapper** (pi-2 §7): the fixture
   defines a tiny `OneShotConnector { transport:
   Mutex<Option<StdioTransport>> }` implementing
-  `fittings_transport::Connector`; `Connector::connect` takes
+  `fittings_core::transport::Connector` (pi-3 §4); `Connector::connect` takes
   the transport via `Option::take` (panics on second call —
   acceptable for a one-shot bus connection). The shape mirrors
   the `OneShotConnector` already used in fittings' own
@@ -1153,7 +1201,7 @@ unit tests run on every platform.
 | `bus_event_schema_round_trip.rs` | Build a `BusEvent` with each `PublisherIdentity` variant; serialise with `serde_json`; deserialise back into a permissive test struct; assert all fields preserved. Verifies the wire shape m4 will need. |
 | `supervisor_spawn_fixture_happy_path.rs` | Headline test. Two fixtures: A in `publish_one` mode publishing `plugin.<A>.hello` with payload `{"msg":"hi"}`; B in `observer` mode subscribed to `plugin.**`. Harness handshake (§H5). Observer receives the event; assertion: `event.topic == "plugin.<A>.hello"`, `event.payload == {"msg":"hi"}`, `event.publisher == Plugin { canonical: A, topic_id: <A's id> }`. |
 | `supervisor_peer_call_core_to_plugin.rs` | A in `respond_peer_call` mode. Test calls `spawn_a.peer().call("core.fixture.echo", json!({"x":1})).await` → response `{"x":1}`. |
-| `supervisor_peer_call_plugin_to_core.rs` | A in `call_core_then_exit` mode. Harness extra service registers `core.fixture.ping` (echoes params + 1). Wait for fixture exit; `wait().await?.code() == Some(0)` (pi-1 §18, §117). |
+| `supervisor_peer_call_plugin_to_core.rs` | A in `call_core_then_exit` mode. Harness extra service registers `core.fixture.ping` (echoes params + 1). Wait for fixture exit; `wait().await.code() == Some(0)` (pi-3 §6 — `wait` is infallible per SP1). |
 | `supervisor_bus_publish_round_trip_two_plugins.rs` | A in `publish_one`, B with subscribe grant on `plugin.<A>.greet`. B in observer-like mode forwards via `core.fixture.observed` extra service. After handshake, B receives A's event. Asserts cross-plugin fan-out via lock grants. |
 | `supervisor_lifecycle_drop_kills_child.rs` | Spawn A in `respond_peer_call` (holds open). Drop the `SpawnHandle` and the supervisor's internal copy by calling `shutdown(self).await`. After completion, `shutdown_report.clean.contains(A)`. The reaper task observed the exit; the test does NOT use `kill -0` (pi-1 §367, §731). |
 | `supervisor_proxy_starts_and_env_injected.rs` | A in `respond_peer_call` with `NetworkPlan::Proxy { allow_hosts: ["example.com"] }`. Harness calls `core.fixture.dump_env` requesting `RFL_FIXTURE_ENV_KEYS=HTTP_PROXY,HTTPS_PROXY,NO_PROXY,ALL_PROXY,RFL_BUS_FD`. Assertions: `HTTP_PROXY` is `http://127.0.0.1:<port>`; same for `HTTPS_PROXY`/`ALL_PROXY` + lowercase; `NO_PROXY = ""`; `RFL_BUS_FD = "3"`. The proxy port is non-zero and `<= u16::MAX`. (pi-1 §26, §107, §108, §325, §496, §542.) |
@@ -1194,7 +1242,7 @@ unit tests run on every platform.
 | `supervisor_spawn_reserved_env_in_pass_refused.rs` | Plan with `env.pass = ["RFL_PLUGIN"]`. → `SpawnError::ReservedEnvInPlan { var: "RFL_PLUGIN" }`. |
 | `supervisor_spawn_reserved_env_helper_refused.rs` | Plan with `env.set = {"RFL_HELPER_FD": "..."}`. → `SpawnError::ReservedEnvInPlan { var: "RFL_HELPER_FD" }` (defence in depth even though m1 doesn't yet reject this — pi-1 §23, §270). |
 | `supervisor_spawn_provider_lock_refused.rs` | Lock has `bindings.provider = true`. `spawn` → `SpawnError::InvalidPlan { reason: ProviderNotInM2 }` (pi-1 §10, §132). |
-| `supervisor_spawn_duplicate_canonical_refused.rs` | Spawn A successfully; attempt to spawn A again → `SpawnError::AlreadyRegistered`. The second attempt's allocated socketpair, proxy (if any), and child are torn down before return. Verified via `harness::TestHooks::*_drop_count()` (see §H6). |
+| `supervisor_spawn_duplicate_canonical_refused.rs` | Spawn A successfully; attempt to spawn A again → `SpawnError::AlreadyRegistered`. The Phase A precheck (`try_reserve_registration` + supervisor `in_flight` set) ensures NO socketpair / proxy / child is allocated for the second call. Verified via `harness::TestHooks::*_count()` deltas being zero across the failing call (pi-3 §7). |
 | `supervisor_lockin_denies_outside_grant_read.rs` | A in `respond_peer_call` with grant `read_dirs = [<project-root>]` only. `RFL_FIXTURE_OPEN_PATH=/etc/passwd`. Test calls `core.fixture.report_open_result`; assertion: `ok == false`, `errno` indicates kernel denial (typically `EPERM` per syd's policy — exact errno asserted with `matches!` not `==` since lockin's specific errno mapping may differ across syd versions). |
 | `supervisor_lockin_denies_outside_grant_write.rs` | Same shape; A's `write_dirs = [<private-state>]` only. `RFL_FIXTURE_WRITE_PATH=<project-root>/forbidden`. Calls `core.fixture.try_write_path`; asserts denial; verifies `<project-root>/forbidden` does not exist after. |
 
@@ -1242,26 +1290,38 @@ Path: `rafaello/plans/milestones/m2-broker-spawn/manual-validation.md`
 
 Pi-1 §107, §191, §552 flagged the proxy/spawn-call-count
 assertions as unobservable through the public API. m2 adds a
-`#[cfg(any(test, feature = "test-fixture"))]` `TestHooks` API
-exposing:
+`#[cfg(any(test, feature = "test-fixture"))]` `TestHooks`
+struct **owned per-supervisor** (NOT a global atomic — pi-3
+non-blocking #2):
 
-- `outpost_starts() -> usize` — count of `outpost_proxy::start`
-  invocations across the supervisor's lifetime.
-- `socketpair_creates() -> usize`.
-- `child_spawns() -> usize`.
+```rust
+pub struct TestHooks { /* AtomicUsize fields, owned by one supervisor */ }
+impl TestHooks {
+    pub fn outpost_starts(&self) -> usize;
+    pub fn socketpair_creates(&self) -> usize;
+    pub fn child_spawns(&self) -> usize;
+}
+impl PluginSupervisor {
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn test_hooks(&self) -> Arc<TestHooks>;
+}
+```
 
-The supervisor wraps these resource allocations in
-`#[cfg]`-gated counters (`AtomicUsize`). Negative tests assert
-counters increase exactly the expected amount across a failed
-spawn. Production builds compile out the counters entirely.
+Counters increment from inside that supervisor's spawn path
+only; tests on different supervisors do not interfere even
+under parallel execution. Negative tests assert counter
+deltas across a failing call. Production builds compile out
+the counters entirely.
 
 ### E — error-surface additions
 
 m2 grows `rafaello_core::error`:
 
 - `pub enum BrokerError { ... }` (variants enumerated in §B2),
-  `#[non_exhaustive]`, `thiserror`-derived, `Debug + Clone +
-  PartialEq`.
+  `#[non_exhaustive]`, `thiserror`-derived, `Debug` only — NOT
+  `Clone`, NOT `PartialEq` (pi-3 §3 + B2; storing
+  `ValidationError`'s `Display` as a string keeps derives
+  cheap and avoids reaching into m1).
 - `pub enum SpawnError { ... }` (variants enumerated in §SP3),
   `#[non_exhaustive]`, `thiserror`-derived. Source-error
   variants are NOT `Clone`/`PartialEq` (pi-1 §126); tests
