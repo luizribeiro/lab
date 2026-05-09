@@ -166,6 +166,35 @@ impl Broker {
             topic: msg.topic.clone(),
             reason: ve.to_string(),
         })?;
+        let segments: Vec<&str> = msg.topic.split('.').collect();
+        let publisher_acl = self
+            .0
+            .acl
+            .plugins
+            .get(canonical)
+            .expect("registered plugin has acl entry");
+        match segments[0] {
+            "core" | "provider" | "frontend" => {
+                return Err(BrokerError::PublishOnReservedNamespace {
+                    publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                    topic: msg.topic.clone(),
+                });
+            }
+            "plugin" => {
+                if segments.len() < 3 || segments[1] != publisher_acl.topic_id {
+                    return Err(BrokerError::PublishOnReservedNamespace {
+                        publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                        topic: msg.topic.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(BrokerError::UnknownNamespace {
+                    publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                    topic: msg.topic.clone(),
+                });
+            }
+        }
         Ok(())
     }
 
