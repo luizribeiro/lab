@@ -7,8 +7,13 @@ use fittings::{
     SubprocessConnector,
 };
 
+use serde::Serialize;
+
 use crate::error::McpfitError;
-use crate::protocol::{ClientInfo, InitializeParams, InitializeResult, ToolInfo, ToolsListResult};
+use crate::protocol::{
+    ClientInfo, InitializeParams, InitializeResult, ToolInfo, ToolsCallParams, ToolsListResult,
+};
+use crate::response::ToolResponse;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-01-01";
 
@@ -68,6 +73,29 @@ where
         Ok(decoded.tools)
     }
 
+    pub async fn call_tool_raw(
+        &self,
+        name: impl Into<String>,
+        args: impl Serialize,
+    ) -> Result<ToolResponse, McpfitError> {
+        let arguments = serde_json::to_value(args)
+            .map_err(|e| McpfitError::internal(format!("encode tools/call arguments: {e}")))?;
+        let params = ToolsCallParams {
+            name: name.into(),
+            arguments,
+            meta: None,
+        };
+        let params_value = serde_json::to_value(&params)
+            .map_err(|e| McpfitError::internal(format!("encode tools/call params: {e}")))?;
+        let result = self
+            .inner
+            .call("tools/call", params_value)
+            .await
+            .map_err(|e| McpfitError::internal(format!("tools/call call failed: {e}")))?;
+        serde_json::from_value(result)
+            .map_err(|e| McpfitError::internal(format!("decode tools/call result: {e}")))
+    }
+
     pub fn notifications(&self) -> broadcast::Receiver<InboundNotification> {
         self.inner.subscribe_notifications()
     }
@@ -102,9 +130,11 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::{Client, MCP_PROTOCOL_VERSION};
+    use crate::content::ToolContent;
     use crate::protocol::{
         InitializeResult, ServerCapabilities, ServerInfo, ToolInfo, ToolsCapability,
     };
+    use crate::response::ToolResponse;
 
     struct OneShotConnector {
         transport: Arc<Mutex<Option<MemoryTransport>>>,
@@ -443,6 +473,103 @@ mod tests {
             err.to_string().contains("decode tools/list result"),
             "unexpected error: {err}"
         );
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn call_tool_raw_serializes_typed_args_and_decodes_response() {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AddArgs {
+            a: i32,
+            b: i32,
+        }
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            assert_eq!(request.method, "tools/call");
+            let id = request.id.expect("tools/call must carry id");
+            assert_eq!(
+                request.params,
+                Some(json!({
+                    "name": "add",
+                    "arguments": {"a": 1, "b": 2},
+                })),
+            );
+
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "3"}],
+                    "isError": false,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let response = client
+            .call_tool_raw("add", AddArgs { a: 1, b: 2 })
+            .await
+            .expect("call_tool_raw succeeds");
+
+        assert_eq!(
+            response,
+            ToolResponse {
+                content: vec![ToolContent::text("3")],
+                structured_content: None,
+                is_error: false,
+            }
+        );
+
+        server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn call_tool_raw_passes_through_is_error_without_mapping() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+
+        let server = tokio::spawn(async move {
+            let frame = server_transport.recv().await.expect("tools/call request");
+            let request = parse_request_fixture(&frame).expect("decode request");
+            let id = request.id.expect("tools/call must carry id");
+            let response = success_response_line(
+                id,
+                json!({
+                    "content": [{"type": "text", "text": "boom"}],
+                    "isError": true,
+                }),
+            )
+            .expect("encode response");
+            server_transport
+                .send(&response)
+                .await
+                .expect("send tools/call response");
+        });
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+        let response = client
+            .call_tool_raw("explode", json!({}))
+            .await
+            .expect("call_tool_raw must surface tool failure as Ok(ToolResponse)");
+
+        assert!(
+            response.is_error,
+            "raw call must passthrough isError without mapping, got: {response:?}"
+        );
+        assert_eq!(response.content, vec![ToolContent::text("boom")]);
 
         server.await.expect("server task joins");
     }
