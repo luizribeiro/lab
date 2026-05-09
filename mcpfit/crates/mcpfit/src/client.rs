@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 use fittings::{
     client::{Client as FittingsClient, InboundNotification},
@@ -43,27 +46,65 @@ impl ProgressToken {
 pub(crate) type ProgressSender = mpsc::Sender<ProgressNotificationParams>;
 
 #[allow(dead_code)]
+pub(crate) const PROGRESS_CHANNEL_CAPACITY: usize = 64;
+
+#[derive(Debug, Default)]
+struct ProgressRegistryInner {
+    senders: HashMap<ProgressToken, ProgressSender>,
+    missed: HashMap<ProgressToken, Arc<AtomicU64>>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ProgressRegistry {
-    inner: Arc<Mutex<HashMap<ProgressToken, ProgressSender>>>,
+    inner: Arc<Mutex<ProgressRegistryInner>>,
 }
 
 #[allow(dead_code)]
 impl ProgressRegistry {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ProgressToken, ProgressSender>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, ProgressRegistryInner> {
         self.inner.lock().expect("progress registry lock poisoned")
     }
 
-    pub(crate) fn register(&self, token: ProgressToken, sender: ProgressSender) {
-        self.lock().insert(token, sender);
+    pub(crate) fn register(
+        &self,
+        token: ProgressToken,
+        sender: ProgressSender,
+    ) -> Arc<AtomicU64> {
+        let missed = Arc::new(AtomicU64::new(0));
+        let mut inner = self.lock();
+        inner.senders.insert(token.clone(), sender);
+        inner.missed.insert(token, missed.clone());
+        missed
     }
 
     pub(crate) fn remove(&self, token: &ProgressToken) -> Option<ProgressSender> {
-        self.lock().remove(token)
+        let mut inner = self.lock();
+        inner.missed.remove(token);
+        inner.senders.remove(token)
     }
 
     pub(crate) fn get(&self, token: &ProgressToken) -> Option<ProgressSender> {
-        self.lock().get(token).cloned()
+        self.lock().senders.get(token).cloned()
+    }
+
+    pub(crate) fn missed_counter(&self, token: &ProgressToken) -> Option<Arc<AtomicU64>> {
+        self.lock().missed.get(token).cloned()
+    }
+
+    fn deliver(&self, token: &ProgressToken, params: ProgressNotificationParams) {
+        let inner = self.lock();
+        let Some(sender) = inner.senders.get(token) else {
+            return;
+        };
+        match sender.try_send(params) {
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if let Some(missed) = inner.missed.get(token) {
+                    missed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
     }
 }
 
@@ -231,10 +272,7 @@ fn route_notification(progress: &ProgressRegistry, notification: InboundNotifica
     let Some(token) = ProgressToken::from_value(&decoded.progress_token) else {
         return;
     };
-    let Some(sender) = progress.get(&token) else {
-        return;
-    };
-    let _ = sender.try_send(decoded);
+    progress.deliver(&token, decoded);
 }
 
 #[cfg(test)]
@@ -1041,6 +1079,63 @@ mod tests {
             rx.try_recv().is_err(),
             "registered token must not see the unknown-token event",
         );
+    }
+
+    #[tokio::test]
+    async fn router_records_missed_progress_when_per_call_buffer_is_full() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        use fittings::tokio::sync::mpsc;
+        use tokio::time::timeout;
+
+        use super::{ProgressToken, PROGRESS_CHANNEL_CAPACITY};
+        use crate::protocol::ProgressNotificationParams;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(256);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let token = ProgressToken::String("flooded".into());
+        let (tx, rx) = mpsc::channel::<ProgressNotificationParams>(PROGRESS_CHANNEL_CAPACITY);
+        let missed = client.progress_registry().register(token.clone(), tx);
+
+        let extra = 8;
+        let total_events = PROGRESS_CHANNEL_CAPACITY + extra;
+        for i in 0..total_events {
+            let frame = format!(
+                "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":\"flooded\",\"progress\":{i}}}}}\n"
+            );
+            server_transport
+                .send(frame.as_bytes())
+                .await
+                .expect("send progress frame");
+        }
+
+        let expected_missed = extra as u64;
+        timeout(Duration::from_secs(2), async {
+            while missed.load(Ordering::Relaxed) < expected_missed {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("router stays alive and missed counter reaches expected value");
+
+        assert_eq!(
+            missed.load(Ordering::Relaxed),
+            expected_missed,
+            "exactly {expected_missed} events should have overflowed the per-call buffer",
+        );
+        assert!(
+            client
+                .progress_registry()
+                .missed_counter(&token)
+                .is_some(),
+            "missed counter handle must remain accessible while token is registered",
+        );
+
+        drop(rx);
     }
 
     #[tokio::test]
