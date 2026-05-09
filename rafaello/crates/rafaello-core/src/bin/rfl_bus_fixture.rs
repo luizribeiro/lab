@@ -76,8 +76,11 @@ fn main() {
         }
     }
 
+    // Enable I/O + time but not signals: signal-driver init creates a
+    // unix socketpair, which lockin's `network_deny` policy blocks.
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
+        .enable_io()
+        .enable_time()
         .build()
         .expect("build tokio runtime");
     runtime.block_on(run_bus_backed(&mode));

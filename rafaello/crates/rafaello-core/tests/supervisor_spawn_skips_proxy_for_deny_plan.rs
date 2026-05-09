@@ -69,10 +69,16 @@ async fn spawn_with_deny_plan_does_not_start_proxy() {
         private_state_dir: proj.path().join(".rafaello-plugin-data").join(&real_topic),
     };
 
-    if sup.spawn(&plan, &paths).await.is_ok() {
-        panic!("expected step-13 stub error");
-    }
+    let handle = sup.spawn(&plan, &paths).await.expect("spawn ok");
 
     assert_eq!(hooks.outpost_starts.load(Ordering::SeqCst), 0);
     assert_eq!(hooks.socketpair_creates.load(Ordering::SeqCst), 1);
+
+    if let Some(pid) = handle.child_pid() {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait()).await;
 }

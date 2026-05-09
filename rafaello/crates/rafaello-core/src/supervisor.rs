@@ -120,7 +120,11 @@ impl SpawnHandle {
     }
 
     pub fn child_pid(&self) -> Option<u32> {
-        self.0.cached_pid
+        if self.0.outcome.borrow().is_some() {
+            None
+        } else {
+            self.0.cached_pid
+        }
     }
 
     pub fn peer(&self) -> &PeerHandle {
@@ -571,7 +575,10 @@ impl PluginSupervisor {
         // Step 17: build server, capture peer, register with broker.
         let server = Server::new(service, transport);
         let peer = server.peer();
-        let registered = match self.broker.register_plugin(plan.canonical.clone(), peer) {
+        let registered = match self
+            .broker
+            .register_plugin(plan.canonical.clone(), peer.clone())
+        {
             Ok(r) => r,
             Err(BrokerError::NotInAcl(c)) => {
                 self.kill_and_reap(&mut child, cached_pid).await;
@@ -601,18 +608,47 @@ impl PluginSupervisor {
         // pi-6 non-blocking #5).
         drop(in_flight_guard);
 
-        // Steps 18–20 (reaper task, serve loop, registry insert)
-        // land in c20–c21. For c19 the function returns the
-        // step-18+ stub after unwinding all post-step-13 resources
-        // per the post-spawn contract.
-        self.kill_and_reap(&mut child, cached_pid).await;
-        drop(registered);
-        drop(server);
-        drop(proxy);
-        Err(SpawnError::SandboxBuild {
+        // Step 18: reaper task owns the child and publishes the
+        // terminal `ReaperOutcome` to the watch channel; the watcher
+        // task consumes the reaper `JoinHandle` (pi-2 B2 — single
+        // owner) and translates a panic into `ReaperPanicked`.
+        let (watch_tx, watch_rx) = watch::channel::<Option<Arc<ReaperOutcome>>>(None);
+        let watch_tx_clone = watch_tx.clone();
+        let reaper_handle = tokio::spawn(async move {
+            let outcome = match child.wait().await {
+                Ok(s) => ReaperOutcome::Exited(s),
+                Err(e) => ReaperOutcome::WaitFailed(e),
+            };
+            let _ = watch_tx.send(Some(Arc::new(outcome)));
+        });
+        let watcher_join = tokio::spawn(async move {
+            if let Err(_join_err) = reaper_handle.await {
+                let _ = watch_tx_clone.send(Some(Arc::new(ReaperOutcome::ReaperPanicked)));
+            }
+        });
+
+        // Step 19: serve loop drives the per-connection fittings server.
+        let serve_join = tokio::spawn(async move {
+            let _ = server.serve().await;
+        });
+
+        // Step 20: build observation + managed record, return handle.
+        let observation = Arc::new(SpawnObservation {
             canonical: plan.canonical.clone(),
-            source: anyhow::anyhow!("Phase B step 18+ not yet implemented"),
-        })
+            topic_id: plan.topic_id.clone(),
+            cached_pid,
+            peer,
+            outcome: watch_rx,
+        });
+        let managed = ManagedSpawn {
+            observation: Arc::clone(&observation),
+            registered: Some(registered),
+            proxy,
+            serve_join: Some(serve_join),
+            watcher_join: Some(watcher_join),
+        };
+        self.managed.lock().insert(plan.canonical.clone(), managed);
+        Ok(SpawnHandle(observation))
     }
 
     fn build_connection_service(&self, canonical: CanonicalId) -> SupervisorConnectionService {
@@ -779,25 +815,4 @@ impl Service for SupervisorConnectionService {
         }
         Err(FittingsError::method_not_found(req.method))
     }
-}
-
-// Type plumbing: a watch channel initialised to `None` so
-// `SpawnHandle::wait` is a usable type before any reaper
-// task exists. c14's `spawn` never returns `Ok`, so no
-// `SpawnHandle` is ever produced — this exercises the type
-// contract only.
-#[allow(dead_code)]
-fn _observation_plumbing_compiles(
-    canonical: CanonicalId,
-    topic_id: String,
-    peer: PeerHandle,
-) -> Arc<SpawnObservation> {
-    let (_tx, rx) = watch::channel(None);
-    Arc::new(SpawnObservation {
-        canonical,
-        topic_id,
-        cached_pid: None,
-        peer,
-        outcome: rx,
-    })
 }

@@ -1,14 +1,13 @@
 //! c17 SP4 Phase B step 9 — under `NetworkPlan::Proxy`, spawn
 //! starts an `outpost_proxy` listener (counter increments to 1)
-//! and the listener stops accepting connections shortly after
-//! `ProxyHandle` is dropped on unwind.
+//! and the listener binds a non-zero loopback port. Unbind on
+//! teardown is covered by the c26 shutdown commit.
 
 #![cfg(feature = "test-fixture")]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 use rafaello_core::broker_acl::{BrokerAcl, PluginAcl};
 use rafaello_core::bus::Broker;
@@ -73,39 +72,21 @@ async fn spawn_with_proxy_plan_starts_proxy_then_unbinds_after_unwind() {
         private_state_dir: proj.path().join(".rafaello-plugin-data").join(&real_topic),
     };
 
-    if sup.spawn(&plan, &paths).await.is_ok() {
-        panic!("expected step-13 stub error");
-    }
+    let handle = sup.spawn(&plan, &paths).await.expect("spawn ok");
 
     assert_eq!(hooks.outpost_starts.load(Ordering::SeqCst), 1);
     assert_eq!(hooks.socketpair_creates.load(Ordering::SeqCst), 1);
-
-    let port = hooks.last_proxy_port.load(Ordering::SeqCst);
-    assert_ne!(port, 0, "expected last_proxy_port to be set");
-
-    // ProxyHandle::drop is async — poll the loopback port until
-    // it stops accepting (or the timeout elapses).
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let addr = format!("127.0.0.1:{port}");
-    let mut unbound = false;
-    while Instant::now() < deadline {
-        let connect = tokio::time::timeout(
-            Duration::from_millis(50),
-            tokio::net::TcpStream::connect(&addr),
-        )
-        .await;
-        match connect {
-            Ok(Err(_)) => {
-                unbound = true;
-                break;
-            }
-            Ok(Ok(stream)) => drop(stream),
-            Err(_) => {}
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        unbound,
-        "proxy port {port} never stopped accepting within 500ms"
+    assert_ne!(
+        hooks.last_proxy_port.load(Ordering::SeqCst),
+        0,
+        "expected last_proxy_port to be set"
     );
+
+    if let Some(pid) = handle.child_pid() {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait()).await;
 }
