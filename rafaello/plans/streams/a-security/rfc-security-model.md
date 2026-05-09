@@ -505,6 +505,19 @@ v1 cross-tool sink confirmation does not require CaMeL.
 
 ### 5.7 Frontends as bus principals
 
+> **v1 status: external UDS-attached frontends deferred to v2**
+> per `decisions.md` row 27 (2026-05-08), which partially
+> reverses decision #15 (TUI-as-bus-principal kept; external
+> attach deferred). v1 ships the TUI only, local-spawned (per
+> §5.7.1's first bullet), with the `frontend.<attach-id>.*`
+> namespace reserved. The `rfl serve` daemon, attach socket,
+> attach token, and external-attach handshake described in
+> §5.7.1's second bullet and §5.7.2 are v2 work; m1's lock has
+> no `frontend.*` ACL surface and m1's manifest schema doesn't
+> reference attached frontends. m1 retrospective added this
+> status banner; the body is historical-as-of-`2026-05-07` and
+> unchanged.
+
 Frontends (the default TUI, an IDE plugin, a web UI, an email
 relay) are first-class bus principals because they answer
 confirmation requests — i.e. they speak for the user inside the
@@ -1074,6 +1087,15 @@ keys. `env.pass` patterns matching any of `*_TOKEN`, `*_SECRET`,
 same `--i-know-what-im-doing` escape.
 
 ### 7.4.1 Helper plugins (`bindings.helper_for`)
+
+> **v1 status: deferred to v2** per `decisions.md` row 26
+> (2026-05-08), which reverses decision #14. The v1 manifest
+> rejects `helper_for` at parse time; the v1 lock has no
+> `helpers` / `helper_for` fields. The §7.4.1 design below is
+> retained as a v2 spec — the `bindings.helper_for` /
+> `RFL_HELPER_FD` primitive lands when CaMeL itself ships in
+> v2. m1 retrospective added this status banner; the body is
+> historical-as-of-`2026-05-07` and unchanged.
 
 Some plugins need to spawn a sandboxed sibling whose only job is
 to do one thing in tighter isolation than the parent — most
