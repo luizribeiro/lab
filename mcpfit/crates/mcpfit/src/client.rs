@@ -3,7 +3,10 @@ use std::ffi::OsStr;
 use fittings::{
     client::{Client as FittingsClient, InboundNotification},
     core::transport::Connector,
-    tokio::sync::broadcast,
+    tokio::{
+        sync::broadcast,
+        task::JoinHandle,
+    },
     SubprocessConnector,
 };
 
@@ -22,6 +25,18 @@ where
     C: Connector + Send + Sync + 'static,
 {
     inner: FittingsClient<C>,
+    router: Option<JoinHandle<()>>,
+}
+
+impl<C> Drop for Client<C>
+where
+    C: Connector + Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(handle) = self.router.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl<C> Client<C>
@@ -39,7 +54,11 @@ where
         let inner = FittingsClient::connect(connector)
             .await
             .map_err(|e| McpfitError::internal(format!("fittings connect: {e}")))?;
-        Ok(Self { inner })
+        let router = spawn_notification_router(inner.subscribe_notifications());
+        Ok(Self {
+            inner,
+            router: Some(router),
+        })
     }
 
     pub async fn initialize(&self) -> Result<InitializeResult, McpfitError> {
@@ -124,6 +143,20 @@ impl Client<SubprocessConnector> {
     pub async fn spawn(command: impl AsRef<OsStr>) -> Result<Self, McpfitError> {
         Self::connect(SubprocessConnector::new(command)).await
     }
+}
+
+fn spawn_notification_router(
+    mut rx: broadcast::Receiver<InboundNotification>,
+) -> JoinHandle<()> {
+    fittings::tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(_notification) => {}
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -669,6 +702,72 @@ mod tests {
         }
 
         server.await.expect("server task joins");
+    }
+
+    #[tokio::test]
+    async fn drop_aborts_notification_router_task() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (client_transport, _server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let router = client
+            .router
+            .as_ref()
+            .expect("router task should exist while client is alive");
+        assert!(
+            !router.is_finished(),
+            "router task must be running before drop"
+        );
+        let handle = router.abort_handle();
+        drop(client);
+
+        timeout(Duration::from_secs(1), async {
+            while !handle.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("router task must finish promptly after Client drop");
+    }
+
+    #[tokio::test]
+    async fn raw_notification_subscribers_still_receive_with_router_running() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(8);
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let mut rx = client.notifications();
+
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{\"foo\":1}}\n")
+            .await
+            .expect("send notification frame");
+        server_transport
+            .send(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"abc\",\"progress\":1.0}}\n")
+            .await
+            .expect("send progress frame");
+
+        let first = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("first notification arrives within timeout")
+            .expect("broadcast not closed");
+        assert_eq!(first.method, "notifications/tools/list_changed");
+
+        let second = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("second notification arrives within timeout")
+            .expect("broadcast not closed");
+        assert_eq!(second.method, "notifications/progress");
     }
 
     #[tokio::test]
