@@ -51,7 +51,6 @@ pub enum PublisherIdentity {
 }
 
 struct PluginConn {
-    #[allow(dead_code)]
     peer: PeerHandle,
 }
 
@@ -146,6 +145,37 @@ impl Broker {
 
     pub fn shutdown(&self) {
         self.0.state.lock().registry.clear();
+    }
+
+    pub fn publish_boot(&self) -> Result<(), BrokerError> {
+        let event = BusEvent {
+            topic: "core.lifecycle.boot".to_string(),
+            payload: serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "plugin_count": self.0.acl.plugins.len(),
+            }),
+            publisher: PublisherIdentity::Core,
+            in_reply_to: None,
+            taint: None,
+        };
+        self.fan_out_one_event(&event);
+        Ok(())
+    }
+
+    fn fan_out_one_event(&self, event: &BusEvent) {
+        let value =
+            serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
+        let recipients: Vec<(CanonicalId, PeerHandle)> = {
+            let state = self.0.state.lock();
+            state
+                .registry
+                .iter()
+                .map(|(canonical, conn)| (canonical.clone(), conn.peer.clone()))
+                .collect()
+        };
+        for (_canonical, peer) in recipients {
+            let _ = peer.notify("bus.event", value.clone());
+        }
     }
 }
 
