@@ -10,7 +10,7 @@ pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
 
 use crate::broker_acl::{BrokerAcl, PluginAcl};
-use crate::error::{BrokerError, InReplyToReason};
+use crate::error::{BrokerError, InReplyToReason, Publisher};
 use crate::lock::canonical_id::CanonicalId;
 use crate::validate::topic::{pattern_matches_topic, validate_pattern, validate_topic};
 
@@ -80,7 +80,7 @@ impl Broker {
         for (canonical, plugin_acl) in &acl.plugins {
             for topic in &plugin_acl.publish_topics {
                 validate_topic(topic).map_err(|e| BrokerError::InvalidTopic {
-                    publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                    publisher: Publisher::Plugin(canonical.clone()),
                     topic: topic.clone(),
                     reason: e.to_string(),
                 })?;
@@ -152,17 +152,29 @@ impl Broker {
         canonical: &CanonicalId,
         raw_params: &serde_json::Value,
     ) -> Result<(), BrokerError> {
+        let result = self.handle_plugin_publish_inner(canonical, raw_params);
+        if let Err(ref err) = result {
+            self.emit_publish_rejected_for_plugin(canonical, raw_params, err);
+        }
+        result
+    }
+
+    fn handle_plugin_publish_inner(
+        &self,
+        canonical: &CanonicalId,
+        raw_params: &serde_json::Value,
+    ) -> Result<(), BrokerError> {
         if !self.0.state.lock().registry.contains_key(canonical) {
             return Err(BrokerError::NotRegistered(canonical.clone()));
         }
         let msg: PublishMsg = serde_json::from_value(raw_params.clone()).map_err(|e| {
             BrokerError::InvalidPayload {
-                publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                publisher: Publisher::Plugin(canonical.clone()),
                 reason: e.to_string(),
             }
         })?;
         validate_topic(&msg.topic).map_err(|ve| BrokerError::InvalidTopic {
-            publisher: crate::error::Publisher::Plugin(canonical.clone()),
+            publisher: Publisher::Plugin(canonical.clone()),
             topic: msg.topic.clone(),
             reason: ve.to_string(),
         })?;
@@ -176,21 +188,21 @@ impl Broker {
         match segments[0] {
             "core" | "provider" | "frontend" => {
                 return Err(BrokerError::PublishOnReservedNamespace {
-                    publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                    publisher: Publisher::Plugin(canonical.clone()),
                     topic: msg.topic.clone(),
                 });
             }
             "plugin" => {
                 if segments.len() < 3 || segments[1] != publisher_acl.topic_id {
                     return Err(BrokerError::PublishOnReservedNamespace {
-                        publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                        publisher: Publisher::Plugin(canonical.clone()),
                         topic: msg.topic.clone(),
                     });
                 }
             }
             _ => {
                 return Err(BrokerError::UnknownNamespace {
-                    publisher: crate::error::Publisher::Plugin(canonical.clone()),
+                    publisher: Publisher::Plugin(canonical.clone()),
                     topic: msg.topic.clone(),
                 });
             }
@@ -239,15 +251,126 @@ impl Broker {
             return Ok(());
         }
 
-        let value =
-            serde_json::to_value(&event).expect("BusEvent always serialises to a JSON value");
+        self.fan_out(&event, Some(canonical));
+        Ok(())
+    }
 
+    /// Publish a `core.*` event from the broker itself (scope §B1, §B5).
+    ///
+    /// Validates grammar first, then performs the §B3 structural namespace
+    /// check with `Publisher::Core`: only `core.*` topics are accepted.
+    /// No publisher exclusion: the broker is not registered as a subscriber.
+    pub fn publish_core(&self, topic: &str, payload: serde_json::Value) -> Result<(), BrokerError> {
+        validate_topic(topic).map_err(|e| BrokerError::InvalidTopic {
+            publisher: Publisher::Core,
+            topic: topic.to_string(),
+            reason: e.to_string(),
+        })?;
+        let segments: Vec<&str> = topic.split('.').collect();
+        match segments[0] {
+            "core" => {}
+            "provider" | "plugin" | "frontend" => {
+                return Err(BrokerError::PublishOnReservedNamespace {
+                    publisher: Publisher::Core,
+                    topic: topic.to_string(),
+                });
+            }
+            _ => {
+                return Err(BrokerError::UnknownNamespace {
+                    publisher: Publisher::Core,
+                    topic: topic.to_string(),
+                });
+            }
+        }
+        self.publish_core_internal(topic, payload)
+    }
+
+    pub fn publish_boot(&self) -> Result<(), BrokerError> {
+        let payload = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "plugin_count": self.0.acl.plugins.len(),
+        });
+        self.publish_core_internal("core.lifecycle.boot", payload)
+    }
+
+    /// Internal core-publish path used by `publish_core` (after the
+    /// structural namespace check) and by lifecycle-event emission
+    /// (scope §B9). Bypasses the structural namespace re-check —
+    /// the broker has already constructed the topic correctly — but
+    /// still runs grammar revalidation and fan-out.
+    fn publish_core_internal(
+        &self,
+        topic: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), BrokerError> {
+        validate_topic(topic).map_err(|e| BrokerError::InvalidTopic {
+            publisher: Publisher::Core,
+            topic: topic.to_string(),
+            reason: e.to_string(),
+        })?;
+        let event = BusEvent {
+            topic: topic.to_string(),
+            payload,
+            publisher: PublisherIdentity::Core,
+            in_reply_to: None,
+            taint: None,
+        };
+        self.fan_out(&event, None);
+        Ok(())
+    }
+
+    fn emit_publish_rejected_for_plugin(
+        &self,
+        canonical: &CanonicalId,
+        raw_params: &serde_json::Value,
+        err: &BrokerError,
+    ) {
+        let (topic, code): (Option<String>, &'static str) = match err {
+            BrokerError::UnknownNamespace { topic, .. } => {
+                (Some(topic.clone()), "unknown_namespace")
+            }
+            BrokerError::PublishOnReservedNamespace { topic, .. } => {
+                (Some(topic.clone()), "publish_on_reserved_namespace")
+            }
+            BrokerError::PublishOutsideGrant { topic, .. } => {
+                (Some(topic.clone()), "publish_outside_grant")
+            }
+            BrokerError::InvalidTopic { topic, .. } => (Some(topic.clone()), "invalid_topic"),
+            BrokerError::InvalidInReplyTo { topic, reason, .. } => {
+                let code = match reason {
+                    InReplyToReason::Missing => "invalid_in_reply_to_missing",
+                    InReplyToReason::EmptyArray => "invalid_in_reply_to_empty",
+                    InReplyToReason::UnexpectedMultiple => "invalid_in_reply_to_multiple",
+                };
+                (Some(topic.clone()), code)
+            }
+            BrokerError::InvalidPayload { .. } => {
+                let topic = raw_params
+                    .get("topic")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                (topic, "invalid_payload")
+            }
+            _ => return,
+        };
+        let payload = serde_json::json!({
+            "canonical": canonical.to_string(),
+            "topic": topic,
+            "code": code,
+            "message": err.to_string(),
+        });
+        let _ = self.publish_core_internal("core.lifecycle.publish_rejected", payload);
+    }
+
+    fn fan_out(&self, event: &BusEvent, exclude: Option<&CanonicalId>) {
+        let value =
+            serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
         let recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)> = {
             let state = self.0.state.lock();
             state
                 .registry
                 .iter()
-                .filter(|(c, _)| *c != canonical)
+                .filter(|(c, _)| exclude != Some(*c))
                 .filter_map(|(c, conn)| {
                     self.0.acl.plugins.get(c).map(|acl| {
                         let patterns: Vec<String> = acl
@@ -265,51 +388,18 @@ impl Broker {
         for (recipient, peer, patterns) in recipients {
             let matches = patterns
                 .iter()
-                .any(|pat| pattern_matches_topic(pat, &msg.topic));
+                .any(|pat| pattern_matches_topic(pat, &event.topic));
             if !matches {
                 continue;
             }
             if let Err(e) = peer.notify("bus.event", value.clone()) {
                 tracing::warn!(
                     recipient = %recipient,
-                    topic = %msg.topic,
+                    topic = %event.topic,
                     error = ?e,
                     "bus.event fan-out notify failed"
                 );
             }
-        }
-
-        Ok(())
-    }
-
-    pub fn publish_boot(&self) -> Result<(), BrokerError> {
-        let event = BusEvent {
-            topic: "core.lifecycle.boot".to_string(),
-            payload: serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "plugin_count": self.0.acl.plugins.len(),
-            }),
-            publisher: PublisherIdentity::Core,
-            in_reply_to: None,
-            taint: None,
-        };
-        self.fan_out_one_event(&event);
-        Ok(())
-    }
-
-    fn fan_out_one_event(&self, event: &BusEvent) {
-        let value =
-            serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
-        let recipients: Vec<(CanonicalId, PeerHandle)> = {
-            let state = self.0.state.lock();
-            state
-                .registry
-                .iter()
-                .map(|(canonical, conn)| (canonical.clone(), conn.peer.clone()))
-                .collect()
-        };
-        for (_canonical, peer) in recipients {
-            let _ = peer.notify("bus.event", value.clone());
         }
     }
 }
