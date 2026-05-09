@@ -118,22 +118,27 @@ where
         self
     }
 
-    pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
+    pub fn start_call(&self, method: &str, params: Value) -> PendingCall {
         let id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
+        let command = ClientCommand::Call {
+            id: id.clone(),
+            method: method.to_string(),
+            params,
+            response_tx,
+        };
 
-        self.request_tx
-            .send(ClientCommand::Call {
-                id,
-                method: method.to_string(),
-                params,
-                response_tx,
-            })
-            .map_err(|_| FittingsError::internal("client is not connected"))?;
+        if let Err(mpsc::error::SendError(ClientCommand::Call { response_tx, .. })) =
+            self.request_tx.send(command)
+        {
+            let _ = response_tx.send(Err(FittingsError::internal("client is not connected")));
+        }
 
-        response_rx
-            .await
-            .map_err(|_| FittingsError::internal("client request canceled"))?
+        PendingCall::new(id, response_rx)
+    }
+
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, FittingsError> {
+        self.start_call(method, params).await
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), FittingsError> {
@@ -156,7 +161,6 @@ pub struct PendingCall {
 }
 
 impl PendingCall {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(id: JsonRpcId, rx: oneshot::Receiver<Result<Value, FittingsError>>) -> Self {
         Self { id, rx }
     }
@@ -945,6 +949,59 @@ mod tests {
         assert!(matches!(
             error,
             FittingsError::Internal(message) if message == "client request canceled"
+        ));
+    }
+
+    #[tokio::test]
+    async fn start_call_exposes_id_matching_outgoing_request_before_response() {
+        let (client_transport, mut server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        let pending = client.start_call("work", json!({"n": 1}));
+        let pending_id = pending.id().clone();
+
+        let request = parse_request_fixture(&server_transport.recv().await.expect("request"))
+            .expect("decode request");
+        let wire_id = request.id.clone().expect("call should carry an id");
+        assert_eq!(wire_id, pending_id);
+        assert_eq!(request.method, "work");
+        assert_eq!(request.params, Some(json!({"n": 1})));
+
+        let response = success_response_line(&wire_id, json!({"ok": true}))
+            .expect("encode response");
+        server_transport
+            .send(&response)
+            .await
+            .expect("send response");
+
+        let result = pending.await.expect("pending call should resolve");
+        assert_eq!(result, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn start_call_after_worker_shutdown_surfaces_error_via_pending_result() {
+        let (client_transport, server_transport) = MemoryTransport::pair(16);
+        let client = Client::connect(OneShotConnector::new(client_transport))
+            .await
+            .expect("client should connect");
+
+        drop(server_transport);
+
+        let initial = client
+            .call("will-fail", json!({}))
+            .await
+            .expect_err("initial call should fail when transport closes");
+        assert!(matches!(initial, FittingsError::Transport(_)));
+
+        let pending = client.start_call("after-shutdown", json!({}));
+        let error = pending
+            .await
+            .expect_err("start_call after shutdown should surface enqueue failure");
+        assert!(matches!(
+            error,
+            FittingsError::Internal(message) if message == "client is not connected"
         ));
     }
 
