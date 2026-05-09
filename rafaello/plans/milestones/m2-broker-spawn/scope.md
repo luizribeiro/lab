@@ -1401,9 +1401,21 @@ needing parent env mutation use
 inspection use `#[serial_test::serial(proc)]`. Each test uses
 `tempfile::tempdir()` for transient state (m1 pattern).
 
-All spawn-bearing tests are
-`#[cfg(target_os = "linux")]` (pi-1 §220, §221). The pure
-unit tests run on every platform.
+**Platform gating.** Tests are written platform-agnostic by
+default: lockin ships both a Linux (`syd`) and a macOS
+(`seatbelt`) backend, so the supervisor + lockin denial
+proofs work on both in principle. m2 development is
+Linux-only (the devshell on the dev box); macOS is verified
+by pushing the m2 branch to origin and reviewing the CI
+job results at the end of the milestone (or any time
+convenient during Phase 3 when the driver wants a sanity
+check). Any test that turns out to need a Linux-specific
+gate gets `#[cfg(target_os = "linux")]` after the CI run
+shows it red; until then no blanket gate is applied. The
+denial-target paths are picked to exist on both platforms
+(e.g. `/etc/hosts` instead of `/etc/passwd`); the
+`/proc/<pid>/fd` snapshot lives in `manual-validation.md`,
+not the test suite.
 
 #### Positive integration tests
 
@@ -1461,7 +1473,7 @@ unit tests run on every platform.
 | `supervisor_spawn_reserved_env_helper_refused.rs` | Plan with `env.set = {"RFL_HELPER_FD": "..."}`. → `SpawnError::ReservedEnvInPlan { var: "RFL_HELPER_FD" }` (defence in depth even though m1 doesn't yet reject this — pi-1 §23, §270). |
 | `supervisor_spawn_provider_lock_refused.rs` | Lock has `bindings.provider = true`. `spawn` → `SpawnError::InvalidPlan { reason: ProviderNotInM2 }` (pi-1 §10, §132). |
 | `supervisor_spawn_duplicate_canonical_refused.rs` | Spawn A successfully; attempt to spawn A again → `SpawnError::AlreadyRegistered`. The Phase A precheck (`try_reserve_registration` + supervisor `in_flight` set) ensures NO socketpair / proxy / child is allocated for the second call. Verified via `harness::TestHooks::*_count()` deltas being zero across the failing call (pi-3 §7). |
-| `supervisor_lockin_denies_outside_grant_read.rs` | A in `respond_peer_call` with grant `read_dirs = [<project-root>]` only. `RFL_FIXTURE_OPEN_PATH=/etc/passwd`. Test calls `core.fixture.report_open_result`; assertion: `ok == false`, `errno` indicates kernel denial (typically `EPERM` per syd's policy — exact errno asserted with `matches!` not `==` since lockin's specific errno mapping may differ across syd versions). |
+| `supervisor_lockin_denies_outside_grant_read.rs` | A in `respond_peer_call` with grant `read_dirs = [<project-root>]` only. `RFL_FIXTURE_OPEN_PATH=/etc/hosts` (exists on both Linux and macOS — original `/etc/passwd` would also work but `hosts` is the conventional cross-platform pick). Test calls `core.fixture.report_open_result`; assertion: `ok == false`, `errno` indicates kernel denial. The exact errno is asserted with `matches!` not `==` since lockin's syd (Linux) and seatbelt (macOS) backends may map to different errnos — `EPERM` / `EACCES` / `ENOENT` all acceptable. |
 | `supervisor_lockin_denies_outside_grant_write.rs` | Same shape; A's `write_dirs = [<private-state>]` only. `RFL_FIXTURE_WRITE_PATH=<project-root>/forbidden`. Calls `core.fixture.try_write_path`; asserts denial; verifies `<project-root>/forbidden` does not exist after. |
 
 #### Manual validation in `manual-validation.md`
@@ -1471,8 +1483,13 @@ Path: `rafaello/plans/milestones/m2-broker-spawn/manual-validation.md`
 
 - `nix develop --impure --command cargo test --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture`
-  green inside the devshell on Linux. (Tests gated on
-  `target_os = "linux"` skip outside.)
+  green inside the devshell on Linux (the dev box). macOS is
+  verified by pushing the m2 branch to origin and reviewing
+  CI; tests are written platform-agnostic so the expectation
+  is "green there too" but is not blocking ratification of
+  the milestone — failures discovered in CI add a per-test
+  `#[cfg(target_os = "linux")]` gate and a retrospective
+  follow-up entry.
 - `RUST_LOG=rafaello_core=debug nix develop --impure --command
   cargo test --manifest-path rafaello/Cargo.toml -p rafaello-core
   --features test-fixture --test supervisor_spawn_fixture_happy_path
@@ -1590,8 +1607,11 @@ mapped to the milestone or RFC that owns them.
   parse time. m2 must not add a spawn path. SP4.4's
   `RFL_HELPER_FD` reserved-name check is *defence in depth*.
 - **Lazy-load orchestrator.** m3.
-- **macOS spawn-bearing tests.** Linux-only, gated `#[cfg(target_os
-  = "linux")]`. m6 polish revisits.
+- **macOS-required dev loop.** m2 dev runs on Linux only; the
+  test suite is platform-agnostic by default and macOS is
+  verified post-hoc via origin CI per §"Platform gating"
+  above. Per-test Linux gates are added only as CI proves
+  them needed.
 - **Cross-plugin RPC routing (`plugin.<a>.rpc_call.<b>`).**
   Not in v1. m2 enforces `rpc_reply` arity but does not route
   `rpc_call`; cross-plugin `rpc_call` topics go through
@@ -1641,11 +1661,17 @@ mapped to the milestone or RFC that owns them.
    the `supervisor_peer_call_*` tests directly cover both
    directions; the `traced_test` infra captures any internal
    warnings.
-3. **lockin requires syd on Linux.** Tests fail outside the
-   devshell. Mitigation: every `cargo test` invocation in
-   `manual-validation.md` is `nix develop --impure`-prefixed.
-   CI runs in the devshell. The acceptance summary is scoped
-   to "green inside `nix develop --impure`" (pi-1 §61, §234).
+3. **lockin's enforcer differs per platform.** Linux uses
+   `syd` (provided by the devshell); macOS uses
+   `seatbelt` (built into the OS). Mitigation: every `cargo
+   test` invocation in `manual-validation.md` is `nix develop
+   --impure`-prefixed; CI runs in the devshell on both
+   targets. The platform-agnostic test bodies (denial-target
+   `/etc/hosts`, errno asserted via `matches!`) are intended
+   to pass on both, but macOS coverage is verified post-hoc
+   by pushing the m2 branch to origin and reviewing CI; any
+   per-test gate added then is a retrospective follow-up,
+   not a ratification blocker.
 4. **Test isolation: parent env mutation.** Cargo runs tests
    in threads. `supervisor_env_*` tests use `#[serial(env)]`
    to serialise (pi-1 §60, §332). Other tests that allocate
@@ -1743,7 +1769,12 @@ m2 is done when:
   behaviours are all covered.
 - `nix develop --impure --command cargo test --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture`
-  green on Linux inside the devshell (pi-1 §61, §234).
+  green on Linux inside the devshell (pi-1 §61, §234). macOS
+  CI (triggered by pushing the m2 branch to origin and
+  reviewing the job results) is captured in `manual-validation.md`
+  before milestone close; failures discovered there get a
+  per-test `#[cfg(target_os = "linux")]` gate and a
+  retrospective follow-up rather than blocking ratification.
 - `nix develop --impure --command cargo build --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture
   --bin rfl-bus-fixture` green.
