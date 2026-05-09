@@ -1492,6 +1492,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_progress_calls_receive_only_their_own_progress_events() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (client_transport, mut server_transport) = MemoryTransport::pair(32);
+
+        let client = Client::connect_uninitialized(OneShotConnector::new(client_transport))
+            .await
+            .expect("client connects");
+
+        let mut handle_a = client
+            .call_tool_with_progress("a", json!({}))
+            .start()
+            .await
+            .expect("start call A");
+        let mut handle_b = client
+            .call_tool_with_progress("b", json!({}))
+            .start()
+            .await
+            .expect("start call B");
+
+        let frame_a = server_transport.recv().await.expect("call A request");
+        let req_a = parse_request_fixture(&frame_a).expect("decode A");
+        let id_a = req_a.id.expect("A id");
+        let token_a = req_a
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+            .expect("A progress token");
+
+        let frame_b = server_transport.recv().await.expect("call B request");
+        let req_b = parse_request_fixture(&frame_b).expect("decode B");
+        let id_b = req_b.id.expect("B id");
+        let token_b = req_b
+            .params
+            .as_ref()
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+            .expect("B progress token");
+
+        assert_ne!(
+            token_a, token_b,
+            "concurrent calls must get distinct progress tokens",
+        );
+
+        let token_a_json = serde_json::to_string(&token_a).expect("encode A token");
+        let token_b_json = serde_json::to_string(&token_b).expect("encode B token");
+        let progress_a = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":{token_a_json},\"progress\":0.1}}}}\n"
+        );
+        let progress_b = format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":{token_b_json},\"progress\":0.9}}}}\n"
+        );
+        server_transport
+            .send(progress_a.as_bytes())
+            .await
+            .expect("send A progress");
+        server_transport
+            .send(progress_b.as_bytes())
+            .await
+            .expect("send B progress");
+
+        let event_a = timeout(Duration::from_secs(1), handle_a.progress().recv())
+            .await
+            .expect("A progress arrives")
+            .expect("A channel open");
+        assert_eq!(event_a.progress, 0.1);
+        assert_eq!(event_a.progress_token, token_a);
+
+        let event_b = timeout(Duration::from_secs(1), handle_b.progress().recv())
+            .await
+            .expect("B progress arrives")
+            .expect("B channel open");
+        assert_eq!(event_b.progress, 0.9);
+        assert_eq!(event_b.progress_token, token_b);
+
+        assert!(
+            handle_a.progress().try_recv().is_err(),
+            "A handle must not observe B's progress event",
+        );
+        assert!(
+            handle_b.progress().try_recv().is_err(),
+            "B handle must not observe A's progress event",
+        );
+
+        let resp_a = success_response_line(
+            id_a,
+            json!({"content": [{"type": "text", "text": "A"}], "isError": false}),
+        )
+        .expect("encode A response");
+        let resp_b = success_response_line(
+            id_b,
+            json!({"content": [{"type": "text", "text": "B"}], "isError": false}),
+        )
+        .expect("encode B response");
+        server_transport
+            .send(&resp_a)
+            .await
+            .expect("send A response");
+        server_transport
+            .send(&resp_b)
+            .await
+            .expect("send B response");
+
+        let response_a = handle_a.await.expect("A resolves");
+        let response_b = handle_b.await.expect("B resolves");
+        assert_eq!(response_a.content, vec![ToolContent::text("A")]);
+        assert_eq!(response_b.content, vec![ToolContent::text("B")]);
+    }
+
+    #[tokio::test]
     async fn initialize_surfaces_decode_failure_when_result_is_malformed() {
         let (client_transport, mut server_transport) = MemoryTransport::pair(8);
 
