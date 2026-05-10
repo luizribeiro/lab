@@ -387,16 +387,38 @@ impl PluginSupervisor {
             });
         }
 
+        // Per-platform CLOEXEC handling: nix's `SockFlag::SOCK_CLOEXEC`
+        // is Linux-only; macOS needs `fcntl(F_SETFD, FD_CLOEXEC)`
+        // after socketpair. m2 retrospective §5.7 (CI follow-up).
+        #[cfg(target_os = "linux")]
+        let cloexec_flag = nix::sys::socket::SockFlag::SOCK_CLOEXEC;
+        #[cfg(not(target_os = "linux"))]
+        let cloexec_flag = nix::sys::socket::SockFlag::empty();
+
         let (core_fd, child_fd) = nix::sys::socket::socketpair(
             nix::sys::socket::AddressFamily::Unix,
             nix::sys::socket::SockType::Stream,
             None,
-            nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+            cloexec_flag,
         )
         .map_err(|source| SpawnError::Socketpair {
             canonical: plan.canonical.clone(),
             source,
         })?;
+
+        // macOS post-socketpair CLOEXEC fixup (Linux already set the flag
+        // atomically via SOCK_CLOEXEC). Uses nix's fcntl wrapper.
+        #[cfg(not(target_os = "linux"))]
+        {
+            use std::os::fd::AsRawFd;
+            for fd in [&core_fd, &child_fd] {
+                let raw = fd.as_raw_fd();
+                let _ = nix::fcntl::fcntl(
+                    raw,
+                    nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+                );
+            }
+        }
         #[cfg(any(test, feature = "test-fixture"))]
         self.test_hooks
             .socketpair_creates
