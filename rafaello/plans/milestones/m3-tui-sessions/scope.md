@@ -471,7 +471,9 @@ The deliverable is:
    child, runs until the TUI exits, persists the session.
 5. `TestHooks::inject_fault` mechanism on `PluginSupervisor`
    (m2 retro §5.1, the single largest known coverage gap)
-   with two inject points; three deleted m2 unwind tests
+   with three inject points (pre-spawn / post-spawn-pre-
+   register / post-register — round 19 added the third);
+   three deleted m2 unwind tests
    re-added against the mechanism.
 6. m1 publishes-grant unknown-namespace parse-time tightening
    (m2 retro §2.8) — small back-reach to m1 in the m3 branch.

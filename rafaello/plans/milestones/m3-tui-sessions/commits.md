@@ -3,7 +3,7 @@
 > **Status:** round-2 draft. Round 1 returned 6 blockers + 4
 > high + 5 medium (`commits-pi-review-1.md`). Round 2
 > restructures: (a) moves the **rfl-bus-fixture extensions
-> (formerly c25)** to before the frontend supervisor group
+> (formerly c23)** to before the frontend supervisor group
 > so c19+ frontend tests can use the new modes without
 > forward references; (b) moves the
 > **`shutdown_with_outcome` extraction** from c06 into the
@@ -62,7 +62,7 @@ exercises them per `~/.claude/CLAUDE.md`.
 ## m3a / m3b checkpoint
 
 No internal split is planned. The driver re-evaluates after
-**c14** (renderer pipeline complete) and after **c25**
+**c14** (renderer pipeline complete) and after **c23**
 (session store + controller landed); if a split becomes
 obviously beneficial, the driver opens an m3a / m3b
 owner-ratification request.
@@ -71,7 +71,7 @@ owner-ratification request.
 
 Wherever `scope.md` and `commits.md` both name a test, this
 `commits.md` is canonical. The headline test is
-**`rfl_chat_demo_bar.rs`** (lands at c33).
+**`rfl_chat_demo_bar.rs`** (lands at c31).
 
 ---
 
@@ -195,7 +195,7 @@ Wherever `scope.md` and `commits.md` both name a test, this
   commit no longer includes the frontend
   `shutdown_with_outcome` seam — that's nonsensical
   here because frontend types don't exist yet; the seam
-  moves to c22 alongside `FrontendHandle::shutdown`):
+  moves to c20 alongside `FrontendHandle::shutdown`):
   - Extend `TestHooks` with `inject_pre_spawn_fault`,
     `inject_post_spawn_pre_register_fault`,
     `inject_post_register_fault` + matching
@@ -251,7 +251,7 @@ Wherever `scope.md` and `commits.md` both name a test, this
   Note: `frontend_shutdown_dead_watch_paths.rs` was
   bundled here in round 1; pi-1 Blocker #2 surfaces
   that those tests need `shutdown_with_outcome` which
-  doesn't exist until c22. They move to c22.
+  doesn't exist until c20. They move to c20.
 - **Why.** scope §H6.3, §I, m2 retro §5.1.
 - **Depends on.** c06.
 - **Acceptance.** All six unwind tests pass on Linux;
@@ -516,104 +516,101 @@ c19+ frontend tests can use `signal_ready` /
   - `frontend_spawn_reserved_env_in_set_refused.rs`.
   - `frontend_register_unknown_attach_id_rejected.rs`.
 
-### c20 — feat(rafaello-core::frontend): Phase B steps 1-8 (env, socketpair, private state dir, spawn, take stderr)
+### c20 — feat(rafaello-core::frontend): shutdown_with_outcome seam + dead-watch unit tests
 
-- **What.** scope §F3 Phase B steps 1-8: socketpair,
-  command construction, env apply, FD_CLOEXEC strip,
-  private state dir create_dir_all (pi-17 #3),
-  stderr piped (pi-10 Blocker 1),
-  command.spawn(), child.stderr.take().
-- **Why.** scope §F3 Phase B 1-8.
-- **Depends on.** c17 (uses `signal_ready` mode in the
-  smoke test below — pi-1 Blocker #4 fixed by Group
-  6 reorder), c19.
-- **Acceptance.** New test
-  `frontend_spawn_phase_b_smoke.rs` — spawns
-  `rfl-bus-fixture` in `signal_ready` mode (now
-  available from c17); assert child PID captured,
-  child stderr taken, env applied. Plus
-  `frontend_spawn_creates_private_state_dir.rs`
-  asserting the per-frontend dir lands at
-  `${PROJECT_ROOT}/.rafaello-frontend-data/<attach-id>/`.
-
-### c21 — feat(rafaello-core::frontend): Phase B steps 9-12 (watches, reaper, watcher, server build)
-
-- **What.** scope §F3 Phase B steps 9-12: readiness
-  watch channel, reaper-outcome watch channel, reaper
-  task spawn, reaper-watcher task spawn (consumes
-  reaper's JoinHandle, on JoinError pushes
-  `ReaperPanicked`), fittings_server::Server build
-  with `FrontendBusPublishService` +
-  `FrontendReadyService` composed via
-  `FrontendExtraServiceFactory`.
-- **Why.** scope §F3 + scope reaper-watcher spec.
-- **Depends on.** c17 (signal_ready), c20.
-- **Acceptance.** Two tests:
-  - `frontend_reaper_publishes_exited_on_clean_exit.rs`
-    — spawn fixture in `signal_ready` mode with
-    `RFL_FIXTURE_MAX_LIFETIME=1`; await outcome; assert
-    `Exited(status)` with `status.success()`.
-  - `frontend_reaper_publishes_reaper_panicked_on_panic.rs`
-    — induce reaper-task panic via cfg-gated
-    `inject_reaper_panic` hook; assert `ReaperPanicked`
-    is published.
-
-### c22 — feat(rafaello-core::frontend): shutdown_with_outcome seam + dead-watch tests
-
-- **What.** scope §F2 / §F4 / §"shutdown_with_outcome"
-  (pi-1 Blocker #2: this seam moved out of c06 — it
-  belongs alongside `FrontendHandle::shutdown`):
-  - Extract the shutdown algorithm into a pure
-    async helper `rafaello_core::frontend::shutdown::
-    shutdown_with_outcome(cached, child_pid, config,
-    signal_fn, probe_fn, serve_handle,
-    register_guard) -> ShutdownReport` per scope §F4.
-- **Why.** scope §F4 + scope §"shutdown_with_outcome";
-  the seam is a unit-testable extraction of the
-  shutdown algorithm.
+- **What.** scope §F4 + §"shutdown_with_outcome" (pi-2
+  H2 — full signature spelled out, including the
+  reaper outcome receiver):
+  - Extract the shutdown algorithm as a pure async
+    helper:
+    ```rust
+    pub async fn rafaello_core::frontend::shutdown::shutdown_with_outcome(
+        cached: Option<Arc<ReaperOutcome>>,
+        child_pid: nix::unistd::Pid,
+        config: &FrontendConfig,
+        reaper_outcome_rx: tokio::sync::watch::Receiver<Option<Arc<ReaperOutcome>>>,
+        serve_handle: Option<tokio::task::JoinHandle<()>>,
+        register_guard: Option<RegisteredFrontend>,
+        signal_fn: impl FnMut(Pid, Signal) -> Result<(), Errno>,
+        probe_fn: impl FnMut(Pid) -> Result<(), Errno>,
+    ) -> ShutdownReport;
+    ```
+  - This commit lands the seam BEFORE the
+    consolidated Phase B + handle in c21 so
+    `FrontendHandle::shutdown` can simply call this
+    function. ReaperOutcome is m2's existing type in
+    `rafaello_core::error`.
+- **Why.** scope §F4 + pi-1 Blocker #2 + pi-2 H2.
 - **Depends on.** c18 (FrontendConfig + ShutdownReport
-  types).
+  + RegisteredFrontend).
 - **Acceptance.** Two new unit tests in
   `rafaello-core/tests/frontend_shutdown_dead_watch_paths.rs`:
   - `dead_watch_waitfailed_child_already_gone`:
-    `cached = Some(WaitFailed(...))`,
-    mock `signal_fn` records SIGTERM, mock
-    `probe_fn` returns `Err(ESRCH)` on first call →
-    SIGKILL is NOT sent, `used_sigkill = false`.
+    `cached = Some(WaitFailed(...))`, mock
+    `signal_fn` records SIGTERM, mock `probe_fn`
+    returns `Err(Errno::ESRCH)` on first call →
+    SIGKILL NOT sent, `used_sigkill = false`.
   - `dead_watch_reaper_panicked_child_alive`:
     `cached = Some(ReaperPanicked)`, `signal_fn`
     records SIGTERM and SIGKILL, `probe_fn` returns
-    `Ok(())` (alive) then `Err(ESRCH)` (gone) →
-    `used_sigkill = true`. Verifies kill_fn call
-    sequence and `ShutdownReport` flags.
+    `Ok(())` then `Err(Errno::ESRCH)` →
+    `used_sigkill = true`. (This test covers the
+    `ReaperPanicked` branch — pi-2 B2: round-2's
+    `inject_reaper_panic` hook test is dropped
+    because no commit owned the hook; the seam-
+    level coverage here is sufficient.)
 
-### c23 — feat(rafaello-core::frontend): Phase B steps 13-15 — register, serve, return; FrontendHandle Drop + shutdown
+### c21 — feat(rafaello-core::frontend): Phase B + FrontendHandle + lifecycle (consolidated cutover)
 
-- **What.** scope §F3 step 13-15 + §F4:
-  - `Broker::register_frontend(...)` →
-    `FrontendHandle.register_guard`.
-  - `tokio::spawn(server.serve())` →
-    `FrontendHandle.serve_handle`.
-  - `FrontendHandle::wait`,
-    `FrontendHandle::wait_ready`,
-    `FrontendHandle::take_child_stderr`,
-    `FrontendHandle::has_signalled_ready`.
-  - `FrontendHandle::shutdown(mut self)` calls
-    `shutdown_with_outcome` from c22.
-  - `FrontendHandle::Drop` — Exited-skip /
-    abnormal-best-kill / None-best-kill per scope §F4.
-- **Why.** scope §F3 step 13-15 + §F4.
-- **Depends on.** c17, c21, c22.
-- **Acceptance.** Six tests:
-  - `frontend_handle_wait_ready_resolves_on_signal.rs`
-    (uses `signal_ready`).
+- **What.** scope §F3 Phase B (all 15 steps) + §F4 +
+  scope §F1 FrontendHandle methods (pi-2 B1 + m0
+  retro §4.1: "workspace-wide cutover commits are
+  unavoidable for breaking surface introductions" —
+  Phase B cannot be split into separately-green
+  commits because `signal_ready` integration tests
+  need register/serve/handle to land together).
+  One consolidated commit covers:
+  - Phase B steps 1-8 (socketpair, env, private state
+    dir create_dir_all per pi-17 #3, stderr piped per
+    pi-10 Blocker 1, spawn, child.stderr.take()).
+  - Phase B steps 9-12 (readiness watch, reaper-
+    outcome watch, reaper task, reaper-watcher task
+    pushing `ReaperPanicked` on JoinError, server
+    build with `FrontendBusPublishService` +
+    `FrontendReadyService` composed via
+    `FrontendExtraServiceFactory`).
+  - Phase B steps 13-15 (register_frontend → guard
+    on handle, `tokio::spawn(server.serve())` →
+    serve_handle on handle, return populated
+    `FrontendHandle` with all 9 fields).
+  - `FrontendHandle::wait`, `wait_ready`,
+    `take_child_stderr`, `has_signalled_ready`,
+    `shutdown(mut self)` calls `shutdown_with_outcome`
+    from c20.
+  - `FrontendHandle::Drop` per scope §F4
+    (Exited-skip / abnormal-best-kill /
+    None-best-kill).
+- **Why.** scope §F3 + §F4 + m0 retro §4.1; pi-2 B1.
+- **Depends on.** c14 (BrokerAcl frontends), c15
+  (register_frontend + try_reserve), c16
+  (handle_frontend_publish), c17 (fixture modes
+  signal_ready / exit_immediately /
+  respond_peer_call MAX_LIFETIME), c18 (types),
+  c19 (Phase A validation), c20 (shutdown_with_outcome).
+- **Acceptance.** Eight tests (drops the unowned
+  `inject_reaper_panic` test — pi-2 B2):
+  - `frontend_spawn_creates_private_state_dir.rs`.
+  - `frontend_reaper_publishes_exited_on_clean_exit.rs`
+    — spawn fixture in `signal_ready` mode with
+    `RFL_FIXTURE_MAX_LIFETIME=1`; await outcome;
+    assert `Exited(status)` with
+    `status.success()`.
+  - `frontend_handle_wait_ready_resolves_on_signal.rs`.
   - `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs`
     (uses `exit_immediately`).
-  - `frontend_handle_wait_resolves_on_child_exit.rs`
-    (uses `signal_ready` + `MAX_LIFETIME=1`).
+  - `frontend_handle_wait_resolves_on_child_exit.rs`.
   - `frontend_handle_drop_does_not_leak_zombie.rs`
-    (Linux-only; uses
-    `respond_peer_call` mode from m2).
+    (Linux-only; uses `respond_peer_call`).
   - `frontend_handle_shutdown_skips_kill_on_exited.rs`.
   - `frontend_handle_shutdown_kills_on_waitfailed.rs`
     (uses `shutdown_with_outcome` directly with
@@ -623,7 +620,7 @@ c19+ frontend tests can use `signal_ready` /
 
 ## Group 8 — Session store + controller
 
-### c24 — feat(rafaello-core::session): SessionStore::open with Flock<File> + lock-first ordering
+### c22 — feat(rafaello-core::session): SessionStore::open with Flock<File> + lock-first ordering
 
 - **What.** scope §S1 + §S5 + §S3 (partial):
   - New module `rafaello_core::session`.
@@ -637,7 +634,7 @@ c19+ frontend tests can use `signal_ready` /
   - `SessionError` enum with `Io`, `Sqlite`, `Serde`,
     `Locked { holder_pid: Option<u32> }`,
     `SchemaMismatch` (the `Publish` variant lands at
-    c26 with SessionController).
+    c24 with SessionController).
 - **Why.** scope §S1 + §S5 + §S3.
 - **Depends on.** c02, c17 (uses `probe_fd_closed`
   fixture mode for the fd-not-inherited test).
@@ -652,21 +649,21 @@ c19+ frontend tests can use `signal_ready` /
   - `session_store_lock_fd_not_inherited_by_child.rs`
     (uses `probe_fd_closed` mode from c17).
 
-### c25 — feat(rafaello-core::session): append_entry + load_entries + StoredEntry
+### c23 — feat(rafaello-core::session): append_entry + load_entries + StoredEntry
 
 - **What.** scope §S1 + §S2:
-  - SQL schema population (tables created at c24;
+  - SQL schema population (tables created at c22;
     rows + queries fill in here).
   - `StoredEntry { seq: u64, entry: Entry }`.
   - `append_entry`, `load_entries` returning
     `Vec<StoredEntry>` ordered by seq.
 - **Why.** scope §S1 + §S2.
-- **Depends on.** c08 (Entry), c24.
+- **Depends on.** c08 (Entry), c22.
 - **Acceptance.** Two tests:
   - `session_store_round_trip.rs`.
   - `session_store_seq_monotonic.rs`.
 
-### c26 — feat(rafaello-core::session): SessionController + finalize_entry + replay_history + SessionError::Publish
+### c24 — feat(rafaello-core::session): SessionController + finalize_entry + replay_history + SessionError::Publish
 
 - **What.** scope §S1 controller bullets:
   - `SessionController { store, pipeline, broker }`.
@@ -680,11 +677,11 @@ c19+ frontend tests can use `signal_ready` /
     variant (pi-12 #2).
 - **Why.** scope §S1 + pi-12 #2.
 - **Depends on.** c11 (RenderPipeline), c16 (broker
-  publish_core), c25.
+  publish_core), c23.
 - **Acceptance.** Two tests using
   `in_memory_broker_with_tui_and_observer_acl()`
   helper (defined inline in this commit; `m3_harness`
-  formal harness lands later in c33):
+  formal harness lands later in c31):
   - `session_controller_finalize_entry.rs` — assert
     SQLite row + one `entry.finalized` event with
     `replay: false`.
@@ -696,7 +693,7 @@ c19+ frontend tests can use `signal_ready` /
 
 ## Group 9 — TUI binary
 
-### c27 — feat(rafaello-tui::bin): rfl-tui core — env parsing, fd adoption, fittings client, frontend.ready RPC
+### c25 — feat(rafaello-tui::bin): rfl-tui core — env parsing, fd adoption, fittings client, frontend.ready RPC
 
 - **What.** scope §T1 + §T2 step 1-3:
   - Parse `RFL_BUS_FD`, `RFL_PROJECT_ROOT`,
@@ -717,7 +714,7 @@ c19+ frontend tests can use `signal_ready` /
   `frontend.ready` arrives parent-side via test-side
   `FrontendReadyService` mock.
 
-### c28 — feat(rafaello-tui::bin): headless test mode + stderr sentinels + RFL_TUI_MAX_LIFETIME self-timeout
+### c26 — feat(rafaello-tui::bin): headless test mode + stderr sentinels + RFL_TUI_MAX_LIFETIME self-timeout
 
 - **What.** scope §T2 step 4 + sentinels:
   - `RFL_TUI_TEST_MODE=1`: skip terminal init,
@@ -730,7 +727,7 @@ c19+ frontend tests can use `signal_ready` /
     `"project-root=<abs-path>"`.
   - `RFL_TUI_MAX_LIFETIME` self-timeout in test mode.
 - **Why.** scope §T2 step 4 + sentinels.
-- **Depends on.** c27.
+- **Depends on.** c25.
 - **Acceptance.** Four tests:
   - `tui_test_mode_logs_bus_events_to_stderr.rs`.
   - `tui_test_mode_exits_on_test_done.rs`.
@@ -738,7 +735,7 @@ c19+ frontend tests can use `signal_ready` /
   - `tui_sends_frontend_ready_after_handler_registration.rs`
     (deterministic-callback ordering, scope §I).
 
-### c29 — feat(rafaello-tui::paint): Painter::draw_with_panic_isolation + paint_node + lib unit test
+### c27 — feat(rafaello-tui::paint): Painter::draw_with_panic_isolation + paint_node + lib unit test
 
 - **What.** scope §I `tui_paint_panic_isolation` +
   scope §T4 + §T5:
@@ -759,41 +756,52 @@ c19+ frontend tests can use `signal_ready` /
   `[render error: ...]` on the test backend AND the
   next render call proceeds normally.
 
-### c30 — feat(rafaello-tui::bin): production-mode UI loop with crossterm + raw mode + ratatui
+### c28 — feat(rafaello-tui::bin): production-mode UI loop with crossterm + raw mode + ratatui
 
 - **What.** scope §T2 step 5-7 + §T6: terminal init,
   alternate-screen, raw-mode, redraw on event arrival,
   q-to-quit, arrow-key scroll, restore-on-exit. Uses
-  `Painter::draw_with_panic_isolation` from c29
+  `Painter::draw_with_panic_isolation` from c27
   (pi-1 Blocker #6: this commit now properly depends
-  on c29 instead of forward-referencing it).
+  on c27 instead of forward-referencing it).
 - **Why.** scope §T2 step 5-7 + §T6.
-- **Depends on.** c28, c29.
+- **Depends on.** c26, c27.
 - **Acceptance.** No automated production-mode tests
   (production mode is exercised by humans only;
   scope §I `rfl_chat_demo_bar` uses headless mode).
-  A manual smoke recording lands in c34
+  A manual smoke recording lands in c32
   `manual-validation.md`.
 
 ---
 
 ## Group 10 — `rfl chat` subcommand
 
-### c31 — feat(rafaello::lib): RflChatCli + RflChatError + resolve_tui_path pure function
+### c29 — feat(rafaello::lib): RflChatCli + RflChatError + resolve_tui_path + workspace_bin_path test helper
 
-- **What.** scope §C1 + §C3:
+- **What.** scope §C1 + §C3 + pi-2 B3 (move
+  `workspace_bin_path` helper here so c30 / c31 CLI
+  tests can use it):
   - clap `Cli` with `Chat { project_root:
     Option<PathBuf> }` subcommand.
   - `RflChatError` with all variants used in §C2.
   - `resolve_tui_path(env, current_exe)` pure
     function per scope §C3.
-- **Why.** scope §C1 + §C3 + pi-15 #5.
+  - **`rafaello/tests/common/workspace_bin_path.rs`**
+    test helper resolving target-dir + binary name
+    via `CARGO_TARGET_DIR` env / cargo metadata
+    walk-up (scope §H workspace_bin_path).
+- **Why.** scope §C1 + §C3 + pi-15 #5 + pi-2 B3.
 - **Depends on.** c04.
 - **Acceptance.** Three resolve_tui_path unit tests
   (per scope §C3): `_env_override.rs`,
-  `_sibling_lookup.rs`, `_unresolved.rs`.
+  `_sibling_lookup.rs`, `_unresolved.rs`. Plus
+  `workspace_bin_path_resolves_rfl_tui.rs` and
+  `workspace_bin_path_resolves_rfl_bus_fixture.rs`
+  smoke tests that cargo-build the workspace then
+  call the helper and assert the resolved path
+  exists and is executable.
 
-### c32 — feat(rafaello::lib): rfl chat orchestration steps 1-7 — open/spawn/wait_ready
+### c30 — feat(rafaello::lib): rfl chat orchestration steps 1-7 — open/spawn/wait_ready
 
 - **What.** scope §C2 steps 1-7. Includes the EnvPlan
   `pass` allowlist construction (scope §C2 step 5),
@@ -802,8 +810,13 @@ c19+ frontend tests can use `signal_ready` /
   `"rfl-chat: frontend-ready-observed"` sentinel.
 - **Why.** scope §C2 steps 1-7.
 - **Depends on.** c17 (fixture modes used by tests),
-  c23 (FrontendHandle), c26 (controller),
-  c27 (rfl-tui in test mode), c31.
+  c21 (FrontendHandle — round-3 consolidated),
+  c24 (SessionController),
+  c26 (rfl-tui headless mode + sentinels including
+  `project-root=` and `RFL_TUI_MAX_LIFETIME` —
+  pi-2 H1: c25 only had the basic RPC, c26 has the
+  test-mode sentinels these tests assert on),
+  c29.
 - **Acceptance.** Seven CLI tests under
   `rafaello/tests/`:
   - `rfl_chat_locked_session_errors_with_holder_pid.rs`.
@@ -817,7 +830,7 @@ c19+ frontend tests can use `signal_ready` /
   - `rfl_chat_frontend_ready_timeout_errors.rs`
     (uses `hold_silent`).
 
-### c33 — feat(rafaello::lib): rfl chat orchestration steps 8-10 — replay/harness/wait + cleanup guard
+### c31 — feat(rafaello::lib): rfl chat orchestration steps 8-10 — replay/harness/wait + cleanup guard
 
 - **What.** scope §C2 steps 8-10 + cleanup guard:
   Option/take ownership pattern, single shutdown +
@@ -825,10 +838,16 @@ c19+ frontend tests can use `signal_ready` /
   in-test fixture-entry harness (when
   `RFL_HARNESS_FIXTURES=1`), step-10 outcome
   reading from `frontend_handle.wait().await`,
-  RflChatError mapping.
-- **Why.** scope §C2 steps 8-10 + cleanup guard.
-- **Depends on.** c32, c17 (uses
-  `signal_ready_then_exit_n` for the post-ready test).
+  RflChatError mapping. **The harness uses c08's
+  `Entry::new_*` constructors** (pi-2 H3 — keeps the
+  rafaello bin's dep graph free of direct
+  `serde_json` / `ulid` / `chrono` deps; only
+  rafaello-core has those).
+- **Why.** scope §C2 steps 8-10 + cleanup guard +
+  pi-2 H3.
+- **Depends on.** c08 (Entry constructors), c30, c17
+  (uses `signal_ready_then_exit_n` for the post-
+  ready test).
 - **Acceptance.** Two CLI tests:
   - `rfl_chat_replay_withheld_until_frontend_ready.rs`
     (single combined stderr stream, line-order
@@ -840,40 +859,41 @@ c19+ frontend tests can use `signal_ready` /
 
 ## Group 11 — Demo-bar headline + manual validation
 
-### c34 — test(rafaello): rfl_chat_demo_bar.rs + workspace_bin_path helper + manual-validation.md
+### c32 — test(rafaello): rfl_chat_demo_bar.rs
 
-- **What.** scope §I `rfl_chat_demo_bar.rs` + scope
-  §H `workspace_bin_path` helper + scope §"Manual
-  validation" record (round-2 bundles the headline
-  test and the manual-validation doc; either could
-  split if pi prefers, but they land together as the
-  milestone-close commit):
-  - `rafaello/tests/common/workspace_bin_path.rs`
-    helper.
+- **What.** scope §I `rfl_chat_demo_bar.rs` only
+  (pi-2 M1 — `manual-validation.md`, the macOS CI
+  URL capture, and the interactive recording are
+  driver-owned Phase-4 artifacts, not per-commit
+  acceptance gates; this commit covers the
+  automated headline test only):
   - `rfl_chat_demo_bar.rs` end-to-end: spawn
     `rfl chat` with `RFL_HARNESS_FIXTURES=1` +
     `RFL_TUI_TEST_MODE=1` against tempdir; assert
     nine SQLite rows + nine `"rfl-tui: bus.event"`
     lines.
-  - `rafaello/plans/milestones/m3-tui-sessions/manual-validation.md`
-    documenting cargo-test-all output (Linux + macOS
-    CI URL), real interactive `rfl chat` recording,
-    macOS CI URL.
-- **Why.** scope §I + §"Manual validation" + §"Acceptance
-  summary".
-- **Depends on.** c33.
+- **Why.** scope §I + §"Acceptance summary".
+- **Depends on.** c29 (workspace_bin_path), c31.
 - **Acceptance.** `rfl_chat_demo_bar.rs` passes on
-  Linux. macOS CI green. `manual-validation.md`
-  exists with all required items.
+  Linux. macOS CI green via the Phase-4 driver
+  push (NOT a c32 per-commit gate; pi-2 M1).
 
 ---
 
-## Phase 4 — `retrospective.md` is driver-owned, NOT a per-commit task
+## Phase 4 — driver-owned artifacts (NOT per-commit tasks)
 
-The milestone driver writes `retrospective.md` in Phase 4
-after all 34 commits land. Pi review (m1: 4 rounds; m2:
-2 rounds). Drift fixes land before retrospective ratifies.
-Then merge to `rafaello-v0.1` linear-history.
+After all 32 commits land, the milestone driver writes:
+
+1. **`manual-validation.md`** capturing cargo-test-all
+   output (Linux + macOS CI URLs), the real interactive
+   `rfl chat` recording, and the macOS CI run URL
+   (pi-2 M1 — moved out of c32 because these are
+   external ratification artifacts, not local
+   per-commit-green gates).
+2. **`retrospective.md`** with pi review (m1: 4 rounds;
+   m2: 2 rounds). Drift fixes land before retrospective
+   ratifies. Then merge to `rafaello-v0.1`
+   linear-history.
 
 Anticipated drift items (from scope §"Acceptance summary"):
 Stream E renderer-RFC banner; `PublisherIdentity::Frontend`
@@ -895,7 +915,7 @@ handover to m4.
   moved into c03 alongside the directory creation.
 - **Blocker #2**: `shutdown_with_outcome` extraction
   moved out of c06 (where the frontend types it
-  references don't exist yet) into a new c22 inside
+  references don't exist yet) into a new c20 inside
   the frontend group, depending on c18's type
   introduction. The dead-watch tests
   (`frontend_shutdown_dead_watch_paths.rs`) move with
@@ -904,21 +924,21 @@ handover to m4.
   replaced with a "`RendererRegistry::new()` is empty"
   test that stays valid through c12 + c13.
 - **Blocker #4**: rfl-bus-fixture extensions (formerly
-  c25) moved to **c17**, ahead of the frontend
+  c23) moved to **c17**, ahead of the frontend
   supervisor group (c18-c23). Frontend tests can now
   use `signal_ready` / `exit_immediately` /
   `hold_silent` / `signal_ready_then_exit_n` /
   `probe_fd_closed` modes without forward references.
 - **Blocker #5**: c17's `probe_fd_closed` mode exits
   on `EBADF` (correct), not `ESRCH` (round-1 mistake).
-- **Blocker #6**: c30 (production-mode UI loop) now
-  depends on c29 (Painter); c30 was forward-
-  referencing c29's `draw_with_panic_isolation`.
+- **Blocker #6**: c28 (production-mode UI loop) now
+  depends on c27 (Painter); c28 was forward-
+  referencing c27's `draw_with_panic_isolation`.
 - **High #1**: c19 + c20 now declare c15 dependency
   for `try_reserve_frontend_registration`.
-- **High #2**: c29 now declares c18 dependency for
+- **High #2**: c27 now declares c18 dependency for
   `PaintError`.
-- **High #3**: c32 / c33 now declare c17 / c27
+- **High #3**: c30 / c31 now declare c17 / c25
   dependencies for fixture modes + rfl-tui test
   mode.
 - **High #4**: forward-reference notes ("re-points",
@@ -927,8 +947,8 @@ handover to m4.
   to specific commits.
 - **Medium #5 counts**: c07 lists six unwind tests
   (was "five"); c11 lists six pipeline tests (was
-  "five"); c32 lists seven CLI tests (was "three"
-  — split across c32 + c33 now).
+  "five"); c30 lists seven CLI tests (was "three"
+  — split across c30 + c31 now).
 - **Medium #5 group count**: 12 groups (was
   miscounted as "11" in the round-1 preamble).
 - **Medium #5 H6 wording**: c06 H6 hook placement
