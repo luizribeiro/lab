@@ -326,6 +326,18 @@ impl Broker {
         attach_id: &AttachId,
         raw_params: &serde_json::Value,
     ) -> Result<(), BrokerError> {
+        let result = self.handle_frontend_publish_inner(attach_id, raw_params);
+        if let Err(ref err) = result {
+            self.emit_publish_rejected_for_frontend(attach_id, raw_params, err);
+        }
+        result
+    }
+
+    fn handle_frontend_publish_inner(
+        &self,
+        attach_id: &AttachId,
+        raw_params: &serde_json::Value,
+    ) -> Result<(), BrokerError> {
         if !self.0.state.lock().frontends.contains_key(attach_id) {
             return Err(BrokerError::FrontendNotRegistered(attach_id.clone()));
         }
@@ -451,6 +463,41 @@ impl Broker {
         };
         self.fan_out(&event, None, None);
         Ok(())
+    }
+
+    fn emit_publish_rejected_for_frontend(
+        &self,
+        attach_id: &AttachId,
+        raw_params: &serde_json::Value,
+        err: &BrokerError,
+    ) {
+        let (topic, code): (Option<String>, &'static str) = match err {
+            BrokerError::UnknownNamespace { topic, .. } => {
+                (Some(topic.clone()), "unknown_namespace")
+            }
+            BrokerError::PublishOnReservedNamespace { topic, .. } => {
+                (Some(topic.clone()), "publish_on_reserved_namespace")
+            }
+            BrokerError::PublishOutsideGrant { topic, .. } => {
+                (Some(topic.clone()), "publish_outside_grant")
+            }
+            BrokerError::InvalidTopic { topic, .. } => (Some(topic.clone()), "invalid_topic"),
+            BrokerError::InvalidPayload { .. } => {
+                let topic = raw_params
+                    .get("topic")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                (topic, "invalid_payload")
+            }
+            _ => return,
+        };
+        let payload = serde_json::json!({
+            "attach_id": attach_id.as_str(),
+            "topic": topic,
+            "code": code,
+            "message": err.to_string(),
+        });
+        let _ = self.publish_core_internal("core.lifecycle.publish_rejected", payload);
     }
 
     fn emit_publish_rejected_for_plugin(
