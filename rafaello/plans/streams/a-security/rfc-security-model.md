@@ -238,17 +238,30 @@ binds *content*, not just *name*.
 > - **`core.lifecycle.boot`** — explicit `Broker::publish_boot()`
 >   emits `{version, plugin_count}`. m2 scope §B1, §B9.
 >
-> The m2 `BusEvent`'s `publisher` enum currently has only
-> `Core` and `Plugin {canonical, topic_id}`. The `Provider`
-> and `Frontend` variants are reserved for m4 / m5 and not
-> yet on the wire. The `request_id` field overview §4.5
-> enumerates is **not** in m2 events; m4 adds it (overview
-> §4.5 v1-status banner).
+> The m2 `BusEvent`'s `publisher` enum has `Core` and
+> `Plugin {canonical, topic_id}`. **m3 adds `Frontend
+> { attach_id }`** to the live wire schema (see m3
+> retrospective §2.2). The `Provider` variant remains
+> reserved for m4 and not yet on the wire. The
+> `request_id` field overview §4.5 enumerates is **not**
+> in m2 / m3 events; m4 adds it (overview §4.5
+> v1-status banner).
+>
+> **m3 ACL extension** (m3 retrospective §2.5): the
+> `BrokerAcl` struct grows a `frontends:
+> Map<AttachId, FrontendAcl>` field with
+> `{subscribe_patterns, auto_subscribes,
+> publish_topics}`, mirroring the plugin shape. The
+> m3 `tui` frontend ACL has empty `publish_topics`;
+> m4 / m5 extend the grant for
+> `frontend.tui.user_message` /
+> `frontend.tui.confirm_answer` respectively.
 >
 > Per `plans/README.md` §"Authoring conventions" stream RFCs
-> are not retroactively rewritten; the m2 wire schemas are
-> referenced via this banner rather than inlined into §5.x.
-> m2 retrospective §2.3 + §2.4.
+> are not retroactively rewritten; the m2 / m3 wire
+> schemas are referenced via this banner rather than
+> inlined into §5.x. m2 retrospective §2.3 + §2.4 +
+> m3 retrospective §2.2 + §2.5.
 
 ### 5.1 Topic and pattern grammars (canonical)
 
