@@ -411,10 +411,12 @@ the landed code is single-file `bus.rs` (443 lines) and
 
 ### 2.13 Verdict
 
-**Eight pieces of action-required drift** (six anticipated,
-two surfaced during c31 capture). Per scope §"Acceptance
-summary"'s explicit assignment, each lands as a follow-up
-commit on this branch before milestone close:
+**Eight drift items** — six action-required (anticipated)
+plus two surfaced during c31 capture (pi-2 non-blocking #2 —
+items 7-8 are recorded-only / deferred, not patched in m2).
+Per scope §"Acceptance summary"'s explicit assignment, each
+action-required item lands as a follow-up commit on this
+branch before milestone close:
 
 1. **Append `decisions.md` row 39** — provider-rejection
    staging (§2.1).
@@ -891,11 +893,13 @@ pending; ⏳ = recorded and explicitly pending external action
 **not** ratified by this retrospective alone — they ratify
 when the follow-up patch lands or the action completes.
 
-- ✅ Every named test in the positive + negative matrices
-  implemented and passing — §1 above; `manual-validation.md`
-  §1: 357 `rafaello-core` tests passing under `--features
-  test-fixture` on Linux. Three unwind tests (c19) deleted
-  with cause by c21; m3 follow-up §5.1.
+- ✅ Every named **behaviour** in the positive + negative
+  matrices is covered (pi-2 non-blocking #1 — exact file
+  names diverge per §1's reconciliation table); 357
+  `rafaello-core` tests passing under `--features
+  test-fixture` on Linux per `manual-validation.md` §1.
+  Three unwind tests (c19) deleted with cause by c21;
+  m3 follow-up §5.1.
 - ✅ `nix develop --impure --command cargo test --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture`
   green on Linux (`manual-validation.md` §1).
