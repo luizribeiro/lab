@@ -1,21 +1,28 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-3 draft. Round 1 returned 10 blocking + 3
-> cleanups (`pi-review-1.md`); round 2 returned 5 blocking +
-> 2 medium (`pi-review-2.md`); round 3 addresses every one.
-> Round-3 highlights: `FrontendBusPublishService` +
-> `FrontendReadyService` + `FrontendExtraServiceFactory`
-> spec'd (round 2 incorrectly reused m2's plugin-keyed
-> service); `SessionStore::load_entries -> Vec<StoredEntry
-> { seq, entry }>` so replay carries the canonical seq;
-> Goal text reconciled with `SessionController::finalize_entry`;
-> `frontend_handle_wait_*` tests use rfl-bus-fixture (not
-> rfl-tui) to keep `CARGO_BIN_EXE_*` valid in core tests;
-> SessionStore lock-acquired-before-SQLite-touch ordering;
-> readiness handshake renamed to `frontend.ready` RPC method
-> with three new tests; `Capabilities::raw_formats` field +
-> `Raw::Html` downgrade test. Pi convergence pending; m2
-> precedent suggests 5+ more rounds.
+> **Status:** round-4 draft. Round 1: 10b + 3c. Round 2: 5b
+> + 2m. Round 3: 3b + 3m. Round 4 addresses every one.
+> Round-4 highlights:
+> - `FrontendHandle` exposes `wait_ready()` (round 3 had a
+>   `oneshot::Sender` inside `FrontendReadyService` with no
+>   public surface);
+> - `FrontendSupervisor::spawn` now also explicitly spawns
+>   the fittings `Server::serve()` task and stores its
+>   `JoinHandle` in `FrontendHandle` for shutdown;
+> - readiness gate moved out of `SessionController` into
+>   `rfl chat` orchestration (pi-3 #2); the corresponding
+>   tests moved to `rafaello/tests/`;
+> - `frontend_handle_wait_ready_*` tests added at the
+>   rafaello-core layer; rafaello-tui's `tui_sends_frontend_ready_after_handler_registration`
+>   added;
+> - `ulid` features `["serde"]` (pi-3 #3);
+> - `option_env!` dropped from `RFL_TUI_PATH` resolution;
+>   only env override + sibling lookup remain (pi-3 #4);
+> - `rfl` no longer depends on `rafaello-tui` library
+>   (pi-3 #6 — TUI is spawned as a subprocess; no library
+>   linkage needed).
+> - Risks #9 wording updated for the round-3 RPC rename.
+> Pi convergence pending.
 
 ## Goal
 
@@ -193,8 +200,12 @@ test matrix.
     - `unicode-width = "0.2"` (terminal column counts;
       transitive in ratatui but used directly by m3's
       renderer text wrapping).
-    - `ulid = "1"` (entry ids — overview §11 / Stream E
-      §3 specify ULID).
+    - `ulid = { version = "1", features = ["serde"] }`
+      (entry ids — overview §11 / Stream E §3 specify
+      ULID; pi-3 #3 — round 3 omitted the `serde`
+      feature, but the `Entry` derive is `Serialize` /
+      `Deserialize` and `Ulid` does not implement
+      these without the feature flag).
   - **Add the new workspace member.** `members` currently
     reads `["crates/rafaello", "crates/rafaello-core"]`;
     m3 extends to `["crates/rafaello",
@@ -223,8 +234,15 @@ test matrix.
   - `[dev-dependencies]`: `tempfile`, `serial_test`,
     `tracing-test` with `workspace = true`.
 - **W4.** Edit `rafaello/crates/rafaello/Cargo.toml`:
-  - `[dependencies]` adds `rafaello-core`, `rafaello-tui`
-    (path-deps), `tokio`, `tracing`, `tracing-subscriber`,
+  - `[dependencies]` adds `rafaello-core` (path-dep —
+    NOT `rafaello-tui`; pi-3 #6 — `rfl` only spawns
+    `rfl-tui` as a subprocess via `RFL_TUI_PATH` /
+    `current_exe` sibling lookup, so the TUI library
+    crate does not need to link into `rfl`. Pulling in
+    `ratatui` / `crossterm` transitively into the
+    rafaello bin would also bloat the cold-start
+    surface unnecessarily). `tokio`, `tracing`,
+    `tracing-subscriber`,
     `clap = { version = "4", features = ["derive"] }`,
     `anyhow` with `workspace = true`. (`clap` is m3's first
     introduction; pi may push back if `rfl chat` is the
@@ -263,12 +281,37 @@ the unsandboxed path explicit.
     network plan because frontends are not sandboxed.
   - `pub struct FrontendPaths` — `project_root: PathBuf`
     (passed to the child as `RFL_PROJECT_ROOT`).
-  - `pub fn FrontendSupervisor::spawn(&self, plan:
+  - `pub async fn FrontendSupervisor::spawn(&self, plan:
     &CompiledFrontend, paths: &FrontendPaths) ->
-    Result<FrontendHandle, FrontendSpawnError>` — async.
+    Result<FrontendHandle, FrontendSpawnError>`. The
+    handle exposes BOTH the lifecycle (wait/exit) and
+    the readiness future — pi-3 #1: round 3 specified
+    `FrontendReadyService { tx: oneshot::Sender<()> }`
+    but had no API to surface the receiver to the
+    caller; round 4 makes the receiver part of the
+    handle.
   - `pub struct FrontendHandle` — analogous to m2's
-    `SpawnHandle`. Carries `attach_id`, child pid, peer
-    handle, drop-time SIGKILL.
+    `SpawnHandle`. Carries:
+    - `attach_id`, child pid, peer handle, drop-time
+      SIGKILL (round 3 surface, unchanged);
+    - the spawned `Server::serve` `JoinHandle` so the
+      supervisor can await it during shutdown (pi-3 #1
+      — round 3 omitted the serve loop entirely);
+    - a `ready: tokio::sync::oneshot::Receiver<()>`
+      that resolves when the child sends the
+      `frontend.ready` RPC. Exposed via `pub async fn
+      FrontendHandle::wait_ready(&mut self) ->
+      Result<(), FrontendReadyError>`. Errors:
+      `FrontendReadyError::Sender Dropped` if the
+      child closed the connection without calling
+      `frontend.ready` (means the child exited or
+      crashed before signalling readiness — caller
+      should treat this as the frontend being broken).
+      Idempotent on second call: returns `Ok(())`
+      immediately because oneshot::Receiver retains the
+      observed value.
+    - `pub fn FrontendHandle::has_signalled_ready(&self)
+      -> bool` — non-blocking peek for tests.
   - **Connection-service composition** (pi-2 #1 / #6:
     round 2 incorrectly said "reuse m2's `BusPublishService`",
     but that service is plugin-keyed (`CanonicalId`) and
@@ -360,6 +403,14 @@ the unsandboxed path explicit.
       `FrontendExtraServiceFactory` (default:
       `FrontendBusPublishService` + `FrontendReadyService`;
       pi-2 #1).
+    - **Spawn the serve loop**: `let serve_handle =
+      tokio::spawn(server.serve())` (pi-3 #1 — round 3
+      built the server but never ran it; without
+      `serve()` neither `bus.publish` nor
+      `frontend.ready` is processed). Store
+      `serve_handle` in the `FrontendHandle` so
+      `FrontendSupervisor::shutdown` can await its
+      completion after the child exits.
     - Register the frontend with the broker
       (`Broker::register_frontend(attach_id, peer)` — see
       §B1).
@@ -1023,10 +1074,21 @@ together.
      Receiver` to satisfy this wait. The method lives
      on the fittings *connection* between the parent
      and the TUI — it is not a broker topic and does
-     not interact with `BrokerAcl`. Bounded wait: 5 s
-     via `tokio::time::timeout`; on timeout, `rfl chat`
-     errors out with `RflChatError::FrontendReadyTimeout`
-     — the TUI is broken or hung.
+     not interact with `BrokerAcl`. The wait is the
+     handle's own API:
+     `tokio::time::timeout(Duration::from_secs(5),
+     handle.wait_ready()).await`; on timeout, `rfl chat`
+     errors out with
+     `RflChatError::FrontendReadyTimeout` — the TUI is
+     broken or hung. **The gate is enforced in `rfl
+     chat` orchestration, NOT inside `SessionController`
+     or `Broker`** (pi-3 #2): `controller.replay_history()`
+     does not consult readiness; the gate is the
+     `handle.wait_ready().await` between TUI spawn and
+     replay. This keeps `SessionController` pure
+     (append → render → publish, no orchestration
+     state) and pushes the gate into the layer that
+     owns the orchestration.
   8. Replay session history through the controller:
      `controller.replay_history(&caps).await?`. Every
      entry is published on `core.session.entry.finalized`
@@ -1048,27 +1110,28 @@ together.
       the controller, close the store (releases flock).
 - **C3.** `rfl-tui` binary path resolution (pi-1 #6 —
   round 1 said "compile-time constants" without
-  specifying the resolution order). Lookup order:
+  specifying the resolution order). Lookup order
+  (round 4: pi-3 #4 — `option_env!` removed because
+  Cargo does not reliably set `CARGO_BIN_EXE_*`
+  cross-package or for `cargo run`-style workflows):
   1. **`RFL_TUI_PATH` env override** (highest priority).
-     Used by tests and by anyone running `rfl chat` from
-     a non-installed cargo target dir.
+     Used by tests and by anyone running `rfl chat`
+     from a non-installed target. The dev workflow is
+     `cargo build --workspace --bins` followed by
+     `RFL_TUI_PATH=$PWD/target/debug/rfl-tui cargo run
+     -p rafaello -- chat`, OR `cargo install --path
+     rafaello/crates/rafaello-tui` to install
+     `rfl-tui` so the sibling lookup below works.
   2. **Sibling of `current_exe()`**. `current_exe()
      .parent().join("rfl-tui")` — the canonical
      installed-binary location (homebrew, nix wrapper,
      `cargo install`).
-  3. **`CARGO_BIN_EXE_rfl-tui` (compile-time)**. m3 may
-     bake this in via `option_env!` for cargo-driven
-     workflows (`cargo run -- chat` from inside the
-     `rafaello` package), but it is NOT a workspace-
-     wide guarantee — pi-1 #5 — so it is the lowest
-     priority. The resolver does not panic if it is
-     unset.
   Errors out with a typed `RflChatError::TuiPathUnresolved`
-  message naming all three lookups it tried. Test
-  coverage: a positive `rfl_chat_resolves_tui_via_env_override.rs`
+  message naming both lookups it tried. Test coverage:
+  a positive `rfl_chat_resolves_tui_via_env_override.rs`
   test sets `RFL_TUI_PATH` to a stub binary and asserts
-  startup; a negative test unsets all three and asserts
-  the typed error.
+  startup; a negative test unsets both and asserts the
+  typed error.
 - **C4.** Error handling: every error path prints a
   human-readable message on stderr and returns a non-
   zero exit. Round 2 keeps the simple "1 for any error"
@@ -1271,29 +1334,20 @@ integration test is being built):
 - `frontend_handle_drop_does_not_leak_zombie.rs`
   (Linux-only) — see §F4. Same rfl-bus-fixture-based
   approach.
-- `frontend_ready_replay_withheld_until_signal.rs` —
-  pi-2 #6: spawn the rfl-tui-equivalent fixture WITHOUT
-  sending `frontend.ready`; assert that
-  `controller.replay_history()` does not emit any
-  `core.session.entry.finalized` event for 100 ms; then
-  send `frontend.ready` from the test side; assert the
-  replay events fire within 50 ms of the call returning.
-  (Uses a small extra-service hook so the test can
-  drive the readiness signal manually.)
-- `frontend_ready_timeout_errors.rs` — pi-2 #6: spawn a
-  fixture child that never sends `frontend.ready`;
-  `rfl chat`-equivalent times out after 5 s with
-  `RflChatError::FrontendReadyTimeout`. Use a 6-second
-  serial-test gate so the wall-clock is bounded.
-- `frontend_ready_sent_after_handler_registration.rs` —
-  pi-2 #6: positive — spawn `rfl-tui` in
-  `RFL_TUI_TEST_MODE`; the TUI's startup sends
-  `frontend.ready` only after its `BusEventHandler` is
-  registered. Assertion: a `core.session.entry.finalized`
-  event published 1 ms after the `frontend.ready` call
-  returns is observed by the TUI's in-memory log.
-  (Lives in rafaello-tui/tests/ — uses the rfl-tui
-  binary.)
+- `frontend_handle_wait_ready_resolves_on_signal.rs` —
+  pi-3 #1: at the rafaello-core layer, the contract is
+  "`FrontendHandle::wait_ready()` resolves when the
+  spawned child sends the `frontend.ready` RPC".
+  Spawn `rfl-bus-fixture` in a new `signal_ready` mode
+  (added in §F + the fixture extension below) that
+  sends a single `peer.call("frontend.ready", json!({}))`
+  on startup and then sleeps; assert
+  `handle.wait_ready().await` returns `Ok(())`.
+- `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs`
+  — pi-3 #1: spawn a fixture child that exits without
+  ever calling `frontend.ready`;
+  `handle.wait_ready().await` returns
+  `FrontendReadyError::SenderDropped`.
 - `manifest_publishes_unknown_namespace_rejected.rs` —
   see §M1.2.
 
@@ -1313,6 +1367,18 @@ integration test is being built):
   TUI does NOT exit; assert it continues processing
   subsequent entries; assert clean exit on `test_done`.
   (This exercises §T5 — paint panic isolation.)
+- `tui_sends_frontend_ready_after_handler_registration.rs`
+  — pi-2 #6 / pi-3 #2: positive — spawn `rfl-tui` in
+  `RFL_TUI_TEST_MODE`. The TUI's startup sends
+  `frontend.ready` only after its `BusEventHandler` is
+  registered. Assertion: the test publishes a
+  `core.session.entry.finalized` event 1 ms after
+  `frontend.ready` has arrived parent-side; the TUI's
+  in-memory log records the event. (Inverted — the
+  test asserts ordering: ready BEFORE the handler
+  starts processing events would mean the event got
+  dropped, so observing the event proves the handler
+  was wired.)
 
 `rafaello/tests/`:
 
@@ -1339,6 +1405,26 @@ integration test is being built):
   stderr citing pid A.
 - `session_store_lock_fd_not_inherited_by_child.rs` —
   see §S5.
+- `rfl_chat_replay_withheld_until_frontend_ready.rs` —
+  pi-3 #2 + pi-2 #6: this assertion lives at the CLI
+  layer because the readiness gate is in `rfl chat`
+  orchestration, not in `SessionController`. Pre-seed
+  the SQLite store with three entries; spawn `rfl
+  chat` against an `rfl-bus-fixture` configured to
+  delay `frontend.ready` by 200 ms; observe (via a
+  test-side broker subscriber injected as an extra
+  service into the spawned `rfl chat` process — set
+  via `RFL_CHAT_TEST_OBSERVER_FD`, a new test-only
+  env analogous to m2's `with_extra_service` pattern)
+  that no `core.session.entry.finalized` events fire
+  in the first 100 ms; after `frontend.ready` lands,
+  the three replay events arrive within 50 ms.
+- `rfl_chat_frontend_ready_timeout_errors.rs` — pi-3 #2 +
+  pi-2 #6: spawn `rfl chat` against a fixture that
+  never sends `frontend.ready`; `rfl chat` exits with
+  `RflChatError::FrontendReadyTimeout` (mapped to
+  exit code 1 + stderr message). 6-second
+  `serial_test` gate caps wall-clock.
 
 #### Negative matrix
 
@@ -1595,15 +1681,17 @@ to sneak in via "while I'm here" implementation drift.
    revisit if a richer event class becomes useful, but
    v1 keeps the topic set minimal.
 9. **TUI subscription readiness handshake.** §C2 step 7
-   waits on `core.lifecycle.frontend_ready` before
-   replaying / publishing any entry; without it, fan-
-   out to a not-yet-subscribed frontend is silently
-   dropped (Stream B notification sink is bounded,
-   drop-on-full). The 5 s bounded wait is a defensive
-   ceiling — real readiness should fire within hundreds
-   of ms. The notification flows on the TUI's bus
-   connection, not the bus itself, so no broker ACL is
-   needed for it.
+   waits on `FrontendHandle::wait_ready()` (round 4 —
+   the `frontend.ready` RPC method drains a oneshot
+   that backs the handle's wait_ready future, per pi-3
+   #1) before replaying / publishing any entry;
+   without it, fan-out to a not-yet-subscribed frontend
+   is silently dropped (Stream B notification sink is
+   bounded, drop-on-full). The 5 s bounded wait is a
+   defensive ceiling — real readiness should fire
+   within hundreds of ms. The RPC flows on the
+   parent↔TUI fittings *connection*, not the bus, so
+   no broker ACL is involved.
 10. **m1 publishes-grant patch back-reach.** Touching
     `validate::manifest` in m3 is a small back-reach to
     m1 (m2 c04 set the precedent). The tightening is
