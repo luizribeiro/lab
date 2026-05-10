@@ -1,16 +1,10 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — retrospective
 
-> **Status:** revised round 4 on 2026-05-10 by the milestone
-> driver after `retro-pi-review-3.md` (3 blockers + 3
-> non-blocking polish). Round 3 had corrected the
-> coverage and acceptance-table issues but left three
-> precision errors: a stale positive-matrix row for
-> `tui_subscribes_to_core_session_events.rs`, an inaccurate
-> SOCK_CLOEXEC-based root-cause attribution for §5.8, and
-> a closing ratification sentence that named only five
-> follow-up commits instead of six. Round 4 corrects
-> each, swaps §5.8 / §5.9 ordering, and updates the
-> companion's banner to "round 2". Worktree `/home/luiz/lab` directly
+> **Status: ratified and closed 2026-05-10 by the owner.**
+> Round 4 (with polish nits folded) was ratified by
+> pi `retro-pi-review-4.md` at zero blockers; the
+> six follow-up commits + macOS CI green + owner-accepted
+> §5 mechanical coverage close the milestone. Worktree `/home/luiz/lab` directly
 > on `rafaello-v0.1` (m3 commits accumulated on the
 > milestone branch — no separate merge step). 31 plan-row
 > commits (`165916e..267607f`) land in 1:1 correspondence
@@ -714,7 +708,7 @@ auto-enable the feature).
 | **macOS CI green** (hard gate) | ✅ run `25640214987` captured 2026-05-10 (`manual-validation.md` §4); the five §5.8 un-gated rafaello-tui tests executed cleanly on `macos-latest` |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
-| `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 / §4 / §6 ✅ captured; §5 (real interactive smoke recording) ⏳ pending owner capture |
+| `manual-validation.md` records manual-validation list | ✅ all six items captured or owner-accepted (§5 mechanical coverage in lieu of recording) |
 | `retrospective.md` written with anticipated drift addressed | ✅ document round 4 records the canonical fixes; all six follow-up commits (§2.1–§2.5 docs + §5.8 macOS un-gating code) have landed at `1e839b3..691145c` |
 | Stream E renderer-RFC drift patch | ✅ `51f97fd` (§2.1) |
 | `PublisherIdentity::Frontend` Stream A schema additions | ✅ `51f20d6` (§2.2) |
@@ -729,28 +723,31 @@ auto-enable the feature).
 
 ---
 
-m3 ratifies once **all of the following** are
-captured:
+**m3 ratified and closed 2026-05-10** by the owner.
+All ratification gates met:
 
-1. The five docs/drift follow-up commits (items 1–5
-   in the list above) land on `rafaello-v0.1`.
-2. The §5.8 rafaello-tui-test-harness un-gating code
-   commit (item 6) lands.
-3. `manual-validation.md` §4 captures a green
-   `macos-latest` CI run URL with the five
-   newly-un-gated TUI integration tests actually
-   executed (not skipped by the cfg).
-4. `manual-validation.md` §5 captures the real
-   interactive `rfl chat` recording.
-5. `manual-validation.md` §6 captures the workflow
-   run URL with both `ubuntu-latest` and
-   `macos-latest` jobs green.
-6. Pi re-reviews this retrospective and returns
-   zero blockers.
+1. ✅ Five docs/drift follow-up commits (items 1–5
+   above) landed at `51f97fd` (Stream E), `51f20d6`
+   (Stream A), `691145c` (overview §10.1), `e863d90`
+   (decisions rows 41 + 42).
+2. ✅ §5.8 rafaello-tui-test-harness un-gating
+   commit landed at `1e839b3`.
+3. ✅ `manual-validation.md` §4 captures `macos-latest`
+   CI run `25640214987` green with the five
+   newly-un-gated TUI integration tests executed.
+4. ✅ `manual-validation.md` §5 owner-accepted via
+   the mechanical-coverage table; no separate
+   screen-recording landed.
+5. ✅ `manual-validation.md` §6 captures workflow
+   run `25640214987` URL with both `ubuntu-latest`
+   and `macos-latest` jobs green.
+6. ✅ Pi `retro-pi-review-4.md` returned zero
+   blockers against the round-4 retrospective.
 
-The ratification sequence mirrors m1 / m2: driver
-lands drift fixes → driver pushes branch → macOS CI
-captures → pi re-reviews → driver declares the
-milestone closed. Since m3 commits accumulate on
-`rafaello-v0.1` directly, no separate merge step is
-needed beyond the ratification sign-off.
+Since m3 commits accumulate on `rafaello-v0.1`
+directly, no separate merge step is needed; the
+milestone is closed in-place on the integration
+branch. m4 inherits the in-test fixture-entry
+harness, the BrokerAcl `frontends` map (with the
+`tui` ACL's `publish_topics = []` ready to be
+extended), and the session-store replay machinery.

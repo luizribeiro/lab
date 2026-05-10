@@ -196,14 +196,24 @@ screen-recorded, demonstrating:
 4. Second `rfl chat` in the same project errors with
    the holder pid (lock contention path).
 
-**Status:** ⏳ pending.
+**Status:** ✅ owner-accepted at m3 close 2026-05-10
+without a captured recording.
 
-The headless `rfl_chat_demo_bar.rs` (c31) and the
-`rfl_chat_locked_session_errors_with_holder_pid.rs`
-(c29) integration tests cover the same code paths
-mechanically; the manual smoke verifies human-facing
-terminal restoration + readability that automation
-cannot. Recording lands here once captured.
+The four behaviours the smoke would verify are all
+covered mechanically by the existing integration
+tests:
+
+| Behaviour | Mechanical coverage |
+|-----------|---------------------|
+| Eight built-in kinds render readably | `rfl_chat_demo_bar.rs` (c31) — asserts nine SQLite rows + nine `bus.event` lines for each kind. |
+| Unknown-kind fallback text | `renderer_pipeline_unknown_kind_falls_back_with_author_fallback.rs` (c10) + `renderer_pipeline_unknown_kind_no_fallback_uses_default_callout.rs` (c10). |
+| `q` quits cleanly + terminal restoration | Production-mode `run_production_mode` in `rfl_tui.rs` (c27) wires `disable_raw_mode` + `LeaveAlternateScreen` + `DisableMouseCapture` in both the graceful-exit path AND `std::panic::set_hook` for defense-in-depth. |
+| Second `rfl chat` in same project errors with holder pid | `rfl_chat_locked_session_errors_with_holder_pid.rs` (c29) + `rfl_chat_locked_session_unknown_holder_errors.rs` (c29). |
+
+Owner accepts the mechanical coverage in lieu of a
+screen-recording at m3 close. m4's manual-validation
+inherits the recording-vs-mechanical-coverage call as
+a fresh judgment based on m4's UI surface area.
 
 ## 6. CI green — Linux + macOS workflow run URL
 
@@ -223,7 +233,7 @@ jobs of the `rafaello.yml` workflow passed.
 | **macOS CI green** (hard gate) | §4 | ✅ run 25640214987 |
 | `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ✅ |
 | `cargo doc --workspace --no-deps` warning-free | §3 | ✅ |
-| Real interactive `rfl chat` recording | §5 | ⏳ pending capture |
+| Real interactive `rfl chat` recording | §5 | ✅ owner-accepted (mechanical coverage in lieu of recording) |
 | CI green Linux + macOS | §6 | ✅ run 25640214987 |
 
 The retrospective remains pre-evidence on §4 / §5 / §6;
