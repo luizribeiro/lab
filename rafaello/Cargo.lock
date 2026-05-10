@@ -1004,6 +1004,7 @@ dependencies = [
  "clap",
  "nix",
  "rafaello-core",
+ "rusqlite",
  "serde_json",
  "serial_test",
  "tempfile",

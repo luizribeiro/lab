@@ -3,22 +3,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use rafaello_core::broker_acl::{AttachId, BrokerAcl, FrontendAcl};
 use rafaello_core::bus::Broker;
 use rafaello_core::compile::EnvPlan;
-use rafaello_core::error::{BrokerError, FrontendSpawnError};
+use rafaello_core::entry::{Entry, EntryFallback, RenderNode, ToolCallStatus};
+use rafaello_core::error::{BrokerError, FrontendSpawnError, ReaperOutcome};
 use rafaello_core::frontend::{
-    CompiledFrontend, FrontendConfig, FrontendPaths, FrontendSupervisor,
+    CompiledFrontend, FrontendConfig, FrontendHandle, FrontendPaths, FrontendSupervisor,
 };
-use rafaello_core::renderer::{RenderPipeline, RendererRegistry};
+use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
 
 #[derive(Debug, Parser)]
@@ -159,7 +162,8 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     let supervisor = FrontendSupervisor::new(broker.clone(), FrontendConfig::default());
     let registry = Arc::new(RendererRegistry::with_builtins());
     let pipeline = RenderPipeline::new(registry);
-    let _controller = SessionController::new(store, pipeline, broker.clone());
+    let controller = SessionController::new(store, pipeline, broker.clone());
+    let caps = Capabilities::tui_default();
 
     let pass: Vec<String> = ENV_PASS_ALLOWLIST
         .iter()
@@ -196,11 +200,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     match outcome {
         Ok(Ok(())) => {
             write_parent_sentinel(&stderr_writer_lock, "rfl-chat: frontend-ready-observed").await;
-            let _ = handle.shutdown().await;
-            if let Some(j) = forwarder {
-                let _ = j.await;
-            }
-            Ok(())
+            run_post_ready(handle, forwarder, &controller, &broker, &caps).await
         }
         Ok(Err(_ready_err)) => {
             let _ = handle.shutdown().await;
@@ -254,6 +254,108 @@ async fn write_parent_sentinel(writer_lock: &Arc<tokio::sync::Mutex<()>>, line: 
     let mut out = std::io::stderr().lock();
     let _ = writeln!(out, "{line}");
     let _ = out.flush();
+}
+
+async fn run_post_ready(
+    mut handle: FrontendHandle,
+    forwarder: Option<tokio::task::JoinHandle<()>>,
+    controller: &SessionController,
+    broker: &Broker,
+    caps: &Capabilities,
+) -> Result<(), RflChatError> {
+    let mut step10_outcome: Option<Result<(), String>> = None;
+    let result: Result<(), RflChatError> = async {
+        controller
+            .replay_history(caps)
+            .await
+            .map_err(|e| RflChatError::Session(Box::new(e)))?;
+        if std::env::var_os("RFL_HARNESS_FIXTURES").as_deref() == Some(std::ffi::OsStr::new("1")) {
+            run_fixture_harness(controller, broker, caps).await?;
+        }
+        let outcome = handle.wait().await;
+        step10_outcome = Some(map_outcome(&outcome));
+        Ok(())
+    }
+    .await;
+
+    let _report = handle.shutdown().await;
+    if let Some(j) = forwarder {
+        let _ = j.await;
+    }
+
+    match (result, step10_outcome) {
+        (Ok(()), Some(Ok(()))) => Ok(()),
+        (Ok(()), Some(Err(reason))) => Err(RflChatError::FrontendExitedAbnormally { reason }),
+        (Err(e), _) => Err(e),
+        _ => unreachable!("step10_outcome must be set whenever result is Ok"),
+    }
+}
+
+fn map_outcome(outcome: &ReaperOutcome) -> Result<(), String> {
+    match outcome {
+        ReaperOutcome::Exited(status) if status.success() => Ok(()),
+        ReaperOutcome::Exited(status) => Err(format!(
+            "frontend exited abnormally: code={:?} signal={:?}",
+            status.code(),
+            status.signal()
+        )),
+        ReaperOutcome::WaitFailed(e) => Err(format!(
+            "frontend wait failed: errno={:?} ({e})",
+            e.raw_os_error()
+        )),
+        ReaperOutcome::ReaperPanicked => {
+            Err("frontend reaper panicked before producing an outcome".to_string())
+        }
+        _ => Err("frontend produced an unrecognised reaper outcome".to_string()),
+    }
+}
+
+async fn run_fixture_harness(
+    controller: &SessionController,
+    broker: &Broker,
+    caps: &Capabilities,
+) -> Result<(), RflChatError> {
+    let entries = vec![
+        Entry::new_text("Hello m3."),
+        Entry::new_heading(1, "m3 demo"),
+        Entry::new_code_block("fn main() {}", Some("rust")),
+        Entry::new_thinking("planning the next step"),
+        Entry::new_tool_call(
+            "call-1",
+            "read_file",
+            json!({"path": "Cargo.toml"}),
+            ToolCallStatus::Ok,
+        ),
+        Entry::new_tool_result(
+            "call-1",
+            true,
+            RenderNode::Text {
+                text: "ok".into(),
+                emphasis: None,
+            },
+        ),
+        Entry::new_image("file:///fake.png", "image/png", "alt text"),
+        Entry::new_error("E001", "synthetic error"),
+        Entry::new_unknown(
+            "myorg:custom",
+            json!({"foo": "bar"}),
+            EntryFallback {
+                text: "unknown demo".into(),
+                markdown: None,
+                summary: None,
+            },
+        ),
+    ];
+    for entry in entries {
+        controller
+            .finalize_entry(entry, caps)
+            .await
+            .map_err(|e| RflChatError::Session(Box::new(e)))?;
+    }
+    broker
+        .publish_core("core.lifecycle.test_done", json!({}))
+        .map_err(|e| RflChatError::Broker(Box::new(e)))?;
+    Ok(())
 }
 
 pub fn run_cli() -> ExitCode {

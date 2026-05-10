@@ -29,3 +29,4 @@ tempfile = { workspace = true }
 serial_test = { workspace = true }
 tracing-test = { workspace = true }
 nix = { workspace = true }
+rusqlite = { workspace = true }
