@@ -1074,6 +1074,24 @@ dependencies = [
 [[package]]
 name = "rafaello-readfile"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fittings-client",
+ "fittings-core",
+ "fittings-server",
+ "fittings-transport",
+ "rafaello-core",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "ulid",
+]
 
 [[package]]
 name = "rafaello-tui"
