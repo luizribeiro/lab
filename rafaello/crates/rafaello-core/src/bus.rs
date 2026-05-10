@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
 
-use crate::broker_acl::{BrokerAcl, PluginAcl};
+use crate::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use crate::error::{BrokerError, InReplyToReason, Publisher};
 use crate::lock::canonical_id::CanonicalId;
 use crate::validate::topic::{pattern_matches_topic, validate_pattern, validate_topic};
@@ -54,8 +54,14 @@ struct PluginConn {
     peer: PeerHandle,
 }
 
+struct FrontendConn {
+    #[allow(dead_code)]
+    peer: PeerHandle,
+}
+
 struct BrokerState {
     registry: BTreeMap<CanonicalId, PluginConn>,
+    frontends: BTreeMap<AttachId, FrontendConn>,
 }
 
 struct BrokerInner {
@@ -95,10 +101,29 @@ impl Broker {
                 })?;
             }
         }
+        for (attach_id, frontend_acl) in &acl.frontends {
+            for topic in &frontend_acl.publish_topics {
+                validate_topic(topic).map_err(|e| BrokerError::InvalidTopic {
+                    publisher: Publisher::Frontend(attach_id.clone()),
+                    topic: topic.clone(),
+                    reason: e.to_string(),
+                })?;
+            }
+            for pattern in frontend_acl
+                .subscribe_patterns
+                .iter()
+                .chain(frontend_acl.auto_subscribes.iter())
+            {
+                validate_pattern(pattern).map_err(|e| BrokerError::InvalidPattern {
+                    reason: e.to_string(),
+                })?;
+            }
+        }
         Ok(Self(Arc::new(BrokerInner {
             acl,
             state: Mutex::new(BrokerState {
                 registry: BTreeMap::new(),
+                frontends: BTreeMap::new(),
             }),
         })))
     }
@@ -143,8 +168,49 @@ impl Broker {
         self.0.acl.plugins.get(canonical).cloned()
     }
 
+    pub fn frontend_acl(&self, attach_id: &AttachId) -> Option<FrontendAcl> {
+        self.0.acl.frontends.get(attach_id).cloned()
+    }
+
+    pub fn try_reserve_frontend_registration(
+        &self,
+        attach_id: &AttachId,
+    ) -> Result<(), BrokerError> {
+        if !self.0.acl.frontends.contains_key(attach_id) {
+            return Err(BrokerError::FrontendNotInAcl(attach_id.clone()));
+        }
+        if self.0.state.lock().frontends.contains_key(attach_id) {
+            return Err(BrokerError::FrontendAlreadyRegistered(attach_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn register_frontend(
+        &self,
+        attach_id: AttachId,
+        peer: PeerHandle,
+    ) -> Result<RegisteredFrontend, BrokerError> {
+        if !self.0.acl.frontends.contains_key(&attach_id) {
+            return Err(BrokerError::FrontendNotInAcl(attach_id));
+        }
+        let mut state = self.0.state.lock();
+        if state.frontends.contains_key(&attach_id) {
+            return Err(BrokerError::FrontendAlreadyRegistered(attach_id));
+        }
+        state
+            .frontends
+            .insert(attach_id.clone(), FrontendConn { peer });
+        drop(state);
+        Ok(RegisteredFrontend {
+            broker: Arc::clone(&self.0),
+            attach_id: Some(attach_id),
+        })
+    }
+
     pub fn shutdown(&self) {
-        self.0.state.lock().registry.clear();
+        let mut state = self.0.state.lock();
+        state.registry.clear();
+        state.frontends.clear();
     }
 
     pub fn handle_plugin_publish(
@@ -209,7 +275,7 @@ impl Broker {
         }
         if !publisher_acl.publish_topics.iter().any(|t| t == &msg.topic) {
             return Err(BrokerError::PublishOutsideGrant {
-                canonical: canonical.clone(),
+                publisher: Publisher::Plugin(canonical.clone()),
                 topic: msg.topic.clone(),
             });
         }
@@ -223,7 +289,7 @@ impl Broker {
             };
             if let Some(reason) = reason {
                 return Err(BrokerError::InvalidInReplyTo {
-                    canonical: canonical.clone(),
+                    publisher: Publisher::Plugin(canonical.clone()),
                     topic: msg.topic.clone(),
                     reason,
                 });
@@ -429,9 +495,32 @@ impl Drop for RegisteredPlugin {
     }
 }
 
+/// RAII guard for an active broker frontend registration. Dropping the
+/// guard removes the frontend's registry entry. Mirrors [`RegisteredPlugin`].
+pub struct RegisteredFrontend {
+    broker: Arc<BrokerInner>,
+    attach_id: Option<AttachId>,
+}
+
+impl std::fmt::Debug for RegisteredFrontend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredFrontend")
+            .field("attach_id", &self.attach_id)
+            .finish()
+    }
+}
+
+impl Drop for RegisteredFrontend {
+    fn drop(&mut self) {
+        if let Some(attach_id) = self.attach_id.take() {
+            self.broker.state.lock().frontends.remove(&attach_id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod static_assertions {
-    use super::RegisteredPlugin;
+    use super::{RegisteredFrontend, RegisteredPlugin};
 
     #[allow(dead_code)]
     fn assert_send_sync<T: Send + Sync>() {}
@@ -439,5 +528,6 @@ mod static_assertions {
     #[allow(dead_code)]
     fn assertions() {
         assert_send_sync::<RegisteredPlugin>();
+        assert_send_sync::<RegisteredFrontend>();
     }
 }

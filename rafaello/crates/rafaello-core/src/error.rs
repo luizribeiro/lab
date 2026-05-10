@@ -328,15 +328,18 @@ pub enum BrokerError {
     NotRegistered(CanonicalId),
     #[error("plugin `{0}` already registered with broker")]
     AlreadyRegistered(CanonicalId),
+    #[error("frontend `{0}` not in broker ACL")]
+    FrontendNotInAcl(AttachId),
+    #[error("frontend `{0}` not registered with broker")]
+    FrontendNotRegistered(AttachId),
+    #[error("frontend `{0}` already registered with broker")]
+    FrontendAlreadyRegistered(AttachId),
     #[error("publisher {publisher:?} subscribed to unknown namespace: `{topic}`")]
     UnknownNamespace { publisher: Publisher, topic: String },
     #[error("publisher {publisher:?} attempted publish on reserved namespace: `{topic}`")]
     PublishOnReservedNamespace { publisher: Publisher, topic: String },
-    #[error("plugin `{canonical}` published outside its grant: `{topic}`")]
-    PublishOutsideGrant {
-        canonical: CanonicalId,
-        topic: String,
-    },
+    #[error("publisher {publisher:?} published outside its grant: `{topic}`")]
+    PublishOutsideGrant { publisher: Publisher, topic: String },
     #[error("publisher {publisher:?} sent invalid topic `{topic}`: {reason}")]
     InvalidTopic {
         publisher: Publisher,
@@ -350,9 +353,9 @@ pub enum BrokerError {
         publisher: Publisher,
         reason: String,
     },
-    #[error("plugin `{canonical}` sent invalid in_reply_to on `{topic}`: {reason:?}")]
+    #[error("publisher {publisher:?} sent invalid in_reply_to on `{topic}`: {reason:?}")]
     InvalidInReplyTo {
-        canonical: CanonicalId,
+        publisher: Publisher,
         topic: String,
         reason: InReplyToReason,
     },

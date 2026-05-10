@@ -38,7 +38,7 @@ fn _broker_variants() {
         topic: "x".into(),
     };
     let _: BrokerError = BrokerError::PublishOutsideGrant {
-        canonical: cid(),
+        publisher: Publisher::Plugin(cid()),
         topic: "x".into(),
     };
     let _: BrokerError = BrokerError::InvalidTopic {
@@ -54,7 +54,7 @@ fn _broker_variants() {
         reason: "bad".into(),
     };
     let _: BrokerError = BrokerError::InvalidInReplyTo {
-        canonical: cid(),
+        publisher: Publisher::Plugin(cid()),
         topic: "x".into(),
         reason: InReplyToReason::Missing,
     };
