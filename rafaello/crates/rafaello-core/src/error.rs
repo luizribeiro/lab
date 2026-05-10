@@ -111,6 +111,8 @@ pub enum ValidationError {
     PublishOnReservedNamespace { topic: String },
     #[error("publish on frontend namespace from non-frontend plugin: `{topic}`")]
     PublishOnFrontendNamespace { topic: String },
+    #[error("publish on unknown top-level namespace `{namespace}`: `{topic}`")]
+    PublishUnknownNamespace { topic: String, namespace: String },
     #[error("publish on foreign topic id")]
     PublishOnForeignTopicId,
     #[error("provider namespace mismatch")]

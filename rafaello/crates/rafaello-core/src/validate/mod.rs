@@ -371,7 +371,11 @@ fn check_publish_topic(topic: &str) -> Result<(), ValidationError> {
         "frontend" => Err(ValidationError::PublishOnFrontendNamespace {
             topic: topic.to_string(),
         }),
-        _ => Ok(()),
+        "plugin" | "provider" => Ok(()),
+        other => Err(ValidationError::PublishUnknownNamespace {
+            topic: topic.to_string(),
+            namespace: other.to_string(),
+        }),
     }
 }
 
