@@ -1,12 +1,33 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-18 draft. Trajectory of finding
+> **Status:** round-19 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
 > r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
-> r16 0/3/2/2, r17 0/2/2/1 (third 0-blocker round).
-> Round 18 highlights:
+> r16 0/3/2/2, r17 0/2/2/1, r18 1/2/2/0 (round-18
+> cleanup-guard introduced a regression with step 10
+> double-shutdown).
+> Round 19 highlights:
+> - Cleanup guard is now the SOLE teardown path;
+>   step 10 only reads outcome / returns errors,
+>   never calls shutdown directly (pi-18 #1).
+> - H6 gains a third inject point
+>   `inject_post_spawn_pre_register_fault` for the
+>   distinct ownership state where Child exists but
+>   no broker registration / reaper task; new
+>   matching test (pi-18 #2).
+> - §B4 frontend publish: 2-segment `frontend.<id>`
+>   bare topic rejected as `PublishOnReservedNamespace`
+>   (symmetric to m2 §B3 plugin two-segment rule);
+>   new negative test (pi-18 #3).
+> - §M1 lock-side validation explicitly NOT
+>   tightened in m3; recorded as anticipated drift
+>   (pi-18 #4).
+> - Manual validation command aligned with
+>   acceptance gate (pi-18 #5).
+>
+> Round-18 highlights (kept for trajectory context):
 > - §C2 cleanup-guard contract spec'd: every
 >   fallible call after TUI spawn runs canonical
 >   shutdown + stderr drain via a guard pattern
@@ -1290,17 +1311,24 @@ variant to live and grows `BrokerAcl` accordingly.
       `PublishOnReservedNamespace { publisher: ...,
       topic }`. (frontend publishing on `core.*`,
       `provider.*`, `plugin.*`.)
-    - `frontend` with `segments[1] != attach_id`,
-      (note: `frontend` alone or any topic with
-      <2 segments is rejected earlier by
-      `validate_topic` as `InvalidTopic`, not by
-      this branch; pi-17 #5) →
-      `PublishOnReservedNamespace { publisher: ...,
-      topic }`.
-    - `frontend.<own-attach-id>.*` → exact-string
-      check against `frontend_acl.publish_topics`. If
-      not member → `PublishOutsideGrant { publisher:
-      ..., topic }`.
+    - `frontend` segment-count check (pi-18 #3 —
+      symmetric to m2 §B3 plugin "two-segment
+      `plugin.<id>` is reserved" rule):
+      - `segments.len() < 3` (e.g. `frontend.tui`
+        only) → `PublishOnReservedNamespace`. The
+        bare `frontend.<id>` topic is grammar-valid
+        but semantically empty; treat as outside any
+        frontend's authority.
+      - `segments[1] != attach_id` →
+        `PublishOnReservedNamespace` (cross-frontend
+        masquerade — m3 only has one frontend so
+        this is mostly defence-in-depth, but
+        identical shape to the plugin case for
+        forward compat with v2 multi-frontend).
+    - `frontend.<own-attach-id>.<...>` (≥3 segments,
+      first two correct) → exact-string check
+      against `frontend_acl.publish_topics`. If not
+      member → `PublishOutsideGrant`.
   - `auto_subscribes` is NOT publish authority for
     frontends either (m2 §B3's rule applies).
 - **B5.** Fan-out (m2 §B7): a frontend subscriber receives
@@ -2299,24 +2327,25 @@ together.
         in production code is deferred to m4 if a
         real-world failure surfaces.)
 
-      Across all four cases (clean Exited, abnormal
-      Exited, WaitFailed, ReaperPanicked), `rfl chat`
-      runs `frontend_handle.shutdown().await` **exactly
-      once** (pi-9 Blocker 2 — round 9 had this
-      called twice consecutively, which won't compile
-      because `shutdown` consumes `self`). The single
-      `shutdown` call drains the serve loop and
-      releases the broker registration guard,
-      capturing the `ShutdownReport`. With pi-8 B2's
-      reaper-outcome check (and pi-13 #1's refinement):
-      shutdown is a no-kill drain when the cached
-      outcome is `Exited(_)` (the clean and abnormal
-      Exited cases above); for `WaitFailed` /
+      The cleanup-guard above (pseudocode at the top
+      of step 8) runs `frontend_handle.shutdown().await`
+      + `stderr_forwarder.await` exactly once on EVERY
+      exit path through this match (clean Exited,
+      abnormal Exited, WaitFailed, ReaperPanicked).
+      Step 10 itself does NOT call shutdown — it
+      reads the `ReaperOutcome` to decide the exit
+      code / error mapping; the guard performs the
+      actual teardown when the async block
+      completes. (Pi-18 #1: round 18 had both the
+      guard and an explicit shutdown call here,
+      which would double-consume `self`.) With pi-8
+      B2 + pi-13 #1: the single guard-time shutdown
+      is a no-kill drain when the cached outcome is
+      `Exited(_)`; for `WaitFailed` /
       `ReaperPanicked`, shutdown still issues
-      SIGTERM + SIGKILL because the child may be
-      alive despite the reaper having failed. Then
-      drop the controller and the store (the store's
-      drop releases the flock). The
+      SIGTERM + SIGKILL since the child may be
+      alive. Then drop the controller and the store
+      (the store's drop releases the flock). The
       `FrontendSupervisor` itself has no shutdown API
       — it's a stateless factory (pi-5 B1).
 - **C3.** `rfl-tui` binary path resolution (pi-1 #6 —
@@ -2391,8 +2420,10 @@ those tests should have been written against.
   impl TestHooks {
       // m2 fields unchanged.
       pub fn inject_pre_spawn_fault(&self);
+      pub fn inject_post_spawn_pre_register_fault(&self);
       pub fn inject_post_register_fault(&self);
       pub fn pre_spawn_fault_consumed(&self) -> bool;
+      pub fn post_spawn_pre_register_fault_consumed(&self) -> bool;
       pub fn post_register_fault_consumed(&self) -> bool;
   }
   ```
@@ -2427,17 +2458,32 @@ those tests should have been written against.
     reaper, and `in_flight` was cleared. This is
     the m2 `unwinds_after_register` +
     `post_register_reaps_child` coverage.
-  Round-18 explicitly does NOT inject between
-  `tokio_command.spawn()` and `register_plugin`
-  (pi-17 #2 corrects round-17's inverted
-  reasoning — m2's reaper-task ownership transition
-  happens AFTER `register_plugin`, not in the
-  pre-register window). A fault in the
-  spawn-to-register span would have the same
-  unwind shape as the pre-spawn-post-socketpair
-  point but with a child to reap; m3's two inject
-  points cover the load-bearing windows pi-asked-
-  for in m2 retro §3.3.
+  - **Post-spawn-pre-register** (pi-18 #2: round 18
+    incorrectly conflated this window with
+    pre-spawn; this is a distinct ownership state —
+    `Child` exists, no broker registration, no
+    reaper task). Inject AFTER `tokio_command.spawn()`
+    and BEFORE `broker.register_plugin(...)`. On
+    fault, the `Child` is held by the spawn body
+    (not yet moved into the reaper); unwind calls
+    `child.start_kill()` + `child.wait().await`
+    directly + drops the socketpair fds + drops the
+    proxy handle. No broker rollback needed (no
+    registration was acquired). New test:
+    `tests/supervisor_spawn_unwinds_post_spawn_pre_register.rs`
+    — arms post-spawn-pre-register fault; spawn
+    returns `SpawnError::SandboxBuild`; assert
+    Linux fd-count returned to baseline AND no
+    child remains in `/proc` (the synchronous
+    `child.wait()` reaped before unwind returned).
+    Linux-only.
+
+  m3's three inject points (`pre_spawn`,
+  `post_spawn_pre_register`, `post_register`)
+  cover all three distinct ownership states in
+  m2's spawn body. m3 retro will record this
+  three-window split as a refinement of m2 retro
+  §3.3's two-window framing.
 - **H6.3.** Re-add three deleted tests:
   - `tests/supervisor_spawn_unwinds_after_register.rs` —
     arms post-register fault; spawn returns
@@ -2518,6 +2564,16 @@ never tightened. m3 owns it.
   inputs that the prior validator's `_ => Ok(())`
   arm accepted (i.e. truly unknown namespaces),
   which no m1 test exercises positively.
+- **M1.4.** **Lock-side validation NOT touched in m3**
+  (pi-18 #4 — `check_lock_publish_topic` also has a
+  `_ => {}` arm that accepts unknown namespaces in
+  hand-authored locks; m3 leaves this as runtime-
+  only enforcement at the broker. Reasoning:
+  hand-authored lock entries are an explicit
+  `--allow-unsafe` user override path; the runtime
+  rejection is sufficient defence. m4 may revisit
+  if a user-facing failure mode surfaces. Recorded
+  as anticipated drift in §"Acceptance summary".)
 
 ### I — integration test suite
 
@@ -2611,6 +2667,9 @@ integration test is being built):
   (Linux-only) — see §H6.3.
 - `supervisor_spawn_unwinds_after_socketpair.rs` — see
   §H6.3.
+- `supervisor_spawn_unwinds_post_spawn_pre_register.rs`
+  (Linux-only) — see §H6.2 (pi-18 #2 third inject
+  point).
 - `frontend_handle_wait_resolves_on_child_exit.rs` — see
   §F4 (pi-6 B6 — round 6 had §F4 say `signal_ready`
   but §I say `respond_peer_call`; round 7 picks
@@ -2852,6 +2911,13 @@ integration test is being built):
   `plugin.foo`, `provider.foo`; broker rejects with
   `PublishOnReservedNamespace { publisher:
   Publisher::Frontend("tui"), topic }`.
+- `frontend_publish_two_segment_topic_rejected.rs` —
+  pi-18 #3: a frontend publish on `frontend.tui`
+  (own attach-id, 2 segments only) → broker rejects
+  with `PublishOnReservedNamespace { publisher:
+  Publisher::Frontend("tui"), topic: "frontend.tui" }`.
+  Symmetric to m2's two-segment `plugin.<id>`
+  rejection rule.
 - `frontend_publish_unknown_namespace_rejected.rs` —
   pi-5 M5: a frontend publish on `evil.foo` /
   `random.thing` (top-level segment outside
@@ -2966,7 +3032,10 @@ the env-override end-to-end test all use this helper.
 Manual validation: §I integration tests are the contract;
 m3's `manual-validation.md` records:
 
-1. `cargo test --workspace` green on Linux + macOS.
+1. `nix develop --impure --command cargo test --manifest-path
+   rafaello/Cargo.toml --workspace --features test-fixture`
+   green on Linux + macOS (pi-18 #5 — match the
+   acceptance-section command exactly).
 2. A real interactive `rfl chat` session against the in-
    test fixture-entry harness (i.e. with
    `RFL_HARNESS_FIXTURES=1`), screen-recorded; verify
@@ -3053,8 +3122,10 @@ New / extended in m3 (added on top of m2's struct):
 impl TestHooks {
     // m2 fields unchanged.
     pub fn inject_pre_spawn_fault(&self);
+    pub fn inject_post_spawn_pre_register_fault(&self);
     pub fn inject_post_register_fault(&self);
     pub fn pre_spawn_fault_consumed(&self) -> bool;
+    pub fn post_spawn_pre_register_fault_consumed(&self) -> bool;
     pub fn post_register_fault_consumed(&self) -> bool;
 }
 ```
