@@ -5,7 +5,6 @@
 //! exposes hooks for the per-test [`ParentService`] (the inbound dispatch
 //! the parent server presents to the child).
 
-#![cfg(target_os = "linux")]
 #![allow(dead_code)]
 
 use std::os::fd::{AsRawFd, OwnedFd};

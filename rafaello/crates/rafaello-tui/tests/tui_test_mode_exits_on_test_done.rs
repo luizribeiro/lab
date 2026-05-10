@@ -1,8 +1,6 @@
 //! c25 — receipt of `core.lifecycle.test_done` ends the headless TUI with
 //! exit code 0, ahead of the self-timeout deadline.
 
-#![cfg(target_os = "linux")]
-
 mod common;
 
 use std::time::Duration;

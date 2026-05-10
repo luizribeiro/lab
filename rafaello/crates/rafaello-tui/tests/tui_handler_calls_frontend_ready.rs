@@ -1,8 +1,6 @@
 //! c25 — `rfl-tui` in headless test mode must peer-call `frontend.ready`
 //! parent-side and exit cleanly via the `RFL_TUI_MAX_LIFETIME` self-timeout.
 
-#![cfg(target_os = "linux")]
-
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};

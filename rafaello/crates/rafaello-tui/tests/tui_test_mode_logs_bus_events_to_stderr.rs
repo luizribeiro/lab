@@ -1,8 +1,6 @@
 //! c25 — every received `bus.event` produces a `bus.event topic=... seq=N`
 //! sentinel line on the headless TUI's stderr.
 
-#![cfg(target_os = "linux")]
-
 mod common;
 
 use std::time::Duration;

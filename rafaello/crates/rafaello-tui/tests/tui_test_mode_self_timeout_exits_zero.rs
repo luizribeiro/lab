@@ -1,8 +1,6 @@
 //! c25 — without any inbound `bus.event`, the headless TUI honours
 //! `RFL_TUI_MAX_LIFETIME` and exits 0 on its own.
 
-#![cfg(target_os = "linux")]
-
 mod common;
 
 use std::time::Duration;

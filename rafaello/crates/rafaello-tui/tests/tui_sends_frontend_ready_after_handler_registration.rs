@@ -6,8 +6,6 @@
 //! ready RPC was sent, the bus.event will land on the child's handler and
 //! show up in the stderr log.
 
-#![cfg(target_os = "linux")]
-
 mod common;
 
 use std::time::Duration;
