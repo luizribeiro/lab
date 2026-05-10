@@ -3,6 +3,8 @@
 //! This commit lands the public type surface only; spawn/wait/shutdown
 //! bodies are placeholders.
 
+pub mod shutdown;
+
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
