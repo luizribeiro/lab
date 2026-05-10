@@ -423,6 +423,21 @@ never a direct plugin-to-plugin route.
 
 ### 4.5 Bus event envelopes
 
+> **v1 status (m2 staging):** the m2 broker (`rafaello-core::bus`)
+> ships `BusEvent { topic, payload, publisher, in_reply_to,
+> taint }` — see m2 scope §B8. The `request_id` field below is
+> **not yet emitted by m2**; it lands in m4 alongside the
+> tool-dispatch flow (`core.session.tool_request` /
+> `tool_result`) where it becomes load-bearing for response
+> correlation. m2's `BusEvent` also adds a `publisher` field
+> (`Core` | `Plugin { canonical, topic_id }`) that this section
+> doesn't yet enumerate; the §15.2 schema-ownership rule (Stream
+> A owns payload schemas) means the m2 `BusEvent` shape is the
+> live wire definition for v1, with the security RFC §B8/§B9
+> banner the canonical reference (`milestones/m2-broker-spawn/scope.md`
+> + retrospective §2.2 + §2.4). m2 retrospective records the
+> overview-§4.5 staging.
+
 Every event carries:
 
 - `topic` — the dot-separated topic.
@@ -430,6 +445,7 @@ Every event carries:
 - `request_id` (when applicable) — correlation id; type
   `JsonRpcId` (string | number | null), preserved per
   `streams/b-fittings/rfc-fittings-notifications.md` §2a.
+  **m2 omits this field; m4 adds it** (see status banner above).
 - `in_reply_to: [<request_id>...]` — required on every event
   class whose semantics imply taint inheritance (tool results,
   RPC replies, confirm answers, provider tool requests, provider
