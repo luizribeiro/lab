@@ -1,10 +1,30 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-11 draft. Trajectory of finding
+> **Status:** round-12 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
-> r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1. Round 11
-> highlights:
+> r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1.
+> Round 12 highlights:
+> - `FrontendHandle.config: FrontendConfig` field
+>   added so `shutdown` can read the grace durations
+>   (pi-11 #1).
+> - `SessionStore.lock_guard: Flock<File>` field
+>   added so the project flock survives `open()`
+>   (pi-11 #2).
+> - Stderr forwarder drained in BOTH the SenderDropped
+>   and timeout error paths in §C2 step 7, not only
+>   in step 10 (pi-11 #3).
+> - New `signal_ready_then_exit_n` fixture mode +
+>   `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
+>   test for the post-ready abnormal-exit branch;
+>   round-11 had a false coverage claim (pi-11 #4).
+> - Replay-withheld test wording fixed: completes
+>   the truncated assertion + drops stale "single
+>   forwarding task" wording (pi-11 #5).
+> - Stale "Flock is a different helper" aside in §S5
+>   deleted (pi-11 #6).
+>
+> Round-11 highlights (kept for trajectory context):
 > - §F3 Phase B re-ordered as numbered 1-14 with
 >   stderr-piped BEFORE spawn, reaper task explicitly
 >   in the main sequence (pi-10 Blocker 1).
@@ -782,7 +802,8 @@ m2-style if needed.
         Some(child_pid), peer, register_guard:
         Some(guard), serve_handle: Some(serve_handle),
         child_stderr, ready: ready_rx, reaper_outcome:
-        reaper_rx }`.
+        reaper_rx, config: self.config.clone() }`
+        (pi-11 #1).
 
   **Phase B unwind rules** (pi-8 M3 — round 8 spawned
   the child before transport / register / serve setup
@@ -862,6 +883,11 @@ m2-style if needed.
         // Always-live fields:
         ready: tokio::sync::watch::Receiver<bool>,
         reaper_outcome: tokio::sync::watch::Receiver<Option<Arc<ReaperOutcome>>>,
+        // Configuration (pi-11 #1: shutdown reads
+        // shutdown_grace and shutdown_kill_grace from
+        // here; round 11 referenced `config.*` without
+        // storing it on the handle).
+        config: FrontendConfig,
     }
 
     impl FrontendHandle {
@@ -1104,7 +1130,13 @@ that could drift — one path for both is the contract.
   surface:
   - `pub struct SessionStore` — owns a
     `rusqlite::Connection` behind a `Mutex` (single-writer;
-    m3 has one core process per project per row 34).
+    m3 has one core process per project per row 34) and a
+    **`lock_guard: Flock<File>`** field that holds the
+    project's exclusive flock for the store's lifetime
+    (pi-11 #2 — round 11 spec'd the Flock RAII switch
+    in §S5 but didn't add the field to the struct;
+    without retention, the lock would drop at the end
+    of `open()`). The `Flock<File>` releases on drop.
   - `pub fn SessionStore::open(state_dir: &Path) ->
     Result<Self, SessionError>` — **lock-first ordering**
     (pi-2 #5):
@@ -1246,11 +1278,9 @@ that could drift — one path for both is the contract.
   pi-2 #5):
   - Open the lockfile with **`O_CLOEXEC`** so the fd is
     not inherited by the spawned `rfl-tui` child (pi-1
-    #3). Concretely (pi-5 M8 — `libc::O_CLOEXEC`
-    requires a direct `libc` dep, so use the
-    `nix`-re-exported constant instead, and
-    `FlockArg` is the correct nix 0.29 enum name —
-    `Flock` is a different helper):
+    #3). Use the nix-re-exported constant
+    (`nix::libc::O_CLOEXEC`) instead of pulling a
+    direct `libc` dep into `rafaello-core`:
     `OpenOptions::new().read(true).write(true).create(true)
     .custom_flags(nix::libc::O_CLOEXEC).open(...)`.
   - **Use `nix::fcntl::Flock`** (pi-10 High 3 —
@@ -1808,21 +1838,22 @@ together.
      - `Ok(Err(FrontendReadyError::SenderDropped))` →
        the bus connection closed before
        `frontend.ready` arrived. The child PROCESS
-       may or may not have exited yet (pi-9 High 5 —
-       round 9's unbounded `handle.wait().await`
-       could hang if the bus connection died but the
-       child stayed alive). Map to
-       `RflChatError::FrontendExitedBeforeReady` and
-       run `handle.shutdown().await` (NOT
-       `wait()`) — shutdown is bounded by
-       `config.shutdown_grace + config.shutdown_kill_grace`,
-       triggers SIGTERM/SIGKILL on a still-live
-       child, drains the serve loop, and returns
-       `ShutdownReport`. Exit non-zero with stderr
-       citing the report.
+       may or may not have exited yet (pi-9 High 5).
+       Map to `RflChatError::FrontendExitedBeforeReady`
+       and run `handle.shutdown().await` (bounded by
+       `config.shutdown_grace +
+       config.shutdown_kill_grace`). **Then drain
+       the stderr forwarder**: `let _ =
+       stderr_forwarder.await;` (pi-11 #3 — round 11
+       only drained in step 10; SenderDropped/timeout
+       arms returned from step 7 without draining,
+       leaving a final-line race). Exit non-zero
+       with stderr citing the report.
      - `Err(_)` (timeout) → `RflChatError::
        FrontendReadyTimeout`. SIGTERM the child via
-       `handle.shutdown()` before exiting non-zero.
+       `handle.shutdown()`, then drain the stderr
+       forwarder (`let _ = stderr_forwarder.await;`,
+       pi-11 #3), before exiting non-zero.
 
      **The gate is enforced in `rfl chat`
      orchestration, NOT inside `SessionController` or
@@ -1892,12 +1923,31 @@ together.
       combined-stream assertions in §I are
       deterministic.
 
-      **Test coverage** (pi-10 Medium 5): the abnormal
-      `Exited(non-success)` branch is covered by
+      **Test coverage** (pi-10 Medium 5 + pi-11 #4 —
+      round 10 incorrectly claimed
       `rfl_chat_frontend_exits_before_ready_errors.rs`
-      (using `exit_immediately` mode). `WaitFailed`
-      and `ReaperPanicked` are **intentionally
-      untested** in m3: triggering them requires
+      covered the post-ready abnormal-exit branch,
+      but `exit_immediately` exits BEFORE
+      `frontend.ready`, so it exercises the step-7
+      SenderDropped path, not step-10 `Exited(!success)`):
+      - **Step-7 SenderDropped path** is covered by
+        `rfl_chat_frontend_exits_before_ready_errors.rs`
+        (using `exit_immediately` mode).
+      - **Step-10 post-ready abnormal-exit path** is
+        covered by a new
+        `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
+        which uses a new `signal_ready_then_exit_n`
+        fixture mode (§L1a, round 12) — the fixture
+        sends `frontend.ready`, sleeps briefly so the
+        readiness gate releases and replay completes,
+        then exits with code 7 (or whatever
+        non-success code the test specifies via env).
+        `rfl chat` maps to
+        `RflChatError::FrontendExitedAbnormally`,
+        exits non-zero with stderr citing the child's
+        exit code.
+      - **`WaitFailed` and `ReaperPanicked`** are
+        **intentionally untested** in m3: triggering them requires
       fault-injection inside the reaper task, which
       m3's `TestHooks::inject_fault` points (§H6 —
       pre-register / post-register) do not cover.
@@ -2357,24 +2407,21 @@ integration test is being built):
   `rfl-tui` child's stderr and re-emits each line on
   its own stderr with a `"rfl-tui: "` prefix; see
   §C2 step 6's stderr-pipe note. Single combined
-  stream is line-ordered by construction because
-  `rfl chat` writes both its own
-  `"rfl-chat: frontend-ready-observed"` line and the
-  forwarded TUI lines into one fd from a single
-  forwarding task that runs after `wait_ready`
-  resolves). Assert (pi-6 B3):
+  stream is line-ordered because parent and
+  forwarder writes both go through the
+  `tokio::sync::Mutex`-guarded stderr writer (pi-11
+  #5 — round 11 left a stale "single forwarding
+  task" wording that conflicted with §C2 step 6's
+  mutex-based scheme). Assert (pi-6 B3):
   - `"rfl-chat: frontend-ready-observed"` appears on
     rfl chat's stderr (§C2 step 7's `Ok(Ok(()))` arm
     prints this after `wait_ready` resolves and
-    BEFORE `controller.replay_history()` is
-    called);
-  - that line appears BEFORE the first
-    `"rfl-tui: bus.event"` line in the same stream
-    (line-order assertion only — no wall-clock
-    timestamps);
+    BEFORE `controller.replay_history()` is called);
+  - NO `"rfl-tui: bus.event"` line appears before
+    that sentinel (line-order assertion only — no
+    wall-clock timestamps);
   - exactly three `"rfl-tui: bus.event"` lines
-    follow within
-    sentinel.
+    follow the sentinel before process exit.
 - `rfl_chat_frontend_exits_before_ready_errors.rs` —
   pi-10 Medium 4: SenderDropped CLI path. Spawn
   `rfl chat` with `RFL_TUI_PATH` pointing at
@@ -2384,6 +2431,17 @@ integration test is being built):
   `RflChatError::FrontendExitedBeforeReady` mapped
   to stderr citing the child's exit status. 6-second
   `serial_test` gate caps wall-clock.
+- `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
+  — pi-11 #4: post-ready abnormal-exit path. Spawn
+  `rfl chat` with `RFL_TUI_PATH` pointing at
+  `rfl-bus-fixture` in `signal_ready_then_exit_n`
+  mode with `RFL_FIXTURE_EXIT_CODE=7`. `rfl chat`
+  observes `frontend.ready`, replays history (zero
+  rows in this test), waits on the TUI, sees
+  `Exited(status)` with `status.code() == Some(7)`,
+  exits non-zero with `RflChatError::
+  FrontendExitedAbnormally` and stderr citing
+  exit code 7.
 - `rfl_chat_frontend_ready_timeout_errors.rs` — pi-3 #2 +
   pi-2 #6 + pi-5 M4: spawn `rfl chat` with
   `RFL_TUI_PATH` pointing at `rfl-bus-fixture` in
@@ -2532,6 +2590,14 @@ filed; m3 picks the **fixture self-timeout** option (option
     readiness; `exit_immediately` would trip
     `SenderDropped` instead, and a child that doesn't
     adopt `RFL_BUS_FD` would trip transport failure).
+  - `signal_ready_then_exit_n` (pi-11 #4) — adopts
+    `RFL_BUS_FD`, sends `frontend.ready`, sleeps 200
+    ms (so `rfl chat`'s readiness gate releases and
+    replay can complete), then `std::process::exit(N)`
+    where `N` is read from `RFL_FIXTURE_EXIT_CODE`
+    env (default 7). Used by
+    `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
+    to exercise the step-10 abnormal-exit path.
   - `probe_fd_closed` (pi-8 M5) — takes a CLI arg
     `--probe-fd <N>`, calls
     `nix::fcntl::fcntl(N, FcntlArg::F_GETFD)`, exits
