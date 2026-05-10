@@ -1,1 +1,1 @@
-
+//! rafaello-mockprovider scaffolding.

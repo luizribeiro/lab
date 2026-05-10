@@ -1052,6 +1052,24 @@ dependencies = [
 [[package]]
 name = "rafaello-mockprovider"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fittings-client",
+ "fittings-core",
+ "fittings-server",
+ "fittings-transport",
+ "rafaello-core",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "ulid",
+]
 
 [[package]]
 name = "rafaello-readfile"
@@ -1080,6 +1098,7 @@ dependencies = [
  "tracing",
  "tracing-test",
  "tui-input",
+ "ulid",
  "unicode-width 0.2.0",
 ]
 
