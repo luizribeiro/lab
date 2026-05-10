@@ -1050,6 +1050,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rafaello-mockprovider"
+version = "0.0.0"
+
+[[package]]
+name = "rafaello-readfile"
+version = "0.0.0"
+
+[[package]]
 name = "rafaello-tui"
 version = "0.0.0"
 dependencies = [
