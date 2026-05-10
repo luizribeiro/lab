@@ -1,6 +1,159 @@
 # m4-provider-agent-loop — commits
 
-> **Status:** round-1 — initial draft. Pi review pending.
+> **Status:** round-2 — addresses `commits-pi-review-1.md`
+> (b/7 h/4 m/3 l/2).
+>
+> Round-2 fixes (by pi-1 number):
+>
+> Blockers:
+> - **B-1** c20/c22 manifest-compile tests need a real
+>   `entry` file inside the package dir; the live
+>   `manifest::validate_with_package` calls
+>   `resolve_inside_package` which canonicalises the entry
+>   path — non-existent files fail
+>   (`validate_with_package.rs:18-34`). c20 now creates
+>   `rafaello/fixtures/rafaello-mockprovider/bin/rfl-mockprovider`
+>   as an executable placeholder shim (POSIX shell file
+>   committed with `chmod +x`, body `#!/bin/sh\nexec "$@"`
+>   — never run during the compile test, but exists as a
+>   file at the entry path). c22 does the same for
+>   `rafaello/fixtures/rafaello-readfile/bin/rfl-readfile`.
+>   Runtime spawn (c25) points the actual lock at the
+>   cargo-built bin under the workspace target dir, not
+>   the fixture shim.
+> - **B-2** c10's positive
+>   `broker_publish_provider_topic_to_internal_subscriber.rs`
+>   moved to c11 (which lands the real
+>   `subscribe_internal`); c10 keeps only the publishing-
+>   path negatives that don't need the internal subscriber
+>   (they observe `BrokerError` results directly without
+>   any subscriber). c10's `notify_internal_subscribers`
+>   placeholder is now an in-commit `Vec<BusEvent>` drain
+>   accessible via a `#[cfg(any(test, feature =
+>   "test-fixture"))]` accessor on `Broker` — wired solely
+>   so the c10 in-commit acceptance can observe inbound
+>   provider events without the c11 channel API; c11
+>   replaces the drain with the real
+>   `mpsc::Sender<BusEvent>` flow.
+> - **B-3** §B0 `request_id` enforcement extended to all
+>   three publish handlers in one commit (c10): the same
+>   topic-suffix check fires inside
+>   `handle_plugin_publish`, `handle_frontend_publish`,
+>   and `handle_provider_publish`. Scope-named
+>   `broker_plugin_tool_result_missing_in_reply_to_rejected.rs`
+>   added to c10's acceptance (m2 already enforces
+>   `in_reply_to` on plugin tool_results; the test is a
+>   regression check under the m4 broker reshape that
+>   adds the `Publisher::Provider` arm).
+> - **B-4** c15's test renamed
+>   `frontend_publish_user_message_accepted_by_broker.rs`
+>   (grant-only — observes that the broker emits a
+>   `BusEvent` without `PublishOutsideGrant`); the
+>   scope-named re-emit test
+>   `frontend_publish_user_message_reemitted_as_core_session_user_message.rs`
+>   moved to c18 (where the re-emit pipeline exists).
+> - **B-5** `AgentLoop::new` signature grows
+>   `caps: Capabilities` (c19). c26 wires
+>   `Capabilities::tui_default()` into it. AL3/AL4/AL5/AL6
+>   call `controller.finalize_entry(entry, &caps)` against
+>   the loop's stored caps. The existing `Capabilities`
+>   type lives in m3's `rafaello-core::renderer`; no API
+>   change to the controller.
+> - **B-6** c26 grows a same-commit smoke test
+>   `rfl_chat_eager_spawns_provider_and_tool_then_shuts_down_cleanly.rs`
+>   that starts the chat with a fixture lock + a
+>   non-matching `RFL_TUI_TEST_MESSAGE="hello"`, waits
+>   for the echo `assistant_message` to surface (no tool
+>   round-trip), then triggers shutdown and asserts every
+>   plugin child reaped cleanly. The headline c27 test
+>   stays as the demo bar; c26 covers wire-up correctness
+>   per the "tests with code" rule.
+> - **B-7** c24 adds a small migration step for m3's
+>   `rfl chat` tests: every m3 test tempdir setup now
+>   writes a **minimal stub `rafaello.lock`** (empty
+>   `plugins` table, `session.provider_active = None`),
+>   and the corresponding test assertions are updated
+>   from "exit 0" to "exit non-zero with
+>   `NoActiveProvider`" since m4 makes a provider
+>   load-bearing. Tests that previously asserted clean
+>   exit (e.g. `rfl_chat_relative_project_root_canonicalises.rs`)
+>   migrate to a new shape that checks the
+>   canonicalisation behaviour against the failure mode
+>   — the canonicalisation runs BEFORE lock load (§C1
+>   step 1a), so the test asserts the absolute path is
+>   visible on stderr even though the run terminates with
+>   `NoActiveProvider`. Listed verbatim in c24
+>   acceptance below.
+>
+> Highs:
+> - **H-1** c17 grows a test
+>   `reemit_invalid_taint_emits_reemit_rejected_event.rs`
+>   (a re-emit failure path emits
+>   `core.lifecycle.reemit_rejected`). c18 grows
+>   `reemit_unknown_tool_emits_tool_dispatch_rejected_event.rs`
+>   (provider publishes a `tool_request` for a tool
+>   absent from `acl.tool_routes`; the re-emit path
+>   skips the canonical re-emit and emits
+>   `core.lifecycle.tool_dispatch_rejected` with
+>   `reason: "unknown_tool"`).
+> - **H-2** c14's `provider_bus_publish` fixture mode
+>   acceptance spells out the publish shape:
+>   `request_id: Some(JsonRpcId::String(<fresh ULID>))`
+>   and `in_reply_to: Some(vec![])` (empty array per
+>   §7.2.6 row 2 first-turn). Without these the m4
+>   broker rejects with `MissingRequestId` /
+>   `InvalidInReplyTo`.
+> - **H-3** c10 sizing waiver expanded explicitly. The
+>   commit body cites: ~300 LoC handler + ~150 LoC tests
+>   + the maps/bookkeeping. Splitting maps/bookkeeping
+>   from handler dispatch is not viable because dispatch
+>   consumes the maps inline. The B-2 + B-3 fixes shrink
+>   the test count slightly (positive moves to c11; B0
+>   enforcement is shared across handlers but the new
+>   tests are small `MissingRequestId` shape checks).
+>   m0 c08 precedent.
+> - **H-4** c25 grows
+>   `rfl_chat_tool_spawn_failure_propagates.rs` —
+>   fixture lock points the readfile plugin at a
+>   `/nonexistent/binary`; `rfl chat` exits non-zero
+>   with `ToolSpawnFailed`. The provider spawn must
+>   succeed first (so the failure isn't shadowed by
+>   `ProviderSpawnFailed`).
+>
+> Mediums:
+> - **M-1** c05 picks **one** test file:
+>   `rafaello-core/tests/env_scrubber_rejects_rfl_provider_id.rs`
+>   (new file). The "or extend
+>   `env_scrubber_reserved_m2_names.rs`" alternative is
+>   removed.
+> - **M-2** c17 `ReemitRouter::start` lookup pinned: the
+>   router resolves `acl.plugins[active_provider]
+>   .provider_id` (the public id string from the
+>   `PluginAcl.provider_id: Option<String>` field at
+>   `broker_acl.rs:81`) and subscribes to
+>   `provider.<provider_id>.**`. The constructor takes
+>   `active_provider: CanonicalId` because the lock
+>   stores the canonical id; the lookup happens inside
+>   `start` so the active-provider field stays
+>   unambiguous.
+> - **M-3** Harness placements made explicit per
+>   commit: c18 grows the
+>   `rafaello-core/tests/common/reemit_test_kit.rs`
+>   shared helper module (`assert_origin_taint`,
+>   `subscribe_router_test_receiver`); c21 grows
+>   `rafaello-mockprovider/tests/common/mock_provider_handle.rs`
+>   wrapping a spawned `rfl-mockprovider`; c23 grows
+>   `rafaello-readfile/tests/common/read_file_tool_handle.rs`.
+>
+> Lows:
+> - **L-1** c01 description reworded from
+>   "members-list-only" to **"workspace-member
+>   placeholder cutover"** to reflect that two new
+>   `Cargo.toml` + `src/lib.rs` placeholders land
+>   alongside the `members` edit.
+> - **L-2** c10 negative-matrix files enumerated
+>   verbatim (no "driver may collapse" wording);
+>   exact filenames pinned.
 
 Drafted from `scope.md` (round 6 — CONVERGED at 0 blockers
 after six pi rounds; commit `c04e894`). Each commit is one
@@ -124,12 +277,13 @@ this `commits.md` is canonical. The headline test is
   third-party crates; `ulid` was already added in m3's
   c01 at line 38). c01 lands the `members` edit only —
   the crate directories themselves land in c03/c04 — and
-  this commit is therefore "members-list-only" with NO
-  crate bodies yet, so the members list briefly points
-  at directories that do not exist on disk. To keep the
-  pre-commit green, c01 ALSO creates empty placeholder
-  `Cargo.toml` files in the two new crate dirs as part
-  of this commit:
+  this commit is a **workspace-member placeholder
+  cutover** (pi-1 L-1 — round-1 wording
+  "members-list-only" was wrong; the commit also lands
+  minimal crate placeholders): the `members` edit AND
+  two minimal `Cargo.toml` + `src/lib.rs` placeholders
+  land together so the workspace resolves cleanly. Full
+  deps + bin targets land in c03/c04. Concretely:
   - `rafaello/crates/rafaello-mockprovider/Cargo.toml`
     with `[package] name = "rafaello-mockprovider";
     version = "0.0.0"; edition = "2021"; publish =
@@ -233,16 +387,15 @@ this `commits.md` is canonical. The headline test is
     constant (m1 territory; symmetric).
 - **Why.** scope §PS4 + §M1.1 (decisions row 40 mirror).
 - **Depends on.** c01.
-- **Acceptance.** New test
+- **Acceptance.** Exactly one new file (pi-1 M-1 — no
+  driver-time either/or):
   `rafaello-core/tests/env_scrubber_rejects_rfl_provider_id.rs`
-  (or extend the existing
-  `env_scrubber_reserved_m2_names.rs` to enumerate the
-  full m4 reserved set including `RFL_PROVIDER_ID` —
-  driver picks at agent time; default cut is a NEW
-  test file for surface-area-clarity). New negative
+  asserts the m1 scrubber rejects `RFL_PROVIDER_ID` in
+  both `env.set` and `env.pass`. Plus the supervisor-side
+  negative
   `rafaello-core/tests/supervisor_spawn_reserved_rfl_provider_id_in_set_refused.rs`
-  exercising `env.set` collision. m3's full test suite
-  still passes.
+  exercising `env.set` collision at spawn. m3's full
+  test suite still passes.
 
 ### c06 — feat(rafaello-core::broker_acl): compiler-inserted `plugin.<topic-id>.tool_result` auto-publish
 
@@ -469,12 +622,19 @@ this `commits.md` is canonical. The headline test is
 
 ### c10 — feat(rafaello-core::bus): handle_provider_publish + observed-id maps + in_reply_to enforcement
 
-- **What.** scope §B6 + §B7b. The single largest c-surface
-  in this milestone. (~250 LoC; budget waiver — the
-  handler + the two observed-id maps + the
-  topic-class-specific stale-id rule are coupled enough
-  that splitting would either leave a broken handler or
-  invent fictional callers.)
+- **What.** scope §B6 + §B7b + §B0 cross-handler
+  enforcement (pi-1 B-3). The single largest c-surface
+  in this milestone. **Sizing waiver (pi-1 H-3 expanded):
+  ~300 LoC handler + ~150 LoC test bodies + the maps /
+  bookkeeping + §B0 enforcement applied symmetrically
+  inside `handle_plugin_publish` and
+  `handle_frontend_publish`.** Splitting maps from
+  handler dispatch is not viable (dispatch consumes the
+  maps inline); splitting the three handler patches is
+  not viable either (the same topic-suffix-keyed
+  enforcement runs in all three and must arrive
+  atomically to keep the §B0 invariant true for every
+  inbound class). m0 c08 precedent.
   - **`BrokerInner`** gains two mutexes:
     ```rust
     provider_observed_results:
@@ -533,72 +693,120 @@ this `commits.md` is canonical. The headline test is
        the emitted inbound `BusEvent.taint = None`
        (pi-3 B-1 — discard+replace rule).
     9. Build `BusEvent` with `PublisherIdentity::Provider
-       { canonical, provider_id, topic_id }` and hand
-       to the internal-subscriber dispatch (c11 wires
-       this; for now, call a placeholder
-       `notify_internal_subscribers` — declared but no-op
-       in this commit; c11 connects it). External fan-out
-       is **not** invoked (B7 internal-intake-only).
+       { canonical, provider_id, topic_id }` and hand to
+       a new in-crate test-only seam:
+       `Broker::drain_inbound_provider_events_for_test()
+       -> Vec<BusEvent>` (cfg-gated by `any(test, feature
+       = "test-fixture")`). Inbound provider events
+       accumulate in an internal `Mutex<Vec<BusEvent>>`
+       that the c10 in-commit acceptance reads from
+       directly (pi-1 B-2 fix — c10's tests are now
+       self-sufficient and don't depend on c11's real
+       `subscribe_internal`). c11 deletes the drain-Vec
+       seam and replaces it with the `mpsc::Sender`-based
+       `notify_internal_subscribers` real path. External
+       fan-out is **not** invoked (B7 internal-intake-only).
+  - **Extend `handle_plugin_publish` and
+    `handle_frontend_publish`** with the same §B0
+    `request_id` topic-suffix check (pi-1 B-3 — the
+    enforcement must arrive in every handler or the
+    invariant is broken for inbound `plugin.*.tool_result`
+    / `frontend.tui.user_message`):
+    - In `handle_plugin_publish` (existing
+      `bus.rs:228-322` body), after step 3
+      (`validate_topic`) and before step 4 (namespace
+      dispatch), check: topic suffix in
+      `{.tool_request, .tool_result, .assistant_message,
+      .user_message}` AND `msg.request_id.is_none()` →
+      `MissingRequestId { publisher: Publisher::Plugin(canonical), topic }`.
+    - In `handle_frontend_publish` (existing
+      `bus.rs:336-402` body), same check with
+      `publisher: Publisher::Frontend(attach_id)`.
+    - Both call sites use the same helper:
+      `fn enforce_b0_request_id(publisher, topic,
+      msg_request_id) -> Result<(), BrokerError>`
+      lives near `handle_plugin_publish` for reuse.
 - **Why.** scope §B6 + §B7b — provider inbound handler
   with topic-class-specific stale-id enforcement
   matching security RFC §7.2.6.
 - **Depends on.** c07, c08, c09.
-- **Acceptance.** New tests:
-  - Positive:
-    `broker_publish_provider_topic_to_internal_subscriber.rs`
-    (pi-2 B-5 / L-2 setup: publish a
-    `core.session.tool_result` via direct broker call so
-    `provider_observed_results` contains a citeable id;
-    provider then publishes
-    `provider.mock.assistant_message` with
-    `in_reply_to: [<that-id>]`; the
-    `notify_internal_subscribers` mock receiver observes
-    the validated `BusEvent` with `publisher: Provider
-    {...}`, `request_id: Some(_)`, `taint: None`).
-  - Negatives (one file per case for grep-discoverability;
-    driver may collapse if the per-commit budget allows):
-    - `broker_publish_provider_id_segment_mismatch_rejected.rs`
+- **Acceptance.** Eighteen new tests — every filename
+  enumerated verbatim (pi-1 L-2; no driver-time
+  collapsing). The positive end-to-end internal-
+  subscriber test lives in c11 (pi-1 B-2); c10 keeps
+  only tests that observe through the drain-Vec seam
+  or through direct `BrokerError` results.
+  - **Negatives (provider-side, observed via
+    `BrokerError` return values — no subscriber
+    needed):**
+    - `rafaello-core/tests/broker_publish_provider_id_segment_mismatch_rejected.rs`
       — `provider.other.foo` →
       `PublishOnReservedNamespace`.
-    - `broker_publish_provider_two_segment_topic_rejected.rs`
+    - `rafaello-core/tests/broker_publish_provider_two_segment_topic_rejected.rs`
       — `provider.mock` →
       `PublishOnReservedNamespace`.
-    - `broker_publish_provider_unknown_namespace_rejected.rs`
+    - `rafaello-core/tests/broker_publish_provider_unknown_namespace_rejected.rs`
       — `evil.foo` → `UnknownNamespace`.
-    - `broker_publish_provider_outside_grant_rejected.rs`
+    - `rafaello-core/tests/broker_publish_provider_outside_grant_rejected.rs`
       — `provider.mock.confidential` →
       `PublishOutsideGrant`.
-    - `broker_provider_tool_request_missing_in_reply_to_rejected.rs`
+    - `rafaello-core/tests/broker_provider_tool_request_missing_in_reply_to_rejected.rs`
       — missing → `InvalidInReplyTo {Missing}`.
-    - `broker_provider_tool_request_stale_id_rejected.rs`
+    - `rafaello-core/tests/broker_provider_tool_request_stale_id_rejected.rs`
       — id never observed in either set →
       `StaleRequestId`.
-    - `provider_assistant_message_in_reply_to_missing_rejected.rs`
+    - `rafaello-core/tests/provider_assistant_message_in_reply_to_missing_rejected.rs`
       — missing field → `InvalidInReplyTo {Missing}`.
-    - `provider_assistant_message_in_reply_to_stale_id_rejected.rs`
+    - `rafaello-core/tests/provider_assistant_message_in_reply_to_stale_id_rejected.rs`
       — unknown id → `StaleRequestId`.
-    - `provider_tool_request_in_reply_to_stale_id_rejected.rs`
+    - `rafaello-core/tests/provider_tool_request_in_reply_to_stale_id_rejected.rs`
       — same shape, tool_request topic.
-    - `provider_tool_request_in_reply_to_user_message_id_rejected.rs`
+    - `rafaello-core/tests/provider_tool_request_in_reply_to_user_message_id_rejected.rs`
       (pi-3 B-2) — fan out a `user_message` to populate
       `provider_observed_user_messages`; provider then
       publishes `tool_request` citing the user_message
       id → `StaleRequestId` (per §7.2.6 row 2 —
       tool_requests may cite only results).
-    - `provider_assistant_message_in_reply_to_user_message_id_accepted.rs`
-      — same setup but `assistant_message` topic →
+  - **Positives (small, observed via the drain-Vec
+    seam):**
+    - `rafaello-core/tests/provider_assistant_message_in_reply_to_user_message_id_accepted.rs`
+      — same setup as the stale-tool_request test but
       broker accepts (row 3 union).
-    - `broker_provider_tool_request_with_supplied_taint_discards.rs`
+    - `rafaello-core/tests/broker_provider_tool_request_with_supplied_taint_discards.rs`
       — provider publishes with `taint: [{source:
-      "user"}]`; emitted inbound event carries
+      "user"}]`; drain-Vec inbound event carries
       `taint: None`.
-    - `cross_plugin_tool_request_blocked_at_broker.rs`
+    - `rafaello-core/tests/cross_plugin_tool_request_blocked_at_broker.rs`
       — a non-provider plugin publishes on
       `plugin.<other-topic-id>.tool_request`; m2's
       existing `PublishOnReservedNamespace` rejects;
       m4 adds this test to explicitly assert the
       dispatch-path violation under the new
       `Publisher::Provider`-aware error machinery.
+  - **§B0 cross-handler enforcement (pi-1 B-3):**
+    - `rafaello-core/tests/broker_provider_tool_request_missing_request_id_rejected.rs`
+      — provider publishes
+      `provider.mock.tool_request` with
+      `request_id: None` → `MissingRequestId`.
+    - `rafaello-core/tests/broker_plugin_tool_result_missing_request_id_rejected.rs`
+      — plugin publishes
+      `plugin.<topic-id>.tool_result` with
+      `request_id: None` →
+      `MissingRequestId { publisher: Plugin(...) }`.
+    - `rafaello-core/tests/broker_frontend_user_message_missing_request_id_rejected.rs`
+      — frontend publishes
+      `frontend.tui.user_message` with
+      `request_id: None` →
+      `MissingRequestId { publisher: Frontend(...) }`.
+    - **`rafaello-core/tests/broker_plugin_tool_result_missing_in_reply_to_rejected.rs`**
+      (scope §I — pi-1 B-3 named the gap): plugin
+      publishes `plugin.<topic-id>.tool_result`
+      without `in_reply_to` → m2's existing
+      `InvalidInReplyTo {Missing}`. This is a
+      regression check that m2's enforcement
+      continues to fire under the m4 reshape
+      (the `Publisher::Plugin` arm flows through
+      the new error machinery).
   Workspace test suite green.
 
 ### c11 — feat(rafaello-core::bus): subscribe_internal RAII primitive + internal-intake fan-out
@@ -628,10 +836,16 @@ this `commits.md` is canonical. The headline test is
     `Drop` impl that removes the matching slot from
     `internal_subscribers`. The Drop is no-op if the
     slot is already gone (broker shutdown cleared it).
-  - **Connect `handle_provider_publish` (c10)** to the
-    internal-subscriber path: replace the placeholder
-    `notify_internal_subscribers` call with the real
-    dispatch:
+  - **Replace c10's drain-Vec seam** (pi-1 B-2) with
+    the real `notify_internal_subscribers` dispatch.
+    `handle_provider_publish` now calls the channel-
+    based notifier (below) instead of pushing to the
+    `Mutex<Vec<BusEvent>>` from c10. The drain-Vec
+    field and its `drain_inbound_provider_events_for_test`
+    accessor are deleted in this commit (the c10 tests
+    that consumed them have moved to c11 or remain
+    on the `BrokerError`-return path which is
+    unchanged). Concretely the helper is:
     ```rust
     fn notify_internal_subscribers(&self, event: &BusEvent) {
         let slots = self.0.internal_subscribers.lock();
@@ -661,7 +875,7 @@ this `commits.md` is canonical. The headline test is
     rule inline.
 - **Why.** scope §B7 + §CR1 — trusted core read path.
 - **Depends on.** c10.
-- **Acceptance.** Four new tests:
+- **Acceptance.** Five new tests:
   - `rafaello-core/tests/broker_internal_subscriber_unregister_on_drop.rs`
     — subscribe; drop the guard; the subscriber no
     longer receives events.
@@ -680,6 +894,32 @@ this `commits.md` is canonical. The headline test is
     `provider.mock.assistant_message`; the
     `notify` count on that plugin's peer stays at zero
     (internal subscriber observes; external does not).
+  - `rafaello-core/tests/broker_publish_provider_topic_to_internal_subscriber.rs`
+    **(moved from c10 — pi-1 B-2)**. Setup (pi-2 L-2):
+    register the provider; **first** publish a
+    `core.session.tool_result` via
+    `Broker::publish_core_with_taint` does not exist
+    yet (lands in c12) — round-2 instead fans out a
+    synthetic `core.session.tool_result` via the
+    `core.session.entry.finalized` path on `publish_core`
+    (m3 surface) to populate the
+    `provider_observed_results` set, OR uses a new
+    test-only `Broker::seed_provider_observed_result_for_test(
+    canonical: &CanonicalId, id: JsonRpcId)` accessor
+    (cfg-gated, in this commit). Round-2 default: the
+    seed accessor — `publish_core_with_taint` isn't
+    available yet at c11, and indirect setup via
+    `core.session.entry.finalized` would not insert
+    into `provider_observed_results` (B7b only inserts
+    on `core.session.tool_result` fan-out specifically,
+    which only `publish_core_with_taint` produces).
+    **Then** the provider publishes
+    `provider.mock.assistant_message` with `in_reply_to:
+    [<that-id>]`; the `subscribe_internal` receiver
+    observes a `BusEvent` with `publisher: Provider {...}`,
+    `request_id: Some(_)`, `taint: None`; **no external
+    plugin / frontend / other-provider peer's `notify`
+    count increments**.
 
 ### c12 — feat(rafaello-core::bus): publish_core_with_taint + origin_provider exclusion + extended fan-out
 
@@ -878,7 +1118,14 @@ this `commits.md` is canonical. The headline test is
   passes. The `rfl-bus-fixture` bin gains a new mode
   `provider_bus_publish` that publishes a synthetic
   `provider.<RFL_PROVIDER_ID>.tool_request` to exercise
-  the new dispatch path in the successor test.
+  the new dispatch path in the successor test (pi-1
+  H-2 — publish shape pinned: payload `{tool:
+  "noop", args: {}}`, `request_id:
+  Some(JsonRpcId::String(<fresh ULID>))`,
+  `in_reply_to: Some(vec![])` — empty array is valid
+  per §7.2.6 row 2 first-turn. Without these the m4
+  broker rejects with `MissingRequestId` or
+  `InvalidInReplyTo`).
   Workspace test suite green.
 
 ---
@@ -902,18 +1149,23 @@ this `commits.md` is canonical. The headline test is
   carryover.
 - **Depends on.** c07 (BusEvent.request_id field exists
   on the wire).
-- **Acceptance.**
+- **Acceptance.** Two new tests (pi-1 B-4 — grant-only
+  in this commit; the re-emit-named test moves to c18):
   - `rafaello-core/tests/frontend_register_with_broker.rs`
-    passes.
-  - `rafaello-core/tests/frontend_publish_user_message_reemitted_as_core_session_user_message.rs`
-    — drive a frontend `bus.publish` for
-    `frontend.tui.user_message`; the broker accepts it
-    (m3's `handle_frontend_publish` is unchanged from
-    a code perspective; the change is only at the ACL
-    construction side). The re-emission to
-    `core.session.user_message` is c18 territory; this
-    test only asserts the publish reaches the broker
-    without `PublishOutsideGrant`.
+    — m3 retro §5.9 granularity gap closer (stand-alone
+    positive test for frontend registration).
+  - `rafaello-core/tests/frontend_publish_user_message_accepted_by_broker.rs`
+    (pi-1 B-4 rename from
+    `frontend_publish_user_message_reemitted_as_core_session_user_message.rs`):
+    drive a frontend `bus.publish` for
+    `frontend.tui.user_message` with `request_id:
+    Some(<ULID JsonRpcId>)` (required per §B0);
+    assert `handle_frontend_publish` returns `Ok(())`
+    — i.e. no `PublishOutsideGrant` and no
+    `MissingRequestId`. The test only observes the
+    `BrokerError` return value (or absence thereof);
+    the canonical re-emit to
+    `core.session.user_message` is c18 territory.
   - Existing m3 negative
     `frontend_publish_outside_grant_rejected.rs` MUST
     still pass — `confirm_answer` remains outside
@@ -986,10 +1238,21 @@ this `commits.md` is canonical. The headline test is
         pub fn start(self) -> JoinHandle<()>;
     }
     ```
-    `start` subscribes via `broker.subscribe_internal`
-    on three patterns:
+    `start` resolves the public `provider_id` segment
+    via `acl.plugins[&active_provider].provider_id`
+    (the `Option<String>` field at `broker_acl.rs:81`;
+    panics with a clear message if `None`, which
+    indicates `rfl chat` constructed an `AgentLoop`
+    against an ACL whose active-provider plugin has no
+    `provider = true` binding — that should already
+    error at `validate::lock`-time but defence in depth
+    is cheap; pi-1 M-2 made this lookup explicit because
+    the round-1 `"provider.<active-provider-id>.**"`
+    wording conflated the canonical id with the public
+    `provider_id`). Then subscribes via
+    `broker.subscribe_internal` on three patterns:
     `["frontend.tui.user_message",
-      "provider.<active-provider-id>.**",
+      format!("provider.{}.**", provider_id),
       "plugin.*.tool_result"]`
     (the third pattern uses `*` for the topic-id
     segment so every installed tool plugin's
@@ -1074,8 +1337,17 @@ this `commits.md` is canonical. The headline test is
 - **Why.** scope §CR2-§CR5 — the canonical re-emit
   pipeline.
 - **Depends on.** c17.
-- **Acceptance.** Eight new tests (one per direction
-  plus the taint/correlation negatives):
+- **Acceptance.** Eleven new tests + one new common
+  module (pi-1 M-3 harness placement explicit):
+  - **New common module**
+    `rafaello-core/tests/common/reemit_test_kit.rs`
+    exposing `assert_origin_taint(event, source,
+    detail)` and
+    `subscribe_router_test_receiver(broker) ->
+    (Receiver<BusEvent>, InternalSubscription)` (a
+    tight wrapper around `broker.subscribe_internal`
+    pre-configured with the four router patterns).
+    Every test below imports from it.
   - `rafaello-core/tests/reemit_provider_tool_request_to_core_session_tool_request.rs`
     — observe canonical taint `[{source: "provider",
     detail: "mock"}]`, `dispatch_target` field.
@@ -1109,23 +1381,66 @@ this `commits.md` is canonical. The headline test is
     — broker rejects the inbound frontend publish
     with `MissingRequestId`; canonical re-emit does
     not fire.
+  - `rafaello-core/tests/frontend_publish_user_message_reemitted_as_core_session_user_message.rs`
+    **(moved from c15 — pi-1 B-4)**. Drive a frontend
+    `bus.publish` for `frontend.tui.user_message` with
+    a valid `request_id`; the router's
+    `subscribe_internal` receiver observes the inbound
+    event AND the broker subsequently fans out the
+    canonical `core.session.user_message` to external
+    subscribers (registered via a separate
+    `register_plugin` with `subscribe_patterns =
+    ["core.session.**"]`); assert the canonical
+    event's `payload.text` matches the inbound's
+    `text`, the canonical `request_id` is forwarded,
+    and `taint = [{source: "user"}]`.
+  - `rafaello-core/tests/reemit_invalid_taint_emits_reemit_rejected_event.rs`
+    (pi-1 H-1) — induce a re-emit failure by
+    publishing a synthetic provider tool_request whose
+    re-emit would call `publish_core_with_taint` with
+    an invalid taint shape (e.g. by patching the
+    router to call `publish_core` instead of
+    `publish_core_with_taint` via a test-only seam —
+    or by directly calling
+    `publish_core("core.session.tool_request", _)`
+    which the broker now rejects with
+    `InvalidTaint{Missing}`); assert the router
+    catches the error, logs at `tracing::error!`, and
+    emits a `core.lifecycle.reemit_rejected` event
+    with the failure reason in the payload.
+  - `rafaello-core/tests/reemit_unknown_tool_emits_tool_dispatch_rejected_event.rs`
+    (pi-1 H-1) — provider publishes
+    `provider.mock.tool_request` for a tool name
+    absent from `acl.tool_routes`; the router
+    observes the inbound event, fails the
+    `tool_routes` lookup, emits
+    `core.lifecycle.tool_dispatch_rejected` with
+    `reason: "unknown_tool"`, and does NOT publish a
+    canonical `core.session.tool_request`.
 
 ### c19 — feat(rafaello-core::agent): AgentLoop + tool dispatch + entry persistence
 
 - **What.** scope §AL1-§AL8 + §TD1-§TD3:
   - New module `rafaello/crates/rafaello-core/src/agent/mod.rs`
     + `pub mod agent;` in `lib.rs`.
-  - New public struct:
+  - New public struct (pi-1 B-5 — `caps` is required
+    because `SessionController::finalize_entry` takes
+    `&Capabilities` per `session/mod.rs:275`; m3's
+    `run_chat` constructs `Capabilities::tui_default()`
+    at `lib.rs:166` and passes it to the controller —
+    m4's AgentLoop holds it for the same reason):
     ```rust
     pub struct AgentLoop {
         broker: Broker,
         acl: BrokerAcl,
         controller: Arc<SessionController>,
+        caps: Capabilities,
         shutdown_rx: watch::Receiver<bool>,
     }
     impl AgentLoop {
         pub fn new(broker: Broker, acl: BrokerAcl,
                    controller: Arc<SessionController>,
+                   caps: Capabilities,
                    shutdown_rx: watch::Receiver<bool>)
                    -> Self;
         pub fn start(self) -> JoinHandle<()>;
@@ -1241,6 +1556,22 @@ this `commits.md` is canonical. The headline test is
     — minimum valid shape per m1 §M10: `{"openrpc":
     "1.2.6", "info": {"title": "mockprovider",
     "version": "0.0.0"}, "methods": []}`.
+  - **Create `rafaello/fixtures/rafaello-mockprovider/bin/rfl-mockprovider`**
+    (pi-1 B-1 — the live
+    `manifest::validate_with_package` calls
+    `resolve_inside_package` which canonicalises the
+    `entry` path inside the package; a non-existent
+    entry file fails `validate_with_package.rs:18-34`).
+    Contents: a placeholder POSIX shell script
+    `#!/bin/sh\nexec "$@"\n` committed with `chmod +x`.
+    The shim never executes during the compile test —
+    its presence as a regular file at `entry` is what
+    the validator requires. The actual runtime binary
+    (used by `rfl chat` at c25 spawn time) lives at
+    `<workspace_target>/debug/rfl-mockprovider`,
+    resolved separately via `CARGO_BIN_EXE_*`; the
+    fixture lock's `entry_absolute` points at the
+    cargo-built binary, not at this shim.
 - **Why.** scope §PR1 + §PR3.
 - **Depends on.** c03 (mockprovider crate exists).
 - **Acceptance.** New test
@@ -1275,8 +1606,17 @@ this `commits.md` is canonical. The headline test is
   delivers `core.session.user_message` /
   `core.session.tool_result` to the provider), c20
   (manifest fixture exists).
-- **Acceptance.** Seven new tests in
+- **Acceptance.** Seven new tests + one new common
+  module (pi-1 M-3 — harness placement explicit) in
   `rafaello-mockprovider/tests/`:
+  - **New common module**
+    `rafaello-mockprovider/tests/common/mock_provider_handle.rs`
+    exposing `MockProviderHandle` — a struct wrapping
+    a spawned `rfl-mockprovider` child + the in-test
+    broker fixture; exposes
+    `publish_user_message(&self, text: &str) ->
+    JsonRpcId` and `recv_event(&self) -> BusEvent`
+    (scope §H1). Imported by every test below.
   - `mockprovider_emits_tool_request_for_read_file_pattern.rs`
     — `"what's in README.md"` →
     `provider.mock.tool_request` with `{tool:
@@ -1330,6 +1670,14 @@ this `commits.md` is canonical. The headline test is
     every tool).
   - Create `rafaello/fixtures/rafaello-readfile/openrpc.json`
     — same minimal shape as c20.
+  - **Create `rafaello/fixtures/rafaello-readfile/bin/rfl-readfile`**
+    (pi-1 B-1) — same placeholder shim pattern as
+    c20: `#!/bin/sh\nexec "$@"\n` with `chmod +x`.
+    Required so
+    `manifest::validate_with_package` finds the
+    `entry` path. Runtime spawn uses the cargo-built
+    `rfl-readfile` from the workspace target dir,
+    not this shim.
 - **Why.** scope §TP1 + §TP3.
 - **Depends on.** c04 (readfile crate exists), c06
   (auto-publish grant — without c06 the manifest's
@@ -1374,8 +1722,17 @@ this `commits.md` is canonical. The headline test is
 - **Depends on.** c14 (tool plugin spawn path),
   c19 (agent loop dispatches to it),
   c22 (manifest fixture exists).
-- **Acceptance.** Five new tests in
-  `rafaello-readfile/tests/`:
+- **Acceptance.** Five new tests + one new common
+  module (pi-1 M-3) in `rafaello-readfile/tests/`:
+  - **New common module**
+    `rafaello-readfile/tests/common/read_file_tool_handle.rs`
+    exposing `ReadFileToolHandle` — analogous to c21's
+    `MockProviderHandle`; wraps a spawned
+    `rfl-readfile` child + an in-test broker fixture;
+    exposes `publish_tool_request(&self, path:
+    &str) -> JsonRpcId` and `recv_event(&self) ->
+    BusEvent` (scope §H2). Imported by every test
+    below.
   - `readfile_returns_content_for_existing_file.rs`
     — tempdir project root with a `README.md`;
     synthetic `plugin.<topic-id>.tool_request`
@@ -1433,19 +1790,63 @@ this `commits.md` is canonical. The headline test is
   surface needed because compile_plugin emits
   provider-shaped ACLs that the broker must accept),
   c15 (frontend ACL extension lives in run_chat).
-- **Acceptance.** Four new tests in
-  `rafaello/tests/`:
-  - `rfl_chat_missing_lock_errors.rs` — no
-    `rafaello.lock` at project root; exit non-zero
-    with stderr citing `LockNotFound`.
-  - `rfl_chat_invalid_lock_errors.rs` — corrupt
-    TOML; `LockParse`.
-  - `rfl_chat_lock_validation_fails.rs` — lock with
-    an invalid `bindings.tools` entry;
+- **Acceptance.** Four new tests + the m3 test
+  migration in the same commit (pi-1 B-7 — the
+  `LockNotFound` path lands here, so the m3 tests
+  that previously asserted no-lock-clean-exit get
+  updated in this commit):
+  - `rafaello/tests/rfl_chat_missing_lock_errors.rs`
+    — no `rafaello.lock` at project root; exit
+    non-zero with stderr citing `LockNotFound`.
+  - `rafaello/tests/rfl_chat_invalid_lock_errors.rs`
+    — corrupt TOML; `LockParse`.
+  - `rafaello/tests/rfl_chat_lock_validation_fails.rs`
+    — lock with an invalid `bindings.tools` entry;
     `LockValidation`.
-  - `rfl_chat_no_active_provider_errors.rs` — valid
-    lock with `session.provider_active = None`;
-    `NoActiveProvider`.
+  - `rafaello/tests/rfl_chat_no_active_provider_errors.rs`
+    — valid lock with `session.provider_active =
+    None`; `NoActiveProvider`.
+  - **m3 `rfl chat` test migration** (pi-1 B-7).
+    Every m3 `rfl chat` test that previously
+    constructed a tempdir without a `rafaello.lock`
+    file now uses a shared helper
+    `rafaello/tests/common/m4_lock_fixture.rs::write_stub_lock(dir: &Path)`
+    that materialises a **minimal stub
+    `rafaello.lock`** (empty `plugins` table,
+    `session.provider_active = None`,
+    `session.tool_owner = {}`) before invoking
+    `rfl chat`. Affected files (verified at agent
+    time via `ls rafaello/crates/rafaello/tests/`):
+    `rfl_chat_demo_bar.rs`,
+    `rfl_chat_resolves_tui_via_env_override.rs`,
+    `rfl_chat_locked_session_errors_with_holder_pid.rs`,
+    `rfl_chat_relative_project_root_canonicalises.rs`,
+    `rfl_chat_nonexistent_project_root_errors.rs`,
+    `rfl_chat_locked_session_unknown_holder_errors.rs`,
+    `rfl_chat_replay_withheld_until_frontend_ready.rs`,
+    `rfl_chat_frontend_exits_before_ready_errors.rs`,
+    `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`,
+    `rfl_chat_frontend_ready_timeout_errors.rs`.
+    Migration rule per file:
+    - Tests previously asserting **clean exit 0**
+      now assert **exit non-zero with
+      `NoActiveProvider` on stderr** (m4 makes a
+      provider load-bearing).
+    - Tests asserting failure modes that fire
+      **BEFORE** lock load (project-root
+      canonicalisation, nonexistent-project-root,
+      flock-held-by-other) keep their existing
+      assertions — the m4 path canonicalises BEFORE
+      `Lock::from_toml`, so the EARLIER failure is
+      still surfaced. The stub-lock fixture is still
+      written so the test doesn't depend on the
+      lock-load happening at all.
+    - `rfl_chat_demo_bar.rs` (the m3 legacy demo
+      bar) becomes a `NoActiveProvider`-expecting
+      smoke test under the stub lock; the m4
+      headline demo bar is c27's new
+      `rfl_chat_demo_bar_read_file.rs`.
+  Workspace test suite green.
 
 ### c25 — feat(rafaello): rfl chat supervisor + eager spawn provider + tool + ProviderSpawnFailed negative
 
@@ -1477,24 +1878,36 @@ this `commits.md` is canonical. The headline test is
   bin so a fixture lock can point at it), c21
   (mockprovider bin compiles), c22, c23 (readfile
   bin compiles).
-- **Acceptance.** One new test in `rafaello/tests/`:
+- **Acceptance.** Two new tests in `rafaello/tests/`:
   - `rfl_chat_provider_spawn_failure_propagates.rs`
     — fixture lock points the provider plugin at
     `/nonexistent/binary`; `rfl chat` exits
     non-zero with stderr citing
     `ProviderSpawnFailed`.
+  - `rfl_chat_tool_spawn_failure_propagates.rs`
+    (pi-1 H-4) — fixture lock points the **readfile
+    tool** plugin at `/nonexistent/binary` while the
+    mockprovider plugin's entry is valid (so the
+    provider spawn succeeds first); `rfl chat` exits
+    non-zero with stderr citing `ToolSpawnFailed`
+    (NOT `ProviderSpawnFailed` — the order matters,
+    and the failure must surface from the tool-spawn
+    iteration in §C8, not the provider spawn in §C7).
 
 ### c26 — feat(rafaello): rfl chat reemit + agent + TUI spawn + wait loop + shutdown
 
 - **What.** scope §C9-§C12:
   - After C8 (spawning complete), construct
     `ReemitRouter::new(broker.clone(), acl.clone(),
-    provider_active_canonical, shutdown_rx)` and
-    spawn its task. Construct `AgentLoop::new(...)`
-    and spawn its task. Both subscribe BEFORE the
-    TUI starts (so the user_message → reemit →
-    tool_request → tool_result chain is wired
-    before any input).
+    provider_active_canonical, shutdown_rx.clone())`
+    and spawn its task. Construct `AgentLoop::new(
+    broker.clone(), acl.clone(), controller.clone(),
+    Capabilities::tui_default(), shutdown_rx.clone())`
+    (pi-1 B-5 — `caps` passed explicitly; matches the
+    c19 struct shape) and spawn its task. Both
+    subscribe BEFORE the TUI starts (so the
+    user_message → reemit → tool_request → tool_result
+    chain is wired before any input).
   - Frontend (TUI) spawn — unchanged from m3 except
     the `CompiledFrontend.env.pass` allowlist
     extended to include `RFL_TUI_TEST_MESSAGE`
@@ -1513,15 +1926,30 @@ this `commits.md` is canonical. The headline test is
   (AgentLoop), c25 (supervisor + plugin spawns
   populate the broker registry before reemit/agent
   start).
-- **Acceptance.** Existing m3 `rfl chat` tests must
-  still pass (the m3 path is unchanged when no
-  plugin tree is present, but with a fixture
-  lock the m3 path now also spawns provider/tool
-  children). The new `rfl_chat_provider_spawn_failure_propagates.rs`
-  from c25 must still pass (the shutdown path must
-  reap any partially-spawned children cleanly).
-  No new dedicated test for this commit — the
-  c27 headline test exercises the whole flow.
+- **Acceptance.** One new same-commit smoke test
+  (pi-1 B-6 — the "code + tests in same commit"
+  rule):
+  - `rafaello/tests/rfl_chat_eager_spawns_provider_and_tool_then_shuts_down_cleanly.rs`
+    — pre-materialise a fixture `rafaello.lock` with
+    `rfl-mockprovider` (active) + `rfl-readfile`
+    installed; spawn `rfl chat` with
+    `RFL_TUI_TEST_MESSAGE="hello"` (non-matching
+    pattern → mockprovider echoes back via
+    `provider.mock.assistant_message`, no tool
+    round-trip); wait for the `core.session.entry.finalized`
+    line on stderr corresponding to the assistant's
+    "echo: hello" text; trigger Ctrl-C; assert
+    `rfl chat` exits 0 and every spawned plugin
+    child reaped cleanly (no zombies under
+    `/proc/self/task` on Linux; verified via the m2
+    fd-baseline pattern). 6-second `serial_test`
+    gate. The c27 headline test exercises the
+    full tool-dispatch path; this smoke covers the
+    wire-up correctness without depending on c27.
+  The m3 `rfl chat` test migration landed in c24
+  (pi-1 B-7); c26 does not re-migrate them. Existing
+  m3 frontend-handle / SessionStore / renderer-pipeline
+  tests are unchanged (they don't spawn `rfl chat`).
 
 ---
 
