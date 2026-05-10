@@ -785,7 +785,23 @@ impl PluginSupervisor {
 
 impl Drop for PluginSupervisor {
     fn drop(&mut self) {
-        // Real best-effort SIGKILL teardown lands in c26.
+        let managed = std::mem::take(self.managed.get_mut());
+        for (_canonical, mut spawn) in managed {
+            if let Some(pid) = spawn.observation.cached_pid {
+                match nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                ) {
+                    Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+                    Err(_) => {}
+                }
+            }
+            if let Some(j) = spawn.serve_join.take() {
+                j.abort();
+            }
+            drop(spawn.registered.take());
+            drop(spawn.proxy.take());
+        }
     }
 }
 
