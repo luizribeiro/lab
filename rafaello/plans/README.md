@@ -304,10 +304,43 @@ that future milestone drivers should plan around:
   F to a concrete commit plan"). Reality: m1's 6k-LoC new crate
   with V1+V2+V3 dual-validation mirroring took **6 pi rounds on
   scope, 3 on commits, 4 on retrospective**, vs m0's 3+3+2.
-  When sizing a future milestone, weight by surface area honestly:
-  a brand-new crate with dual-side validation needs more rounds
-  than refactoring an existing crate, even when the design is
-  ratified. m1 §4.1.
+  m2 (broker + locked plugin spawn) pushed it further: **8 rounds
+  on scope (one was a runtime-extensibility sanity check, preserved
+  on disk), 4 on commits, 2 on retrospective**. When sizing a
+  future milestone, weight by surface area honestly: a brand-new
+  crate with dual-side validation needs more rounds than
+  refactoring an existing crate, even when the design is
+  ratified. m1 §4.1, m2 §4.8.
+- **Synthetic-stub tests need a planned successor in `commits.md`.**
+  When a `commits.md` row stages a test against a synthetic
+  failure path baked into an in-progress commit (e.g. "this stub
+  returns `Err`; verify unwind"), the row that *removes the stub*
+  must either (a) name a fault-injection mechanism the test will
+  pivot to, or (b) include an explicit deletion rationale in its
+  acceptance lines. Without that, the stub-removal commit silently
+  deletes the synthetic test (because the synthetic `Err` is
+  gone) and the underlying real failure path goes uncovered.
+  m2's c19 staged three unwind tests against a Phase-B-not-yet-
+  implemented stub; c21 finalised Phase B and deleted all three
+  rather than rewriting against a fault-injection mechanism that
+  didn't exist yet. The two unwind windows (post-register and
+  pre-register/post-socketpair) are now uncovered in m2 and
+  filed as the m3 §5.1 follow-up. m2 §3.3 + §4.1.
+- **Local `nix develop` aggregates more than the CI devshell —
+  push to CI early when introducing system dependencies.** The
+  default `.#default` devshell may include exports from
+  neighbouring projects' `devenv.nix` files (e.g. the lockin
+  shell's `LOCKIN_SYD_PATH`), but CI explicitly enters
+  `.#<project>`'s own devshell and only sees that project's
+  exports. m2 round-1 CI failed on Linux because
+  `rafaello/nix/devenv.nix` didn't export `LOCKIN_SYD_PATH`
+  even though the local shell did, and on macOS because a
+  `SOCK_CLOEXEC` cfg-gate was missing — both invisible locally.
+  When a milestone introduces a new system dependency (a syd
+  enforcer, a socket flag, a platform-specific syscall), push
+  to CI inside the milestone rather than waiting until the
+  retrospective; the round-trip cost of catching it locally
+  is much cheaper. m2 §5.7.
 
 ## Tooling notes
 
