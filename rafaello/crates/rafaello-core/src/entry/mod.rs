@@ -44,7 +44,7 @@ pub enum StreamState {
 /// Plain-text fallback an author ships alongside a structured payload, so
 /// frontends without the matching renderer can still display *something*.
 /// See RFC §6.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EntryFallback {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

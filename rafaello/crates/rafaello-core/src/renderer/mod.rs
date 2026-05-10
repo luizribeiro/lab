@@ -6,6 +6,9 @@ use thiserror::Error;
 
 use crate::entry::{Entry, RenderNode};
 
+pub mod pipeline;
+pub use pipeline::RenderPipeline;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnicodeClass {
     Ascii,

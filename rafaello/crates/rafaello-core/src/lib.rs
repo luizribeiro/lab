@@ -24,8 +24,8 @@ pub use entry::{
 };
 
 pub use renderer::{
-    Capabilities, ColorClass, Renderer, RendererError, RendererRegistry, ScrollbackClass,
-    UnicodeClass,
+    Capabilities, ColorClass, RenderPipeline, Renderer, RendererError, RendererRegistry,
+    ScrollbackClass, UnicodeClass,
 };
 
 pub use compile::{
