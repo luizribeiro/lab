@@ -1,6 +1,27 @@
 # m3-tui-sessions — commits
 
-> **Status:** round-6 draft. Round 1: 6b + 4h + 5m.
+> **Status:** round-8 draft. Trajectory blockers per
+> round (commits): r1 6 → r2 3 → r3 1 → r4 2 → r5
+> 1 → r6 0 → r7 0. Round 8 cleans the remaining
+> r7 precision gaps:
+> - c30 harness contract fully spec'd: nine entries
+>   enumerated, `Capabilities::tui_default()` called,
+>   `core.lifecycle.test_done` published after the
+>   last fixture entry. New harness-path acceptance
+>   test (pi-7 H1).
+> - c30 calls `Capabilities::tui_default()`
+>   explicitly + adds c09 dep (pi-7 M1).
+> - Status banner round number updated to round-8;
+>   m3a/m3b checkpoint changed from c13 → c12
+>   (renderer pipeline completes at c12, not c13)
+>   (pi-7 M2).
+> - c31 explicitly sets `RFL_TUI_PATH` via
+>   `workspace_bin_path("rfl-tui")` (pi-7 M3).
+>
+> Earlier round trajectory (r1-r6 detail kept for
+> trajectory):
+>
+> Round 1: 6b + 4h + 5m.
 > Round 2: 3b + 3h + 3m. Round 3: 1b + 3h + 3m.
 > Round 4: 2b + 2h + 4m. Round 5: 1b + 0h + 4m
 > (`commits-pi-review-5.md`).
@@ -108,7 +129,8 @@ exercises them per `~/.claude/CLAUDE.md`.
 ## m3a / m3b checkpoint
 
 No internal split is planned. The driver re-evaluates after
-**c13** (renderer pipeline complete) and after **c23**
+**c12** (renderer pipeline complete — pi-7 M2)
+and after **c23**
 (SessionController landed — c21 SessionStore + c22
 StoredEntry + c23 Controller); if a split becomes
 obviously beneficial, the driver opens an m3a / m3b
@@ -1057,27 +1079,78 @@ c18+ frontend tests can use `signal_ready` /
 - **What.** scope §C2 steps 8-10 + cleanup guard:
   Option/take ownership pattern, single shutdown +
   forwarder.await regardless of result, replay,
-  in-test fixture-entry harness (when
-  `RFL_HARNESS_FIXTURES=1`), step-10 outcome
-  reading from `frontend_handle.wait().await`,
-  RflChatError mapping. **The harness uses c08's
-  `Entry::new_*` constructors** (pi-2 H3) and
-  `serde_json::json!` for `tool_call.args` and the
-  unknown-kind payload (pi-4 B2 — `serde_json` is a
-  direct dep of the rafaello bin per c04 round-5
-  update; `ulid` and `chrono` stay rafaello-core-
-  only because the constructors hide them).
+  step-10 outcome reading from
+  `frontend_handle.wait().await`, RflChatError
+  mapping.
+  **Capabilities** (pi-7 M1): the orchestration
+  uses `let caps = Capabilities::tui_default()`
+  (from c09) for both `controller.replay_history(&caps)`
+  and the harness's `controller.finalize_entry(entry,
+  &caps)` calls.
+  **In-test fixture-entry harness** (only when
+  `RFL_HARNESS_FIXTURES=1` — production `rfl
+  chat` does NOT publish anything; m4 replaces this
+  with the real agent loop). Pi-7 H1 — full
+  contract enumerated (this commit owns the harness;
+  c31 is test-only and asserts on the SQLite +
+  stderr outputs the harness produces):
+  - **Nine fixture entries**, each finalized via
+    `controller.finalize_entry(entry, &caps)` in
+    seq order:
+    1. `Entry::new_text("Hello m3.")`.
+    2. `Entry::new_heading(1, "m3 demo")`.
+    3. `Entry::new_code_block("fn main() {}",
+       Some("rust"))`.
+    4. `Entry::new_thinking("planning the next
+       step")`.
+    5. `Entry::new_tool_call("call-1", "read_file",
+       json!({"path": "Cargo.toml"}),
+       ToolCallStatus::Ok)`.
+    6. `Entry::new_tool_result("call-1", true,
+       RenderNode::Text { text: "ok".into(),
+       emphasis: None })`.
+    7. `Entry::new_image("file:///fake.png",
+       "image/png", "alt text")`.
+    8. `Entry::new_error("E001", "synthetic
+       error")`.
+    9. `Entry::new_unknown("myorg:custom",
+       json!({"foo": "bar"}), EntryFallback {
+       text: Some("unknown demo".into()),
+       markdown: None, summary: None })`.
+  - **After the ninth entry**, publish
+    `core.lifecycle.test_done` directly via
+    `broker.publish_core("core.lifecycle.test_done",
+    json!({}))`. This signals the headless TUI to
+    exit cleanly (per scope §T2 step 4); without
+    this publish, `rfl chat` would hang waiting on
+    the TUI's self-timeout.
+  - The harness uses `serde_json::json!` for the
+    free-form payload arguments. `ulid` / `chrono`
+    stay rafaello-core-only because the
+    constructors (c08) hide them.
 - **Why.** scope §C2 steps 8-10 + cleanup guard +
-  pi-2 H3.
-- **Depends on.** c08 (Entry constructors), c29, c16
-  (uses `signal_ready_then_exit_n` for the post-
-  ready test).
-- **Acceptance.** Two CLI tests:
+  pi-2 H3 + pi-7 H1.
+- **Depends on.** c08 (Entry constructors +
+  RenderNode), c09 (Capabilities::tui_default),
+  c16 (uses `signal_ready_then_exit_n` for the
+  post-ready test), c29.
+- **Acceptance.** Three CLI tests under
+  `rafaello/tests/`:
   - `rfl_chat_replay_withheld_until_frontend_ready.rs`
     (single combined stderr stream, line-order
     assertion).
   - `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
     (uses `signal_ready_then_exit_n`).
+  - `rfl_chat_harness_finalizes_nine_entries.rs`
+    (pi-7 H1 — exercises the harness path: spawn
+    `rfl chat` with `RFL_HARNESS_FIXTURES=1` +
+    `RFL_TUI_TEST_MODE=1` + `RFL_TUI_PATH` via
+    `workspace_bin_path("rfl-tui")`; on clean exit,
+    assert SQLite contains nine `entries` rows
+    with `kind` matching the enumeration above; the
+    full headline `rfl_chat_demo_bar.rs` in c31
+    inherits this assertion + adds the bus-event
+    line-count check).
 
 ---
 
@@ -1092,10 +1165,15 @@ c18+ frontend tests can use `signal_ready` /
   acceptance gates; this commit covers the
   automated headline test only):
   - `rfl_chat_demo_bar.rs` end-to-end: spawn
-    `rfl chat` with `RFL_HARNESS_FIXTURES=1` +
-    `RFL_TUI_TEST_MODE=1` against tempdir; assert
-    nine SQLite rows + nine `"rfl-tui: bus.event"`
-    lines.
+    `rfl chat` against tempdir with
+    `RFL_HARNESS_FIXTURES=1`,
+    `RFL_TUI_TEST_MODE=1`, and **`RFL_TUI_PATH` set
+    via `workspace_bin_path("rfl-tui")`** (pi-7 M3
+    — explicit so the test is deterministic
+    regardless of dev-machine sibling state).
+    Assert nine SQLite rows (kinds match c30's
+    enumeration) + nine `"rfl-tui: bus.event"`
+    lines on the combined parent stderr.
 - **Why.** scope §I + §"Acceptance summary".
 - **Depends on.** c28 (workspace_bin_path), c30.
 - **Acceptance.** `rfl_chat_demo_bar.rs` passes on
