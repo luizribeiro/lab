@@ -1,8 +1,36 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-6 draft. Round 1: 10b + 3c. Round 2:
+> **Status:** round-7 draft. Round 1: 10b + 3c. Round 2:
 > 5b + 2m. Round 3: 3b + 3m. Round 4: 3b + 3hm + 1l.
-> Round 5: 2b + 11m + 3l. Round 6 addresses every one.
+> Round 5: 2b + 11m + 3l. Round 6: 6b + 5m + 3l.
+> Round-7 highlights:
+> - §C2 step 5 spec'd `EnvPlan.pass` allowlist for
+>   the bundled TUI so test-only knobs survive
+>   `env_clear` (B1).
+> - `SessionError::Publish { source: BrokerError }`
+>   added (B2).
+> - Parent-side `frontend-ready-observed` stderr
+>   sentinel — replaces the round-6 child-side
+>   sentinel that didn't establish ordering against
+>   replay (B3).
+> - `RendererRegistry::register/new/get` made public
+>   (B4).
+> - Paint-panic seam uses cfg(test) `PaintAction`
+>   enum instead of contaminating `RenderNode`/`RawFormat`
+>   (B5).
+> - §F4 wait test fixture mode aligned to
+>   `signal_ready` everywhere (B6).
+> - F1 ownership wording corrected — supervisor is a
+>   stateless factory (M1).
+> - Out-of-scope macOS language reframed (M2).
+> - Post-ready abnormal TUI exit semantics spec'd
+>   (M3).
+> - `ShutdownReport`, `FrontendReadyError`,
+>   `PaintError` types pinned (M4).
+> - `RFL_TUI_MAX_LIFETIME` env spec'd in §T2 (M5).
+> - L1, L2, L3 cleanups.
+>
+> Round-6 highlights (kept for trajectory context):
 > Round-6 highlights: handle-owned lifecycle model
 > resolved (B1 — `FrontendHandle::shutdown`); paint-
 > panic seam re-spec'd as a `Painter::draw_with_panic_isolation`
@@ -124,9 +152,11 @@ The deliverable is:
    re-added against the mechanism.
 6. m1 publishes-grant unknown-namespace parse-time tightening
    (m2 retro §2.8) — small back-reach to m1 in the m3 branch.
-7. Integration tests under `rafaello/crates/rafaello-core/tests/`
-   and `rafaello/crates/rafaello-tui/tests/` exercising the
-   demo bar.
+7. Integration tests under `rafaello/crates/rafaello-core/tests/`,
+   `rafaello/crates/rafaello-tui/tests/`, and
+   `rafaello/crates/rafaello/tests/` (the CLI layer —
+   the headline `rfl chat` end-to-end test lives here
+   per pi-3 #2 / pi-6 L2) exercising the demo bar.
 
 No agent loop, no provider, no tool dispatch in m3. The TUI
 runs against an **in-test fixture-entry harness** that injects
@@ -343,9 +373,14 @@ m2-style if needed.
 
 - **F1.** New module `rafaello_core::frontend`. Public
   surface:
-  - `pub struct FrontendSupervisor` — owns the broker handle
-    and the spawned frontend's lifecycle. `new(broker:
-    Broker, config: FrontendConfig) -> Self`.
+  - `pub struct FrontendSupervisor` — stateless factory
+    holding only a `Broker` clone (used to construct
+    `FrontendHandle`s via `spawn`). The returned
+    handle owns lifecycle resources (pi-6 M1 — round 6
+    intro paragraph fixed this language at the section
+    level but this bullet still said "owns ... the
+    spawned frontend's lifecycle"; round 7 corrects).
+    `new(broker: Broker, config: FrontendConfig) -> Self`.
   - `pub struct CompiledFrontend` — the spawn-time plan.
     Fields: `attach_id: String` (kebab-case, validated
     against `^[a-z][a-z0-9-]{0,31}$`), `entry_absolute:
@@ -457,7 +492,33 @@ m2-style if needed.
       pattern, scoped to frontends. The default
       factory composes `FrontendBusPublishService` and
       `FrontendReadyService` only.
-- **F2.** `FrontendSpawnError` typed enum (lives in
+- **F2.** Public types — pi-6 M4 fully spec'd shapes:
+  ```rust
+  pub struct ShutdownReport {
+      pub exit_status: Option<ExitStatus>,
+      pub used_sigterm: bool,
+      pub used_sigkill: bool,
+      pub serve_aborted: bool,
+      pub elapsed: Duration,
+  }
+
+  #[non_exhaustive]
+  #[derive(thiserror::Error, Debug)]
+  pub enum FrontendReadyError {
+      #[error("ready-watch sender dropped before ready was signalled")]
+      SenderDropped,
+  }
+
+  #[derive(thiserror::Error, Debug)]
+  pub enum PaintError {
+      #[error("ratatui draw error: {0}")]
+      Draw(std::io::Error),
+  }
+  ```
+  m4 may add a `Cancelled` variant to
+  `FrontendReadyError` if `wait_ready` ever surfaces
+  outer cancellation; m3 does not need it.
+  `FrontendSpawnError` typed enum (lives in
   `rafaello_core::error`). Variants:
   - `InvalidPlan { reason: InvalidFrontendPlanReason }` —
     spot-check failures; reasons enumerate `AttachIdInvalid
@@ -587,9 +648,11 @@ m2-style if needed.
     spawn `rfl-bus-fixture` in `respond_peer_call`
     mode, drop the handle without cooperatively
     shutting down, allow the reaper task a 500 ms
-    grace, then assert no child is in zombie state
-    (`/proc/<pid>/status` returns `ENOENT`).
-    Linux-only.
+    grace, then assert (pi-6 L3 — `ENOENT` is
+    PID-reuse-sensitive): if `/proc/<pid>/status`
+    exists, its `State:` field is NOT `Z` (zombie);
+    if the file is `ENOENT`, the process disappeared
+    entirely (still acceptable). Linux-only.
 - **F5.** Out of scope for §F: lockin builder calls (frontends
   are trusted UI principals; decision row 15), outpost
   proxy startup, `bindings.helper_for`, `provider = true`
@@ -859,7 +922,14 @@ that could drift — one path for both is the contract.
 - **S3.** `SessionError` typed enum: `Io { source }`,
   `Sqlite { source: rusqlite::Error }`, `Serde { source:
   serde_json::Error }`, `Locked { holder_pid: u32 }` (see
-  §S5 below), `SchemaMismatch { found, expected }`.
+  §S5 below), `SchemaMismatch { found, expected }`,
+  **`Publish { source: BrokerError }`** (pi-6 B2 —
+  round 6 had `SessionController::finalize_entry` call
+  `broker.publish_core` whose error is a
+  `BrokerError`; without a variant the controller's
+  `Result<(), SessionError>` cannot typecheck. The
+  `Publish` variant is `#[from] BrokerError` so the
+  `?` operator is clean).
   `#[non_exhaustive]`, `thiserror`-derived. Re-exported
   from `lib.rs`.
 - **S4.** Project state directory layout — `${PROJECT_ROOT}/
@@ -1044,12 +1114,27 @@ Built-in in-process Rust renderers turn an `Entry` into a
   fn render(&self, entry: &Entry, caps: &Capabilities) ->
   Result<RenderNode, RendererError>;
 }`. Each built-in kind has one `impl`.
-- **R2.** `pub struct RendererRegistry` — `BTreeMap<String,
-  Arc<dyn Renderer>>` keyed by `kind` string. Constructed
-  via `RendererRegistry::with_builtins()` which registers
-  the eight built-in kinds at compile time. Plugin
-  renderers are NOT registered (decision row 29, deferred
-  to v2).
+- **R2.** `pub struct RendererRegistry` — wraps
+  `BTreeMap<String, Arc<dyn Renderer>>` keyed by `kind`
+  string. Public surface (pi-6 B4 — round 6 only had
+  `with_builtins`, but the panic / Err integration
+  tests under `rafaello-core/tests/` need to register
+  test renderers; without a public `register` method
+  those tests can't be implemented as integration
+  tests):
+  - `pub fn RendererRegistry::new() -> Self` — empty
+    registry.
+  - `pub fn RendererRegistry::with_builtins() -> Self`
+    — registers the eight built-in kinds.
+  - `pub fn RendererRegistry::register(&mut self, kind:
+    String, renderer: Arc<dyn Renderer>) -> Option<Arc<dyn Renderer>>`
+    — inserts; returns the previous entry if present
+    (so tests can detect collisions; production
+    `with_builtins` does not collide).
+  - `pub fn RendererRegistry::get(&self, kind: &str) -> Option<&Arc<dyn Renderer>>`
+    — accessor used by `RenderPipeline`.
+  Plugin (subprocess) renderers are NOT registered
+  (decision row 29, deferred to v2).
 - **R3.** `pub struct RenderPipeline` — the entry-to-tree
   driver. Pi-1 #9 surfaced that round 1 conflated three
   distinct fallback paths; round 2 separates them per
@@ -1198,17 +1283,26 @@ identified as `frontend.tui`.
      per received entry, JSON-encoded) so test harnesses
      can parse-and-assert without involving a fake
      terminal.
-     **Stderr sentinels** (pi-5 M10):
-     - `"rfl-tui: ready-sent"` printed AFTER the
-       `frontend.ready` RPC call returns successfully.
-       Test harnesses parse this as the deterministic
-       "TUI is now subscribed" marker — replaces the
-       `100 ms wall-clock window after rfl-tui starts`
-       wording that was flake-prone.
-     - `"rfl-tui: bus.event topic=<topic> seq=<n>"`
-       (one line per received `bus.event`).
-     - `"rfl-tui: test-done"` printed before exit on
-       receipt of `core.lifecycle.test_done`.
+     **Stderr sentinels** (pi-5 M10 + pi-6 B3 —
+     round-6 had only TUI-side sentinels, but those
+     don't establish ordering against parent-side
+     replay because the TUI prints `ready-sent` AFTER
+     the RPC response returns, which is concurrent
+     with the parent's `wait_ready` resolving and
+     starting replay. Round 7 splits sentinels across
+     parent and child sides):
+     - **TUI side (`rfl-tui` stderr)**:
+       - `"rfl-tui: bus.event topic=<topic> seq=<n>"`
+         (one line per received `bus.event`).
+       - `"rfl-tui: test-done"` printed before exit on
+         receipt of `core.lifecycle.test_done`.
+     - **Parent side (`rfl chat` stderr)** — see §C2
+       step 7's update below:
+       - `"rfl-chat: frontend-ready-observed"` printed
+         BEFORE replay starts, AFTER
+         `handle.wait_ready()` returns. This is the
+         test's ordering anchor (see §C2 stderr-pipe
+         note).
      **Deterministic exit** (pi-1 #7) — the test
      harness publishes `core.lifecycle.test_done`
      after the last fixture entry; the 60 s
@@ -1227,6 +1321,19 @@ identified as `frontend.tui`.
      `user_message` publish path).
   7. On exit, close the bus connection, restore the
      terminal (production mode only), exit 0.
+
+  **Self-timeout** (pi-6 M5): in `RFL_TUI_TEST_MODE`,
+  the TUI reads `RFL_TUI_MAX_LIFETIME` (env, seconds;
+  default `60` if unset) and `std::process::exit(0)`
+  on elapsed time even without `core.lifecycle.test_done`.
+  This is the test-chain leak mitigation parallel to
+  L1's fixture self-timeout. Production mode does NOT
+  honour this env (a real interactive TUI runs as
+  long as the user wants); the env is silently ignored
+  when `RFL_TUI_TEST_MODE` is unset. Exit code on
+  self-timeout is `0` (the TUI did its job; the
+  upstream test harness is responsible for asserting
+  whatever else it cares about).
 - **T3.** Entry → render-tree happens **on the core side**
   (the TUI subscribes to `core.session.entry.finalized`
   events whose payload is the `Entry` plus a pre-rendered
@@ -1279,7 +1386,50 @@ together.
      construct the `RendererRegistry::with_builtins()`
      and the `RenderPipeline`. Build the
      `SessionController` bundling store + pipeline +
-     broker (§S1).
+     broker (§S1). Build the `CompiledFrontend` for
+     the bundled TUI:
+     ```rust
+     CompiledFrontend {
+         attach_id: AttachId::new("tui"),
+         entry_absolute: tui_path,  // §C3 resolved
+         argv: vec![],
+         env: EnvPlan {
+             pass: btreeset![
+                 "TERM".into(), "COLORTERM".into(),
+                 "LANG".into(), "LC_ALL".into(),
+                 "LC_CTYPE".into(),
+                 // Test-only knobs (pi-6 B1 — round 6
+                 // had FrontendSupervisor env_clear
+                 // strip these, breaking every CLI
+                 // test that needs RFL_TUI_TEST_MODE
+                 // or RFL_TUI_READY_DELAY_MS):
+                 "RFL_TUI_TEST_MODE".into(),
+                 "RFL_TUI_READY_DELAY_MS".into(),
+                 "RFL_TUI_MAX_LIFETIME".into(),
+                 "RFL_FIXTURE_MODE".into(),
+                 "RFL_FIXTURE_MAX_LIFETIME".into(),
+             ],
+             set: btreemap![],
+             clear: vec![],
+         },
+         subscribe_patterns: btreeset![
+             "core.session.**".into(),
+             "core.lifecycle.**".into(),
+         ],
+         auto_subscribes: btreeset![],
+         publish_topics: btreeset![],
+     }
+     ```
+     The `pass` set above is the allowlist of env vars
+     the TUI / fixture child can observe. Reserved
+     RFL names (`RFL_BUS_FD`, `RFL_PROJECT_ROOT`,
+     `RFL_PRIVATE_STATE_DIR`) are still injected by
+     the supervisor (§F3) on top of this. m4+ may add
+     more pass entries (e.g. provider API keys go via
+     a different mechanism); m3's allowlist is closed.
+     The reserved-RFL list (§F3) and the pass-list
+     here are disjoint by construction — pass entries
+     listed here are ALL non-reserved.
   6. **Spawn the TUI first**:
      `frontend_supervisor.spawn(&compiled,
      &paths).await?`. This registers the frontend with
@@ -1309,8 +1459,11 @@ together.
      `tokio::time::timeout(Duration::from_secs(5),
      handle.wait_ready()).await`. Three outcomes
      (pi-4 #4):
-     - `Ok(Ok(()))` → readiness; proceed to step 8
-       (replay).
+     - `Ok(Ok(()))` → readiness. **Print
+       `"rfl-chat: frontend-ready-observed"` to `rfl
+       chat`'s own stderr** (parent-side sentinel per
+       §T2 — this is the test's ordering anchor;
+       pi-6 B3). Proceed to step 8 (replay).
      - `Ok(Err(FrontendReadyError::SenderDropped))` →
        child exited / connection closed before
        sending `frontend.ready`; map to
@@ -1346,15 +1499,29 @@ together.
      entry, the harness publishes
      `core.lifecycle.test_done` (which the headless TUI
      uses for clean exit per §T2 step 4).
-  10. Wait on `frontend_handle.wait().await`. On TUI
-      exit (clean or otherwise), call
-      `frontend_handle.shutdown().await` to drain the
-      serve loop, release the broker registration
-      guard, and capture the `ShutdownReport`. Then
-      drop the controller and the store (the store's
-      drop releases the flock). The
-      `FrontendSupervisor` itself has no shutdown API —
-      it's a stateless factory (pi-5 B1).
+  10. Wait on `frontend_handle.wait().await` ->
+      `Arc<ReaperOutcome>`. On TUI exit:
+      - If `ReaperOutcome::Exited(0)`: clean exit;
+        proceed.
+      - If `ReaperOutcome::Exited(n)` (n != 0) or
+        `Signaled(_)`: post-ready abnormal exit
+        (pi-6 M3 — round 6 left this undefined; round
+        7: `rfl chat` exits non-zero with stderr
+        citing the TUI exit status. Persisted entries
+        in SQLite are NOT rolled back — they
+        committed during replay/finalize and are
+        durable across restarts; the next `rfl chat`
+        replays them as usual). Map to
+        `RflChatError::FrontendExitedAbnormally {
+        outcome }`.
+      Then call `frontend_handle.shutdown().await` to
+      drain the serve loop and release the broker
+      registration guard, capturing the
+      `ShutdownReport`. Then drop the controller and
+      the store (the store's drop releases the
+      flock). The `FrontendSupervisor` itself has no
+      shutdown API — it's a stateless factory
+      (pi-5 B1).
 - **C3.** `rfl-tui` binary path resolution (pi-1 #6 —
   round 1 said "compile-time constants" without
   specifying the resolution order). Lookup order
@@ -1599,16 +1766,16 @@ integration test is being built):
 - `supervisor_spawn_unwinds_after_socketpair.rs` — see
   §H6.3.
 - `frontend_handle_wait_resolves_on_child_exit.rs` — see
-  §F4. **Spawns `rfl-bus-fixture`** (NOT `rfl-tui`) in
-  its existing `respond_peer_call` mode (m2 c20). The
-  child binary is incidental to the assertion — what
-  the test verifies is that `FrontendHandle::wait()`
-  resolves when ANY spawned child exits. Using
-  rafaello-core's own fixture keeps
-  `env!("CARGO_BIN_EXE_rfl-bus-fixture")` valid in
-  rafaello-core's test build (pi-2 #4 — round 2 had
-  this test reach for `rfl-tui`'s BIN_EXE which is in a
-  different package).
+  §F4 (pi-6 B6 — round 6 had §F4 say `signal_ready`
+  but §I say `respond_peer_call`; round 7 picks
+  `signal_ready` everywhere because it exercises the
+  readiness path and exits deterministically via
+  `RFL_FIXTURE_MAX_LIFETIME=1`). Spawns
+  `rfl-bus-fixture` (NOT `rfl-tui` — pi-2 #4) in
+  `signal_ready` mode (§L1a) with
+  `RFL_FIXTURE_MAX_LIFETIME=1` so the child exits
+  after 1 s and `FrontendHandle::wait().await`
+  returns `ReaperOutcome::Exited(0)`.
 - `frontend_handle_drop_does_not_leak_zombie.rs`
   (Linux-only) — see §F4. Same rfl-bus-fixture-based
   approach.
@@ -1639,46 +1806,54 @@ integration test is being built):
   cleanly on a follow-up `core.lifecycle.test_done`.
   Uses `env!("CARGO_BIN_EXE_rfl-tui")` (valid because
   the test is in the same crate as the bin).
-- `tui_paint_panic_isolation` — pi-5 B2: round-5 still
-  said "feed a render-tree the painter panics on with
-  a renderer that panics on call", but the TUI paint
-  path consumes already-rendered `RenderNode` values
-  from core; it does NOT invoke renderers. Round 6
-  re-specs as a **library-level unit test** in
+- `tui_paint_panic_isolation` — pi-5 B2 + pi-6 B5:
+  paint-panic isolation is exercised as a
+  **library-level unit test** inside
   `rafaello-tui/src/paint.rs` (`#[cfg(test)] mod
-  tests`) that exercises the redraw loop's
-  `catch_unwind` directly:
+  tests`). The seam is structured to keep the
+  production `RenderNode` wire enum unchanged
+  (pi-6 B5 — round 6's "RawFormat::Test" trick was
+  type-incorrect):
   ```rust
-  // pseudo-test
+  // In rafaello-tui::paint:
+  pub fn draw_with_panic_isolation(
+      term: &mut ratatui::Terminal<impl Backend>,
+      node: &RenderNode,
+  ) -> Result<(), PaintError> { ... }
+
+  #[cfg(test)]
+  pub(crate) fn draw_with_panic_isolation_for_test(
+      term: &mut ratatui::Terminal<impl Backend>,
+      action: PaintAction,
+  ) -> Result<(), PaintError> { ... }
+
+  #[cfg(test)]
+  pub(crate) enum PaintAction<'a> {
+      Render(&'a RenderNode),
+      RunPanicking,            // synthetic panic source
+      RunReturningError,       // synthetic Err source
+  }
+  ```
+  Production paint always uses
+  `draw_with_panic_isolation(term, node)`. The
+  `#[cfg(test)] PaintAction` variant `RunPanicking`
+  triggers a deliberate panic inside the
+  `catch_unwind` block; `RunReturningError` returns
+  a `PaintError`. Test:
+  ```rust
   let backend = ratatui::backend::TestBackend::new(80, 24);
   let mut term = ratatui::Terminal::new(backend)?;
-  let mut painter = Painter::new(/* ... */);
-  // First entry: paint via a closure that panics.
-  let panicking_node = test_helpers::node_that_paints_via(|_, _| {
-      panic!("synthetic paint panic");
-  });
-  painter.draw_with_panic_isolation(&mut term, &panicking_node);
-  // Second entry: a normal Text node.
-  painter.draw_with_panic_isolation(&mut term,
-      &RenderNode::Text { text: "ok".into(), emphasis: None });
-  // Assertions on TestBackend's buffer:
-  //  - first entry's row contains "[render error: ...]"
-  //  - second entry's row contains "ok"
+  draw_with_panic_isolation_for_test(&mut term,
+      PaintAction::RunPanicking)?;
+  draw_with_panic_isolation_for_test(&mut term,
+      PaintAction::Render(&RenderNode::Text {
+          text: "ok".into(), emphasis: None }))?;
+  // Assertions on TestBackend buffer: "[render error: ...]"
+  // followed by "ok".
   ```
-  The seam is `Painter::draw_with_panic_isolation` —
-  a thin wrapper over `std::panic::catch_unwind` that
-  calls a `paint_node(&self, node: &RenderNode, frame:
-  &mut Frame)` method internally. The unit test uses a
-  test-only `node_that_paints_via(closure)` helper
-  that injects an arbitrary paint closure into a
-  `RenderNode::Raw { format: "test", body: <token> }`
-  variant; the production `paint_node` matches that
-  token under `#[cfg(test)]` only and dispatches to
-  the closure. Production paint never sees the test
-  token. Pi-5 B2's three suggestions all collapse to
-  this: a paint-level seam, gated by `cfg(test)`,
-  exercised by a unit test on a `TestBackend`. No
-  subprocess, no headless mode involvement.
+  No production-side `RenderNode`/`RawFormat`
+  contamination. No cfg(test) variant on production
+  enums. No subprocess, no headless mode.
 - `tui_sends_frontend_ready_after_handler_registration.rs`
   — pi-2 #6 / pi-3 #2: positive — spawn `rfl-tui` in
   `RFL_TUI_TEST_MODE`. The TUI's startup sends
@@ -1733,16 +1908,25 @@ integration test is being built):
   step 3 — it inserts a `tokio::time::sleep` BEFORE
   the `peer.call("frontend.ready", ...)` so the
   parent's readiness wait is delayed); capture
-  rfl-tui's stderr; assert (pi-5 M10):
-  - **before** the `"rfl-tui: ready-sent"` sentinel
-    appears, NO `"rfl-tui: bus.event"` lines have
-    been printed (deterministic ordering — replay
-    cannot fan out before readiness is observed by
-    the parent);
-  - **after** the sentinel, three `bus.event` lines
-    appear within an upper bound (1 s — generous to
-    survive CI scheduling jitter; ordering is the
-    real assertion, not wall-clock).
+  capture both `rfl chat`'s stderr (parent-side) and
+  `rfl-tui`'s stderr (child-side); assert (pi-6 B3):
+  - `"rfl-chat: frontend-ready-observed"` appears on
+    parent stderr (§C2 step 7's `Ok(Ok(()))` arm
+    prints this after `wait_ready` resolves and
+    BEFORE `controller.replay_history()` is called);
+  - between the parent's
+    `frontend-ready-observed` timestamp and the FIRST
+    `"rfl-tui: bus.event"` timestamp, the order MUST
+    be parent-first. Both streams are captured via
+    `Command::stderr(Stdio::piped())`; each line is
+    timestamped at read-time using
+    `std::time::Instant::now()`; the test asserts
+    monotonic ordering on those timestamps. This
+    removes the round-6 ordering race between the
+    RPC response and the TUI's sentinel print;
+  - exactly three `"rfl-tui: bus.event"` lines appear
+    within an upper bound of 1 s after the parent
+    sentinel.
 - `rfl_chat_frontend_ready_timeout_errors.rs` — pi-3 #2 +
   pi-2 #6 + pi-5 M4: spawn `rfl chat` with
   `RFL_TUI_PATH` pointing at `rfl-bus-fixture` in
@@ -1965,11 +2149,16 @@ to sneak in via "while I'm here" implementation drift.
 - **Audit log table** (m5 confirmation answers).
 - **Helper plugins** (deferred per row 26; m1 + m2 already
   guard the surface).
-- **macOS-only TUI smoke gate.** m3 dev runs on Linux; the
-  test suite is platform-agnostic by default and macOS is
-  verified post-hoc via origin CI per m2's §5.7
-  precedent. Per-test macOS gates are added only as CI
-  proves them needed.
+- **Manual interactive macOS smoke testing** (i.e. a
+  human-driven smoke recording on a macOS box). m3
+  dev work is on Linux; macOS is verified through CI
+  only. The CI cargo-test green is a HARD gate per
+  the Acceptance section; the manual recording is
+  Linux-only. (Pi-6 M2 — round 6's "verified
+  post-hoc" wording for macOS contradicted Acceptance;
+  round 7 reframes: cross-platform CI green is the
+  gate, but interactive end-to-end recording is
+  Linux-only.)
 - **`PluginSupervisor` extensions beyond `inject_fault`.**
   m3 does NOT introduce per-plugin shutdown,
   `bindings.helper_for`, or any new spawn-time validation
@@ -2111,7 +2300,7 @@ m3a/m3b split point after the broker frontend extension
    heading; code_block + thinking; tool_call + tool_result;
    image + error) if per-commit greenness budget is
    tight.
-5. **Broker frontend extension** (B1-B7): ~3 commits.
+5. **Broker frontend extension** (B1-B6): ~3 commits.
    Splits into `BrokerAcl` extension; `register_frontend`
    + RAII guard; publish authority + fan-out wiring.
 6. **Frontend supervisor** (F1-F5): ~3 commits.
