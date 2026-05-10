@@ -13,6 +13,7 @@ semver = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 outpost = { path = "../outpost/crates/outpost" }
 tempfile = "3"
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

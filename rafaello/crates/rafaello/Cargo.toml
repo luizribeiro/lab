@@ -19,7 +19,7 @@ rafaello-core = { path = "../rafaello-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
