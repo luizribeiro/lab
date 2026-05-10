@@ -67,6 +67,8 @@ pub struct FixtureSpec {
     pub subscribes: Vec<String>,
     pub env_set: BTreeMap<String, String>,
     pub network_plan: Option<NetworkPlan>,
+    pub read_dirs: Vec<String>,
+    pub write_dirs: Vec<String>,
 }
 
 impl FixtureSpec {
@@ -82,7 +84,19 @@ impl FixtureSpec {
             subscribes: Vec::new(),
             env_set,
             network_plan: None,
+            read_dirs: Vec::new(),
+            write_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_read_dirs(mut self, dirs: Vec<String>) -> Self {
+        self.read_dirs = dirs;
+        self
+    }
+
+    pub fn with_write_dirs(mut self, dirs: Vec<String>) -> Self {
+        self.write_dirs = dirs;
+        self
     }
 
     pub fn with_network_plan(mut self, plan: NetworkPlan) -> Self {
@@ -135,7 +149,9 @@ impl FixtureLockBuilder {
 
     pub fn build(self) -> BuiltFixtures {
         let project = tempfile::tempdir().expect("project tempdir");
+        let home = tempfile::tempdir().expect("home tempdir");
         let project_root = project.path().to_path_buf();
+        let home_root = home.path().to_path_buf();
         let plugins_root = project_root.join("plugins");
         std::fs::create_dir_all(&plugins_root).expect("create plugins/");
 
@@ -190,6 +206,8 @@ impl FixtureLockBuilder {
                 GrantBundle {
                     filesystem: Some(GrantFilesystem {
                         exec_dirs: runtime_exec_dirs(),
+                        read_dirs: spec.read_dirs.clone(),
+                        write_dirs: spec.write_dirs.clone(),
                         ..GrantFilesystem::default()
                     }),
                     network: Some(GrantNetwork {
@@ -223,7 +241,7 @@ impl FixtureLockBuilder {
 
         let lvc = LockValidationContext {
             project_root: project_root.clone(),
-            home: project_root.clone(),
+            home: home_root.clone(),
             plugin_dirs: plugin_dirs.clone(),
             cache_root: project_root.clone(),
             state_root: project_root.clone(),
@@ -240,7 +258,7 @@ impl FixtureLockBuilder {
                 .clone();
             let pctx = PathContext {
                 project_root: project_root.clone(),
-                home: project_root.clone(),
+                home: home_root.clone(),
                 plugin_dir: pdir.clone(),
                 cache_dir: project_root.clone(),
                 state_dir: project_root.clone(),
@@ -260,8 +278,10 @@ impl FixtureLockBuilder {
                 .iter()
                 .find(|s| &s.canonical == canonical)
                 .expect("spec for canonical");
+            let project_root_str = project_root.to_string_lossy().into_owned();
             for (k, v) in &spec.env_set {
-                plan.env.set.insert(k.clone(), v.clone());
+                let expanded = v.replace("${project}", &project_root_str);
+                plan.env.set.insert(k.clone(), expanded);
             }
             if let Some(np) = &spec.network_plan {
                 plan.network = np.clone();
@@ -272,6 +292,7 @@ impl FixtureLockBuilder {
         BuiltFixtures {
             layout: ProjectLayout {
                 project,
+                _home: home,
                 plugin_dirs,
             },
             broker_acl: acl,
@@ -297,6 +318,7 @@ fn runtime_exec_dirs() -> Vec<String> {
 
 pub struct ProjectLayout {
     pub project: TempDir,
+    pub _home: TempDir,
     pub plugin_dirs: BTreeMap<CanonicalId, PathBuf>,
 }
 
