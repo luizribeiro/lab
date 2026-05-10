@@ -23,7 +23,10 @@ nix develop --impure --command cargo test --manifest-path rafaello/Cargo.toml --
 devshell on Linux x86_64 / 6.12.84).
 
 **Aggregate:** 308 test binaries / 516 tests passed / 0
-failed / 0 ignored.
+failed / 0 ignored. Re-captured 2026-05-10 after the
+§5.8 macOS un-gating commit (`1e839b3`); the five
+newly-un-gated rafaello-tui integration tests continue
+to pass on Linux post-removal.
 
 **Source:** `/tmp/m3-acceptance.log` (~284 KB transient
 log). The aggregate was extracted via `grep "test
