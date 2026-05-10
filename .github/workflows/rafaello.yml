@@ -2,7 +2,7 @@ name: rafaello
 
 on:
   push:
-    branches: [main]
+    branches: [main, rafaello-v0.1]
     paths:
       - "rafaello/**"
       - "shared/**"
@@ -42,4 +42,4 @@ jobs:
       - name: Run tests
         run: |
           nix develop .#rafaello --impure -L --command \
-            cargo test --manifest-path rafaello/Cargo.toml --workspace
+            cargo test --manifest-path rafaello/Cargo.toml --workspace --features rafaello-core/test-fixture
