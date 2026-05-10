@@ -1,8 +1,19 @@
 # m4 — provider fixture + secure agent loop + read-only tool + taint envelope — scope
 
-> **Status:** round-5 — pi-4 b/2 m/1 closed. Trajectory:
-> r1 8/5/4/3 → r2 6/5/3/2 → r3 4/2/2/1 → r4 2/0/1/0.
-> Near convergence.
+> **Status:** round-6 — pi-5 L-1 closed; **scope.md
+> CONVERGED at round 6, 0 blockers; moving to
+> `commits.md` drafting.** Trajectory:
+> r1 8/5/4/3 → r2 6/5/3/2 → r3 4/2/2/1 → r4 2/0/1/0 →
+> r5 0/0/0/1 → r6 0/0/0/0.
+>
+> Round-6 fix:
+> - **L5-1** Future-work decisions.md-row description in
+>   §Acceptance summary was missing `.tool_result` in the
+>   `request_id`-required topic list. Wording aligned with
+>   §B0 table-of-truth: `request_id` is required on every
+>   event whose topic suffix is `.tool_request`,
+>   `.tool_result`, `.assistant_message`, or
+>   `.user_message`.
 >
 > Round-5 fixes (by pi-4 number):
 >
@@ -3264,9 +3275,11 @@ m4 is done when:
     the new variant.
   - **decisions.md row for the `BusEvent.request_id`
     rollout** — new ratified row documenting that
-    `request_id` is now mandatory on request-shaped
-    topics (`*.tool_request`, `*.user_message`,
-    `*.assistant_message`) at the broker.
+    `request_id` is now mandatory on every event whose
+    topic suffix is `.tool_request`, `.tool_result`,
+    `.assistant_message`, or `.user_message` at the
+    broker (per §B0 table-of-truth; pi-5 L-1 — round-5
+    omitted `.tool_result` from this list).
   - **decisions.md row for the `Publisher::Provider`
     variant landing** — refines row 42.
   - **m1's `check_lock_publish_topic` unknown-namespace
