@@ -1,8 +1,41 @@
 # m4 — provider fixture + secure agent loop + read-only tool + taint envelope — scope
 
-> **Status:** round-4 — addresses `pi-review-3.md`
-> (b/4 h/2 m/2 l/1). Trajectory:
-> r1 8/5/4/3 → r2 6/5/3/2 → r3 4/2/2/1. Converging.
+> **Status:** round-5 — pi-4 b/2 m/1 closed. Trajectory:
+> r1 8/5/4/3 → r2 6/5/3/2 → r3 4/2/2/1 → r4 2/0/1/0.
+> Near convergence.
+>
+> Round-5 fixes (by pi-4 number):
+>
+> Blockers:
+> - **B4-1** TP2's readfile `plugin.<topic-id>.tool_result`
+>   publish updated to carry **`request_id: Some(<fresh
+>   ULID-stringified JsonRpcId>)`** per §B0 table-of-truth.
+>   Without it, the broker rejects with `MissingRequestId`
+>   at §B6 step 7 before CR3 sees the event, and the demo
+>   bar cannot complete.
+> - **B4-2** `ulid = { workspace = true }` added to both
+>   `rafaello-mockprovider` and `rafaello-readfile`
+>   `[dependencies]` (§W2 / §W3). Both bins generate fresh
+>   request_ids (mockprovider for its `tool_request` /
+>   `assistant_message`; readfile for its `tool_result`
+>   per B4-1 above). The workspace alias already exists at
+>   `rafaello/Cargo.toml:38` from m3.
+>
+> Medium:
+> - **M4-1** §B6's `plugin.<id>.tool_result` rule wording
+>   aligned with the recorded gap in §Out of scope. The
+>   "rejected indirectly at the reemit path" phrasing is
+>   gone; the explicit text is: m4 does **not** enforce
+>   stale-id rejection at the broker for plugin tool_results.
+>   CR3 forwards `in_reply_to` verbatim. A stale id may
+>   surface as the provider failing to correlate on its
+>   side — that is the v2 provider-side concern. The
+>   §Out-of-scope row remains the canonical record.
+>
+> ---
+>
+> Round-4 history (kept for trajectory; addresses
+> `pi-review-3.md` b/4 h/2 m/2 l/1):
 >
 > Round-4 fixes (by pi-3 number):
 >
@@ -858,14 +891,17 @@ land:
     "../rafaello-core" }`, `tokio`, `tracing`,
     `tracing-subscriber`, `fittings-core`, `fittings-server`,
     `fittings-client`, `fittings-transport`, `serde`,
-    `serde_json`, `async-trait`, `anyhow`, all via
-    `workspace = true`.
+    `serde_json`, `async-trait`, `anyhow`, **`ulid`** (all
+    workspace deps; `ulid` added in pi-4 B-2 — PR2
+    generates fresh `JsonRpcId::String(Ulid::new()
+    .to_string())` request_ids).
   - `[dev-dependencies]`: `tempfile`, `serial_test`,
     `tracing-test`, all `workspace = true`.
 - **W3 (new crate `rafaello-readfile`).** Cargo manifest at
   `rafaello/crates/rafaello-readfile/Cargo.toml`. Same dep
-  shape as W2 (`bin/rfl_readfile.rs`); no extra runtime
-  dependencies.
+  shape as W2 (`bin/rfl_readfile.rs`), **including `ulid =
+  { workspace = true }`** (pi-4 B-2 — TP2 generates fresh
+  `request_id`s for every `tool_result` publish per §B0).
 - **W4 (`rafaello-core/Cargo.toml`).** No edits required —
   `rafaello-core` already pulls every dep m4's new modules
   (`agent`, `reemit`) need. Round-1 default: leave
@@ -1125,16 +1161,21 @@ prefer they bundle because they all touch `BusEvent` /
        `core.session.tool_result.request_id` or
        `core.session.user_message.request_id`). Same
        in-flight-map enforcement.
-     - `plugin.<id>.tool_result`: m2 already enforces "required,
-       exactly one entry". m4 does **not** add stale-id
-       enforcement against any agent-loop outstanding map
-       (pi-2 B-3 — correlation flows through `in_reply_to`,
-       not a shared store). A tool plugin citing an
-       unrecognised request_id is rejected indirectly at the
-       reemit path (CR3 forwards `in_reply_to` verbatim;
-       provider sees an `in_reply_to` it never issued and
-       can fail closed on its end — but that is a v2
-       provider-side concern).
+     - `plugin.<id>.tool_result`: m2 already enforces
+       "required, exactly one entry" on shape. m4 does
+       **not** check whether the cited id corresponds to a
+       tool_request the broker actually routed to this
+       plugin (pi-4 M-1 — wording aligned with the §Out of
+       scope recorded gap): the broker has no per-plugin
+       outstanding-tool_request map. CR3 forwards
+       `in_reply_to` verbatim; an unrecognised id is
+       **accepted by the broker** and surfaces downstream
+       as the provider failing to correlate on its own
+       side (a v2 provider-side concern). The security RFC
+       §7.2.6 row 1 requirement is intentionally deferred;
+       see the §Out of scope row "Broker-side stale-
+       correlation enforcement on
+       `plugin.<id>.tool_result.in_reply_to`".
      - `frontend.<id>.user_message`: **optional** per §7.2.6
        row 5 (user messages are roots; no taint to inherit).
      - `plugin.<a>.rpc_reply`: m2 already enforces "required,
@@ -2304,9 +2345,21 @@ half of the canonical 5-step path (overview §7):
       reject paths that escape (canonicalize + ancestor
       check);
     - read the file (utf8-only — m4 cut);
-    - publish `plugin.<topic-id>.tool_result` with payload
-      `{ok: true, content: <utf8>}` (or `{ok: false, error:
-      <reason>}`) and `in_reply_to = [<request_id>]`.
+    - publish `plugin.<topic-id>.tool_result` with:
+      - payload `{ok: true, content: <utf8>}` (or
+        `{ok: false, error: <reason>}`) — the canonical
+        bus wire shape (pi-3 B-4);
+      - **`request_id: Some(<fresh
+        JsonRpcId::String(Ulid::new().to_string())>)`**
+        (pi-4 B-1 — §B0 table-of-truth requires
+        `request_id` on every `.tool_result` event;
+        without it the broker rejects at §B6 step 7 with
+        `MissingRequestId` and CR3 never sees the
+        event);
+      - `in_reply_to: Some(vec![<tool_request.request_id>])`
+        (the single citeable id is the inbound
+        tool_request's `request_id`, m2-enforced and
+        m4-validated per §B0 table).
 - **TP3 (compile-test).** Same as PR3 — pinned to the live
   `Manifest::parse` + `manifest::validate_with_package`
   sequence (pi-2 H-5). Lands as
