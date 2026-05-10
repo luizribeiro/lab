@@ -163,6 +163,7 @@ fn main() {
 }
 
 async fn run_bus_backed(mode: &str) {
+    maybe_install_sigterm_trap();
     let transport = build_bus_transport();
     let client = Client::connect(OneShotConnector::new(transport))
         .await
@@ -228,6 +229,21 @@ async fn run_bus_backed(mode: &str) {
         }
         _ => unreachable!("mode dispatch already validated"),
     }
+}
+
+fn maybe_install_sigterm_trap() {
+    if std::env::var("RFL_FIXTURE_TRAP_SIGTERM").as_deref() != Ok("1") {
+        return;
+    }
+    let mut stream = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
+    tokio::spawn(async move {
+        loop {
+            if stream.recv().await.is_none() {
+                return;
+            }
+        }
+    });
 }
 
 fn build_bus_transport() -> FixtureTransport {

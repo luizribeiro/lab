@@ -688,7 +688,98 @@ impl PluginSupervisor {
     }
 
     pub async fn shutdown(self) -> ShutdownReport {
-        ShutdownReport::default()
+        let drained: Vec<(CanonicalId, ManagedSpawn)> = {
+            let mut guard = self.managed.lock();
+            std::mem::take(&mut *guard).into_iter().collect()
+        };
+
+        let mut report = ShutdownReport::default();
+        let grace = self.config.shutdown_grace;
+
+        for (canonical, mut managed) in drained {
+            drop(managed.registered.take());
+
+            let mut rx = managed.observation.outcome.clone();
+            let cached_pid = managed.observation.cached_pid;
+            let mut forced = false;
+
+            if rx.borrow_and_update().is_none() {
+                if let Some(pid) = cached_pid {
+                    let pid_t = nix::unistd::Pid::from_raw(pid as i32);
+                    match nix::sys::signal::kill(pid_t, nix::sys::signal::Signal::SIGTERM) {
+                        Ok(()) => {}
+                        Err(nix::errno::Errno::ESRCH) => {}
+                        Err(e) => {
+                            drop(managed.proxy.take());
+                            if let Some(j) = managed.serve_join.take() {
+                                j.abort();
+                            }
+                            report
+                                .failed
+                                .push((canonical, ShutdownFailure::SignalSendFailed(e)));
+                            continue;
+                        }
+                    }
+
+                    let graceful = tokio::time::timeout(grace, async {
+                        loop {
+                            if rx.borrow_and_update().is_some() {
+                                return;
+                            }
+                            if rx.changed().await.is_err() {
+                                return;
+                            }
+                        }
+                    })
+                    .await;
+
+                    if graceful.is_err() {
+                        forced = true;
+                        let _ = nix::sys::signal::kill(pid_t, nix::sys::signal::Signal::SIGKILL);
+                        loop {
+                            if rx.borrow_and_update().is_some() {
+                                break;
+                            }
+                            if rx.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            drop(managed.proxy.take());
+            if let Some(j) = managed.serve_join.take() {
+                j.abort();
+            }
+
+            let outcome = rx.borrow().clone();
+            match outcome.as_deref() {
+                Some(ReaperOutcome::Exited(_)) => {
+                    if forced {
+                        report.forced.push(canonical);
+                    } else {
+                        report.clean.push(canonical);
+                    }
+                }
+                Some(ReaperOutcome::WaitFailed(e)) => {
+                    report.failed.push((
+                        canonical,
+                        ShutdownFailure::WaitFailed {
+                            kind: e.kind(),
+                            message: e.to_string(),
+                        },
+                    ));
+                }
+                Some(ReaperOutcome::ReaperPanicked) | None => {
+                    report
+                        .failed
+                        .push((canonical, ShutdownFailure::ReaperPanicked));
+                }
+            }
+        }
+
+        report
     }
 }
 
