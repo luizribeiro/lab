@@ -1,7 +1,139 @@
 # m4 — provider fixture + secure agent loop + read-only tool + taint envelope — scope
 
-> **Status:** round-3 — addresses `pi-review-2.md`
-> (b/6 h/5 m/3 l/2). Trajectory: r1 8/5/4/3 → r2 6/5/3/2.
+> **Status:** round-4 — addresses `pi-review-3.md`
+> (b/4 h/2 m/2 l/1). Trajectory:
+> r1 8/5/4/3 → r2 6/5/3/2 → r3 4/2/2/1. Converging.
+>
+> Round-4 fixes (by pi-3 number):
+>
+> Blockers:
+> - **B3-1** Added the **`request_id` table-of-truth** in
+>   new §B0 as the *single* source for which topics require
+>   `request_id` on the wire. The table lists six topic
+>   classes (`*.tool_request`, `*.tool_result`,
+>   `*.assistant_message`, `*.user_message`, `*.rpc_reply`,
+>   everything else) with required/optional on inbound and
+>   canonical sides, and a "fail mode" column. B2's
+>   `BusEvent.request_id` field-type prose, B4's
+>   `MissingRequestId` enumeration, B6's per-topic
+>   enforcement step, CR5's frontend user_message handling,
+>   AL5's tool dispatch publish, and TP2's tool_result
+>   publish are all rewritten to cite the table. The
+>   round-3 contradictions (B2 optional-on-results, B4
+>   excluding tool_result, CR5 synthesising missing
+>   frontend ids, TP2 missing fresh `request_id`) are
+>   collapsed into "every event on a `.tool_request` /
+>   `.tool_result` / `.assistant_message` / `.user_message`
+>   topic carries `request_id: Some(_)`; missing →
+>   `MissingRequestId`."
+> - **B3-2** `provider_observed_results` enforcement
+>   split by topic class (pi-3 B-2, security RFC
+>   §7.2.6 row 2 vs row 3):
+>   - `provider.<id>.tool_request.in_reply_to[i]` MUST be
+>     in `provider_observed_results[canonical]` only —
+>     **never** in `provider_observed_user_messages`. A
+>     provider that cites a user_message id on a
+>     `tool_request` → `StaleRequestId`.
+>   - `provider.<id>.assistant_message.in_reply_to[i]`
+>     MUST be in the **union** of
+>     `provider_observed_results[canonical]` and
+>     `provider_observed_user_messages[canonical]` (the
+>     conversation context row of §7.2.6).
+>   B7b rewritten to encode the split; new negatives in
+>   §I:
+>   `provider_tool_request_in_reply_to_user_message_id_rejected.rs`
+>   asserts that citing a user_message id on a
+>   tool_request fails with `StaleRequestId`.
+> - **B3-3** §C3 rewritten with the **live** symbols:
+>   - `digest::manifest_digest(&manifest.canonical_bytes())`
+>     — `canonical_bytes()` already returns `Vec<u8>`
+>     (`manifest/top_level.rs:86`); `manifest_digest` takes
+>     `&[u8]` (`digest.rs:26`); the auto-deref to slice via
+>     `&Vec<u8>` works directly. No `.as_bytes()` call (the
+>     round-3 code applied `.as_bytes()` to a `Vec<u8>`,
+>     which doesn't compile).
+>   - `topic_id::derive(&canonical.to_string())`
+>     (`topic_id.rs:15`) replaces the invented
+>     `topic_id_of(canonical)`. The same helper is already
+>     used inside `broker_acl::compile` at
+>     `broker_acl.rs:97`.
+> - **B3-4** Mock-provider tool_result wire shape pinned
+>   to **one canonical bus payload**. The wire shape for
+>   `core.session.tool_result.payload` is **the
+>   readfile-supplied bus payload `{ok: bool, content:
+>   String}`**, **not** the persistence-side
+>   `ToolResultPayload { call_id, ok, content:
+>   RenderNode::Code, details }`. Reconciliation:
+>   - **CR3** forwards the inbound bus payload from
+>     `plugin.<topic-id>.tool_result` unchanged into
+>     `core.session.tool_result.payload`. No transformation.
+>   - **AL6 (persistence)** is the *only* place that wraps
+>     the bus payload into `ToolResultPayload` with
+>     `content: RenderNode::Code { code: <content>, lang:
+>     None }`. The persistence shape is for SQLite + TUI
+>     rendering only; it never reaches the provider.
+>   - **PR2 (mock provider)** reads `bus_event.payload.content`
+>     (a `String`) directly from the canonical bus payload,
+>     not from a `ToolResultPayload.content` RenderNode.
+>     The assistant_message text is built as
+>     `format!("Here's what's in {}:\n{}", path,
+>     payload.content)`.
+>   The two shapes are explicitly distinct now:
+>   **wire shape** ({ok, content: String}) vs
+>   **persistence shape** (`ToolResultPayload`); the
+>   reemit + provider path uses the wire shape end to end.
+>
+> High:
+> - **H3-1** Added named multi-turn test
+>   `mockprovider_multi_turn_cites_prior_tool_result_id.rs`
+>   to `rafaello-mockprovider/tests/`: drive
+>   user_message → tool_request → tool_result for file A,
+>   then user_message → second tool_request for file B;
+>   assert the second `provider.mock.tool_request`'s
+>   `in_reply_to` contains the first tool_result's
+>   `request_id` and the broker accepts (B7b retained-context
+>   semantics).
+> - **H3-2** Provider-origin exclusion in fan-out gets a
+>   **mechanical hook**: `publish_core_with_taint` grows an
+>   explicit `origin_provider: Option<CanonicalId>` argument
+>   (round-4 signature shift). When `Some(c)`, the canonical
+>   `core.session.tool_request` fan-out excludes the
+>   matching provider from the recipient set. Pi correctly
+>   noted that inferring origin from `taint[0].detail` is
+>   ambiguous when multiple providers share a provider_id
+>   prefix (decisions row 6 forbids that today, but defence
+>   in depth is cheaper than relying on it). CR2 passes
+>   `origin_provider = Some(<source provider canonical>)`;
+>   CR3/CR4/CR5 pass `None` (no provider to exclude). B8 +
+>   B10 rewritten.
+>
+> Mediums:
+> - **M3-1** Table-of-truth lands in new §B0 (closes the
+>   pi-3 medium that highlighted the divergence root cause).
+> - **M3-2** Tool-result stale-correlation explicitly
+>   **deferred** to m5+. New paragraph in §B6's
+>   `plugin.<id>.tool_result` rule documents the gap: the
+>   security RFC §7.2.6 row 1 requires referencing a
+>   matching routed tool_request, but m4 does not maintain
+>   an agent-loop outstanding map for broker validation
+>   (correlation flows through `in_reply_to` as a
+>   passthrough). A stale id surfaces as the provider
+>   failing to find the matching in-flight tool_request on
+>   its side. **Recorded gap**: m5 will add the
+>   agent-loop outstanding map back for broker validation
+>   if it lands the sink-confirmation gate (which needs the
+>   same data structure). Listed in §Out-of-scope.
+>
+> Lows:
+> - **L3-1** Negative-matrix heading "plugin-supplied taint
+>   rejected" renamed to **"plugin-supplied taint
+>   discarded/replaced"** to match the discard+replace rule
+>   used everywhere else.
+>
+> ---
+>
+> Round-3 history (kept for trajectory; addresses
+> `pi-review-2.md` b/6 h/5 m/3 l/2):
 >
 > Round-3 fixes (by pi-2 number):
 >
@@ -763,6 +895,35 @@ land as separate commits or be bundled — driver picks; pi may
 prefer they bundle because they all touch `BusEvent` /
 `Publisher` / `BrokerError` together.
 
+- **B0.** **`request_id` table-of-truth** (pi-3 B-1 /
+  M3-1 — the *single* source of truth all of B2 / B4 / B6 /
+  CR / AL / TP cite). Every event class either requires
+  `request_id: Some(_)` on the wire or treats it as
+  optional. The same rule applies on **both** the inbound
+  (`provider.*` / `plugin.*` / `frontend.*`) and canonical
+  (`core.*`) sides — there is no synthesis path that fills
+  in a missing inbound `request_id`. Topic suffix is the
+  discriminator:
+
+  | Topic suffix          | Inbound `request_id`            | Canonical `request_id`              | Fail mode                       |
+  |-----------------------|----------------------------------|--------------------------------------|----------------------------------|
+  | `.tool_request`       | **required**                     | **required** (forwarded)             | `MissingRequestId`               |
+  | `.tool_result`        | **required**                     | **required** (forwarded)             | `MissingRequestId`               |
+  | `.assistant_message`  | **required**                     | **required** (forwarded)             | `MissingRequestId`               |
+  | `.user_message`       | **required**                     | **required** (forwarded)             | `MissingRequestId`               |
+  | `.rpc_reply`          | required (m2 already enforces)   | n/a (not re-emitted to `core.*` in m4) | m2's existing path              |
+  | everything else       | optional                         | optional                             | accept                            |
+
+  The Rust field type stays `request_id: Option<JsonRpcId>`
+  on `BusEvent` and `PublishMsg` (because some topics carry
+  `None`) — the field's presence/absence is enforced at
+  the per-handler validation step (`handle_plugin_publish`,
+  `handle_provider_publish`, `handle_frontend_publish`,
+  `publish_core_with_taint`), keyed by the topic suffix.
+  Round-3's "optional on response topics, synthesise on the
+  re-emit side" formulation is dropped; B2/B4/B6/CR3/CR4/
+  CR5/AL5/TP2 all cite this table.
+
 - **B1.** Extend `Publisher` (`error.rs:289-293`):
   ```rust
   #[derive(Debug)]
@@ -802,13 +963,14 @@ prefer they bundle because they all touch `BusEvent` /
     `JsonRpcId` is the same type used inside `in_reply_to` and is
     re-exported via `crate::bus::JsonRpcId`. Generated on the
     publishing side; preserved verbatim by the broker; consumed
-    by subscribers correlating against `in_reply_to`. Required
-    on every event that may be cited by a future `in_reply_to`
-    (tool_request, user_message, assistant_message — every
-    "request-shaped" topic). Optional on result/reply topics
-    that close a prior `request_id` (tool_result, rpc_reply).
-    Schema-side validation lives in the per-publisher `PublishMsg`
-    parsing path (B6 below).
+    by subscribers correlating against `in_reply_to`.
+    Required/optional by topic class **per the §B0
+    table-of-truth**: required on every event whose suffix is
+    `.tool_request`, `.tool_result`, `.assistant_message`, or
+    `.user_message` (round-4 collapse — pi-3 B-1; the round-3
+    "optional on response topics" wording is dropped).
+    Schema-side validation lives in the per-publisher
+    `PublishMsg` parsing path (B6 below).
   - **`PublishMsg`** (`bus.rs:17-26`) grows
     `request_id: Option<JsonRpcId>` symmetrically. Plugins
     set it on their `bus.publish` calls; the broker passes it
@@ -863,9 +1025,12 @@ prefer they bundle because they all touch `BusEvent` /
       UnknownSource { source: String },
   }
   ```
-  - `MissingRequestId` fires when a request-shaped topic
-    (`*.tool_request`, `*.user_message`, `*.assistant_message`)
-    arrives without `request_id`.
+  - `MissingRequestId` fires per the **§B0 table-of-truth**
+    — every event whose topic suffix is `.tool_request`,
+    `.tool_result`, `.assistant_message`, or `.user_message`
+    must carry `request_id: Some(_)` on both inbound and
+    canonical sides (pi-3 B-1 — round-3's
+    `.tool_result`-exclusion is dropped).
   - `InvalidTaint` covers the three canonical-side
     taint-envelope failure modes (missing, empty array,
     unknown source taxon). It is **never** fired by
@@ -1066,15 +1231,31 @@ prefer they bundle because they all touch `BusEvent` /
   / `core.session.user_message` fan-out delivered to a given
   provider; ids are **never removed** when a provider cites
   them in a subsequent `tool_request` / `assistant_message`.
-  The broker's enforcement is membership-only: an
-  `in_reply_to` entry not in the union of the two sets →
-  `InvalidInReplyTo { reason: StaleRequestId { id } }`.
-  Multi-turn semantics: turn 2's `tool_request` may cite
-  turn 1's tool_result id; the broker still recognises it.
   An empty `in_reply_to: []` is valid for both
   `tool_request` (first-turn or context-free request) and
   `assistant_message` (§7.2.6 row 2 and row 3 — both
   ≥0 entries).
+
+  **Topic-class-specific membership rule** (pi-3 B-2 —
+  security RFC §7.2.6 rows 2 and 3 require **different**
+  citeable id sets per provider topic):
+  - For `provider.<id>.tool_request.in_reply_to[i]`: MUST
+    be in `provider_observed_results[canonical]` —
+    **never** in `provider_observed_user_messages`. A
+    provider that cites a user_message id on a
+    `tool_request` →
+    `InvalidInReplyTo { reason: StaleRequestId { id } }`.
+    (§7.2.6 row 2: "each referencing a tool_result the
+    provider has already received".)
+  - For `provider.<id>.assistant_message.in_reply_to[i]`:
+    MUST be in the **union** of
+    `provider_observed_results[canonical]` and
+    `provider_observed_user_messages[canonical]` (§7.2.6
+    row 3: "the conversation context the message is
+    replying to" — either a prior tool_result or a prior
+    user_message).
+  Round-3's "union for everything" wording is the pi-3
+  B-2 bug; round-4 splits per-topic.
   - Round-1's "consume-on-cite" wording was a thinko
     surfaced by pi-2 B-4: it broke turn-2 multi-turn
     flows because the mock provider re-cites the full
@@ -1087,22 +1268,39 @@ prefer they bundle because they all touch `BusEvent` /
     are bounded by `rfl chat` lifetime). m5+ may add a
     bounded ring buffer once sessions get longer.
 - **B8.** Taint-envelope synthesis on canonical re-emission.
-  - **`Broker::publish_core_with_taint(topic, payload,
-    request_id, in_reply_to, taint)`** is a new method that:
+  - **`Broker::publish_core_with_taint(topic: &str,
+    payload: Value, request_id: Option<JsonRpcId>,
+    in_reply_to: Option<Vec<JsonRpcId>>, taint:
+    Option<Vec<TaintEntry>>, origin_provider:
+    Option<CanonicalId>)`** is a new method that:
     - validates the topic is `core.*`;
+    - **per §B0 table-of-truth**: `request_id` must be
+      `Some(_)` when the topic suffix is `.tool_request`,
+      `.tool_result`, `.assistant_message`, or
+      `.user_message`; missing → `MissingRequestId`;
     - **for `core.session.tool_request` /
       `core.session.tool_result`**: validates `taint` is
       `Some(non_empty_vec)` and every entry's `source ∈
       {"user", "provider", "tool", "system"}` (security RFC
       §7.2.1 taxon); on failure → `InvalidTaint`;
     - for other `core.*` topics: `taint` may be `None`;
+    - **`origin_provider` (pi-3 H-2 mechanical hook)**:
+      when `Some(c)`, the fan-out excludes the provider
+      `c` from the recipient set. This is the explicit
+      mechanism for the B10 "provider re-receives its own
+      tool_request" exclusion rule; round-3's "infer from
+      `taint[0].detail`" was ambiguous (multiple providers
+      could share a provider_id prefix; the canonical id
+      is the unambiguous key). CR2 passes the source
+      provider canonical here; CR3 / CR4 / CR5 pass
+      `None`.
     - emits the `BusEvent` with the supplied
       `request_id` / `in_reply_to` / `taint` and fans out
       externally (this is the only path that produces
       canonical `core.session.tool_*` events).
   - The existing `publish_core` becomes a thin wrapper that
     calls `publish_core_with_taint(topic, payload, None,
-    None, None)`. Publishing `publish_core(
+    None, None, None)`. Publishing `publish_core(
     "core.session.tool_request", _)` now errors
     `InvalidTaint { reason: "missing" }` — defence in depth
     against a future core path that forgot to use the
@@ -1216,23 +1414,40 @@ the headline test has no plugin tree to drive.
   let manifest = Manifest::parse(&manifest_raw)
       .map_err(|source| RflChatError::ManifestParse {
           canonical: canonical.clone(), source })?;
+  let canonical_bytes: Vec<u8> = manifest.canonical_bytes();
   let recomputed_digests = RecomputedDigests {
-      content: digest::content_digest(package_dir)?,
-      manifest: digest::manifest_digest(
-          manifest.canonical_bytes().as_bytes()),
+      content: digest::content_digest(package_dir)
+          .map_err(|source| RflChatError::Digest {
+              canonical: canonical.clone(), source })?,
+      manifest: digest::manifest_digest(&canonical_bytes),
   };
+  let topic_id = topic_id::derive(&canonical.to_string());
   let path_ctx = PathContext {
       project_root: project_root.clone(),
       home: ctx.home.clone(),
       plugin_dir: package_dir.clone(),
-      cache_dir: ctx.cache_root.join(&topic_id_of(canonical)),
-      state_dir: ctx.state_root.join(&topic_id_of(canonical)),
+      cache_dir: ctx.cache_root.join(&topic_id),
+      state_dir: ctx.state_root.join(&topic_id),
   };
   let plan = compile_plugin(&lock, canonical, &path_ctx,
                             &recomputed_digests)
       .map_err(|source| RflChatError::CompilePlugin {
           canonical: canonical.clone(), source })?;
   ```
+  Helpers pinned to live symbols (pi-3 B-3 fix):
+  - `Manifest::canonical_bytes(&self) -> Vec<u8>` per
+    `manifest/top_level.rs:86` — already returns owned
+    bytes; no `.as_bytes()` call needed (the round-3
+    snippet wrongly applied it).
+  - `digest::manifest_digest(canonical_bytes: &[u8]) ->
+    String` per `digest.rs:26` — takes a slice; passing
+    `&canonical_bytes` (a `&Vec<u8>`) auto-derefs to
+    `&[u8]`.
+  - `topic_id::derive(canonical_id: &str) -> String` per
+    `topic_id.rs:15` is the live helper (round-3 invented
+    `topic_id_of`; the live name is `derive`, already used
+    inside `broker_acl::compile` at `broker_acl.rs:97`).
+
   Live `compile_plugin` signature (`compile.rs:117-122`):
   `fn compile_plugin(lock: &Lock, canonical: &CanonicalId,
   ctx: &PathContext, recomputed_digests: &RecomputedDigests)
@@ -1580,10 +1795,14 @@ the four wire paths that produce `core.session.*` events:
        "core.session.tool_request",
        json!({tool: <name>, args: <args>, dispatch_target:
          <canonical-id>}),
-       Some(rid),                          // forwarded from provider
-       Some(prior_tool_result_ids),        // forwarded — ≥0 entries
-                                           // per §7.2.6 row 2
-       Some(taint))`.
+       Some(rid),                                    // forwarded from provider
+       Some(prior_tool_result_ids),                  // forwarded — ≥0 entries
+                                                     // per §7.2.6 row 2
+       Some(taint),
+       Some(source_provider_canonical),              // pi-3 H-2 origin hook
+                                                     // — excludes the source
+                                                     // provider from fan-out
+     )`.
 - **CR3.** Re-emission steps for **plugin →
   core.session.tool_result**:
   1. Receive `BusEvent { topic: "plugin.<topic-id>.tool_result",
@@ -1602,12 +1821,26 @@ the four wire paths that produce `core.session.*` events:
      tool_request's taint per security RFC §7.2.2.)
   4. `publish_core_with_taint("core.session.tool_result",
      payload, Some(rid), Some([tool_request_id]),
-     Some(taint))` — `request_id` forwarded verbatim from
-     the inbound.
+     Some(taint), None /* origin_provider — see B8 */)`.
+     **`payload` is forwarded byte-for-byte** from the
+     inbound `plugin.<topic-id>.tool_result`; for the
+     readfile tool that shape is `{ok: bool, content:
+     String}` (the canonical **wire shape**). No
+     serialisation into `ToolResultPayload` happens here
+     — wrapping into the persistence shape lives in §AL6
+     only (pi-3 B-4 wire-vs-persistence split).
 - **CR4.** Re-emission steps for **provider →
   core.session.assistant_message**: payload pass-through;
-  taint = `[{source: "provider", detail: provider_id}]`;
-  `in_reply_to` forwarded; `request_id` forwarded.
+  taint = `[{source: "provider", detail:
+  Some(provider_id)}]`; `in_reply_to` forwarded;
+  `request_id` forwarded (required per §B0). Call:
+  `publish_core_with_taint(
+     "core.session.assistant_message",
+     payload, Some(rid), Some(in_reply_to), Some(taint),
+     None /* origin_provider: no exclusion — the
+            assistant_message is informational, not a
+            request the source provider needs to be
+            shielded from re-receiving */)`.
 - **CR5.** Re-emission for **frontend.tui.user_message →
   core.session.user_message** (pi-1 L-3 — pinned). The
   user-message root event is the only canonical `core.*` event
@@ -1631,29 +1864,36 @@ the four wire paths that produce `core.session.*` events:
      is a singleton principal in the v1 trust model. m4 is
      the **only** point in v1 where the `"user"` taxon
      originates.
-  5. `request_id` handling: if the frontend supplied one,
-     forward it; if absent, synthesise a fresh
-     `JsonRpcId::String(Ulid::new().to_string())` —
-     `core.session.user_message.request_id` must be present
-     on the canonical wire so a provider can cite it in a
-     future `assistant_message.in_reply_to`. (Round-1 errored
-     on missing `request_id`; round-2 + L-3 cut: synthesise
-     instead, since the user is a singleton and a missing
-     id is benign.)
+  5. `request_id` is **required** on inbound per §B0
+     table-of-truth (round-4 pi-3 B-1 — the round-3 "synthesise
+     on absence" path was incompatible with the single
+     table-of-truth). The TUI generates a fresh
+     `JsonRpcId::String(Ulid::new().to_string())` for every
+     `frontend.tui.user_message` publish per §T1 (the TUI
+     binary is the canonical source of user-message
+     request_ids in v1; W5 adds the `ulid` dep to make this
+     compile). The broker rejects a missing inbound
+     `request_id` with `MissingRequestId` before CR5 sees
+     the event.
   6. `in_reply_to` is forced to `None`: user messages are
      conversation roots and inherit no prior taint (security
      RFC §7.2.6 row 5 confirms the optional + root semantic).
   7. Call `publish_core_with_taint(
        "core.session.user_message",
        json!({text: <text>}),
-       Some(canonical_request_id),
+       Some(inbound_request_id),          // §B0 forwarded
        None,                              // user messages are roots
        Some(vec![TaintEntry{source: "user".into(), detail: None}]),
+       None,                              // origin_provider — n/a for user messages
      )`.
   Tests:
   `reemit_user_message_synthesises_user_taint.rs`,
   `reemit_user_message_discards_frontend_supplied_taint.rs`,
-  `reemit_user_message_synthesises_request_id_when_absent.rs`.
+  `frontend_user_message_missing_request_id_rejected.rs`
+  (round-4 — replaces the round-3
+  `reemit_user_message_synthesises_request_id_when_absent.rs`
+  test, since the §B0 table requires
+  `request_id` on inbound).
 - **CR6.** Active-provider scoping. The router subscribes to
   `provider.<active-id>.**` only (round-1 cut: m4 installs
   exactly one provider plugin, named `mock`). If a future
@@ -1923,13 +2163,20 @@ half of the canonical 5-step path (overview §7):
       - on hit, publish
         `provider.mock.assistant_message` with
         - payload `{text: format!("Here's what's in {}:\n{}",
-          path, content_text)}` where `content_text` is
-          extracted from `ToolResultPayload.content`
-          (m4 wraps as `RenderNode::Code` per AL6;
-          the mock provider unwraps it back to text — a
-          fragile shape, but acceptable for the
-          deterministic fixture);
-        - `request_id: <fresh>`;
+          path, payload.content)}` where `payload` is the
+          **canonical bus payload** of the
+          `core.session.tool_result` event —
+          `{ok: bool, content: String}` (pi-3 B-4 fix).
+          The mock provider reads `payload.content`
+          directly off `bus_event.payload`; it does **not**
+          deserialise it into a `ToolResultPayload` or
+          unwrap a `RenderNode::Code`. Persistence-shape
+          types (`ToolResultPayload`, `RenderNode::Code`)
+          live entirely on the SQLite / renderer side
+          (§AL6); they never appear on the wire delivered
+          to providers.
+        - `request_id: <fresh>` per §B0 (every
+          `assistant_message` carries `request_id`);
         - `in_reply_to: [<bus_event.request_id of the
           tool_result>]` (one entry citing the result the
           message is replying to).
@@ -2285,8 +2532,18 @@ is only reliable inside the bin's own package):
   to the emitted event.
 - `broker_publish_core_with_taint_happy_path.rs` —
   `publish_core_with_taint("core.session.tool_request", …,
-  taint=[{source: "provider", detail: "mock"}])` succeeds;
-  fan-out delivers an event whose `taint` matches.
+  taint=[{source: "provider", detail: "mock"}],
+  origin_provider=Some(<provider_canonical>))` succeeds;
+  fan-out delivers an event whose `taint` matches and
+  whose recipient set **excludes** the originating
+  provider (pi-3 H-2 exclusion hook).
+- `broker_publish_core_with_taint_excludes_origin_provider.rs`
+  (pi-3 H-2) — register two providers; call
+  `publish_core_with_taint(...,
+  origin_provider=Some(provider_a_canonical))` on
+  `core.session.tool_request`; assert provider A's peer
+  `notify` count stays at zero while provider B's
+  increments (when its subscribe set covers the topic).
 - `reemit_provider_tool_request_to_core_session_tool_request.rs`
   — drive a provider publish; observe the re-emitted
   `core.session.tool_request` with canonical taint
@@ -2307,10 +2564,12 @@ is only reliable inside the bin's own package):
   (pi-1 L-3) — TUI publishes with `taint: [{source:
   "provider", detail: "mock"}]`; the canonical re-emit
   carries `[{source: "user", detail: None}]` only.
-- `reemit_user_message_synthesises_request_id_when_absent.rs`
-  (pi-1 L-3) — frontend publish omits `request_id`; the
-  canonical event nonetheless carries a synthesised
-  `request_id`.
+- `frontend_user_message_missing_request_id_rejected.rs`
+  (pi-3 B-1 — replaces the round-3
+  `reemit_user_message_synthesises_request_id_when_absent.rs`;
+  the §B0 table-of-truth makes `request_id` required on
+  inbound `frontend.tui.user_message`, so a missing
+  field is `MissingRequestId`, not a synthesis trigger).
 - `agent_loop_dispatches_tool_request_to_target_plugin.rs` —
   drive a `core.session.tool_request` with
   `dispatch_target` set; the agent loop publishes the
@@ -2361,7 +2620,23 @@ is only reliable inside the bin's own package):
   (pi-1 H-2) — `in_reply_to: [<id-never-observed>]`;
   broker rejects with `StaleRequestId`.
 - `provider_tool_request_in_reply_to_stale_id_rejected.rs`
-  (pi-1 H-2) — analogous for tool_request.
+  (pi-1 H-2) — analogous for tool_request (id never
+  observed in either set).
+- `provider_tool_request_in_reply_to_user_message_id_rejected.rs`
+  (pi-3 B-2) — fan out a `core.session.user_message` to
+  the provider so its
+  `provider_observed_user_messages` set is non-empty;
+  then have the provider publish
+  `provider.mock.tool_request` with `in_reply_to:
+  [<user_message_id>]`. Broker rejects with
+  `StaleRequestId` per the topic-class-specific
+  membership rule (§7.2.6 row 2 — tool_request may cite
+  only tool_results, never user_messages). The sibling
+  positive
+  `provider_assistant_message_in_reply_to_user_message_id_accepted.rs`
+  uses the same setup but the provider publishes
+  `assistant_message` instead; the broker accepts
+  (row 3 union).
 
 `rafaello-mockprovider/tests/`:
 
@@ -2401,6 +2676,21 @@ is only reliable inside the bin's own package):
 - `mockprovider_handles_multibyte_utf8_path.rs` (pi-1 H-4)
   — input `"what's in données.txt"` produces
   `args.path = "données.txt"` correctly.
+- `mockprovider_multi_turn_cites_prior_tool_result_id.rs`
+  (pi-3 H-1) — drive the full two-turn flow against the
+  spawned provider + broker fixture:
+  1. user_message #1 "what's in a.txt" →
+     `provider.mock.tool_request` #1 with
+     `in_reply_to: []` (first turn, no prior results);
+  2. broker delivers `core.session.tool_result` #1 (the
+     readfile result for a.txt) to the provider;
+  3. user_message #2 "what's in b.txt" →
+     `provider.mock.tool_request` #2 whose `in_reply_to`
+     **contains** the `request_id` from tool_result #1
+     (retained-context semantics per B7b);
+  4. assert the broker accepts the second tool_request
+     (no `StaleRequestId`).
+  This is the multi-turn coverage pi-3 H-1 demanded.
 
 `rafaello-readfile/tests/`:
 
@@ -2534,7 +2824,9 @@ to test files:
   `InvalidTaint { reason: "missing" }`. Plus
   `broker_publish_core_session_tool_result_missing_taint_rejected.rs`.
 - **Plugin-supplied (rather than core-supplied) taint
-  rejected** →
+  discarded/replaced** (pi-3 L-1 — heading renamed to
+  match the discard+replace rule used everywhere else in
+  the doc; the actual mechanism never rejected) →
   `rafaello-core/tests/reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs`
   — drive a provider publish with `taint: [{source: "user"}]`
   (the provider trying to launder a tool_request as
@@ -2602,6 +2894,22 @@ sneak in via implementation drift:
   matching / propagation, the broker-side sink gate that
   consumes the envelope on sink calls, slash commands
   (`/grant`, `/grants list`, `/revoke`)** — all m5.
+- **Broker-side stale-correlation enforcement on
+  `plugin.<id>.tool_result.in_reply_to`** (pi-3 M-2 —
+  explicit recorded gap). Security RFC §7.2.6 row 1
+  ("plugin.<id>.tool_result … must reference the matching
+  tool_request previously routed to this plugin")
+  describes a check m4 does not implement: the broker has
+  no per-plugin outstanding-tool_request map, so a tool
+  plugin can publish a `tool_result` citing an
+  `in_reply_to` the broker has never routed and m4
+  accepts it. The downstream effect surfaces as the
+  provider failing to find the matching in-flight request
+  on its side (provider-side concern, not v1's). m5 will
+  add the agent-loop outstanding map back for broker
+  validation when it lands the sink-confirmation gate
+  (which needs the same data structure). Listed here so
+  the gap is owner-visible and not lost.
 - **`rfl-openai` (the bundled default provider plugin
   per decisions row 38) and any OpenAI-Chat-Completions
   wire protocol code** — m5 (lands alongside sinks +
