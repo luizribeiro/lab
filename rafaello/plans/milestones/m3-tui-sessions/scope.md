@@ -1,12 +1,26 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-20 draft. Trajectory of finding
+> **Status:** round-21 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
 > r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
 > r16 0/3/2/2, r17 0/2/2/1, r18 1/2/2/0,
-> r19 1/0/2/0. Round 20 highlights:
+> r19 1/0/2/0, r20 0/1/2/1 (fifth 0-blocker round
+> overall). Round 21 highlights:
+> - Step-10 outcome read switched to public
+>   `frontend_handle.wait().await` API instead of
+>   internal `reaper_outcome.borrow()` (pi-20 #1).
+> - §H6.2 wording for `unwinds_post_spawn_pre_register`
+>   matches the round-19 split (cross-platform +
+>   Linux-only twin) (pi-20 #2).
+> - Cross-platform unwind test uses existing
+>   `try_reserve_registration` API instead of the
+>   invented `broker.is_registered` (pi-20 #3).
+> - H6.1 inject point count corrected to three
+>   (pi-20 #4).
+>
+> Round-20 highlights (kept for trajectory context):
 > - Step-10 explicit shutdown+drain block fully
 >   replaced with a forward reference to the
 >   cleanup guard (pi-19 #1).
@@ -2253,10 +2267,14 @@ together.
       step 10's outcome read, because the guard
       takes ownership before the async block
       starts), (2) `let _ = forwarder.await;` —
-      EOF-on-close drain. Step 10 itself reads
-      `*reaper_outcome.borrow()` for outcome
-      mapping; the guard handles the actual
-      shutdown call afterward.
+      EOF-on-close drain. Step 10 reads the outcome
+      from `frontend_handle.wait().await` (the
+      public API — `Arc<ReaperOutcome>` — pi-20 #1
+      corrects round-19's `*reaper_outcome.borrow()`
+      reference, which would not compile because
+      the field is internal to `FrontendHandle`).
+      The guard handles the actual shutdown call
+      after step 10's outcome match completes.
 
       **Test coverage** (pi-10 Medium 5 + pi-11 #4 —
       round 10 incorrectly claimed
@@ -2422,8 +2440,9 @@ m2 c21 deleted three unwind tests because their synthetic
 stub was removed. m3 ships the fault-injection mechanism
 those tests should have been written against.
 
-- **H6.1.** Extend m2's `TestHooks` with two one-shot
-  inject points:
+- **H6.1.** Extend m2's `TestHooks` with three one-shot
+  inject points (pi-20 #4 — count updated for the
+  pi-18 #2 post-spawn-pre-register addition):
   ```rust
   pub struct TestHooks { /* m2 fields */ }
 
@@ -2479,14 +2498,21 @@ those tests should have been written against.
     `child.start_kill()` + `child.wait().await`
     directly + drops the socketpair fds + drops the
     proxy handle. No broker rollback needed (no
-    registration was acquired). New test:
-    `tests/supervisor_spawn_unwinds_post_spawn_pre_register.rs`
-    — arms post-spawn-pre-register fault; spawn
-    returns `SpawnError::SandboxBuild`; assert
-    Linux fd-count returned to baseline AND no
-    child remains in `/proc` (the synchronous
-    `child.wait()` reaped before unwind returned).
-    Linux-only.
+    registration was acquired). Two new tests
+    (pi-19 #3 split):
+    - `tests/supervisor_spawn_unwinds_post_spawn_pre_register.rs`
+      (cross-platform) — arms post-spawn-pre-register
+      fault; spawn returns
+      `SpawnError::SandboxBuild`; assert hook was
+      consumed (`post_spawn_pre_register_fault_consumed()`),
+      `try_reserve_registration(canonical)` succeeds
+      (proves no registration was acquired during
+      the failing spawn — pi-20 #3, replaces a
+      non-existent `is_registered` accessor).
+    - `tests/supervisor_spawn_unwinds_post_spawn_pre_register_fd_baseline.rs`
+      (Linux-only `#[cfg(target_os = "linux")]`) —
+      same fault; reads `/proc/self/fd` before and
+      after to assert fd count returns to baseline.
 
   m3's three inject points (`pre_spawn`,
   `post_spawn_pre_register`, `post_register`)
@@ -2679,16 +2705,20 @@ integration test is being built):
   §H6.3.
 - `supervisor_spawn_unwinds_post_spawn_pre_register.rs`
   — see §H6.2 (pi-18 #2 third inject point + pi-19
-  #3 platform split). **Cross-platform** assertions:
-  hook consumed (`post_spawn_pre_register_fault_consumed`),
-  `SpawnError::SandboxBuild` returned, no broker
-  registration acquired (`broker.is_registered(canonical)`
-  false), `in_flight` cleared. The child is reaped
-  synchronously via `child.wait().await` during
-  unwind; on success the test asserts the spawn
-  function returned without leaving a zombie
-  (covered by reading exit_status from the wait
-  call inside the unwind path).
+  #3 platform split + pi-20 #3 API correction).
+  **Cross-platform** assertions: hook consumed
+  (`post_spawn_pre_register_fault_consumed()`),
+  `SpawnError::SandboxBuild` returned,
+  `broker.try_reserve_registration(canonical)`
+  succeeds afterward (proves no registration was
+  acquired during the failing spawn — `m2`'s
+  existing precheck method, pi-20 #3 replaces the
+  invented `broker.is_registered`), `in_flight`
+  cleared. Child reaping is internal to the
+  unwind path; the test does not directly observe
+  exit_status (covered by the Linux fd-baseline
+  test below + by the manual-validation no-zombie
+  smoke).
 - `supervisor_spawn_unwinds_post_spawn_pre_register_fd_baseline.rs`
   (Linux-only — `#[cfg(target_os = "linux")]`) —
   the Linux-specific complement that reads
