@@ -1,12 +1,31 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-17 draft. Trajectory of finding
+> **Status:** round-18 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
 > r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
-> r16 0/3/2/2 (NO BLOCKERS — second 0-blocker round).
-> Round 17 highlights:
+> r16 0/3/2/2, r17 0/2/2/1 (third 0-blocker round).
+> Round 18 highlights:
+> - §C2 cleanup-guard contract spec'd: every
+>   fallible call after TUI spawn runs canonical
+>   shutdown + stderr drain via a guard pattern
+>   (pi-17 #1).
+> - H6 post-register inject point pinned in
+>   code-order terms ("after watcher/reaper spawn,
+>   before serve install"); round-17's inverted
+>   reasoning about pre-register window corrected
+>   (pi-17 #2).
+> - §F3 step 5 added: create per-frontend private
+>   state dir before spawning the child (pi-17 #3).
+> - §C2 step 1 canonicalises project root via
+>   `Path::canonicalize`; new `ProjectRootInvalid`
+>   error variant; two new CLI tests
+>   (relative + nonexistent) (pi-17 #4).
+> - §B4 frontend-alone wording corrected — handled
+>   by `validate_topic` first, not B4 (pi-17 #5).
+>
+> Round-17 highlights (kept for trajectory context):
 > - H6 inject points renamed/clarified:
 >   `inject_pre_spawn_fault` (post-socketpair, pre-
 >   `tokio_command.spawn`) and
@@ -862,23 +881,37 @@ m2-style if needed.
        unsandboxed analogue of
        `SandboxBuilder::inherit_fd_as`; nix
        `fcntl(F_SETFD, 0)`).
-    5. **Configure stderr**: `command.stderr(Stdio::piped())`
+    5. **Create the per-frontend private state dir**
+       (pi-17 #3 — round 17 had §S6 saying it's
+       created at spawn, but §F3 omitted the step):
+       `let state_dir = paths.project_root.join(
+       ".rafaello-frontend-data").join(attach_id
+       .as_str());` `fs::create_dir_all(&state_dir)
+       .map_err(|source| FrontendSpawnError::Io {
+       source })?;`. This step is BEFORE the child
+       is spawned, so a failure has no child to
+       unwind. Inject the path as
+       `RFL_PRIVATE_STATE_DIR` in the env apply
+       step above (re-set the env var on the
+       `Command` here if the apply-env step ran
+       before this state_dir derivation).
+    6. **Configure stderr**: `command.stderr(Stdio::piped())`
        BEFORE spawning so the child's stderr fd is a
        pipe (pi-10 Blocker 1).
-    6. **Spawn the child**: `let mut child =
+    7. **Spawn the child**: `let mut child =
        command.spawn()?;` (`Child` now exists).
-    7. **Take stderr**: `let child_stderr =
+    8. **Take stderr**: `let child_stderr =
        child.stderr.take();` (Option<ChildStderr>;
        moved out of `Child`).
-    8. **Construct the readiness watch**:
+    9. **Construct the readiness watch**:
        `let (ready_tx, ready_rx) =
        tokio::sync::watch::channel(false);`. Hand
        `ready_tx` to a fresh `FrontendReadyService`;
        hold `ready_rx` for the handle.
-    9. **Construct the reaper-outcome watch**:
-       `let (reaper_tx, reaper_rx) =
-       tokio::sync::watch::channel::<Option<Arc<ReaperOutcome>>>(None);`.
-    10. **Spawn the reaper + reaper-watcher tasks**.
+    10. **Construct the reaper-outcome watch**:
+        `let (reaper_tx, reaper_rx) =
+        tokio::sync::watch::channel::<Option<Arc<ReaperOutcome>>>(None);`.
+    11. **Spawn the reaper + reaper-watcher tasks**.
         The reaper is a `tokio::spawn`ed task that
         moves `Child` in and awaits `child.wait()`,
         pushing `Exited(status)` (or
@@ -888,30 +921,26 @@ m2-style if needed.
         reaper's `JoinHandle` and awaits it; on
         `JoinError` (panic / cancellation), it
         pushes `ReaperOutcome::ReaperPanicked` into
-        `reaper_tx` (pi-12 #1 — round 11/12 had
-        `ReaperPanicked` mapped at the CLI layer
-        but no producer; m2's same-shape watcher
-        bridges the panic into the watch). After
-        step 10, `Child` is no longer accessible;
-        unwind / shutdown signals via
-        `nix::sys::signal::kill(Pid, ...)` on
+        `reaper_tx`. After this step, `Child` is no
+        longer accessible; unwind / shutdown signals
+        via `nix::sys::signal::kill(Pid, ...)` on
         `child_pid` and observes the reaper watch.
-    11. Build a `fittings_server::Server` over the
+    12. Build a `fittings_server::Server` over the
         parent socketpair end with the composed
         services from `FrontendExtraServiceFactory`
         (default: `FrontendBusPublishService` +
         `FrontendReadyService`).
-    12. **Register the frontend with the broker**
+    13. **Register the frontend with the broker**
         (`Broker::register_frontend(attach_id, peer)`
         — see §B1) BEFORE spawning the serve loop, so
         the registration is in place when fittings
         starts processing inbound notifications. Move
         the returned `RegisteredFrontend` guard into
         the handle (pi-4 #1).
-    13. **Spawn the serve loop**: `let serve_handle =
+    14. **Spawn the serve loop**: `let serve_handle =
         tokio::spawn(server.serve());`. Store on the
         handle.
-    14. Return `FrontendHandle { attach_id, child_pid:
+    15. Return `FrontendHandle { attach_id, child_pid:
         Some(child_pid), peer, register_guard:
         Some(guard), serve_handle: Some(serve_handle),
         child_stderr, ready: ready_rx, reaper_outcome:
@@ -1262,7 +1291,10 @@ variant to live and grows `BrokerAcl` accordingly.
       topic }`. (frontend publishing on `core.*`,
       `provider.*`, `plugin.*`.)
     - `frontend` with `segments[1] != attach_id`,
-      including `frontend` alone (under-2 segments) →
+      (note: `frontend` alone or any topic with
+      <2 segments is rejected earlier by
+      `validate_topic` as `InvalidTopic`, not by
+      this branch; pi-17 #5) →
       `PublishOnReservedNamespace { publisher: ...,
       topic }`.
     - `frontend.<own-attach-id>.*` → exact-string
@@ -1844,6 +1876,12 @@ identified as `frontend.tui`.
          line per received `bus.event`).
        - `"test-done"` printed before exit on
          receipt of `core.lifecycle.test_done`.
+       - `"project-root=<abs-path>"` printed during
+         startup, after `RFL_PROJECT_ROOT` is
+         parsed and validated as absolute (pi-17 #4
+         — used by the rfl chat
+         relative-project-root canonicalisation
+         test).
      - **Parent side (rfl chat stderr)** — see §C2
        step 7:
        - `"rfl-chat: frontend-ready-observed"`
@@ -1918,8 +1956,18 @@ together.
   TUI must subscribe before any history is published, or
   it misses every replay event because broker fan-out is
   to live registrations only):
-  1. Resolve project root (cwd by default; `--project-root`
-     override).
+  1. Resolve project root: start from the
+     `--project-root` flag if set, else
+     `std::env::current_dir()`. **Canonicalize to an
+     absolute path** via `Path::canonicalize`; on
+     failure (path doesn't exist, permission denied),
+     map to `RflChatError::ProjectRootInvalid {
+     path, source }` (pi-17 #4 — relative inputs
+     would propagate a relative `RFL_PROJECT_ROOT`
+     that the TUI rejects). Note: the canonicalize
+     also resolves symlinks; m3 considers this a
+     feature (the TUI sees a stable, fully-resolved
+     path).
   2. Resolve `rfl-tui` binary path (§C3 below).
   3. Open `SessionStore` → acquire flock → on
      `SessionError::Locked { holder_pid }` print a
@@ -2074,6 +2122,37 @@ together.
      (append → render → publish, no orchestration
      state) and pushes the gate into the layer that
      owns the orchestration.
+  **Cleanup-guard contract for steps 8 onward**
+  (pi-17 #1: every fallible call after the TUI is
+  spawned MUST run the canonical teardown — bounded
+  shutdown + stderr drain — before propagating the
+  error). The orchestration uses an explicit
+  cleanup guard pattern:
+  ```rust
+  let mut cleanup_state = Some((frontend_handle,
+      stderr_forwarder));
+  let result: Result<(), RflChatError> = async {
+      // steps 8, 9, 10's wait
+      controller.replay_history(&caps).await?;
+      if let Some(harness) = harness {
+          harness.run(&controller, &caps).await?;
+      }
+      let outcome = frontend_handle_ref.wait().await;
+      // outcome handling per step 10 below
+      Ok(())
+  }.await;
+  // Always run teardown, regardless of result:
+  if let Some((handle, forwarder)) = cleanup_state.take() {
+      let _ = handle.shutdown().await;
+      let _ = forwarder.await;
+  }
+  result.map_err(|e| /* exit non-zero with stderr cite */)
+  ```
+  (Pseudocode — implementation may use
+  `scopeguard::defer!` or an async drop guard
+  pattern; the contract is "exactly one
+  shutdown+drain call regardless of which step
+  errored".)
   8. Replay session history through the controller:
      `controller.replay_history(&caps).await?`. Every
      entry is published on `core.session.entry.finalized`
@@ -2335,21 +2414,30 @@ those tests should have been written against.
     returns to baseline + proxy / private-state dirs
     cleaned up. This is the m2 `unwinds_after_socketpair`
     coverage.
-  - **Post-register**: after
-    `broker.register_plugin(...)` succeeds and BEFORE
-    the function returns `Ok(handle)` (i.e. between
-    register and `Server::serve` install). On fault,
-    the child IS spawned and the reaper is already
-    running; unwind verifies the broker registration
-    was rolled back, the child was reaped, and
-    `in_flight` was cleared. This is the m2
-    `unwinds_after_register` + `post_register_reaps_child`
-    coverage.
-  Round-17 explicitly does NOT inject between
+  - **Post-register**: pinned in code-order terms
+    (pi-17 #2: m2's actual ordering is
+    `register_plugin` → drop in-flight guard →
+    spawn reaper/watcher → spawn `server.serve`):
+    **after the reaper/watcher tasks have been
+    spawned, BEFORE `tokio::spawn(server.serve())`**.
+    On fault, the child is spawned, the reaper IS
+    already running, and the broker has live
+    registration; unwind verifies registration was
+    rolled back, the child was reaped via the
+    reaper, and `in_flight` was cleared. This is
+    the m2 `unwinds_after_register` +
+    `post_register_reaps_child` coverage.
+  Round-18 explicitly does NOT inject between
   `tokio_command.spawn()` and `register_plugin`
-  because the reaper-task ownership transition
-  happens in that window and a fault there has the
-  same unwind shape as the post-socketpair point.
+  (pi-17 #2 corrects round-17's inverted
+  reasoning — m2's reaper-task ownership transition
+  happens AFTER `register_plugin`, not in the
+  pre-register window). A fault in the
+  spawn-to-register span would have the same
+  unwind shape as the pre-spawn-post-socketpair
+  point but with a child to reap; m3's two inject
+  points cover the load-bearing windows pi-asked-
+  for in m2 retro §3.3.
 - **H6.3.** Re-add three deleted tests:
   - `tests/supervisor_spawn_unwinds_after_register.rs` —
     arms post-register fault; spawn returns
@@ -2661,6 +2749,16 @@ integration test is being built):
   `SessionStore::open`); spawn `rfl chat` in pid B
   against the same project root; B exits non-zero with
   stderr citing pid A.
+- `rfl_chat_relative_project_root_canonicalises.rs` —
+  pi-17 #4: spawn `rfl chat --project-root ./relative/path`
+  with cwd set to a tempdir; assert the spawned TUI
+  receives `RFL_PROJECT_ROOT` as an absolute path
+  (verify via the headless TUI's stderr — TUI prints
+  `"rfl-tui: project-root=<abs-path>"` as part of
+  startup sentinels per §T2 step 4).
+- `rfl_chat_nonexistent_project_root_errors.rs` —
+  pi-17 #4: `--project-root /nonexistent/path` →
+  exit non-zero with `RflChatError::ProjectRootInvalid`.
 - `rfl_chat_locked_session_unknown_holder_errors.rs` —
   pi-15 #4: pre-create `session.lock` empty and hold
   flock from a separate test thread (without writing
