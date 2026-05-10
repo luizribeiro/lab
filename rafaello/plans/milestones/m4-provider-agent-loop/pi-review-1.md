@@ -42,4 +42,16 @@
 
 3. **`rfl-mockprovider` uses regex syntax but W2 does not add a regex dependency.** Evidence: PR2 says use regex `(?i)what(?:'s| is) in (?<path>\S+)` (scope.md:980-987), while W2's dependency list has no `regex` crate (scope.md:388-393). Concrete fix: either add `regex` to workspace/new crate deps or specify a small hand-written deterministic parser.
 
-4. **Commit sizing is optimistic relative to m3 and this scope's unresolved surfaces.** Evidence: m3 took 22 scope rounds and 31 plan-row commits, and future comparable milestones should budget 15+ scope rounds/8+ commit rounds (m3 retrospective:410-422). m4 scope has broker publisher class + request_id cutover + provider registration
+4. **Commit sizing is optimistic relative to m3 and this scope's unresolved surfaces.** Evidence: m3 took 22 scope rounds and 31 plan-row commits, and future comparable milestones should budget 15+ scope rounds/8+ commit rounds (m3 retrospective:410-422). m4 scope has broker publisher class + request_id cutover + provider registration + two subprocess crates + CLI orchestration + TUI input + security negatives, but still frames the work as 20-26 commits (scope.md:170-176). Concrete fix: either split m4a/m4b or increase the commit-count expectation and isolate high-risk bus/security changes before fixture crate work.
+
+## Low
+
+1. **Scope cites `Publisher::Provider { provider_id, topic_id }` in one place and `canonical, provider_id` elsewhere.** Evidence: top-level asks for `Publisher::Provider { provider_id, topic_id }` (scope.md:28-33), while B1/B3 use `Provider { canonical, provider_id }` or `PublisherIdentity::Provider { canonical, provider_id, topic_id }` (scope.md:427-449). Concrete fix: define one exact enum shape and use it consistently.
+
+2. **Terminology alternates between `read-file` and `read_file` without a binding rule.** Evidence: milestone demo says bundled `read-file` (scope.md:20-26), while the overview/security examples use `read_file` taint/source names (security RFC:880-884) and many payload snippets use `tool: "read-file"` (scope.md:828-831). Concrete fix: explicitly state manifest tool name is `read-file` and any internal Rust identifiers may be `read_file`, or switch all bus payload examples to one canonical spelling.
+
+3. **The TUI/root taint source is mentioned but not tied to the user-message root event.** Evidence: the security RFC says `core.session.user_message` gets `{source:"user"}` (security RFC:878-886), but scope mostly discusses provider/tool taint and does not specify who synthesizes user-message taint when frontend publishes `frontend.tui.user_message`. Concrete fix: add one CR/AL bullet: frontend user messages are canonicalized to `core.session.user_message` with `taint=[{source:"user"}]`, request_id assigned by core, and no provider-supplied taint accepted.
+
+## Summary
+
+The scope is directionally right for the m4 demo, but it is not implementation-ready. The main blockers are not small polish issues: the CLI path does not actually spawn locked provider/tool plugins; fixture manifests are invalid under m1; taint, provider fan-out, and correlation semantics contradict the overview/RFCs and sometimes themselves; and several “exact” test/API names are still placeholders or wrong. Fix those before generating `commits.md`, otherwise the first implementation commits will choose security semantics ad hoc.
