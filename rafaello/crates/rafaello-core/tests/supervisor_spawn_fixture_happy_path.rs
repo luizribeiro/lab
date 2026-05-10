@@ -18,6 +18,11 @@ use common::m2_harness::{FixtureLockBuilder, FixtureSpec, Observer, Spawn, Spawn
 
 #[tokio::test(flavor = "multi_thread")]
 async fn supervisor_spawn_fixture_happy_path() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
+
     let publisher = FixtureSpec::new("publisher", "publish_one")
         .env("RFL_FIXTURE_PAYLOAD_JSON", r#"{"msg":"hi"}"#);
     let publisher_topic_id = publisher.topic_id();
