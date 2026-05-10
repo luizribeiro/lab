@@ -1,10 +1,30 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-10 draft. Round 1: 10b + 3c. Round 2:
-> 5b + 2m. Round 3: 3b + 3m. Round 4: 3b + 3hm + 1l.
-> Round 5: 2b + 11m + 3l. Round 6: 6b + 5m + 3l.
-> Round 7: 5b + 3m + 1l. Round 8: 3b + 5m. Round 9:
-> 3b + 2h + 3m + 2l. Round 10 highlights:
+> **Status:** round-11 draft. Trajectory of finding
+> counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
+> r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
+> r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1. Round 11
+> highlights:
+> - §F3 Phase B re-ordered as numbered 1-14 with
+>   stderr-piped BEFORE spawn, reaper task explicitly
+>   in the main sequence (pi-10 Blocker 1).
+> - Stderr forwarder JoinHandle stored in `rfl chat`
+>   state; awaited before §C2 step 10 teardown
+>   (pi-10 High 2).
+> - `nix::fcntl::Flock` (RAII helper) replaces the
+>   deprecated `nix::fcntl::flock` function form
+>   (pi-10 High 3).
+> - New CLI test
+>   `rfl_chat_frontend_exits_before_ready_errors.rs`
+>   covering SenderDropped → FrontendExitedBeforeReady
+>   path (pi-10 Medium 4).
+> - Abnormal `WaitFailed` / `ReaperPanicked` branches
+>   marked intentionally untested with rationale
+>   (pi-10 Medium 5).
+> - W5 reworded: feature-gate setup unchanged; mode
+>   dispatch grows with §L1a (pi-10 Low 6).
+>
+> Round-10 highlights (kept for trajectory context):
 > - Stale "Cooperative shutdown" block deleted from §F4
 >   (pi-9 Blocker 1 — round 9 left two conflicting
 >   shutdown contracts).
@@ -427,8 +447,15 @@ test matrix.
     round-1 keeps `clap` because m4–m6 will add more
     subcommands.)
 - **W5.** No `default = ["test-fixture"]` flip on
-  `rafaello-core`; m2's opt-in feature gate stays. m3's
-  fixture binary (`rfl-bus-fixture`) is unchanged.
+  `rafaello-core`; m2's opt-in feature gate stays. The
+  `rfl-bus-fixture` binary's **feature-gate +
+  required-features setup is unchanged from m2**
+  (pi-10 Low 6 — round 9/10 added new fixture modes
+  per §L1a: `signal_ready`, `exit_immediately`,
+  `hold_silent`, `probe_fd_closed`. Round 11
+  reframes W5: only the Cargo.toml feature/required
+  setup is unchanged; the binary's mode-dispatch
+  logic grows with §L1a).
 
 ### F — frontend supervisor (`rafaello_core::frontend`)
 
@@ -689,53 +716,73 @@ m2-style if needed.
     - `Broker::try_reserve_frontend_registration(attach_id)`
       to fail fast if the attach id is already registered
       or not in the frontend ACL.
-  - **Phase B** (resource allocation, async):
-    - Create socketpair (`SOCK_STREAM | SOCK_CLOEXEC`,
-      m2's pattern + macOS fcntl fallback per m2 §5.7).
-    - Build `tokio::process::Command` (NOT
-      `lockin::SandboxBuilder::tokio_command`; m3 frontend
-      spawns are unsandboxed).
-    - Apply env: `env_clear` then re-inject `RFL_BUS_FD`,
-      `RFL_PROJECT_ROOT`, `RFL_PRIVATE_STATE_DIR` (the
-      frontend's per-plugin state-equivalent dir under
-      `${PROJECT_ROOT}/.rafaello-frontend-data/<attach-id>/`
-      — see §S6 below), then `env.pass` then `env.set`
-      (set wins, m2 c18 pattern).
-    - Inherit fd `RFL_BUS_FD` via `pre_exec` clearing the
-      child socketpair end's `FD_CLOEXEC` (the unsandboxed
-      analogue of `SandboxBuilder::inherit_fd_as`; nix
-      `fcntl(F_SETFD, 0)`).
-    - Spawn the child.
-    - Construct the `tokio::sync::watch::channel(false)`
-      pair. Hand the `Sender<bool>` to a fresh
-      `FrontendReadyService`; keep the `Receiver<bool>`
-      to put on `FrontendHandle.ready`.
-    - Build a `fittings_server::Server` over the parent
-      socketpair end with the composed services from
-      `FrontendExtraServiceFactory` (default:
-      `FrontendBusPublishService` + the
-      `FrontendReadyService` constructed above;
-      pi-2 #1).
-    - **Register the frontend with the broker**
-      (`Broker::register_frontend(attach_id, peer)` —
-      see §B1) BEFORE spawning the serve loop, so the
-      registration is in place when fittings starts
-      processing inbound notifications. Move the
-      returned `RegisteredFrontend` guard into the
-      `FrontendHandle` (pi-4 #1).
-    - **Spawn the serve loop**: `let serve_handle =
-      tokio::spawn(server.serve())` (pi-3 #1).
-      Store `serve_handle` in the `FrontendHandle` so
-      `FrontendSupervisor::shutdown` can await it.
-    - Configure the spawned `tokio::process::Command`
-      with `.stderr(Stdio::piped())` so the child's
-      stderr is capturable (pi-9 Blocker 3). Take
-      `child.stderr.take()` as `Option<ChildStderr>`
-      and store it in the handle.
-    - Return `FrontendHandle { attach_id, child_pid:
-      Some(_), peer, register_guard: Some(_),
-      serve_handle: Some(_), child_stderr: Some(_),
-      ready: watch_rx, reaper_outcome: ... }`.
+  - **Phase B** (resource allocation, async). Round-11
+    explicit ordering (pi-10 Blocker 1 — round 10
+    ended up with `.stderr(Stdio::piped())`
+    configuration AFTER `child.spawn()` was called,
+    which won't apply. The reaper-spawn step was also
+    only mentioned in the unwind text, not in the main
+    sequence):
+    1. Create socketpair (`SOCK_STREAM | SOCK_CLOEXEC`,
+       m2's pattern + macOS fcntl fallback per m2 §5.7).
+    2. Build `tokio::process::Command` (NOT
+       `lockin::SandboxBuilder::tokio_command`; m3
+       frontend spawns are unsandboxed).
+    3. Apply env: `env_clear` then re-inject
+       `RFL_BUS_FD`, `RFL_PROJECT_ROOT`,
+       `RFL_PRIVATE_STATE_DIR` (the frontend's per-
+       plugin state-equivalent dir under
+       `${PROJECT_ROOT}/.rafaello-frontend-data/<attach-id>/`
+       — see §S6 below), then `env.pass` then
+       `env.set` (set wins, m2 c18 pattern).
+    4. Inherit fd `RFL_BUS_FD` via `pre_exec` clearing
+       the child socketpair end's `FD_CLOEXEC` (the
+       unsandboxed analogue of
+       `SandboxBuilder::inherit_fd_as`; nix
+       `fcntl(F_SETFD, 0)`).
+    5. **Configure stderr**: `command.stderr(Stdio::piped())`
+       BEFORE spawning so the child's stderr fd is a
+       pipe (pi-10 Blocker 1).
+    6. **Spawn the child**: `let mut child =
+       command.spawn()?;` (`Child` now exists).
+    7. **Take stderr**: `let child_stderr =
+       child.stderr.take();` (Option<ChildStderr>;
+       moved out of `Child`).
+    8. **Construct the readiness watch**:
+       `let (ready_tx, ready_rx) =
+       tokio::sync::watch::channel(false);`. Hand
+       `ready_tx` to a fresh `FrontendReadyService`;
+       hold `ready_rx` for the handle.
+    9. **Construct the reaper-outcome watch**:
+       `let (reaper_tx, reaper_rx) =
+       tokio::sync::watch::channel::<Option<Arc<ReaperOutcome>>>(None);`.
+    10. **Spawn the reaper task**: moves `Child` and
+        `reaper_tx` into a `tokio::spawn`-ed task that
+        awaits `child.wait()` and pushes the outcome
+        through the watch. The `Child` is no longer
+        accessible after this step; subsequent unwind
+        signals via `nix::sys::signal::kill(Pid, ...)`
+        on `child_pid` and observes the reaper watch.
+    11. Build a `fittings_server::Server` over the
+        parent socketpair end with the composed
+        services from `FrontendExtraServiceFactory`
+        (default: `FrontendBusPublishService` +
+        `FrontendReadyService`).
+    12. **Register the frontend with the broker**
+        (`Broker::register_frontend(attach_id, peer)`
+        — see §B1) BEFORE spawning the serve loop, so
+        the registration is in place when fittings
+        starts processing inbound notifications. Move
+        the returned `RegisteredFrontend` guard into
+        the handle (pi-4 #1).
+    13. **Spawn the serve loop**: `let serve_handle =
+        tokio::spawn(server.serve());`. Store on the
+        handle.
+    14. Return `FrontendHandle { attach_id, child_pid:
+        Some(child_pid), peer, register_guard:
+        Some(guard), serve_handle: Some(serve_handle),
+        child_stderr, ready: ready_rx, reaper_outcome:
+        reaper_rx }`.
 
   **Phase B unwind rules** (pi-8 M3 — round 8 spawned
   the child before transport / register / serve setup
@@ -1206,7 +1253,21 @@ that could drift — one path for both is the contract.
     `Flock` is a different helper):
     `OpenOptions::new().read(true).write(true).create(true)
     .custom_flags(nix::libc::O_CLOEXEC).open(...)`.
-  - `nix::fcntl::flock(fd, FlockArg::LockExclusiveNonblock)`.
+  - **Use `nix::fcntl::Flock`** (pi-10 High 3 —
+    round 10 used the deprecated function form
+    `nix::fcntl::flock(fd, FlockArg::...)`, which
+    nix 0.29 marks `#[deprecated]` and would trip
+    the warning-free `cargo doc`/`cargo build`
+    acceptance gate). The `Flock` type is the
+    RAII-style replacement:
+    `Flock::lock(file, FlockArg::LockExclusiveNonblock)
+    -> Result<Flock<File>, (File, Errno)>`. On
+    `Errno::EWOULDBLOCK` the `(File, Errno)` tuple
+    is destructured to read the holder pid from the
+    returned File before mapping to
+    `SessionError::Locked`. The `Flock<File>` wrapper
+    holds the lock for its lifetime; release happens
+    on drop.
   - On `EWOULDBLOCK`, read the holder's pid from the file
     contents and return `SessionError::Locked {
     holder_pid }`. The holder writes its pid in
@@ -1687,29 +1748,34 @@ together.
      &paths).await?`. This registers the frontend
      with the broker and the broker fan-out is now
      live for `frontend.tui`. **Stderr forwarding
-     contract** (pi-8 M2 + pi-9 Blocker 3): the
-     supervisor sets `Command::stderr(Stdio::piped())`
-     and stores the resulting `ChildStderr` on the
-     handle; `rfl chat` calls
-     `let child_stderr = handle.take_child_stderr()
-     .expect("piped");` and spawns a task that
+     contract** (pi-8 M2 + pi-9 Blocker 3 + pi-10
+     High 2): the supervisor sets
+     `Command::stderr(Stdio::piped())` and stores the
+     resulting `ChildStderr` on the handle;
+     `rfl chat` takes it (`let child_stderr =
+     handle.take_child_stderr()
+     .expect("piped");`) and spawns a task that
      reads the stderr line-buffered, writing each line
-     back to `rfl chat`'s OWN stderr prefixed with
-     `"rfl-tui: "` via a `tokio::sync::Mutex<Stderr>`
-     guard so parent and forwarded writes are
-     serialised on a single fd (pi-9 Medium 7 — the
-     mutex makes the "single combined stream"
-     guarantee load-bearing). **The TUI binary itself
-     does NOT prefix its own stderr lines** with
-     `"rfl-tui: "` (pi-9 Medium 7 — round 9 had a
-     double-prefix bug where both the TUI emitted
-     `"rfl-tui: bus.event ..."` AND the forwarder
-     would re-prefix; round 10: the TUI emits raw
-     `"bus.event topic=... seq=..."` lines and the
-     forwarder is the sole prefix source). The
-     forwarder task also handles EOF (child stderr
-     closed) without disturbing the rest of `rfl
-     chat`.
+     back to `rfl chat`'s own stderr (acquired via
+     `tokio::io::stderr()`) prefixed with `"rfl-tui:
+     "`. The forwarder serialises with parent
+     sentinel writes via an `Arc<tokio::sync::Mutex<()>>`
+     held in `rfl chat`'s top-level state — both the
+     forwarder's per-line write and the parent's
+     `eprintln!`-equivalent take the mutex around a
+     single `write_all` call to a unified stderr
+     locked-writer (pi-9 Medium 7). **The TUI binary
+     itself does NOT prefix its own stderr lines**
+     with `"rfl-tui: "` (round 10's no-double-prefix
+     contract). **`rfl chat` retains the forwarder's
+     `JoinHandle` so it can be drained** (pi-10
+     High 2 — round 10 spawned the forwarder
+     fire-and-forget; on TUI exit, the runtime could
+     end before the forwarder flushed its final
+     lines, making combined-stream assertions flaky).
+     The handle is awaited in §C2 step 10's tail (see
+     below). The forwarder task also handles EOF
+     (child stderr closed) gracefully.
   7. **Wait for TUI subscription readiness.** The
      fittings server fans out `bus.event` notifications
      best-effort with a bounded drop-on-full sink (m2
@@ -1816,6 +1882,32 @@ together.
         task itself panicked while awaiting the
         child. Same treatment — abnormal exit, log
         the panic.
+      **Drain the stderr forwarder** (pi-10 High 2)
+      before tearing down: `let _ =
+      stderr_forwarder.await;` — the forwarder's
+      EOF-on-close path makes this a bounded await
+      (the child's stderr fd closes when the child
+      process exits, which the reaper has already
+      observed). With the drain in place, the
+      combined-stream assertions in §I are
+      deterministic.
+
+      **Test coverage** (pi-10 Medium 5): the abnormal
+      `Exited(non-success)` branch is covered by
+      `rfl_chat_frontend_exits_before_ready_errors.rs`
+      (using `exit_immediately` mode). `WaitFailed`
+      and `ReaperPanicked` are **intentionally
+      untested** in m3: triggering them requires
+      fault-injection inside the reaper task, which
+      m3's `TestHooks::inject_fault` points (§H6 —
+      pre-register / post-register) do not cover.
+      The branches are defensive pattern matches
+      against m2's existing `ReaperOutcome` shape;
+      m4 may add reaper-task fault injection if a
+      real-world failure surfaces. This
+      intentional-untested status is filed in the
+      retrospective drift section.
+
       Across all four cases (clean Exited, abnormal
       Exited, WaitFailed, ReaperPanicked), `rfl chat`
       runs `frontend_handle.shutdown().await` **exactly
@@ -2283,6 +2375,15 @@ integration test is being built):
   - exactly three `"rfl-tui: bus.event"` lines
     follow within
     sentinel.
+- `rfl_chat_frontend_exits_before_ready_errors.rs` —
+  pi-10 Medium 4: SenderDropped CLI path. Spawn
+  `rfl chat` with `RFL_TUI_PATH` pointing at
+  `rfl-bus-fixture` in `exit_immediately` mode
+  (§L1a — adopts bus fd, exits 0 without sending
+  `frontend.ready`). `rfl chat` exits non-zero with
+  `RflChatError::FrontendExitedBeforeReady` mapped
+  to stderr citing the child's exit status. 6-second
+  `serial_test` gate caps wall-clock.
 - `rfl_chat_frontend_ready_timeout_errors.rs` — pi-3 #2 +
   pi-2 #6 + pi-5 M4: spawn `rfl chat` with
   `RFL_TUI_PATH` pointing at `rfl-bus-fixture` in
