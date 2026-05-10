@@ -110,7 +110,7 @@ The §I positive matrix is satisfied. Per-row mapping:
 | `frontend_handle_wait_ready_resolves_on_signal.rs` | `frontend_handle_wait_ready_resolves_on_signal.rs` | `7822575` (c20) |
 | `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `7822575` (c20) |
 | `manifest_publishes_unknown_namespace_rejected.rs` | `manifest_publishes_unknown_namespace_rejected.rs` | `b8bff38` (c05) |
-| `tui_subscribes_to_core_session_events.rs` | scope behaviour split across four files (see reconciliation row 2): `frontend_subscribes_to_core_session_events.rs` (c15), `tui_test_mode_logs_bus_events_to_stderr.rs` (c25), `tui_test_mode_exits_on_test_done.rs` (c25), and the end-to-end exercises in `rfl_chat_demo_bar.rs` (c31) + `rfl_chat_replay_withheld_until_frontend_ready.rs` (c30). | c15 + c25 + c30 + c31 |
+| `tui_subscribes_to_core_session_events.rs` | scope behaviour split across five files (see reconciliation row 2): `frontend_subscribes_to_core_session_events.rs` (c15), `tui_test_mode_logs_bus_events_to_stderr.rs` (c25), `tui_test_mode_exits_on_test_done.rs` (c25), and the end-to-end exercises in `rfl_chat_demo_bar.rs` (c31) + `rfl_chat_replay_withheld_until_frontend_ready.rs` (c30). | c15 + c25 + c30 + c31 |
 | `tui_handler_calls_frontend_ready.rs` | `tui_handler_calls_frontend_ready.rs` | `8e87edf` (c25) |
 | `tui_test_mode_logs_bus_events_to_stderr.rs` | `tui_test_mode_logs_bus_events_to_stderr.rs` | `8e87edf` (c25) |
 | `tui_test_mode_exits_on_test_done.rs` | `tui_test_mode_exits_on_test_done.rs` | `8e87edf` (c25) |
@@ -211,12 +211,11 @@ this is filed in §5.8 below as a non-blocking m4
 follow-up.
 
 The 516 tests / 0 failed result on Linux satisfies
-`scope.md` §"Acceptance summary"'s **first**
-bullet (Linux `cargo test`); the **second** bullet
-(macOS CI green hard gate) remains pending the
-post-retrospective branch push (`manual-validation.md`
-§4); the **third** and **fourth** bullets (cargo
-build green; cargo doc warning-free) are captured in
+`scope.md` §"Acceptance summary"'s Linux
+`cargo test` bullet; the macOS CI green hard gate
+remains pending the post-retrospective branch push
+(`manual-validation.md` §4); the cargo build green
+and cargo doc warning-free bullets are captured in
 `manual-validation.md` §2 and §3.
 
 ---
@@ -224,7 +223,7 @@ build green; cargo doc warning-free) are captured in
 ## 2. Drift against overview / decisions / stream RFCs
 
 The drift items below were **anticipated** by `scope.md`
-§"Acceptance summary" — nine bullets pre-named the items
+§"Acceptance summary" — ten bullets pre-named the items
 the m3 retrospective was expected to address. Following
 the m1 / m2 pattern, this retrospective records the fix;
 the actual `decisions.md` rows / overview patches /
@@ -716,7 +715,7 @@ auto-enable the feature).
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
 | `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 ✅ archived round 1; §4 (macOS CI URL) / §5 (interactive smoke) / §6 (CI run URL) ⏳ pending the post-retrospective push |
-| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 3 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.8 macOS-harness code commit have NOT YET LANDED |
+| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 4 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.8 macOS-harness code commit have NOT YET LANDED |
 | Stream E renderer-RFC drift patch | ⏳ §2.1 — follow-up commit pre-named, NOT YET LANDED |
 | `PublisherIdentity::Frontend` Stream A schema additions | ⏳ §2.2 — follow-up commit pre-named, NOT YET LANDED |
 | Capabilities staging note in overview §10.1 | ⏳ §2.3 — follow-up commit pre-named, NOT YET LANDED |
