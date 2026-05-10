@@ -22,17 +22,49 @@ devshell on Linux x86_64 / 6.12.84).
 **Aggregate:** 308 test binaries / 516 tests passed / 0
 failed / 0 ignored.
 
-**Source:** `/tmp/m3-acceptance.log` (transient; the
-aggregate above was extracted via `grep "test result:"
-/tmp/m3-acceptance.log | awk '{p+=$4; f+=$6; i+=$8; c+=1}
-END{print c, p, f, i}'`).
+**Source:** `/tmp/m3-acceptance.log` (~284 KB transient
+log). The aggregate was extracted via `grep "test
+result:" /tmp/m3-acceptance.log | awk '{p+=$4; f+=$6;
+i+=$8; c+=1} END{print c, p, f, i}'`. Tail of the log
+archived inline below for durability:
+
+```
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+... (308 binaries total; doc-tests for the three workspace
+crates each report `0 passed; 0 failed; 0 ignored`)
+```
 
 The captured run includes Linux-only tests gated on
-`#[cfg(target_os = "linux")]` (e.g.
-`frontend_handle_drop_does_not_leak_zombie.rs`,
-`supervisor_spawn_post_register_reaps_child.rs`); macOS
-will skip these and the count there is expected to be
-slightly lower.
+`#[cfg(target_os = "linux")]`. The current Linux-only
+gates split into two classes:
+
+- **Platform-inherent** (cannot be fixed for macOS in
+  m3 without scope expansion): `frontend_handle_drop_does_not_leak_zombie.rs`
+  (`/proc/<pid>` zombie observation), `supervisor_spawn_post_register_reaps_child.rs`
+  (Linux-specific reap timing), `supervisor_spawn_unwinds_*_fd_baseline.rs`
+  (`/proc/self/fd` count baseline assertions).
+- **Harness gating that is NOT platform-inherent**:
+  every `rafaello-tui/tests/*.rs` integration test
+  (`tui_handler_calls_frontend_ready.rs`,
+  `tui_test_mode_logs_bus_events_to_stderr.rs`,
+  `tui_test_mode_exits_on_test_done.rs`,
+  `tui_test_mode_self_timeout_exits_zero.rs`,
+  `tui_sends_frontend_ready_after_handler_registration.rs`)
+  is currently `#![cfg(target_os = "linux")]` because
+  the c25 test harness uses `nix::sys::socket::socketpair`
+  with `SOCK_CLOEXEC` directly, which fails on macOS
+  (m2 retro §5.7 captured the same failure mode for
+  `rfl-bus-fixture` and fixed it via an `fcntl` fallback
+  in `7db9da8`). **This is not an inherent macOS
+  limitation**; it is a harness gap that needs the
+  m2 fix applied to the rafaello-tui test harness
+  before macOS CI can prove m3's TUI integration
+  coverage. Filed in `retrospective.md` §5.9 as a
+  required follow-up code commit before ratification.
 
 > Per `scope.md` round-9 polish: the headline
 > `rfl_chat_demo_bar.rs` test ran in under 30 s under
@@ -45,7 +77,20 @@ slightly lower.
 nix develop --impure --command cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture
 ```
 
-**Status:** ✅ green (captured 2026-05-10).
+**Status:** ✅ green (captured 2026-05-10). Tail of the
+build log archived inline:
+
+```
+Running           devenv:enterShell
+Succeeded         devenv:enterShell (4.47ms)
+Running           devenv:enterTest
+No command        devenv:enterTest
+1 Skipped, 4 Succeeded
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+```
+
+(The 0.07s figure reflects an incremental build over an
+already-warm `target/` from the preceding test run.)
 
 The explicit `--features rafaello-core/test-fixture` is
 required because `rfl-bus-fixture` is gated by
@@ -68,12 +113,22 @@ nix develop --impure --command cargo doc --manifest-path rafaello/Cargo.toml --w
 ```
 
 **Status:** ✅ green and warning-free (captured 2026-05-10).
+Tail of the doc log archived inline:
+
+```
+    Checking rafaello-core v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello-core)
+ Documenting rafaello-core v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello-core)
+    Checking rafaello v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello)
+    Checking rafaello-tui v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello-tui)
+ Documenting rafaello-tui v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello-tui)
+ Documenting rafaello v0.0.0 (/home/luiz/lab/rafaello/crates/rafaello)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.59s
+   Generated /home/luiz/lab/rafaello/target/doc/rafaello/index.html and 4 other files
+```
 
 No `private_intra_doc_links` warnings (m2 retro §5.2's
 fix held). No new doc warnings introduced under m3's
 expanded surface (rafaello-tui, rafaello/lib).
-
-**Source:** `/tmp/m3-doc.log`.
 
 ## 4. macOS CI gate — hard ratification gate
 
@@ -91,9 +146,13 @@ is a hard ratification gate and not deferrable.
    feature; m2 retro §5.7 captured run `25623373610`
    for the macOS-CI green gate at m2 close).
 3. Capture the `macos-latest` job URL into this section.
-4. Confirm the same 516 (Linux-counted) less the
-   `#[cfg(target_os = "linux")]` exemptions tests pass
-   on `macos-latest`.
+4. Confirm a green run on `macos-latest`. The expected
+   pass count is the Linux 516 minus all
+   `#[cfg(target_os = "linux")]`-gated tests; an exact
+   arithmetic is not pre-named here because the
+   exemption inventory depends on whether the
+   §5.9-filed rafaello-tui-harness macOS port lands
+   before the macOS CI run captures.
 5. Any non-platform-inherent failure must be fixed in
    m3 before ratification (per scope round-6: macOS
    failures are NOT retrospective-time follow-ups).

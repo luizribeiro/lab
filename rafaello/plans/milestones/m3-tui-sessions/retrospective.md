@@ -1,8 +1,13 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — retrospective
 
-> **Status:** revised round 2 on 2026-05-10 by the milestone
-> driver after `retro-pi-review-1.md` (5 blockers + 4
-> non-blocking polish). Worktree `/home/luiz/lab` directly
+> **Status:** revised round 3 on 2026-05-10 by the milestone
+> driver after `retro-pi-review-2.md` (5 blockers + 3
+> non-blocking polish). Round 2 had closed the round-1
+> blockers but introduced four new factual errors
+> (inventory count, c14/c15/c18 row mismatches,
+> tui_subscribes split reconciliation, macOS Linux-only
+> exemption framing) plus over-greened the acceptance
+> table. Round 3 corrects each. Worktree `/home/luiz/lab` directly
 > on `rafaello-v0.1` (m3 commits accumulated on the
 > milestone branch — no separate merge step). 31 plan-row
 > commits (`165916e..267607f`) land in 1:1 correspondence
@@ -34,15 +39,17 @@ The five sections match m1 / m2's structure.
 
 ## 1. Coverage
 
-`scope.md` §I positive + negative matrices and the per-§
-test enumerations name a total of 41 test files. All 41
-behaviours are implemented under
-`rafaello/crates/rafaello-core/tests/`,
-`rafaello/crates/rafaello-tui/tests/`, and
-`rafaello/crates/rafaello/tests/`. **Four files** landed
-under different names than scope; the reconciliation
-below records each rename, split, or indirect coverage
-case.
+`scope.md` §I positive + negative matrices plus the
+per-§ test enumerations (§S, §R, §F, §T, §B, §C2, §H6,
+§M1) name on the order of 50 unique test files.
+Behavioural coverage is complete; **four files** landed
+under different names than scope, and the
+`tui_subscribes_to_core_session_events.rs` row split
+into three smaller landed files at the c25 reconciliation.
+The reconciliation table below records each rename,
+split, or indirect-coverage case. (Round 2 over-claimed
+"name-for-name match" and underestimated the inventory
+at "41 files"; round 3 corrects both.)
 
 The `nix develop --impure --command cargo test
 --manifest-path rafaello/Cargo.toml --workspace --features
@@ -66,7 +73,7 @@ without surprise:
 | `scope.md` test name | Landed file(s) | Reason |
 |----------------------|----------------|--------|
 | `renderer_pipeline_built_in_kinds.rs` | split into eight files: `renderer_builtin_text.rs`, `renderer_builtin_heading.rs`, `renderer_builtin_code_block.rs`, `renderer_builtin_thinking.rs`, `renderer_builtin_tool_call.rs`, `renderer_builtin_tool_result.rs`, `renderer_builtin_image.rs`, `renderer_builtin_error.rs` | c11/c12 — one test per built-in renderer per `commits.md` row split, per pi-9 polish: per-renderer files are easier to bisect than a single eight-case table. |
-| `tui_subscribes_to_core_session_events.rs` | landed at the **core** layer as `frontend_subscribes_to_core_session_events.rs` (c14) | pi-13 reconciliation — the subscription is enforced on the broker side via `BrokerAcl.frontends[].subscribe_patterns` (m3 §B); the TUI's role is to register the `BusEventHandler` (covered by `tui_test_mode_logs_bus_events_to_stderr.rs` and `tui_sends_frontend_ready_after_handler_registration.rs`). The "subscribe behaviour" the scope test name implied is broker-layer enforcement, not TUI-layer routing. |
+| `tui_subscribes_to_core_session_events.rs` | scope behaviour landed split across three files: `frontend_subscribes_to_core_session_events.rs` (c15, `dbfeebc` — broker-side fan-out to a registered frontend ACL), `tui_test_mode_logs_bus_events_to_stderr.rs` (c25, `8e87edf` — bus.event sentinel on TUI stderr; uses `core.lifecycle.demo` as the test topic, not `core.session.entry.finalized`), and `tui_test_mode_exits_on_test_done.rs` (c25 — `core.lifecycle.test_done` clean exit). Plus `rfl_chat_demo_bar.rs` (c31) and `rfl_chat_replay_withheld_until_frontend_ready.rs` (c30) exercise the actual `core.session.entry.finalized` topic end-to-end through the CLI/TUI path. The scope-named test's three behaviours (`core.session.entry.finalized` reception → stderr line → `test_done` exit) are individually covered, but no single landed file aggregates all three: the c25 split was pi-12 reconciliation to keep each test bisectable. |
 | `frontend_register_with_broker.rs` | covered indirectly as setup in `frontend_subscribes_to_core_session_events.rs`, `frontend_publish_*.rs` (4 files), and `broker_register_frontend_*.rs` (2 files) | The positive happy-path "frontend lands in registry, guard drops cleanly" is the precondition for every frontend-layer integration test; no test-file specialised on registration alone landed because no row in `commits.md` had it as primary acceptance. **Recorded as a coverage gap of test-file granularity, not behaviour:** the path is exercised in setup of seven adjacent tests. Filed below. |
 | `frontend_register_duplicate_rejected.rs` | landed as `broker_register_frontend_duplicate_rejected.rs` (c14, `79d4c0d`) | The behaviour is broker-side ACL enforcement, not a frontend-side surface; pi-14 reconciliation moved the file to the `broker_*` namespace to match m2's broker-test naming convention. |
 
@@ -122,7 +129,7 @@ all land:
 | `frontend_publish_two_segment_topic_rejected.rs` | `frontend_publish_two_segment_topic_rejected.rs` | `dbfeebc` (c15) |
 | `frontend_publish_unknown_namespace_rejected.rs` | `frontend_publish_unknown_namespace_rejected.rs` | `dbfeebc` (c15) |
 | `frontend_publish_outside_grant_rejected.rs` | `frontend_publish_outside_grant_rejected.rs` | `dbfeebc` (c15) |
-| `frontend_register_unknown_attach_id_rejected.rs` | `frontend_register_unknown_attach_id_rejected.rs` | `79d4c0d` (c14) |
+| `frontend_register_unknown_attach_id_rejected.rs` (broker-layer) | `broker_register_frontend_unknown_attach_id_rejected.rs` (c14, `79d4c0d`) — broker-side `register_frontend()` ACL refusal; AND `frontend_register_unknown_attach_id_rejected.rs` (c18, `22a345c`) — `FrontendSupervisor::spawn` surfacing `AttachIdNotInAcl`. Both layers' refusals landed; the broker-layer file uses the m2 `broker_*` naming convention. | c14 + c18 |
 | `frontend_register_duplicate_rejected.rs` | `broker_register_frontend_duplicate_rejected.rs` (see reconciliation row 4) | `79d4c0d` (c14) |
 | `frontend_spawn_invalid_attach_id_rejected.rs` | `frontend_spawn_invalid_attach_id_rejected.rs` | `22a345c` (c18) |
 | `frontend_spawn_relative_entry_path_refused.rs` | `frontend_spawn_relative_entry_path_refused.rs` | `22a345c` (c18) |
@@ -156,10 +163,9 @@ non-matrix tests required by individual `commits.md`
 acceptance lines include compile-surface assertions and
 unit-level seam tests.
 
-- `m3_frontend_error_surface_compiles.rs` (or similar
-  build-only landed name; per c14, c17, c18 acceptance
-  rows) — compile-surface assertions matching the
-  m1/m2 c02-style pattern.
+- `m3_frontend_error_surface_compiles.rs` (per c14, c17,
+  c18 acceptance rows) — compile-surface assertions
+  matching the m1/m2 c02-style pattern.
 - `tui_paint_panic_isolation` — `#[cfg(test)]` lib unit
   test in `rafaello-tui/src/paint.rs`, driven by
   `ratatui::backend::TestBackend`, exercising both
@@ -575,6 +581,43 @@ The pattern is documented in `scope.md` §C2 step 8
 verbatim and the c30 implementation matches it
 line-for-line.
 
+### 5.9 rafaello-tui-test-harness macOS port (BLOCKING ratification — code follow-up)
+
+`rafaello/crates/rafaello-tui/tests/common/mod.rs` is
+gated `#![cfg(target_os = "linux")]` because it calls
+`nix::sys::socket::socketpair` with the
+`SockFlag::SOCK_CLOEXEC` flag, which is unavailable on
+macOS (the same failure mode m2 retro §5.7 captured for
+`rfl-bus-fixture` and fixed in `7db9da8` via an
+`fcntl(F_SETFD, FD_CLOEXEC)` fallback). All five
+`rafaello-tui/tests/*.rs` integration tests inherit the
+gate transitively:
+
+- `tui_handler_calls_frontend_ready.rs`
+- `tui_test_mode_logs_bus_events_to_stderr.rs`
+- `tui_test_mode_exits_on_test_done.rs`
+- `tui_test_mode_self_timeout_exits_zero.rs`
+- `tui_sends_frontend_ready_after_handler_registration.rs`
+
+These exercise central m3 TUI/session behaviours and
+are NOT platform-inherent Linux assertions (unlike
+`frontend_handle_drop_does_not_leak_zombie.rs` which
+reads `/proc/<pid>` zombie state, or
+`supervisor_spawn_unwinds_*_fd_baseline.rs` which read
+`/proc/self/fd`). Pi-review-2 B3 caught this:
+`scope.md` round-6 made macOS CI a **hard ratification
+gate** precisely so cross-platform TUI/session
+behaviour is proven; a green macOS run that skips all
+five files would not satisfy that gate.
+
+**Required follow-up code commit before m3
+ratification:** apply the m2 `7db9da8` SOCK_CLOEXEC →
+`fcntl` fallback pattern to
+`rafaello-tui/tests/common/mod.rs`, then drop the
+blanket `#![cfg(target_os = "linux")]` from each of
+the five test files. The m2 retro records this as a
+proven 5-line patch.
+
 ### 5.8 `frontend_register_with_broker.rs` test-file granularity gap (m4 follow-up)
 
 `scope.md` §I positive matrix names a stand-alone
@@ -597,8 +640,9 @@ behaviour.
 
 Per the m1 / m2 precedent, the drift items in §2 land
 as **separate commits on this branch before milestone
-close**. The list below pre-names them; each is a
-docs-only or banner-only patch.
+close**. The list below pre-names them; items 1–5 are
+docs-only/banner-only patches addressing §2 drift; item
+6 is a code patch addressing §5.9.
 
 1. `docs(rafaello-streams-e): v1-status banner — point at
    decisions rows 27–29, no body rewrite` — addresses §2.1.
@@ -612,6 +656,9 @@ docs-only or banner-only patch.
 5. `docs(rafaello-decisions): BrokerError variant additions +
    PublishOutsideGrant / InvalidInReplyTo reshape to take
    publisher: Publisher` — addresses §2.5.
+6. `fix(rafaello-tui::tests/common): SOCK_CLOEXEC fallback via
+   fcntl — un-gate rafaello-tui integration tests on macOS`
+   — addresses §5.9. Mirrors m2 `7db9da8`.
 
 Items §2.6 (m1 publishes-grant tightening) and §2.9
 (fixture self-timeout) landed as Phase-3 code commits
@@ -646,8 +693,8 @@ auto-enable the feature).
 | **macOS CI green** (hard gate) | ⏳ pending the post-retrospective branch push (`manual-validation.md` §4 + §5.1 below) |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
-| `manual-validation.md` records manual-validation list | ✅ round 1 written alongside this retro; §4 / §5 / §6 ⏳ pending the post-retrospective push |
-| `retrospective.md` written with anticipated drift addressed | ✅ this document, round 2 |
+| `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 ✅ archived round 1; §4 (macOS CI URL) / §5 (interactive smoke) / §6 (CI run URL) ⏳ pending the post-retrospective push |
+| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 3 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.9 macOS-harness code commit have NOT YET LANDED |
 | Stream E renderer-RFC drift patch | ⏳ §2.1 — follow-up commit pre-named, NOT YET LANDED |
 | `PublisherIdentity::Frontend` Stream A schema additions | ⏳ §2.2 — follow-up commit pre-named, NOT YET LANDED |
 | Capabilities staging note in overview §10.1 | ⏳ §2.3 — follow-up commit pre-named, NOT YET LANDED |
