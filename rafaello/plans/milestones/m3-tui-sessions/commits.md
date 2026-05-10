@@ -1,9 +1,19 @@
 # m3-tui-sessions — commits
 
-> **Status:** round-9 draft. Trajectory blockers per
-> round (commits): r1 6 → r2 3 → r3 1 → r4 2 → r5
-> 1 → r6 0 → r7 0 → r8 0. Round 9 closes the
-> remaining r8 precision gaps:
+> **Status:** RATIFIED at round 9
+> (`commits-pi-review-9.md`). Pi: "Verdict:
+> ratified. I did not find a blocker, high-priority
+> issue, dependency cycle, or test/code ownership
+> contradiction that should prevent ratification."
+> Final round 10 folds in two non-blocking polish
+> notes from pi-9 (c26 paint.rs explicit module
+> note + RFL_TUI_MAX_LIFETIME reminder on
+> rfl_chat_replay_withheld_until_frontend_ready).
+> Trajectory blockers per round: r1 6 → r2 3 →
+> r3 1 → r4 2 → r5 1 → r6 0 → r7 0 → r8 0 → r9 0.
+> Phase 3 (walk the 31 commits) begins.
+>
+> Round 9 closes the r8 precision gaps:
 > - c31 demo-bar test: nine
 >   `"bus.event topic=core.session.entry.finalized"`
 >   lines (was generic "bus.event"; pi-8 H1 — the
@@ -973,6 +983,12 @@ c18+ frontend tests can use `signal_ready` /
 
 ### c26 — feat(rafaello-tui::paint): Painter::draw_with_panic_isolation + paint_node + lib unit test
 
+> Creates `rafaello-tui/src/paint.rs` and exports
+> `pub mod paint` from `rafaello-tui/src/lib.rs`
+> (pi-9 polish — implied by What/Acceptance, made
+> explicit for the per-commit agent prompt).
+
+
 - **What.** scope §I `tui_paint_panic_isolation` +
   scope §T4 + §T5:
   - `pub fn rafaello_tui::paint::draw_with_panic_isolation(
@@ -1152,7 +1168,10 @@ c18+ frontend tests can use `signal_ready` /
   `rafaello/tests/`:
   - `rfl_chat_replay_withheld_until_frontend_ready.rs`
     (single combined stderr stream, line-order
-    assertion).
+    assertion). The test sets
+    `RFL_TUI_MAX_LIFETIME=2` so the headless TUI
+    self-terminates without needing a `test_done`
+    publish (pi-9 polish — explicit reminder).
   - `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs`
     (uses `signal_ready_then_exit_n`).
   - `rfl_chat_harness_finalizes_nine_entries.rs`
