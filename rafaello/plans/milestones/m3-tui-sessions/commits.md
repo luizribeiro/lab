@@ -1,8 +1,20 @@
 # m3-tui-sessions — commits
 
-> **Status:** round-5 draft. Round 1: 6b + 4h + 5m.
+> **Status:** round-6 draft. Round 1: 6b + 4h + 5m.
 > Round 2: 3b + 3h + 3m. Round 3: 1b + 3h + 3m.
-> Round 4: 2b + 2h + 4m (`commits-pi-review-4.md`).
+> Round 4: 2b + 2h + 4m. Round 5: 1b + 0h + 4m
+> (`commits-pi-review-5.md`).
+> Round 6 cleans up the c08+c09 collapse drift:
+> - c09 self-dependency fixed → depends on c08
+>   (pi-5 B1).
+> - c08 acceptance count "Five new tests" (was
+>   "Three"; pi-5 M1).
+> - Group 6 heading "+ 6 m3 modes" (was "+ 5"; pi-5
+>   M2).
+> - c26 deps c08 for RenderNode (was c09; pi-5 M3).
+> - Phase 4 "all 31 commits" (was "32"; pi-5 M4).
+>
+> Round-5 highlights (kept for trajectory):
 > Round 5 collapses c08+c09 into a single commit (the
 > RenderNode dep on `tool_result.content` made the
 > split unimplementable per pi-4 B1) and accepts a
@@ -382,7 +394,8 @@ Wherever `scope.md` and `commits.md` both name a test, this
 - **Why.** scope §E1 + §E2 + §E3 + §E4 + pi-4 B1
   + pi-4 B2 + pi-4 H1.
 - **Depends on.** c02.
-- **Acceptance.** Three new tests:
+- **Acceptance.** Five new tests (pi-5 M1 — count
+  updated for the c08+c09 collapse):
   - `entry_serde_round_trip.rs` (eight built-in
     payload cases — round-trip JSON encode/decode).
   - `entry_stream_state_rejects_open.rs`
@@ -410,7 +423,9 @@ Wherever `scope.md` and `commits.md` both name a test, this
   - `with_builtins()` is empty in c09 (registers
     nothing yet); built-in renderers land in c11 + c12.
 - **Why.** scope §R1 + §R2 + §R4 + §R5.
-- **Depends on.** c09.
+- **Depends on.** c08 (Entry / RenderNode / payloads —
+  pi-5 B1 corrects round-5's renumber-induced
+  self-dependency).
 - **Acceptance.** Two tests (pi-1 medium #5: was
   contradicting itself with a "with_builtins is empty"
   assertion that c11 would invalidate; round-2
@@ -534,7 +549,7 @@ Wherever `scope.md` and `commits.md` both name a test, this
 
 ---
 
-## Group 6 — rfl-bus-fixture extensions (fixture self-timeout + 5 m3 modes)
+## Group 6 — rfl-bus-fixture extensions (fixture self-timeout + 6 m3 modes)
 
 This group moves AHEAD of the frontend supervisor work so
 c18+ frontend tests can use `signal_ready` /
@@ -914,7 +929,9 @@ c18+ frontend tests can use `signal_ready` /
     panic-isolation seam against
     `ratatui::backend::TestBackend`.
 - **Why.** scope §T4 + §T5.
-- **Depends on.** c09 (RenderNode), c17 (PaintError
+- **Depends on.** c08 (RenderNode — pi-5 M3:
+  RenderNode lives in c08 after the round-5
+  collapse), c17 (PaintError
   type — pi-1 high #2).
 - **Acceptance.** Unit test passes; assert that a
   panicking `PaintAction::RunPanicking` produces
@@ -1052,7 +1069,7 @@ c18+ frontend tests can use `signal_ready` /
 
 ## Phase 4 — driver-owned artifacts (NOT per-commit tasks)
 
-After all 32 commits land, the milestone driver writes:
+After all 31 commits land, the milestone driver writes:
 
 1. **`manual-validation.md`** capturing cargo-test-all
    output (Linux + macOS CI URLs), the real interactive
