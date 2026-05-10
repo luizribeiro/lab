@@ -1,10 +1,39 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-9 draft. Round 1: 10b + 3c. Round 2:
+> **Status:** round-10 draft. Round 1: 10b + 3c. Round 2:
 > 5b + 2m. Round 3: 3b + 3m. Round 4: 3b + 3hm + 1l.
 > Round 5: 2b + 11m + 3l. Round 6: 6b + 5m + 3l.
-> Round 7: 5b + 3m + 1l. Round 8: 3b + 5m. Round 9
-> highlights:
+> Round 7: 5b + 3m + 1l. Round 8: 3b + 5m. Round 9:
+> 3b + 2h + 3m + 2l. Round 10 highlights:
+> - Stale "Cooperative shutdown" block deleted from §F4
+>   (pi-9 Blocker 1 — round 9 left two conflicting
+>   shutdown contracts).
+> - §C2 step 10 calls `frontend_handle.shutdown()`
+>   exactly once across all four exit cases (pi-9
+>   Blocker 2).
+> - `FrontendHandle.child_stderr: Option<ChildStderr>`
+>   + `take_child_stderr()` API (pi-9 Blocker 3 —
+>   round 9 spec'd the forwarder without an API to
+>   access the stderr handle).
+> - Phase B unwind matrix split by reaper-ownership
+>   transition: pre-reaper unwind uses `Child` directly,
+>   post-reaper unwind uses `nix::sys::signal::kill`
+>   + reaper-watch (pi-9 High 4).
+> - SenderDropped path uses bounded `handle.shutdown()`
+>   instead of unbounded `wait()` (pi-9 High 5).
+> - `SessionStore::lock_fd_for_test()` cfg-gated
+>   accessor (pi-9 Medium 6).
+> - Stderr forwarding uses `tokio::sync::Mutex<Stderr>`
+>   for serialised writes; TUI emits raw lines without
+>   `rfl-tui:` prefix (the forwarder is the sole prefix
+>   source) (pi-9 Medium 7).
+> - `ReaperOutcome::Exited(status)` /
+>   `WaitFailed(io::Error)` shapes corrected throughout
+>   (pi-9 Medium 8).
+> - L1a fixture-mode wording / count fixed (Low 9 +
+>   Low 10).
+>
+> Round-9 highlights (kept for trajectory context):
 > - §M1 namespace patch made role-aware: provider
 >   plugin manifests still publish on
 >   `provider.<own-id>.*`; `core.*` and `frontend.*`
@@ -698,10 +727,15 @@ m2-style if needed.
       tokio::spawn(server.serve())` (pi-3 #1).
       Store `serve_handle` in the `FrontendHandle` so
       `FrontendSupervisor::shutdown` can await it.
+    - Configure the spawned `tokio::process::Command`
+      with `.stderr(Stdio::piped())` so the child's
+      stderr is capturable (pi-9 Blocker 3). Take
+      `child.stderr.take()` as `Option<ChildStderr>`
+      and store it in the handle.
     - Return `FrontendHandle { attach_id, child_pid:
       Some(_), peer, register_guard: Some(_),
-      serve_handle: Some(_), ready: watch_rx,
-      reaper_outcome: ... }`.
+      serve_handle: Some(_), child_stderr: Some(_),
+      ready: watch_rx, reaper_outcome: ... }`.
 
   **Phase B unwind rules** (pi-8 M3 — round 8 spawned
   the child before transport / register / serve setup
@@ -713,11 +747,32 @@ m2-style if needed.
   2. If `register_guard` was acquired (broker register
      succeeded), drop it (broker registration
      releases).
-  3. If `child` was spawned, `child.start_kill()`
-     (sends SIGKILL on Unix) then `let _ =
-     child.wait().await` to reap. The reaper task
-     might or might not have started; if it has, it
-     observes the wait and finishes cleanly.
+  3. If the child was spawned (pi-9 High 4 — round 9
+     said `child.start_kill()` + `child.wait()`, but
+     by Phase B step "spawn the reaper" the `Child`
+     has already been moved into the reaper task and
+     can no longer be accessed directly). The order
+     of operations in Phase B is: (a)
+     `tokio_command.spawn()` produces `Child` →
+     (b) take `child.stderr` for the handle → (c)
+     spawn the reaper task with the moved `Child` and
+     a `watch::Sender<Option<Arc<ReaperOutcome>>>`.
+     Unwind cases:
+     - **Failure between (a) and (c)** (e.g. taking
+       stderr fails, fittings transport setup
+       errors): the spawn site still holds `Child`;
+       call `child.start_kill()` + `let _ =
+       child.wait().await` directly.
+     - **Failure after (c) but before broker
+       register** (e.g. building the fittings server
+       errors): `Child` is in the reaper. Call
+       `nix::sys::signal::kill(Pid::from_raw(pid),
+       Signal::SIGKILL)` and await the reaper-watch
+       receiver until `Some(_)` is observed.
+     - **Failure after broker register but before
+       returning the handle**: same SIGKILL + reaper
+       wait; also drop the `RegisteredFrontend`
+       guard.
   4. Drop the socketpair fds (RAII).
   5. Drop the proxy handle (m3 frontends don't have
      one but the unwind framework should be the same
@@ -756,9 +811,20 @@ m2-style if needed.
         child_pid: Option<u32>,
         serve_handle: Option<tokio::task::JoinHandle<...>>,
         register_guard: Option<RegisteredFrontend>,
+        child_stderr: Option<tokio::process::ChildStderr>,
         // Always-live fields:
         ready: tokio::sync::watch::Receiver<bool>,
         reaper_outcome: tokio::sync::watch::Receiver<Option<Arc<ReaperOutcome>>>,
+    }
+
+    impl FrontendHandle {
+        // Caller takes ownership of the child's
+        // piped stderr; `rfl chat` uses this to spawn
+        // the line-forwarding task (pi-9 Blocker 3 —
+        // round 9 spec'd the forwarder without an
+        // API to access the stderr handle).
+        pub fn take_child_stderr(&mut self)
+            -> Option<tokio::process::ChildStderr>;
     }
     ```
     `Drop` semantics: if `child_pid.is_some()`, send
@@ -807,29 +873,12 @@ m2-style if needed.
     best-effort SIGKILL applies. This closes the
     PID-recycle window for both the cooperative and
     the implicit-drop paths.
-  - Cooperative shutdown: `pub async fn
-    FrontendHandle::shutdown(self) -> ShutdownReport`
-    (consumes `self`):
-    1. Send SIGTERM to the child pid.
-    2. `tokio::time::timeout(Duration::from_secs(2),
-       self.wait())` — await the reaper watch with a
-       2 s grace.
-    3. On timeout, send SIGKILL; `tokio::time::
-       timeout(Duration::from_secs(1), self.wait())` —
-       a 1 s additional grace. Failure to reap after
-       SIGKILL is logged but does NOT block shutdown.
-    4. Abort the `Server::serve` join handle if it has
-       not already completed (`serve_handle.abort()`),
-       then `let _ = serve_handle.await` (allow it to
-       drain).
-    5. Drop `_register_guard` (broker registration
-       releases).
-    6. Return `ShutdownReport { exit_status,
-       used_sigkill, serve_aborted, ... }`.
-    Identical to m2 c25 in spirit (SIGTERM + grace +
-    SIGKILL + reaper wait); the shape moved onto the
-    handle because m3 has at most one frontend per
-    process.
+  - (Pi-9 Blocker 1: round 9 left a stale "Cooperative
+    shutdown" block here that conflicted with the
+    canonical one above — round 10 deletes it.
+    `FrontendHandle::shutdown(mut self)` is fully
+    spec'd in the disarmable-Drop section above; that
+    is the single source of truth.)
   - **New positive test**
     `frontend_handle_wait_resolves_on_child_exit.rs`:
     spawn a `rfl-bus-fixture` child (NOT `rfl-tui` —
@@ -838,7 +887,9 @@ m2-style if needed.
     `signal_ready` mode (§L1a) with a
     `RFL_FIXTURE_MAX_LIFETIME=1` so it exits after
     1 s. `handle.wait().await` returns
-    `ReaperOutcome::Exited(0)`.
+    `ReaperOutcome::Exited(status)` with
+    `status.success()` true (pi-9 Medium 8 — round 9
+    used a non-existent `Exited(0)` shape).
   - **New negative test**
     `frontend_handle_drop_does_not_leak_zombie.rs`:
     spawn `rfl-bus-fixture` in `respond_peer_call`
@@ -1050,6 +1101,14 @@ that could drift — one path for both is the contract.
   - `pub fn SessionStore::session_id(&self) -> &str` —
     ULID assigned at first open; persisted in a single-
     row `session_meta` table.
+  - `#[cfg(any(test, feature = "test-fixture"))] pub fn
+    SessionStore::lock_fd_for_test(&self) ->
+    std::os::fd::RawFd` (pi-9 Medium 6) — exposes the
+    flock fd to integration tests so
+    `session_store_lock_fd_not_inherited_by_child.rs`
+    can pass it as the `--probe-fd <N>` arg to the
+    `probe_fd_closed` fixture mode. Production code
+    never calls this.
   - `pub struct SessionController` — bundles a
     `SessionStore` + a `RenderPipeline` + a `Broker`
     handle. Constructed by `rfl chat` after the broker is
@@ -1488,26 +1547,22 @@ identified as `frontend.tui`.
      per received entry, JSON-encoded) so test harnesses
      can parse-and-assert without involving a fake
      terminal.
-     **Stderr sentinels** (pi-5 M10 + pi-6 B3 —
-     round-6 had only TUI-side sentinels, but those
-     don't establish ordering against parent-side
-     replay because the TUI prints `ready-sent` AFTER
-     the RPC response returns, which is concurrent
-     with the parent's `wait_ready` resolving and
-     starting replay. Round 7 splits sentinels across
-     parent and child sides):
-     - **TUI side (`rfl-tui` stderr)**:
-       - `"rfl-tui: bus.event topic=<topic> seq=<n>"`
-         (one line per received `bus.event`).
-       - `"rfl-tui: test-done"` printed before exit on
+     **Stderr sentinels** (pi-5 M10 + pi-6 B3 + pi-9
+     Medium 7):
+     - **TUI side (rfl-tui stderr — RAW, no
+       `rfl-tui:` prefix; the rfl-chat-side
+       forwarder adds the prefix exclusively to
+       avoid double-prefixing)**:
+       - `"bus.event topic=<topic> seq=<n>"` (one
+         line per received `bus.event`).
+       - `"test-done"` printed before exit on
          receipt of `core.lifecycle.test_done`.
-     - **Parent side (`rfl chat` stderr)** — see §C2
-       step 7's update below:
-       - `"rfl-chat: frontend-ready-observed"` printed
-         BEFORE replay starts, AFTER
+     - **Parent side (rfl chat stderr)** — see §C2
+       step 7:
+       - `"rfl-chat: frontend-ready-observed"`
+         printed BEFORE replay starts, AFTER
          `handle.wait_ready()` returns. This is the
-         test's ordering anchor (see §C2 stderr-pipe
-         note).
+         test's ordering anchor.
      **Deterministic exit** (pi-1 #7) — the test
      harness publishes `core.lifecycle.test_done`
      after the last fixture entry; the 60 s
@@ -1628,20 +1683,33 @@ together.
      here are disjoint by construction — pass entries
      listed here are ALL non-reserved.
   6. **Spawn the TUI first**:
-     `frontend_supervisor.spawn(&compiled,
+     `let mut handle = frontend_supervisor.spawn(&compiled,
      &paths).await?`. This registers the frontend
      with the broker and the broker fan-out is now
      live for `frontend.tui`. **Stderr forwarding
-     contract** (pi-8 M2): the supervisor's spawn
-     uses `Command::stderr(Stdio::piped())` for the
-     child; `rfl chat` spawns a task that line-buffers
-     the child's stderr and writes each line back to
-     `rfl chat`'s own stderr prefixed with
-     `"rfl-tui: "`. This produces a single combined
-     stream where parent sentinels and child events
-     are line-ordered by construction. The forwarder
-     task also handles EOF (child stderr closed)
-     without disturbing the rest of `rfl chat`.
+     contract** (pi-8 M2 + pi-9 Blocker 3): the
+     supervisor sets `Command::stderr(Stdio::piped())`
+     and stores the resulting `ChildStderr` on the
+     handle; `rfl chat` calls
+     `let child_stderr = handle.take_child_stderr()
+     .expect("piped");` and spawns a task that
+     reads the stderr line-buffered, writing each line
+     back to `rfl chat`'s OWN stderr prefixed with
+     `"rfl-tui: "` via a `tokio::sync::Mutex<Stderr>`
+     guard so parent and forwarded writes are
+     serialised on a single fd (pi-9 Medium 7 — the
+     mutex makes the "single combined stream"
+     guarantee load-bearing). **The TUI binary itself
+     does NOT prefix its own stderr lines** with
+     `"rfl-tui: "` (pi-9 Medium 7 — round 9 had a
+     double-prefix bug where both the TUI emitted
+     `"rfl-tui: bus.event ..."` AND the forwarder
+     would re-prefix; round 10: the TUI emits raw
+     `"bus.event topic=... seq=..."` lines and the
+     forwarder is the sole prefix source). The
+     forwarder task also handles EOF (child stderr
+     closed) without disturbing the rest of `rfl
+     chat`.
   7. **Wait for TUI subscription readiness.** The
      fittings server fans out `bus.event` notifications
      best-effort with a bounded drop-on-full sink (m2
@@ -1672,12 +1740,20 @@ together.
        §T2 — this is the test's ordering anchor;
        pi-6 B3). Proceed to step 8 (replay).
      - `Ok(Err(FrontendReadyError::SenderDropped))` →
-       child exited / connection closed before
-       sending `frontend.ready`; map to
-       `RflChatError::FrontendExitedBeforeReady`,
-       capture the reaper outcome via
-       `handle.wait().await`, exit non-zero with
-       stderr citing the child's pid + exit status.
+       the bus connection closed before
+       `frontend.ready` arrived. The child PROCESS
+       may or may not have exited yet (pi-9 High 5 —
+       round 9's unbounded `handle.wait().await`
+       could hang if the bus connection died but the
+       child stayed alive). Map to
+       `RflChatError::FrontendExitedBeforeReady` and
+       run `handle.shutdown().await` (NOT
+       `wait()`) — shutdown is bounded by
+       `config.shutdown_grace + config.shutdown_kill_grace`,
+       triggers SIGTERM/SIGKILL on a still-live
+       child, drains the serve loop, and returns
+       `ShutdownReport`. Exit non-zero with stderr
+       citing the report.
      - `Err(_)` (timeout) → `RflChatError::
        FrontendReadyTimeout`. SIGTERM the child via
        `handle.shutdown()` before exiting non-zero.
@@ -1725,7 +1801,10 @@ together.
         `rfl chat` replays them as usual. Map to
         `RflChatError::FrontendExitedAbnormally {
         outcome }`.
-      - **`WaitFailed { errno }`** (pi-8 M4 — round 8
+      - **`WaitFailed(io::Error)`** (pi-9 Medium 8 —
+        m2's actual shape is `WaitFailed(std::io::
+        Error)`, not `{ errno }`; assertions read
+        `e.raw_os_error()` for the os errno; pi-8 M4 —
         only handled `Exited`; m2's `ReaperOutcome`
         also has `WaitFailed` and `ReaperPanicked`
         variants the supervisor inherits): `rfl
@@ -1737,20 +1816,23 @@ together.
         task itself panicked while awaiting the
         child. Same treatment — abnormal exit, log
         the panic.
-      In all three abnormal cases, `rfl chat` still
-      runs `frontend_handle.shutdown().await` to
-      drain the serve loop and broker registration
-      (pi-8 B2's reaper-outcome check makes shutdown
-      a no-kill drain when the outcome is already
-      cached).
-      Then call `frontend_handle.shutdown().await` to
-      drain the serve loop and release the broker
-      registration guard, capturing the
-      `ShutdownReport`. Then drop the controller and
-      the store (the store's drop releases the
-      flock). The `FrontendSupervisor` itself has no
-      shutdown API — it's a stateless factory
-      (pi-5 B1).
+      Across all four cases (clean Exited, abnormal
+      Exited, WaitFailed, ReaperPanicked), `rfl chat`
+      runs `frontend_handle.shutdown().await` **exactly
+      once** (pi-9 Blocker 2 — round 9 had this
+      called twice consecutively, which won't compile
+      because `shutdown` consumes `self`). The single
+      `shutdown` call drains the serve loop and
+      releases the broker registration guard,
+      capturing the `ShutdownReport`. With pi-8 B2's
+      reaper-outcome check, shutdown is a no-kill
+      drain when the outcome is already cached
+      (which it is in all four cases above, since
+      `wait()` already observed the outcome). Then
+      drop the controller and the store (the store's
+      drop releases the flock). The
+      `FrontendSupervisor` itself has no shutdown API
+      — it's a stateless factory (pi-5 B1).
 - **C3.** `rfl-tui` binary path resolution (pi-1 #6 —
   round 1 said "compile-time constants" without
   specifying the resolution order). Lookup order
@@ -2036,7 +2118,9 @@ integration test is being built):
   `signal_ready` mode (§L1a) with
   `RFL_FIXTURE_MAX_LIFETIME=1` so the child exits
   after 1 s and `FrontendHandle::wait().await`
-  returns `ReaperOutcome::Exited(0)`.
+  returns `ReaperOutcome::Exited(status)` with
+    `status.success()` true (pi-9 Medium 8 — round 9
+    used a non-existent `Exited(0)` shape).
 - `frontend_handle_drop_does_not_leak_zombie.rs`
   (Linux-only) — see §F4. Same rfl-bus-fixture-based
   approach.
@@ -2326,9 +2410,9 @@ filed; m3 picks the **fixture self-timeout** option (option
   `RFL_FIXTURE_MAX_LIFETIME` env (seconds; default
   `60` if unset) and `std::process::exit(0)` after that
   even without SIGTERM.
-- **L1a (m3 fixture additions).** Three new modes for
-  m3 readiness / wait_ready integration tests
-  (pi-5 M4 added `hold_silent`):
+- **L1a (m3 fixture additions).** Four new modes for
+  m3 (pi-5 M4 added `hold_silent`; pi-8 M5 added
+  `probe_fd_closed`; pi-9 Low 10):
   - `signal_ready` — adopts `RFL_BUS_FD`, runs fittings
     `Client::serve` so it can receive notifications,
     sends one `peer.call("frontend.ready", json!({}))`
@@ -2355,13 +2439,16 @@ filed; m3 picks the **fixture self-timeout** option (option
     to portably verify the lock fd was NOT inherited
     across exec (replaces round-8's `lsof`-on-macOS
     approach).
-  All three modes reuse the existing fixture
+  All four modes reuse the existing fixture
   transport scaffolding from m2 c20.
-- **L2.** Tests don't override the default; the 60 s ceiling
-  is generous (every m2/m3 happy path test completes in
-  under 5 s) but keeps a panicked / abandoned worktree
-  from leaking fixture processes for hours (m2 c20 saw a
-  >1 h orphan).
+- **L2.** Tests use the 60 s default unless they need a
+  deterministic shorter bound (pi-9 Low 9 — round 9
+  said "tests don't override the default" but several
+  m3 tests intentionally set `RFL_FIXTURE_MAX_LIFETIME=1`
+  / `=2` for fast wait-resolution; both forms are
+  valid). The default keeps panicked / abandoned
+  worktrees from leaking fixture processes for hours
+  (m2 c20 saw a >1 h orphan).
 - **L3.** Driver-side reaper (option 1) is rejected because
   it is operationally fragile (greps `pgrep -f` on
   worktree paths) and only catches the m2/m3 driver's
