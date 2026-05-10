@@ -1,11 +1,28 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-13 draft. Trajectory of finding
+> **Status:** round-14 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
-> **r12 0/2/2/1 ("no new blocking issues found")**.
-> Round 13 highlights:
+> r12 0/2/2/1, r13 1/1/2/1 (round 13's reaper-
+> watcher addition introduced a regression by
+> treating WaitFailed/ReaperPanicked as
+> proof-of-exit). Round 14 highlights:
+> - shutdown skip-kill is now Exited(_)-only;
+>   WaitFailed/ReaperPanicked proceed with bounded
+>   SIGTERM+SIGKILL using `kill(SIGCONT)` ESRCH
+>   probes since the watch is dead (pi-13 #1).
+> - SIGKILL-after-SIGTERM-grace re-checks the cached
+>   outcome to close the recycled-PID race (pi-13 #2).
+> - §C2 step 7 wording on shutdown grace fixed —
+>   refers to "the handle's FrontendConfig" instead
+>   of inappropriate `self.config` (pi-13 #3).
+> - `RFL_TUI_MAX_LIFETIME=2` added to the env-override
+>   end-to-end test (pi-13 #4).
+> - Fixture-mode count corrected to "Five new modes"
+>   / "All five modes" (pi-13 #5).
+>
+> Round-13 highlights (kept for trajectory context):
 > - Reaper-watcher task added to §F3 step 10 to
 >   produce `ReaperPanicked` outcomes via JoinHandle
 >   bridging (pi-12 #1).
@@ -939,27 +956,56 @@ m2-style if needed.
        (`child_pid`, `serve_handle`, `register_guard`)
        BEFORE doing anything async, so a panic in the
        shutdown body still leaves Drop a no-op.
-    2. **Check reaper outcome first** (pi-8 B2 —
-       round 8 had `shutdown` send SIGTERM
-       unconditionally, but if the caller already
-       observed exit via `wait()` the PID may have
-       been recycled; signalling it would hit an
-       unrelated process). Read
+    2. **Check reaper outcome first** (pi-8 B2 +
+       pi-13 #1 — only `Exited(_)` is proof the child
+       has actually exited. `WaitFailed(_)` /
+       `ReaperPanicked` mean the reaper itself
+       failed; the child process may still be alive
+       and must be cleaned up). Read
        `*self.reaper_outcome.borrow()`:
-       - If `Some(_)` (terminal outcome cached): the
-         child has already exited; **skip
-         SIGTERM/SIGKILL entirely**. Just abort the
-         taken `serve_handle` and drop the taken
-         `register_guard`.
-       - If `None`: proceed with SIGTERM + grace +
-         SIGKILL flow.
+       - `Some(Arc<ReaperOutcome::Exited(_)>)`: the
+         child has already exited; **skip SIGTERM/
+         SIGKILL entirely**. Just abort the taken
+         `serve_handle` and drop the taken
+         `register_guard`. Set `used_sigterm =
+         used_sigkill = false`.
+       - `Some(Arc<ReaperOutcome::WaitFailed(_)>)` or
+         `Some(Arc<ReaperOutcome::ReaperPanicked>)`:
+         the reaper failed but the child may still be
+         alive. **Treat the reaper-outcome watch as
+         dead** — it will not produce further
+         notifications. Proceed with the SIGTERM +
+         SIGKILL flow below, but instead of awaiting
+         the (dead) watch, sleep for the configured
+         grace and verify the pid is gone via
+         `nix::sys::signal::kill(Pid, Signal::SIGCONT)`
+         returning `ESRCH` (a portable
+         "is-this-pid-alive" probe that does not
+         interrupt the process).
+       - `None`: proceed with SIGTERM + grace +
+         SIGKILL flow with reaper-watch-based wait.
     3. Send SIGTERM to the taken `child_pid`.
-    4. `tokio::time::timeout(self.config.shutdown_grace,
-       reaper_outcome.changed())` — await the
-       reaper-outcome watch flipping to `Some`.
-    5. On timeout, send SIGKILL; another
-       `tokio::time::timeout(self.config.shutdown_kill_grace,
-       reaper_outcome.changed())`.
+    4. Wait for the configured grace
+       (`self.config.shutdown_grace`):
+       - If reaper-outcome watch is live: `tokio::
+         time::timeout(self.config.shutdown_grace,
+         reaper_outcome.changed())`.
+       - If watch is dead (WaitFailed/ReaperPanicked
+         path): `tokio::time::sleep(self.config
+         .shutdown_grace)`.
+    5. **Re-check the cached outcome** before
+       escalation (pi-13 #2 — between step 4's
+       timeout return and step 5's SIGKILL, the
+       reaper could have published `Exited`; sending
+       SIGKILL after that hits a recycled PID).
+       Read `*self.reaper_outcome.borrow()` again:
+       - On `Some(Exited(_))`: skip SIGKILL, fall
+         through to step 6.
+       - Otherwise: send SIGKILL; another
+         grace/sleep per step 4's branching, then
+         re-check. Failure to confirm exit after
+         this is logged at `tracing::warn!` but
+         does not block shutdown.
     6. Abort `serve_handle.abort()` and `let _ =
        serve_handle.await`.
     7. Drop `register_guard`.
@@ -1886,8 +1932,11 @@ together.
        may or may not have exited yet (pi-9 High 5).
        Map to `RflChatError::FrontendExitedBeforeReady`
        and run `handle.shutdown().await` (bounded by
-       `self.config.shutdown_grace +
-       self.config.shutdown_kill_grace`). **Then drain
+       the handle's `FrontendConfig` —
+       `shutdown_grace + shutdown_kill_grace` —
+       pi-13 #3, "self.config" was wrong context
+       since this is rfl chat orchestration code).
+       **Then drain
        the stderr forwarder**: `let _ =
        stderr_forwarder.await;` (pi-11 #3 — round 11
        only drained in step 10; SenderDropped/timeout
@@ -2012,10 +2061,13 @@ together.
       `shutdown` call drains the serve loop and
       releases the broker registration guard,
       capturing the `ShutdownReport`. With pi-8 B2's
-      reaper-outcome check, shutdown is a no-kill
-      drain when the outcome is already cached
-      (which it is in all four cases above, since
-      `wait()` already observed the outcome). Then
+      reaper-outcome check (and pi-13 #1's refinement):
+      shutdown is a no-kill drain when the cached
+      outcome is `Exited(_)` (the clean and abnormal
+      Exited cases above); for `WaitFailed` /
+      `ReaperPanicked`, shutdown still issues
+      SIGTERM + SIGKILL because the child may be
+      alive despite the reaper having failed. Then
       drop the controller and the store (the store's
       drop releases the flock). The
       `FrontendSupervisor` itself has no shutdown API
@@ -2066,15 +2118,13 @@ together.
   - End-to-end `rfl_chat_resolves_tui_via_env_override.rs`
     sets the real `RFL_TUI_PATH` env to **the real
     `rfl-tui` binary** with `RFL_TUI_TEST_MODE=1`
-    (pi-5 M3: a non-protocol "stub" would trip
-    `FrontendExitedBeforeReady` or
-    `FrontendReadyTimeout` after round 5's tightening
-    of the readiness contract — the real
-    headless-mode TUI is the only easily-available
-    binary that adopts `RFL_BUS_FD` and calls
-    `frontend.ready`). The pure-function tests above
-    are the synthetic-stub coverage; this end-to-end
-    is the integration-level "actually boots" gate.
+    AND `RFL_TUI_MAX_LIFETIME=2` (pi-13 #4 — without
+    the lifetime override the test would block on
+    the headless TUI's default 60 s self-timeout
+    because no `core.lifecycle.test_done` event is
+    published). The pure-function tests above are
+    the synthetic-stub coverage; this end-to-end is
+    the integration-level "actually boots" gate.
 - **C4.** Error handling: every error path prints a
   human-readable message on stderr and returns a non-
   zero exit. Round 2 keeps the simple "1 for any error"
@@ -2614,9 +2664,11 @@ filed; m3 picks the **fixture self-timeout** option (option
   `RFL_FIXTURE_MAX_LIFETIME` env (seconds; default
   `60` if unset) and `std::process::exit(0)` after that
   even without SIGTERM.
-- **L1a (m3 fixture additions).** Four new modes for
+- **L1a (m3 fixture additions).** Five new modes for
   m3 (pi-5 M4 added `hold_silent`; pi-8 M5 added
-  `probe_fd_closed`; pi-9 Low 10):
+  `probe_fd_closed`; pi-11 #4 added
+  `signal_ready_then_exit_n`; pi-13 #5 — count
+  updated):
   - `signal_ready` — adopts `RFL_BUS_FD`, runs fittings
     `Client::serve` so it can receive notifications,
     sends one `peer.call("frontend.ready", json!({}))`
@@ -2651,7 +2703,7 @@ filed; m3 picks the **fixture self-timeout** option (option
     to portably verify the lock fd was NOT inherited
     across exec (replaces round-8's `lsof`-on-macOS
     approach).
-  All four modes reuse the existing fixture
+  All five modes reuse the existing fixture
   transport scaffolding from m2 c20.
 - **L2.** Tests use the 60 s default unless they need a
   deterministic shorter bound (pi-9 Low 9 — round 9
