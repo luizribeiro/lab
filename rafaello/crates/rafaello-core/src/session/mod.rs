@@ -6,6 +6,8 @@
 //! acquired, the holder pid is written, and only then is the SQLite file
 //! opened and the schema initialized.
 
+#![allow(clippy::result_large_err)]
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -17,7 +19,10 @@ use rusqlite::Connection;
 use thiserror::Error;
 use ulid::Ulid;
 
+use crate::bus::Broker;
 use crate::entry::Entry;
+use crate::error::BrokerError;
+use crate::renderer::{Capabilities, RenderPipeline};
 
 const SCHEMA_VERSION: &str = "1";
 
@@ -34,6 +39,11 @@ pub enum SessionError {
     Locked { holder_pid: Option<u32> },
     #[error("session schema mismatch: expected {expected}, found {found}")]
     SchemaMismatch { expected: String, found: String },
+    #[error("session publish failed: {source}")]
+    Publish {
+        #[from]
+        source: BrokerError,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +251,61 @@ fn write_holder_pid(guard: &mut Flock<File>, pid: u32) -> std::io::Result<()> {
     writeln!(file, "{}", pid)?;
     file.flush()?;
     Ok(())
+}
+
+pub struct SessionController {
+    store: SessionStore,
+    pipeline: RenderPipeline,
+    broker: Broker,
+}
+
+impl SessionController {
+    pub fn new(store: SessionStore, pipeline: RenderPipeline, broker: Broker) -> Self {
+        Self {
+            store,
+            pipeline,
+            broker,
+        }
+    }
+
+    pub fn store(&self) -> &SessionStore {
+        &self.store
+    }
+
+    pub async fn finalize_entry(
+        &self,
+        entry: Entry,
+        caps: &Capabilities,
+    ) -> Result<(), SessionError> {
+        let seq = self.store.append_entry(&entry)?;
+        let tree = self.pipeline.render(&entry, caps);
+        self.broker.publish_core(
+            "core.session.entry.finalized",
+            serde_json::json!({
+                "entry": entry,
+                "tree": tree,
+                "seq": seq,
+                "replay": false,
+            }),
+        )?;
+        Ok(())
+    }
+
+    pub async fn replay_history(&self, caps: &Capabilities) -> Result<(), SessionError> {
+        for stored in self.store.load_entries()? {
+            let tree = self.pipeline.render(&stored.entry, caps);
+            self.broker.publish_core(
+                "core.session.entry.finalized",
+                serde_json::json!({
+                    "entry": stored.entry,
+                    "tree": tree,
+                    "seq": stored.seq,
+                    "replay": true,
+                }),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn init_or_verify_meta(conn: &Connection) -> Result<String, SessionError> {

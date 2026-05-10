@@ -48,4 +48,4 @@ pub use frontend::{
     PaintError, ShutdownReport,
 };
 
-pub use session::{SessionError, SessionStore, StoredEntry};
+pub use session::{SessionController, SessionError, SessionStore, StoredEntry};

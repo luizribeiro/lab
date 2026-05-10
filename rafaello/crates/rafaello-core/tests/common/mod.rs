@@ -3,6 +3,7 @@
 
 pub mod frontend_test_kit;
 pub mod peer_test_kit;
+pub mod session_test_kit;
 
 #[cfg(feature = "test-fixture")]
 pub mod m2_harness;
