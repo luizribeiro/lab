@@ -216,6 +216,40 @@ binds *content*, not just *name*.
 
 ## 5. The bus ACL
 
+> **v1 status (m2 wire schemas):** the m2 broker ships
+> concrete wire types this RFC body doesn't enumerate; per
+> `decisions.md` row 23 ("Bus payload schemas are owned by
+> Stream A"), the live v1 schema is the union of (this §5
+> body) PLUS the four m2-introduced schemas:
+>
+> - **`bus.publish` notification (plugin → core)** — the
+>   inbound publish wire type with `{topic, payload,
+>   in_reply_to?, taint?}`. m2 scope §B4.
+> - **`bus.event` notification (core → plugin)** — the
+>   outbound fan-out wire type with `{topic, payload,
+>   publisher, in_reply_to?, taint?}` where `publisher` is
+>   `{kind: "core"}` or `{kind: "plugin", canonical, topic_id}`.
+>   m2 scope §B8.
+> - **`core.lifecycle.publish_rejected`** — emitted on every
+>   broker rejection with `{canonical?, topic?, code, message}`
+>   where `code ∈ {unknown_namespace, publish_on_reserved_namespace,
+>   publish_outside_grant, invalid_topic, invalid_in_reply_to_*,
+>   invalid_payload}`. m2 scope §B9.
+> - **`core.lifecycle.boot`** — explicit `Broker::publish_boot()`
+>   emits `{version, plugin_count}`. m2 scope §B1, §B9.
+>
+> The m2 `BusEvent`'s `publisher` enum currently has only
+> `Core` and `Plugin {canonical, topic_id}`. The `Provider`
+> and `Frontend` variants are reserved for m4 / m5 and not
+> yet on the wire. The `request_id` field overview §4.5
+> enumerates is **not** in m2 events; m4 adds it (overview
+> §4.5 v1-status banner).
+>
+> Per `plans/README.md` §"Authoring conventions" stream RFCs
+> are not retroactively rewritten; the m2 wire schemas are
+> referenced via this banner rather than inlined into §5.x.
+> m2 retrospective §2.3 + §2.4.
+
 ### 5.1 Topic and pattern grammars (canonical)
 
 Topics and subscribe patterns are different grammars; conflating
