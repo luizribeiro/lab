@@ -492,6 +492,48 @@ pub enum SpawnError {
     },
 }
 
+/// Why a [`CompiledFrontend`](crate::frontend::CompiledFrontend) failed
+/// structural validation at frontend spawn time (scope §F2).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum InvalidFrontendPlanReason {
+    AttachIdInvalid { attach_id: String },
+    EntryNotAbsolute { path: PathBuf },
+    EntryNotExecutable { path: PathBuf },
+    ControlCharsInPath { path: PathBuf },
+    ReservedEnvName { var: String },
+    AttachIdNotInAcl { attach_id: AttachId },
+    AttachIdAlreadyRegistered { attach_id: AttachId },
+}
+
+/// Errors raised by the frontend spawn pipeline (scope §F2).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum FrontendSpawnError {
+    #[error("invalid compiled frontend plan: {reason:?}")]
+    InvalidPlan { reason: InvalidFrontendPlanReason },
+    #[error("io error: {source}")]
+    Io {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("frontend spawn failed: {source}")]
+    Spawn {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("frontend transport setup failed: {source}")]
+    Transport {
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("frontend broker registration failed: {source}")]
+    BrokerRegister {
+        #[source]
+        source: BrokerError,
+    },
+}
+
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -517,4 +559,6 @@ pub enum Error {
     Broker(#[from] BrokerError),
     #[error(transparent)]
     Spawn(#[from] SpawnError),
+    #[error(transparent)]
+    FrontendSpawn(#[from] FrontendSpawnError),
 }

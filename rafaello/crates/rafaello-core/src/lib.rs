@@ -7,6 +7,7 @@ pub mod compile;
 pub mod digest;
 pub mod entry;
 pub mod error;
+pub mod frontend;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
@@ -35,6 +36,13 @@ pub use compile::{
 };
 pub use error::{
     AttachIdParseError, BrokerError, CarveOutError, CollisionError, CompileError, DigestError,
-    Error, InReplyToReason, InvalidPlanReason, LockError, ManifestError, PathError, PathKind,
-    Publisher, ReaperOutcome, ShutdownFailure, SpawnError, TrifectaError, ValidationError,
+    Error, FrontendSpawnError, InReplyToReason, InvalidFrontendPlanReason, InvalidPlanReason,
+    LockError, ManifestError, PathError, PathKind, Publisher, ReaperOutcome, ShutdownFailure,
+    SpawnError, TrifectaError, ValidationError,
+};
+
+pub use frontend::{
+    CompiledFrontend, FrontendBusPublishService, FrontendConfig, FrontendExtraServiceFactory,
+    FrontendHandle, FrontendPaths, FrontendReadyError, FrontendReadyService, FrontendSupervisor,
+    PaintError, ShutdownReport,
 };
