@@ -1,11 +1,19 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-1 draft. Awaiting pi adversarial review.
-> Inheritances from m2 retrospective (§5.1 unwind-window
-> coverage, §4.4 fixture process leak, §2.8 m1
-> publishes-grant unknown-namespace gap) explicitly addressed
-> below — each of the three is in scope unless pi argues
-> otherwise.
+> **Status:** round-2 draft. Round 1 returned 10 blocking + 3
+> cleanup findings (`pi-review-1.md`); round 2 addresses every
+> one. Most consequential changes from round 1: replay no
+> longer uses a separate `core.session.entry.replay` topic
+> (collapsed into `entry.finalized`) and is published only
+> after the TUI subscribes; the fixture-entry harness now
+> goes through a new `SessionController::finalize_entry`
+> (append → render → publish) so the demo bar's nine SQLite
+> rows actually land; `O_CLOEXEC` on the session lock fd;
+> `FrontendSupervisor` gains an explicit reaper task; TUI
+> integration tests live in the `rafaello-tui` crate (Cargo's
+> `CARGO_BIN_EXE_*` rule); deterministic test exit via
+> `core.lifecycle.test_done`; broker error variants made
+> publisher-symmetric. Pi convergence pending.
 
 ## Goal
 
@@ -145,28 +153,47 @@ test matrix.
 
 ### W — workspace dependencies
 
-- **W1.** Add to `rafaello/Cargo.toml`'s `[workspace.dependencies]`:
-  - `ratatui = "0.29"` (TUI rendering)
-  - `crossterm = "0.28"` (terminal control; ratatui's default
-    backend)
-  - `rusqlite = { version = "0.32", features = ["bundled"] }`
-    (bundles SQLite — no system-sqlite dependency; lockin /
-    devshell remain free of system libsqlite3)
-  - `tui-input = "0.10"` (line editor widget for the prompt
-    box) — pi may argue against; the alternative is a hand-
-    rolled minimal editor, ~80 LoC, no dep
-  - `unicode-width = "0.2"` (terminal column counts;
-    transitive in ratatui but used directly by m3's renderer
-    text wrapping)
-  - `ulid = "1"` (entry ids — overview §11 / Stream E §3
-    specify ULID)
-  - `chrono = { version = "0.4", default-features = false,
-    features = ["serde", "clock"] }` (entry timestamps;
-    `created_at` per Stream E §3)
-  - `time = ...` is the alternative — m3 picks `chrono`
-    because Stream E spells `created_at` as `date-time`
-    string and `chrono`'s serde integration is the obvious
-    fit.
+- **W1 (workspace `Cargo.toml`).** Three concrete edits to
+  `rafaello/Cargo.toml` (verified against the live file —
+  `chrono` already exists, `tokio` is missing the `process`
+  feature, and the `members` list does not yet include the
+  new TUI crate):
+  - **Edit existing entries.**
+    - `tokio.features` adds `"process"` (currently
+      `["rt-multi-thread", "macros", "io-util", "net",
+      "sync", "time"]`). Required by m3's
+      `FrontendSupervisor` (§F3) for `tokio::process::
+      Command`.
+    - `chrono` already exists as `{ version = "0.4",
+      features = ["serde"] }`. m3 leaves it alone — the
+      existing entry is sufficient for `DateTime<Utc>`
+      serde encode/decode. (Round 1 incorrectly proposed a
+      replacement with `default-features = false` +
+      `clock`; the existing `default-features = true`
+      gives us `clock` and `std` for free, and there is
+      no compile-time cost worth chasing in v1.)
+  - **Add new entries.**
+    - `ratatui = "0.29"` (TUI rendering).
+    - `crossterm = "0.28"` (terminal control; ratatui's
+      default backend).
+    - `rusqlite = { version = "0.32", features =
+      ["bundled"] }` (bundles SQLite — no system-sqlite
+      dependency; the lockin / devshell stays free of
+      system libsqlite3).
+    - `tui-input = "0.10"` (line editor for the prompt
+      box) — pi may argue against; the alternative is a
+      hand-rolled ~80-LoC editor and no dep. m4/m5 will
+      need a richer editor either way, so round 2 keeps
+      `tui-input`.
+    - `unicode-width = "0.2"` (terminal column counts;
+      transitive in ratatui but used directly by m3's
+      renderer text wrapping).
+    - `ulid = "1"` (entry ids — overview §11 / Stream E
+      §3 specify ULID).
+  - **Add the new workspace member.** `members` currently
+    reads `["crates/rafaello", "crates/rafaello-core"]`;
+    m3 extends to `["crates/rafaello",
+    "crates/rafaello-core", "crates/rafaello-tui"]`.
 - **W1 (dev-deps).** No new entries; `tempfile`, `serial_test`,
   `tracing-test`, `tracing-subscriber` already in m2's W1.
   `insta = "1"` is **not** added in m3 — render-tree snapshot
@@ -293,10 +320,41 @@ the unsandboxed path explicit.
       (`Broker::register_frontend(attach_id, peer)` — see
       §B1).
     - Return `FrontendHandle`.
-- **F4.** `FrontendHandle::Drop` SIGKILLs the child if alive
-  (mirrors m2 c26). Cooperative shutdown via
-  `FrontendSupervisor::shutdown(self) -> ShutdownReport` —
-  SIGTERM + 2 s grace + SIGKILL, identical to m2 c25.
+- **F4.** Lifecycle (pi-1 #4: round 1 was missing the
+  reaper, which would have leaked zombies in tests and
+  long-running parents — m2 SP5 already paid this
+  tuition):
+  - At spawn time, `FrontendSupervisor::spawn` hands the
+    `tokio::process::Child` to a per-frontend **reaper
+    task** spawned with `tokio::spawn`. The reaper owns
+    the `Child` and `await`s `child.wait()`. On exit it
+    pushes the `ExitStatus` (or pre-`wait` outcome) into
+    a `tokio::sync::watch` channel.
+  - `FrontendHandle::wait(&self) -> Arc<ReaperOutcome>`
+    resolves on that watch (mirroring m2 §SP4 step 18).
+    Late `wait` callers see the cached `Arc` immediately.
+  - `FrontendHandle::Drop` sends a best-effort SIGKILL
+    (idempotent on a dead pid; logged at `warn!` if the
+    syscall fails) and **does not block**; the reaper
+    completes the `wait()` asynchronously.
+  - Cooperative shutdown: `FrontendSupervisor::shutdown(self)
+    -> ShutdownReport` sends SIGTERM, awaits the reaper
+    watch with a 2 s timeout, escalates to SIGKILL,
+    awaits again with a 1 s timeout. Identical to m2 c25
+    (SIGTERM + grace + SIGKILL + reaper wait); shape is
+    the same so a future merge of `PluginSupervisor` and
+    `FrontendSupervisor` would be mechanical.
+  - **New positive test** `frontend_handle_wait_resolves_on_child_exit.rs`:
+    spawn a `rfl-tui` child in `RFL_TUI_TEST_MODE`,
+    publish a `core.lifecycle.test_done` event (§T2
+    deterministic exit), `handle.wait().await` returns a
+    `ReaperOutcome::Exited(0)`.
+  - **New negative test** `frontend_handle_drop_does_not_leak_zombie.rs`:
+    spawn a child, drop the handle without
+    cooperatively shutting down, allow the reaper task
+    a 500 ms grace, then assert no child is in zombie
+    state (`/proc/<pid>/status` returns `ENOENT`).
+    Linux-only.
 - **F5.** Out of scope for §F: lockin builder calls (frontends
   are trusted UI principals; decision row 15), outpost
   proxy startup, `bindings.helper_for`, `provider = true`
@@ -332,47 +390,96 @@ variant to live and grows `BrokerAcl` accordingly.
   and `user_message` topics are out of scope here. Pi may
   push back: round-1 takes the conservative "TUI publishes
   nothing in m3" position.)
-- **B2.** New `Broker::register_frontend(&self, attach_id:
-  AttachId, peer: PeerHandle) -> Result<RegisteredFrontend,
-  BrokerError>`. Symmetric to `register_plugin`. Errors
-  `NotInAcl` / `AlreadyRegistered`. RAII guard
-  `RegisteredFrontend` mirrors `RegisteredPlugin`.
-- **B3.** New `Broker::try_reserve_frontend_registration`
-  precheck (m2 §B1 pattern).
-- **B4.** Promote `PublisherIdentity::Frontend { attach_id:
+- **B2.** New broker registration surface for frontends. m2's
+  `BrokerError::{NotInAcl, AlreadyRegistered, PublishOutsideGrant,
+  InvalidInReplyTo}` are `CanonicalId`-shaped; round 1 was wrong
+  to claim frontend support drops in "without API breakage"
+  (pi-1 #10). Round 2 makes the error surface explicitly
+  publisher-typed:
+  - **New `Publisher` variant**: `Publisher::Frontend(AttachId)`
+    (m2's enum is `Core | Plugin(CanonicalId)`; round 2
+    extends).
+  - **New `BrokerError` variants** (frontend-shaped, mirroring
+    the plugin pair):
+    - `FrontendNotInAcl(AttachId)`,
+    - `FrontendAlreadyRegistered(AttachId)`,
+    - `FrontendNotRegistered(AttachId)`.
+  - **Generalise** the existing publisher-bearing variants to
+    accept the `Publisher` enum. Concretely:
+    - `PublishOutsideGrant { publisher: Publisher, topic:
+      String }` (m2 currently `{ canonical: CanonicalId,
+      topic: String }`),
+    - `InvalidInReplyTo { publisher: Publisher, topic: String,
+      reason: InReplyToReason }` (m2 currently `{ canonical:
+      CanonicalId, ... }`).
+    These are source-breaking changes to `BrokerError` and
+    require the m2 callers (broker internal call sites + every
+    `matches!`-style test) to update accordingly. The change is
+    isolated to `rafaello-core` (`BrokerError` is not yet
+    surfaced beyond the crate's tests at m2 close).
+  - `UnknownNamespace { publisher: Publisher, topic }` and
+    `PublishOnReservedNamespace { publisher: Publisher, topic }`
+    (m2 already typed as `Publisher`-bearing per m2 §B2; no
+    change beyond the new `Frontend` enum arm).
+  - **New register/lookup methods**:
+    - `pub fn Broker::register_frontend(&self, attach_id:
+      AttachId, peer: PeerHandle) -> Result<RegisteredFrontend,
+      BrokerError>` — symmetric to `register_plugin`. Errors
+      `FrontendNotInAcl` / `FrontendAlreadyRegistered`. RAII
+      guard `RegisteredFrontend` mirrors `RegisteredPlugin`.
+    - `pub fn Broker::try_reserve_frontend_registration(&self,
+      attach_id: &AttachId) -> Result<(), BrokerError>` —
+      cheap precheck (m2 §B1 pattern).
+    - `pub fn Broker::frontend_acl(&self, attach_id: &AttachId)
+      -> Option<FrontendAcl>` — same shape as
+      `plugin_acl(canonical)`.
+    - `pub fn Broker::handle_frontend_publish(&self, attach_id:
+      &AttachId, raw_params: &Value) -> Result<(), BrokerError>`
+      — the symmetric handler to `handle_plugin_publish`. m3
+      ships this method but m3's `tui` ACL has
+      `publish_topics = []`, so its only m3-observable behaviour
+      is "always errors" (`PublishOutsideGrant`). m4 / m5
+      will exercise the success path when `user_message` /
+      `confirm_answer` enter the grant set.
+- **B3.** Promote `PublisherIdentity::Frontend { attach_id:
   String }` from commented-future to live. Bus event
   serialisation gains the new variant — `kind: "frontend"`
   per the existing `#[serde(tag = "kind", rename_all =
   "snake_case")]` convention.
-- **B5.** Publish authority for frontends (m3 enforcement,
+- **B4.** Publish authority for frontends (m3 enforcement,
   symmetric to m2 §B3 plugin path):
   - `frontend.<attach-id>.*` only — same exact-match-against-
     `publish_topics` rule as plugins.
   - Top-level segments other than `frontend.<own-attach-id>`
     → `PublishOnReservedNamespace { publisher: Publisher::
     Frontend(attach_id), topic }`.
-  - `Publisher` enum gains a `Frontend(AttachId)` variant.
-    `BrokerError`'s existing `publisher`-bearing variants
-    accept the new arm without API breakage.
   - `auto_subscribes` is NOT publish authority for frontends
     either (m2 §B3's rule applies).
-- **B6.** Fan-out (m2 §B7): a frontend subscriber receives
+- **B5.** Fan-out (m2 §B7): a frontend subscriber receives
   `core.session.**` events the same way plugins do. Result-
   routing protection (m2 §B7's `plugin.<id>.tool_result` /
   `rpc_reply` no-fan-out) is unchanged — m4 territory. m3
   does not introduce any frontend-targeted result-routing
   carve-out.
-- **B7.** `BrokerAcl` defence-in-depth pattern revalidation
+- **B6.** `BrokerAcl` defence-in-depth pattern revalidation
   (m2 §B10) extends to the new `frontends` map. New tests:
   `broker_construct_with_invalid_frontend_pattern_rejected.rs`,
   `broker_register_frontend_unknown_attach_id_rejected.rs`,
   `broker_register_frontend_duplicate_rejected.rs`.
 
-### S — session store (`rafaello_core::session`)
+### S — session store + controller (`rafaello_core::session`)
 
 Sessions persist conversation entries to SQLite. m3 ships
-the storage layer; the entry stream is generated only by the
-in-test fixture-entry harness (no provider yet).
+the storage layer **plus a `SessionController` that owns
+the canonical entry-finalisation pipeline** — append to
+SQLite, render through the renderer pipeline, publish on
+the bus, in that order. The fixture-entry harness in m3
+goes through the controller; m4's agent loop will replace
+the harness with the real provider path. Pi round-1 #2:
+without the controller, the demo bar's "nine SQLite rows
+after shutdown" assertion (§I) and the "renders all of
+them" assertion (§I) would land via two parallel paths
+that could drift — one path for both is the contract.
 
 - **S1.** New module `rafaello_core::session`. Public
   surface:
@@ -385,17 +492,56 @@ in-test fixture-entry harness (no provider yet).
     journal_mode = WAL` and `PRAGMA synchronous = NORMAL`.
     Creates tables on first call (no migration framework
     in v1; future schema bumps add a migration step in
-    m4+).
+    m4+). Acquires the project flock per §S5.
   - `pub fn SessionStore::append_entry(&self, entry:
-    &Entry) -> Result<(), SessionError>` — INSERT into
-    `entries`.
+    &Entry) -> Result<u64, SessionError>` — INSERT into
+    `entries`; returns the assigned `seq`.
   - `pub fn SessionStore::load_entries(&self) ->
     Result<Vec<Entry>, SessionError>` — SELECT in `seq`
-    order. Used at startup to replay history into the
-    TUI.
+    order. Used at startup for replay (§C2).
   - `pub fn SessionStore::session_id(&self) -> &str` —
     ULID assigned at first open; persisted in a single-
     row `session_meta` table.
+  - `pub struct SessionController` — bundles a
+    `SessionStore` + a `RenderPipeline` + a `Broker`
+    handle. Constructed by `rfl chat` after the broker is
+    up. Public methods:
+    - `pub async fn finalize_entry(&self, entry: Entry,
+      caps: &Capabilities) -> Result<(), SessionError>`
+      — single canonical entry-publication path:
+      1. `store.append_entry(&entry)` (assigns `seq`);
+      2. `pipeline.render(&entry, caps)` (panic-isolated
+         per §R3);
+      3. `broker.publish_core("core.session.entry.finalized",
+         json!({ "entry": entry, "tree": tree, "seq":
+         seq, "replay": false }))`.
+      Errors at step 1 or 3 are surfaced as
+      `SessionError`; renderer panics at step 2 are
+      handled by `RenderPipeline` itself (catch_unwind
+      converts to a `Callout` tree, the publish still
+      proceeds — the entry is persisted regardless).
+    - `pub async fn replay_history(&self, caps:
+      &Capabilities) -> Result<(), SessionError>` —
+      iterates `store.load_entries()`, renders each, and
+      publishes on the same `core.session.entry.finalized`
+      topic with `replay: true` in the metadata payload
+      (so a future m4+ TUI can suppress fresh-entry
+      animations on replay if needed). m3's TUI does not
+      currently distinguish; the metadata flag is wire-
+      reserved without a consumer.
+    - `pub fn store(&self) -> &SessionStore` — exposed
+      for tests that want to assert on persisted state
+      after shutdown.
+  - **No separate `core.session.entry.replay` topic.** Pi
+    round-1 #1 / #9: round 1 invented a `replay` topic
+    that does not match overview §11 / Stream E §3
+    (which know only `finalized`). Round 2 collapses
+    onto `entry.finalized` with a `replay: bool` payload
+    flag. The decision is recorded in §"Acceptance
+    summary" as anticipated drift; if pi prefers a
+    metadata-on-`EntryMetadata` flag rather than a
+    payload-envelope flag, that is a no-op rewire and
+    round 2 is open to either form.
 - **S2.** Schema (one table for v1):
   ```sql
   CREATE TABLE IF NOT EXISTS entries (
@@ -439,6 +585,14 @@ in-test fixture-entry harness (no provider yet).
   instead of fighting for SQLite". m3 takes a flock on
   `${state_dir}/session.lock` at `SessionStore::open`
   time:
+  - Open the lockfile with **`O_CLOEXEC`** so the fd is
+    not inherited by the spawned `rfl-tui` child (pi-1
+    #3: `rfl chat` opens the store before spawning the
+    TUI, so without `O_CLOEXEC` the child would inherit
+    the lock fd and keep the lock alive after parent
+    failure with a stale holder pid). Concretely:
+    `OpenOptions::new().read(true).write(true).create(true)
+    .custom_flags(libc::O_CLOEXEC).open(...)`.
   - `nix::fcntl::flock(fd, Flock::LockExclusiveNonblock)`.
   - On `EWOULDBLOCK`, read the holder's pid from the file
     contents (the holder writes `std::process::id()` on
@@ -446,10 +600,16 @@ in-test fixture-entry harness (no provider yet).
     holder_pid }`.
   - The lock is released on `Drop` (close fd → kernel
     releases). No explicit release path.
+  - **New negative test** `session_store_lock_fd_not_inherited_by_child.rs`:
+    open store, spawn a probe child via `tokio::process::
+    Command` (no special inheritance), check
+    `/proc/<pid>/fd` (Linux) / `lsof -p <pid>` (macOS;
+    gated `#[cfg(target_os = "macos")]`) and assert the
+    lock fd is NOT in the child's fd table.
   Cross-platform: Linux + macOS both support
-  `LockExclusiveNonblock`. flock is per-fd, not per-pid —
-  fork inheritance is not an issue because m3 never forks
-  with the lock held.
+  `LockExclusiveNonblock`. flock is per-fd, not per-pid;
+  with `O_CLOEXEC` set, fork+exec preserves the lock in
+  the parent and the child does not inherit it.
 - **S6.** Per-frontend private state directory:
   `${PROJECT_ROOT}/.rafaello-frontend-data/<attach-id>/` —
   injected as `RFL_PRIVATE_STATE_DIR` to the child. m3's
@@ -493,8 +653,17 @@ contract. m3 implements only the v1 subset.
       pub author: EntryAuthor,             // user|assistant|tool|system|plugin
       pub plugin: Option<String>,          // when author==plugin
       pub stream_state: StreamState,       // v1: only Final
-      pub seq: Option<u64>,
       pub tags: Vec<String>,
+      // NOTE: `seq` is NOT part of EntryMetadata in v1.
+      // The SQLite `entries.seq` column is the canonical
+      // monotonic ordering; SessionStore::append_entry
+      // assigns it server-side. The fan-out wire payload
+      // for core.session.entry.finalized carries `seq` at
+      // the envelope level (see §S1 SessionController),
+      // not under metadata. Round-1 had a duplicate
+      // `seq: Option<u64>` here; pi-1 #12 surfaced the
+      // ambiguity. v2 may revisit if a streaming-patch
+      // ordering field needs to ride alongside the entry.
   }
 
   #[non_exhaustive]
@@ -557,31 +726,72 @@ Built-in in-process Rust renderers turn an `Entry` into a
   renderers are NOT registered (decision row 29, deferred
   to v2).
 - **R3.** `pub struct RenderPipeline` — the entry-to-tree
-  driver. `pipeline.render(entry, caps) -> RenderNode`
-  algorithm:
-  1. Look up `entry.kind` in the registry.
-  2. If not present → emit `Unknown { kind, payload,
-     fallback }` per Stream E §6 (the server-side
-     downgrade for unknown kinds, matching the demo bar
-     "in-test harness publishes one entry per built-in
-     kind plus one unknown kind; TUI renders all of them
-     with the unknown kind falling back").
-  3. If present, **catch panics** with `std::panic::
-     catch_unwind(AssertUnwindSafe(|| renderer.render(...)))`
-     and on panic emit `Callout { kind: Warn, child:
-     KeyValue { pairs: [("renderer", entry.kind),
-     ("error", "panicked"), ("fallback", fallback.text)] }
-     }`. The panic is logged at `tracing::error!` with
-     entry id + kind for diagnosability.
-  4. If the renderer returns `Err(_)` (non-panic), same
-     fallback as the panic path but with `("error",
-     err.to_string())`.
-  5. After the renderer returns successfully, walk the
-     tree and downgrade any nodes the frontend
-     `Capabilities` reports it cannot handle to `Unknown
-     { kind: "<node-name>", payload: <serialised-node>,
-     fallback }`. (`fallback` here is the entry's
-     top-level `fallback`, or a default Block if none.)
+  driver. Pi-1 #9 surfaced that round 1 conflated three
+  distinct fallback paths; round 2 separates them per
+  Stream E §6 + §6 last paragraph:
+  - **Path A — unknown entry kind / renderer-unavailable.**
+    The `entry.kind` is not present in the registry. Stream
+    E §6 specifies:
+    1. If `entry.fallback.text` (or `.markdown`) is set →
+       emit `Block { children: [ Text { text:
+       fallback.text, emphasis: None } ] }` (markdown is
+       converted to a render-tree if the markdown renderer
+       can run; the markdown path is itself a built-in
+       kind in m3, so `fallback.markdown` re-enters Path A
+       with `kind = "text", payload = { text:
+       fallback.markdown, markdown: true }` rather than
+       reusing the markdown renderer in-place — pi may
+       prefer the simpler "always emit `Text`" form;
+       round 2 keeps the markdown path because Stream E
+       §6 specifies it).
+    2. If neither is set → emit `Callout { kind: "warn",
+       child: KeyValue { pairs: [(\"kind\", entry.kind),
+       (\"schema\", entry.schema.unwrap_or(\"\")),
+       (\"payload\", payload-stringified)] } }` per
+       Stream E §6 second bullet ("ugly on purpose so
+       plugin authors notice").
+  - **Path B — renderer panic / renderer `Err`.** The
+    `entry.kind` IS in the registry but the call panics
+    or returns `Err`. Per Stream E §9 last paragraph
+    ("a crashing renderer never crashes the daemon"),
+    the panic / `Err` is treated as renderer-unavailable
+    — the pipeline falls into **Path A** with the same
+    fallback rules (author fallback if set, default
+    Callout otherwise). The panic is **separately**
+    logged at `tracing::error!` with entry id + kind for
+    diagnosability; the `Err` is logged at
+    `tracing::warn!`. The wire output does NOT include a
+    "panicked" diagnostic in the rendered tree — that
+    would conflate trust boundaries (the user sees a
+    fallback; the operator sees a log). Pi may push back
+    on this and prefer an in-tree diagnostic in dev
+    builds; round 2 takes the conservative "log-only" cut
+    to keep the user-visible tree predictable across dev
+    and release builds. Catch implementation:
+    `std::panic::catch_unwind(AssertUnwindSafe(||
+    renderer.render(entry, caps)))`.
+  - **Path C — capability-driven render-tree node
+    downgrade.** The renderer returned `Ok(tree)`, but
+    one or more nodes are not in the frontend's
+    `Capabilities::nodes` set. The pipeline walks the
+    tree and downgrades each unsupported subtree to
+    `Unknown { kind: "<node-name>",
+    payload: <serialised-node-as-Value>, fallback:
+    EntryFallback }` per Stream E §6 last paragraph.
+    `EntryFallback` here is **the entry's `fallback`
+    field** (not a "default Block" — round-1 wording was
+    self-contradictory per pi-1 #9; `Unknown.fallback`'s
+    type IS `EntryFallback` per E2). If
+    `entry.fallback` is `None`, the downgraded subtree
+    carries `EntryFallback { text: <node-summary>,
+    markdown: None, summary: None }` where
+    `node-summary` is a one-line stringification (e.g.
+    `"[unsupported Image]"`); the frontend then has a
+    minimal text to paint.
+  - The three paths are mutually exclusive on a
+    per-entry basis: A and B replace the renderer's
+    return; C runs only after a successful renderer
+    return.
 - **R4.** `pub struct Capabilities` — the v1 subset of
   Stream E §5. Fields: `unicode: UnicodeClass`, `color:
   ColorClass`, `width: u16`, `height: Option<u16>`,
@@ -615,8 +825,9 @@ identified as `frontend.tui`.
 - **T1.** New crate scaffolding (§W3).
 - **T2.** `[[bin]] rfl-tui` — the binary's `main`:
   1. Parse env: `RFL_BUS_FD` (required; numeric fd),
-     `RFL_PROJECT_ROOT` (required; abs path), the
-     fittings reserved env vars.
+     `RFL_PROJECT_ROOT` (required; abs path),
+     `RFL_TUI_TEST_MODE` (optional; if `=1`, see step 5),
+     the fittings reserved env vars.
   2. Adopt the inherited fd as a tokio `UnixStream`,
      wrap with `fittings_transport::stdio::StdioTransport`-
      equivalent (m2 c19 already split on
@@ -624,20 +835,36 @@ identified as `frontend.tui`.
   3. Build a `fittings_client::Client` with a
      `BusEventHandler` (notification handler) that turns
      `bus.event` notifications into channel sends to the
-     UI thread.
-  4. Initialise terminal (crossterm raw mode +
-     alternate-screen optional — m3 picks alternate-
-     screen for the v1 cut to keep scrollback handling
-     simple). On exit, restore raw mode (Drop guard) so
-     a panic in the TUI does not leave the user's
-     terminal corrupted.
-  5. Run the UI loop: redraw on each entry-event arrival,
+     UI thread. Subscribe semantics are broker-managed at
+     `register_frontend` time; the client does not issue
+     a `bus.subscribe` request (m2 §"Out of scope" — the
+     broker rejects `bus.subscribe` with `MethodNotFound`).
+  4. **Headless test mode** (when `RFL_TUI_TEST_MODE = 1`):
+     skip terminal init entirely; collect every received
+     `bus.event` into an in-memory log; exit cleanly on
+     the first `core.lifecycle.test_done` event with
+     `exit_code = 0`. No keyboard handling, no crossterm
+     calls. The log is reachable via stderr (one line
+     per received entry, JSON-encoded) so test harnesses
+     can parse-and-assert without involving a fake
+     terminal. **Deterministic exit** (pi-1 #7) — the
+     test harness publishes `core.lifecycle.test_done`
+     after the last fixture entry; the 60 s self-timeout
+     (§L1 — extended to `rfl-tui`) is a defensive
+     backstop only, NOT the test's exit signal.
+  5. **Production mode** (default; `RFL_TUI_TEST_MODE`
+     unset): initialise terminal (crossterm raw mode +
+     alternate-screen — m3 picks alternate-screen for the
+     v1 cut to keep scrollback handling simple). On exit,
+     restore raw mode (Drop guard) so a panic in the TUI
+     does not leave the user's terminal corrupted.
+  6. Run the UI loop: redraw on each entry-event arrival,
      handle keyboard input (q to quit; arrow keys to
      scroll; no other commands in m3 — the prompt box is
      wired but submitting is a no-op since m3 has no
      `user_message` publish path).
-  6. On exit, close the bus connection, restore the
-     terminal, exit 0.
+  7. On exit, close the bus connection, restore the
+     terminal (production mode only), exit 0.
 - **T3.** Entry → render-tree happens **on the core side**
   (the TUI subscribes to `core.session.entry.finalized`
   events whose payload is the `Entry` plus a pre-rendered
@@ -671,41 +898,95 @@ together.
 - **C1.** Add `clap`-derived `Cli` with one subcommand:
   `Chat { project_root: Option<PathBuf> }`. Default project
   root is the current directory.
-- **C2.** `rfl chat` flow:
+- **C2.** `rfl chat` flow (re-ordered per pi-1 #1 — the
+  TUI must subscribe before any history is published, or
+  it misses every replay event because broker fan-out is
+  to live registrations only):
   1. Resolve project root (cwd by default; `--project-root`
      override).
-  2. Open `SessionStore` → acquire flock → on
+  2. Resolve `rfl-tui` binary path (§C3 below).
+  3. Open `SessionStore` → acquire flock → on
      `SessionError::Locked { holder_pid }` print a
      friendly error citing the holder pid and exit non-
      zero (matches the demo-bar negative).
-  3. Build the `BrokerAcl` for m3: zero plugins, one
+  4. Build the `BrokerAcl` for m3: zero plugins, one
      frontend `tui` with `subscribe_patterns =
-     ["core.session.**", "core.lifecycle.**"]`.
-  4. `Broker::new(acl)` → `FrontendSupervisor::new`.
-  5. Replay session history: for every entry in
-     `store.load_entries()`, render through `RenderPipeline`
-     and `broker.publish_core("core.session.entry.replay",
-     {entry, tree})`. (Replay is a separate event class
-     so the TUI knows to skip the "fresh entry" animation;
-     pi may push back on a separate topic vs. a metadata
-     flag — round-1 takes the separate-topic position
-     because it makes the wire-level shape unambiguous.)
-  6. Spawn the TUI: `frontend_supervisor.spawn(&compiled,
-     &paths).await?`.
-  7. Run the in-test fixture-entry harness (only when
+     ["core.session.**", "core.lifecycle.**"]`,
+     `auto_subscribes = []`, `publish_topics = []`.
+  5. `Broker::new(acl)` → `FrontendSupervisor::new` →
+     construct the `RendererRegistry::with_builtins()`
+     and the `RenderPipeline`. Build the
+     `SessionController` bundling store + pipeline +
+     broker (§S1).
+  6. **Spawn the TUI first**:
+     `frontend_supervisor.spawn(&compiled,
+     &paths).await?`. This registers the frontend with
+     the broker and the broker fan-out is now live for
+     `frontend.tui`.
+  7. **Wait for TUI subscription readiness.** The
+     fittings server publishes `bus.event`
+     notifications best-effort with a bounded
+     drop-on-full sink (m2 §B7 + Stream B); without an
+     explicit ready handshake, the parent could publish
+     before the TUI's `BusEventHandler` is registered.
+     m3 reuses m2's readiness pattern: the TUI sends a
+     `core.lifecycle.frontend_ready` notification on its
+     bus connection once its handler is wired (this is
+     just a `peer.notify` from inside the rfl-tui bin's
+     startup); `rfl chat` waits on a fittings extra-
+     service for that notification before proceeding.
+     (Round-1 omitted readiness; pi-1 #1 surfaced the
+     gap for replay specifically, but it applies to
+     every publish from `rfl chat`.) Bounded wait:
+     5 s; on timeout, `rfl chat` errors out — the TUI
+     is broken or hung.
+  8. Replay session history through the controller:
+     `controller.replay_history(&caps).await?`. Every
+     entry is published on `core.session.entry.finalized`
+     with `replay: true` in the envelope; the broker
+     fan-out reaches the TUI which is now subscribed.
+  9. **In-test fixture-entry harness** (only when
      `RFL_HARNESS_FIXTURES` is set — production
      `rfl chat` does NOT publish anything; m4 replaces
-     this with the agent loop). The harness publishes
-     one entry per built-in kind + one unknown kind, all
-     with `stream_state: "final"`.
-  8. Wait on the TUI handle. On TUI exit, shutdown the
-     broker, drop the supervisor, close the store.
-- **C3.** Error handling: every error path prints a
+     this with the agent loop). The harness calls
+     `controller.finalize_entry(entry, &caps)` for one
+     entry per built-in kind + one unknown kind, all
+     with `stream_state: "final"`. After the last
+     entry, the harness publishes
+     `core.lifecycle.test_done` (which the headless TUI
+     uses for clean exit per §T2 step 4).
+  10. Wait on `frontend_handle.wait().await`. On TUI
+      exit, shutdown the broker
+      (`frontend_supervisor.shutdown().await`), drop
+      the controller, close the store (releases flock).
+- **C3.** `rfl-tui` binary path resolution (pi-1 #6 —
+  round 1 said "compile-time constants" without
+  specifying the resolution order). Lookup order:
+  1. **`RFL_TUI_PATH` env override** (highest priority).
+     Used by tests and by anyone running `rfl chat` from
+     a non-installed cargo target dir.
+  2. **Sibling of `current_exe()`**. `current_exe()
+     .parent().join("rfl-tui")` — the canonical
+     installed-binary location (homebrew, nix wrapper,
+     `cargo install`).
+  3. **`CARGO_BIN_EXE_rfl-tui` (compile-time)**. m3 may
+     bake this in via `option_env!` for cargo-driven
+     workflows (`cargo run -- chat` from inside the
+     `rafaello` package), but it is NOT a workspace-
+     wide guarantee — pi-1 #5 — so it is the lowest
+     priority. The resolver does not panic if it is
+     unset.
+  Errors out with a typed `RflChatError::TuiPathUnresolved`
+  message naming all three lookups it tried. Test
+  coverage: a positive `rfl_chat_resolves_tui_via_env_override.rs`
+  test sets `RFL_TUI_PATH` to a stub binary and asserts
+  startup; a negative test unsets all three and asserts
+  the typed error.
+- **C4.** Error handling: every error path prints a
   human-readable message on stderr and returns a non-
-  zero exit. Pi may push back on the exit code matrix
-  (`SessionError::Locked` = 1, plan validation = 2, etc.)
-  — round-1 leaves it as "1 for any error".
-
+  zero exit. Round 2 keeps the simple "1 for any error"
+  exit-code stance; m4 may differentiate when the agent
+  loop introduces new error classes worth distinguishing.
 ### H6 — supervisor fault injection (m2 retro §5.1 carryover)
 
 m2 c21 deleted three unwind tests because their synthetic
@@ -771,14 +1052,26 @@ runtime as `UnknownNamespace`. The mirror at parse time was
 never tightened. m3 owns it.
 
 - **M1.1.** In `rafaello_core::validate::manifest`, extend
-  the publishes-grant validation: every entry's first
-  segment must be one of `{plugin, frontend}`. (`core.*`
-  and `provider.*` are publish-authority of core / providers
-  only; a plugin manifest declaring publish on those is a
-  category error.) For `plugin.<topic-id>.*`, the existing
-  topic-id-matches-this-plugin check applies; for
-  `frontend.<attach-id>.*`, m1 manifests do not declare
-  these (frontends are not plugins) — m3 rejects.
+  the publishes-grant validation. Pi-1 #11: round-1
+  wording was self-contradictory ("first segment must be
+  one of `{plugin, frontend}`" then "frontend rejected"
+  then test expects `frontend.foo` rejected). The
+  correct rule, scoped to plugin manifests:
+  - **For a plugin manifest**, every `publishes` entry's
+    first segment must be exactly `plugin` (the plugin's
+    own `plugin.<topic-id>.*` namespace) — and the
+    existing topic-id-matches-this-plugin check applies.
+  - Top-level segments `core` / `provider` / `frontend`
+    are publish-authority of core / provider plugins /
+    frontends, and a plugin manifest declaring publish
+    on those is a category error. Reject with a typed
+    `ManifestError::PublishNamespaceForbidden { topic,
+    namespace }`.
+  - Top-level segments not in `{core, provider, plugin,
+    frontend}` (`evil.foo`, `random.thing`) are not
+    valid namespaces at all. Reject with
+    `ManifestError::PublishNamespaceUnknown { topic,
+    namespace }`.
 - **M1.2.** New test `tests/manifest_publishes_unknown_namespace_rejected.rs`
   in `rafaello-core` covering the four cases:
   `core.foo`, `provider.foo`, `frontend.foo`, `evil.foo`
@@ -792,76 +1085,163 @@ never tightened. m3 owns it.
 ### I — integration test suite
 
 The §"Demo bar" matrix below is the contract.
+Test placement (pi-1 #5: Cargo only reliably exposes
+`CARGO_BIN_EXE_<name>` for binaries of the package whose
+integration test is being built):
+
+- **`rafaello-core/tests/`** — broker, session store,
+  renderer pipeline, supervisor (incl. fault-injection),
+  manifest tightening. None of these need `rfl-tui` or
+  the `rfl` bin.
+- **`rafaello-tui/tests/`** — anything spawning
+  `rfl-tui` (uses `env!("CARGO_BIN_EXE_rfl-tui")`,
+  resolved within the rafaello-tui crate's test build).
+- **`rafaello/tests/`** — the headline `rfl chat` end-
+  to-end test (uses `env!("CARGO_BIN_EXE_rfl")`, resolved
+  in the rafaello crate's tests; the test-side path to
+  `rfl-tui` is set via the `RFL_TUI_PATH` env override
+  per §C3, with the path obtained via a build-time
+  helper that reads the rafaello-tui crate's binary
+  from the workspace target dir — pi may suggest a more
+  robust resolver such as `tempfile::workspace_target` or
+  `cargo_metadata`; round 2 picks the env-override path
+  because it sidesteps any cross-crate resolution
+  fragility).
 
 #### Positive matrix
 
-- `frontend_register_with_broker.rs` — spawn the TUI via
-  `FrontendSupervisor::spawn` against a real broker; the
-  frontend ends up in the broker's frontend registry; its
-  `attach_id` is `tui`.
-- `frontend_subscribes_to_core_session_events.rs` —
-  publish a `core.session.entry.finalized` event from
-  core; the TUI's `BusEventHandler` receives it (verify
-  via a `respond_peer_call`-style fixture in the TUI bin
-  itself; m3 may add a `RFL_TUI_TEST_MODE` env var to
-  short-circuit the real terminal initialisation — pi
-  may push back, round-1 takes this position).
+`rafaello-core/tests/`:
+
+- `frontend_register_with_broker.rs` — open a broker in-
+  process and call `register_frontend(AttachId::new("tui"),
+  peer)`; the frontend lands in the registry; the guard
+  drops cleanly. (No subprocess; uses an in-memory
+  fittings transport from m2's `m2_harness`.)
 - `session_store_round_trip.rs` — open a `SessionStore`
-  in a tempdir, append three entries (one of each `text`
-  / `code_block` / `tool_call`), close, reopen, load —
-  see the three back in order.
-- `session_store_replay_after_restart.rs` — open store,
-  append entries, drop, reopen with `rfl chat`-style
-  flow, verify replay events fire.
-- `renderer_pipeline_built_in_kinds.rs` — for each of the
-  eight built-in kinds, render a sample entry through the
-  full pipeline; assert the resulting tree matches a
-  hand-written expected JSON (round-trip-stable).
-- `renderer_pipeline_unknown_kind_falls_back.rs` —
-  publish an entry with `kind = "myorg:custom"` and an
-  author `fallback`; pipeline returns `Unknown { kind,
-  payload, fallback }`; downgrade path applies.
-- `renderer_pipeline_unknown_kind_no_fallback_uses_default.rs`
-  — same but `fallback = None`; pipeline returns
-  `Callout { kind: Warn, child: KeyValue }` per Stream
-  E §6 second bullet.
-- `renderer_pipeline_panic_returns_callout.rs` — register
-  a test renderer that panics; pipeline catches the
-  panic and returns a `Callout { kind: Warn }` with the
-  entry's fallback text; the panic is logged at
-  `tracing::error!`. (Uses `tracing-test`.)
-- `renderer_capabilities_downgrade.rs` — render an entry
-  whose tree contains an `Image` node; render with
-  `Capabilities` reporting `image: ["none"]` and
-  `nodes` excluding `Image`; the `Image` node downgrades
-  to `Unknown { fallback }`.
-- `rfl_chat_demo_bar.rs` — end-to-end: spawn `rfl chat`
-  with `RFL_HARNESS_FIXTURES=1` against a tempdir
-  project root; the TUI runs in headless test mode;
-  one entry per built-in kind + one unknown kind get
-  rendered; SQLite contains nine `entries` rows after
-  shutdown. (This is the headline test; lands at the
-  end of the milestone.)
+  in a tempdir, append three entries (`text`,
+  `code_block`, `tool_call`), close, reopen, load — see
+  the three back in `seq` order.
+- `session_controller_finalize_entry.rs` — wire a
+  `SessionController` against an in-memory broker; call
+  `finalize_entry(entry)`; assert (a) the row is in
+  SQLite, (b) a `core.session.entry.finalized` event
+  fired with the rendered tree, (c) the `replay` flag
+  is `false`.
+- `session_controller_replay_history.rs` — pre-seed the
+  store with three entries, build a fresh
+  `SessionController` with a new in-memory broker,
+  register an in-process subscriber, call
+  `replay_history()`; the subscriber sees three
+  `core.session.entry.finalized` events with `replay:
+  true`, in `seq` order.
+- `renderer_pipeline_built_in_kinds.rs` — for each of
+  the eight built-in kinds, render a sample entry; assert
+  tree matches a hand-written expected JSON.
+- `renderer_pipeline_unknown_kind_falls_back_with_author_fallback.rs`
+  — `kind = "myorg:custom"` + author `fallback` set;
+  pipeline returns `Block { children: [ Text {
+  text: fallback.text } ] }` per §R3 Path A bullet 1.
+- `renderer_pipeline_unknown_kind_no_fallback_uses_default_callout.rs`
+  — same but no fallback; returns `Callout { kind:
+  "warn", child: KeyValue { ... } }` per §R3 Path A
+  bullet 2.
+- `renderer_pipeline_panic_falls_through_to_path_a.rs` —
+  register a test renderer that panics; pipeline logs
+  at `tracing::error!`, then falls into Path A (author
+  fallback if set, else default `Callout`); the wire
+  output contains NO "panicked" diagnostic.
+- `renderer_pipeline_renderer_err_falls_through_to_path_a.rs`
+  — same but renderer returns `Err(_)`; pipeline logs at
+  `tracing::warn!`, falls into Path A.
+- `renderer_capabilities_downgrade_unsupported_node.rs` —
+  render an entry whose tree contains an `Image` node;
+  render with `Capabilities` reporting `nodes`
+  excluding `Image`; pipeline downgrades to `Unknown
+  { kind: "Image", payload: ..., fallback: <entry's
+  fallback or default> }` per §R3 Path C.
 - `supervisor_spawn_unwinds_after_register.rs` — see
   §H6.3.
 - `supervisor_spawn_post_register_reaps_child.rs`
   (Linux-only) — see §H6.3.
 - `supervisor_spawn_unwinds_after_socketpair.rs` — see
   §H6.3.
+- `frontend_handle_wait_resolves_on_child_exit.rs` — see
+  §F4 (uses the `RFL_TUI_TEST_MODE` headless mode but
+  spawns `rfl-tui` from rafaello-core via a path
+  obtained from `RFL_TUI_PATH` provided by the test-
+  harness build script — pi may push back on the
+  build-script path; alternative is to move this test
+  to rafaello-tui crate. Round 2 keeps it under
+  rafaello-core because the assertion is on
+  `FrontendHandle::wait`, which lives in rafaello-core,
+  and the `rfl-tui` invocation is incidental.)
+- `frontend_handle_drop_does_not_leak_zombie.rs`
+  (Linux-only) — see §F4.
+- `manifest_publishes_unknown_namespace_rejected.rs` —
+  see §M1.2.
+
+`rafaello-tui/tests/`:
+
+- `tui_subscribes_to_core_session_events.rs` —
+  spawn `rfl-tui` in `RFL_TUI_TEST_MODE`; from a
+  parent-side broker fixture, publish one
+  `core.session.entry.finalized`; assert the TUI
+  process logs the event on its stderr and exits
+  cleanly on a follow-up `core.lifecycle.test_done`.
+  Uses `env!("CARGO_BIN_EXE_rfl-tui")` (valid because
+  the test is in the same crate as the bin).
+- `tui_paint_panic_isolation.rs` — feed the TUI a
+  render-tree that the painter panics on (a synthetic
+  `Unknown` variant the test code wires); assert the
+  TUI does NOT exit; assert it continues processing
+  subsequent entries; assert clean exit on `test_done`.
+  (This exercises §T5 — paint panic isolation.)
+
+`rafaello/tests/`:
+
+- `rfl_chat_demo_bar.rs` — **headline test, lands at
+  the end of the milestone.** Spawn `rfl chat` against
+  a tempdir project root with
+  `RFL_HARNESS_FIXTURES=1` and `RFL_TUI_TEST_MODE=1`;
+  let the parent + TUI run; assert the SQLite store
+  contains nine `entries` rows after shutdown (eight
+  built-in kinds + one unknown kind); assert each row's
+  `kind`, `seq`, and `payload` match the harness
+  inputs. The `rfl-tui` path is provided to the spawned
+  `rfl chat` via `RFL_TUI_PATH` set by the test, which
+  itself reads the workspace target dir from the
+  `CARGO_TARGET_DIR` env (with a fallback to
+  `target/debug/rfl-tui` from the workspace root, m2
+  c30's pattern).
+- `rfl_chat_resolves_tui_via_env_override.rs` — see
+  §C3 positive.
+- `rfl_chat_locked_session_errors_with_holder_pid.rs` —
+  hold the project flock in pid A (an in-test
+  `SessionStore::open`); spawn `rfl chat` in pid B
+  against the same project root; B exits non-zero with
+  stderr citing pid A.
+- `session_store_lock_fd_not_inherited_by_child.rs` —
+  see §S5.
 
 #### Negative matrix
 
-- `frontend_publish_on_core_namespace_rejected.rs` — TUI
-  attempts `frontend.tui.confirm_answer` (currently NOT
-  in m3's `publish_topics` because m3 has no
-  confirmation flow); broker rejects with
-  `PublishOutsideGrant`. Same test class for `core.foo`,
-  `plugin.foo`, `provider.foo` from the frontend →
-  `PublishOnReservedNamespace`.
+`rafaello-core/tests/`:
+
+- `frontend_publish_on_reserved_namespace_rejected.rs`
+  — synthesise a frontend publish on `core.foo`,
+  `plugin.foo`, `provider.foo`; broker rejects with
+  `PublishOnReservedNamespace { publisher:
+  Publisher::Frontend("tui"), topic }`.
+- `frontend_publish_outside_grant_rejected.rs` — TUI
+  attempts `frontend.tui.confirm_answer` (NOT in m3's
+  `publish_topics`); broker rejects with
+  `PublishOutsideGrant { publisher:
+  Publisher::Frontend("tui"), topic }`.
 - `frontend_register_unknown_attach_id_rejected.rs` —
-  ACL has only `tui`; `register_frontend("ide", ...)`
-  fails with `BrokerError::NotInAcl`.
-- `frontend_register_duplicate_rejected.rs`.
+  ACL has only `tui`; `register_frontend(AttachId::new(
+  "ide"), ...)` fails with `BrokerError::FrontendNotInAcl`.
+- `frontend_register_duplicate_rejected.rs` —
+  `BrokerError::FrontendAlreadyRegistered`.
 - `frontend_spawn_invalid_attach_id_rejected.rs` —
   `attach_id` not matching the regex →
   `FrontendSpawnError::InvalidPlan { reason:
@@ -873,35 +1253,46 @@ The §"Demo bar" matrix below is the contract.
   `frontend_spawn_reserved_env_in_set_refused.rs` —
   m2 §SP4 Phase A pattern, replicated.
 - `session_store_concurrent_open_errors.rs` — open store
-  in pid A; open same path in pid B (or in the same
-  process via a different fd); B gets `SessionError::
-  Locked { holder_pid: A }`. Cross-platform Linux +
-  macOS.
+  in pid A; spawn a probe child that calls `open()` on
+  the same path; child gets `SessionError::Locked {
+  holder_pid: A }`. Cross-platform Linux + macOS.
 - `session_store_schema_mismatch_errors.rs` — open store
   whose `session_meta.schema_version = "0"` (manually
   pre-seeded); errors with `SessionError::SchemaMismatch
   { found: "0", expected: "1" }`.
-- `renderer_pipeline_panic_does_not_propagate.rs` (covered
-  by the positive `panic_returns_callout`, listed under
-  negatives because it asserts "the panic does not crash
-  the pipeline").
-- `manifest_publishes_unknown_namespace_rejected.rs` —
-  see §M1.2.
 
-### H — test harness (`rafaello-core/tests/common/m3_harness.rs`)
+### H — test harness
 
-A new module under the existing `tests/common/` (m2's
-`m2_harness.rs` set the precedent). m3's harness adds:
+Module placement (pi-1 #5): renderer / store / broker
+helpers go in `rafaello/crates/rafaello-core/tests/common/m3_harness.rs`
+(reuses m2's `m2_harness.rs` precedent). TUI-spawning
+helpers go in `rafaello/crates/rafaello-tui/tests/common/tui_harness.rs`,
+because `env!("CARGO_BIN_EXE_rfl-tui")` is only sound in
+the rafaello-tui crate's tests.
+
+`m3_harness.rs` (in rafaello-core):
 
 - `FixtureEntryBuilder` — fluent builder for a synthetic
   `Entry` with each built-in kind. Reused by every
   positive renderer test.
 - `TestSessionStore::open_in_tempdir() -> (SessionStore,
   TempDir)` — common setup for store tests.
-- `tui_test_mode_command(...)` — wraps
-  `Command::new(env!("CARGO_BIN_EXE_rfl-tui")).env(
-  "RFL_TUI_TEST_MODE", "1").env("RFL_BUS_FD", ...)` for
-  the headless TUI mode.
+- `in_memory_broker_with_tui_acl()` — constructs a
+  `Broker` with a single `tui` frontend ACL and the
+  `core.session.**` / `core.lifecycle.**` subscribe set.
+- `record_subscriber()` — registers an in-process plugin-
+  shaped subscriber that records every event into a
+  `Vec<BusEvent>`. Used by §I controller tests.
+
+`tui_harness.rs` (in rafaello-tui):
+
+- `tui_test_mode_command()` — wraps
+  `Command::new(env!("CARGO_BIN_EXE_rfl-tui"))
+  .env("RFL_TUI_TEST_MODE", "1")
+  .env("RFL_BUS_FD", ...)` for the headless TUI mode.
+- `parent_socket_pair()` — creates a socketpair and
+  returns the parent end as a `tokio::net::UnixStream`,
+  child fd as `OwnedFd` to inherit.
 
 Manual validation: §I integration tests are the contract;
 m3's `manual-validation.md` records:
@@ -1078,35 +1469,60 @@ to sneak in via "while I'm here" implementation drift.
    `tui-input` because m4 and m5 will need a richer
    editor (multi-line, command-history) and the dep
    carries that for free.
-8. **Replay event class.** Round-1 uses
-   `core.session.entry.replay` as a separate topic
-   class. Pi may argue for a metadata flag on
-   `entry.finalized` instead. The trade-off:
-   separate-topic is wire-explicit (a TUI built for m4+
-   provider events doesn't have to special-case the
-   finalized stream); a metadata flag keeps the topic
-   set smaller. Round-1 picks separate-topic because
-   the wire-shape stability matters more than topic
-   parsimony in v1.
-9. **m1 publishes-grant patch back-reach.** Touching
-   `validate::manifest` in m3 is a small back-reach to
-   m1 (m2 c04 set the precedent for back-reaching). The
-   tightening is purely additive (manifests that
-   previously accepted unknown namespaces would have
-   failed at runtime anyway), so existing m1 tests
-   continue to pass without modification. Mitigation:
-   a one-line note in the commit body marks it as the
-   m3-owned m1 patch and points at m2 retro §2.8.
-10. **Demo-bar headline test (`rfl_chat_demo_bar.rs`)
-    spawning a real subprocess from inside cargo test.**
-    The pattern is a stretch of m2's
-    `supervisor_spawn_fixture_happy_path` precedent —
-    the rafaello bin spawned from a test, which then
-    spawns rfl-tui as a subprocess. Two-level subprocess
-    chains can leak processes if any layer panics.
-    Mitigation: the L1 fixture self-timeout pattern
-    extends to `rfl-tui`'s `RFL_TUI_TEST_MODE` (exit
-    after 30 s default).
+8. **Replay event class collapsed (round 2).** Round 1
+   used a separate `core.session.entry.replay` topic;
+   pi-1 #1 / #9 surfaced that this had no Stream E
+   anchor and broke the TUI subscribe set. Round 2
+   uses one topic (`core.session.entry.finalized`) with
+   a `replay: bool` payload-envelope flag. m4 may
+   revisit if a richer event class becomes useful, but
+   v1 keeps the topic set minimal.
+9. **TUI subscription readiness handshake.** §C2 step 7
+   waits on `core.lifecycle.frontend_ready` before
+   replaying / publishing any entry; without it, fan-
+   out to a not-yet-subscribed frontend is silently
+   dropped (Stream B notification sink is bounded,
+   drop-on-full). The 5 s bounded wait is a defensive
+   ceiling — real readiness should fire within hundreds
+   of ms. The notification flows on the TUI's bus
+   connection, not the bus itself, so no broker ACL is
+   needed for it.
+10. **m1 publishes-grant patch back-reach.** Touching
+    `validate::manifest` in m3 is a small back-reach to
+    m1 (m2 c04 set the precedent). The tightening is
+    additive — manifests that previously accepted
+    unknown namespaces would have failed at runtime
+    anyway. Mitigation: a one-line note in the commit
+    body marks it as the m3-owned m1 patch and points
+    at m2 retro §2.8.
+11. **Demo-bar headline test spawning a real subprocess
+    chain from inside cargo test.** The pattern is a
+    stretch of m2's `supervisor_spawn_fixture_happy_path`
+    precedent — the rafaello bin spawned from a test,
+    which then spawns rfl-tui as a subprocess. Two-
+    level subprocess chains can leak processes if any
+    layer panics. Mitigations: (a) the L1 fixture self-
+    timeout pattern extends to `rfl-tui`'s
+    `RFL_TUI_TEST_MODE` (60 s default); (b) the
+    deterministic `core.lifecycle.test_done` exit
+    signal (§T2 step 4) keeps the test bounded under
+    1 s on the happy path; (c) the in-test rafaello
+    parent process registers a SIGCHLD-style cleanup so
+    a panic in the test propagates kill to both
+    children before unwinding.
+12. **Frontend reaper / wait race.** The reaper task
+    owns the `tokio::process::Child`. `FrontendHandle::
+    wait()` resolves on a `tokio::sync::watch` whose
+    value transitions from `None` to `Some(Arc<
+    ReaperOutcome>)`. Late `wait` callers see the
+    cached `Arc` immediately. Same shape as m2 §SP4
+    step 18 (pi-5 §1).
+13. **`O_CLOEXEC` cross-platform.** Linux (3.x+) and
+    macOS (10.7+) both support `O_CLOEXEC` on `open()`.
+    `OpenOptions::custom_flags` is the cross-platform
+    portable shim. No `fcntl(F_SETFD, FD_CLOEXEC)`
+    follow-up needed (unlike socketpair on macOS,
+    m2 §5.7).
 
 ## Internal split (driver guidance for `commits.md`)
 
@@ -1170,9 +1586,13 @@ m3 is done when:
   retrospective follow-up rather than blocking
   ratification.
 - `nix develop --impure --command cargo build --manifest-path
-  rafaello/Cargo.toml --workspace --bins` green (verifies
-  `rfl`, `rfl-tui`, and the unchanged `rfl-bus-fixture`
-  with `--features test-fixture`).
+  rafaello/Cargo.toml --workspace --bins --features
+  rafaello-core/test-fixture` green (pi-1 #13 — the
+  fixture bin is `required-features = ["test-fixture"]`
+  on the `rafaello-core` crate, so `--workspace --bins`
+  alone skips it; the explicit feature flag is required).
+  Verifies `rfl`, `rfl-tui`, and `rfl-bus-fixture` all
+  build.
 - `nix develop --impure --command cargo doc --manifest-path
   rafaello/Cargo.toml --workspace --no-deps` warning-free.
 - `manual-validation.md` records the items in the manual-
@@ -1201,10 +1621,23 @@ m3 is done when:
     deferral). Overview §10.1's banner already says
     this; m3's retrospective records the concrete
     indexing scheme used (per attach-id constants).
-  - **Replay topic class.** If round-1's
-    `core.session.entry.replay` decision sticks, a new
-    decisions row pins it. If pi argues us to a metadata
-    flag instead, the row records that.
+  - **Replay over `core.session.entry.finalized` with
+    `replay: bool` envelope flag.** Round-2 collapse
+    away from a separate `entry.replay` topic. New
+    decisions row pins the canonical wire shape and the
+    `finalized.replay` flag's semantics (true on history
+    replay, false on fresh entries). Round 2 is open to
+    a metadata-on-`EntryMetadata` flag instead — the
+    rewire is mechanical; choice is whichever pi prefers
+    by ratification.
+  - **Broker error variant additions.** Round 2 adds
+    `BrokerError::FrontendNotInAcl`,
+    `FrontendAlreadyRegistered`, `FrontendNotRegistered`,
+    and reshapes existing `PublishOutsideGrant` /
+    `InvalidInReplyTo` to take `publisher: Publisher`
+    rather than `canonical: CanonicalId`. The reshape is
+    source-breaking for m2's tests but contained to
+    `rafaello-core`; retrospective records the migration.
   - **m1 publishes-grant unknown-namespace tightening
     (m2 retro §2.8).** Lands as the §M1 patch within
     m3; retrospective records the back-reach and points
