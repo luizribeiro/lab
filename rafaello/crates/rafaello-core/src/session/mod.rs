@@ -17,6 +17,8 @@ use rusqlite::Connection;
 use thiserror::Error;
 use ulid::Ulid;
 
+use crate::entry::Entry;
+
 const SCHEMA_VERSION: &str = "1";
 
 #[derive(Debug, Error)]
@@ -32,6 +34,12 @@ pub enum SessionError {
     Locked { holder_pid: Option<u32> },
     #[error("session schema mismatch: expected {expected}, found {found}")]
     SchemaMismatch { expected: String, found: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredEntry {
+    pub seq: u64,
+    pub entry: Entry,
 }
 
 pub struct SessionStore {
@@ -110,6 +118,105 @@ impl SessionStore {
     #[allow(dead_code)]
     pub(crate) fn conn(&self) -> &Mutex<Connection> {
         &self.conn
+    }
+
+    pub fn append_entry(&self, entry: &Entry) -> Result<u64, SessionError> {
+        let id = entry.id.to_string();
+        let parent = entry.parent.as_ref().map(|p| p.to_string());
+        let schema = entry.schema.clone();
+        let payload = serde_json::to_string(&entry.payload)?;
+        let metadata = serde_json::to_string(&entry.metadata)?;
+        let fallback = entry
+            .fallback
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let created_at = entry.metadata.created_at.to_rfc3339();
+
+        let conn = self.conn.lock();
+        let seq: i64 = conn.query_row(
+            "INSERT INTO entries (id, seq, parent, kind, schema, payload, metadata, fallback, created_at) \
+             VALUES (?1, (SELECT COALESCE(MAX(seq), -1) + 1 FROM entries), ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             RETURNING seq",
+            rusqlite::params![
+                id,
+                parent,
+                entry.kind,
+                schema,
+                payload,
+                metadata,
+                fallback,
+                created_at,
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(seq as u64)
+    }
+
+    pub fn load_entries(&self) -> Result<Vec<StoredEntry>, SessionError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT seq, id, parent, kind, schema, payload, metadata, fallback \
+             FROM entries ORDER BY seq ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let seq: i64 = row.get(0)?;
+            let id: String = row.get(1)?;
+            let parent: Option<String> = row.get(2)?;
+            let kind: String = row.get(3)?;
+            let schema: Option<String> = row.get(4)?;
+            let payload: String = row.get(5)?;
+            let metadata: String = row.get(6)?;
+            let fallback: Option<String> = row.get(7)?;
+            Ok((seq, id, parent, kind, schema, payload, metadata, fallback))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, id, parent, kind, schema, payload, metadata, fallback) = row?;
+            let id = Ulid::from_string(&id).map_err(|e| {
+                SessionError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e.to_string(),
+                    )),
+                ))
+            })?;
+            let parent = match parent {
+                Some(p) => Some(Ulid::from_string(&p).map_err(|e| {
+                    SessionError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e.to_string(),
+                        )),
+                    ))
+                })?),
+                None => None,
+            };
+            let payload: serde_json::Value = serde_json::from_str(&payload)?;
+            let metadata: crate::entry::EntryMetadata = serde_json::from_str(&metadata)?;
+            let fallback = match fallback {
+                Some(s) => Some(serde_json::from_str(&s)?),
+                None => None,
+            };
+            out.push(StoredEntry {
+                seq: seq as u64,
+                entry: Entry {
+                    id,
+                    parent,
+                    kind,
+                    schema,
+                    payload,
+                    metadata,
+                    fallback,
+                },
+            });
+        }
+        Ok(out)
     }
 
     #[cfg(any(test, feature = "test-fixture"))]
