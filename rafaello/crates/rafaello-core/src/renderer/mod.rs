@@ -115,6 +115,10 @@ impl RendererRegistry {
         registry.register("heading".into(), Arc::new(builtins::HeadingRenderer));
         registry.register("code_block".into(), Arc::new(builtins::CodeBlockRenderer));
         registry.register("thinking".into(), Arc::new(builtins::ThinkingRenderer));
+        registry.register("tool_call".into(), Arc::new(builtins::ToolCallRenderer));
+        registry.register("tool_result".into(), Arc::new(builtins::ToolResultRenderer));
+        registry.register("image".into(), Arc::new(builtins::ImageRenderer));
+        registry.register("error".into(), Arc::new(builtins::ErrorRenderer));
         registry
     }
 
