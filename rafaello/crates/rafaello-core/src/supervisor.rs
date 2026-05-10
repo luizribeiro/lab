@@ -187,6 +187,16 @@ pub struct TestHooks {
     /// means "no reap has fired yet". Stored as `AtomicI64` so a
     /// `u32` pid plus the "none" sentinel both round-trip.
     pub last_reaped_pid: std::sync::atomic::AtomicI64,
+    /// One-shot fault injectors (scope §H6.1). When set to `true`
+    /// the matching point in `PluginSupervisor::spawn` swaps the
+    /// flag back to `false`, sets the matching `*_consumed` flag,
+    /// and returns `SpawnError::SandboxBuild`.
+    pub inject_pre_spawn_fault: std::sync::atomic::AtomicBool,
+    pub inject_post_spawn_pre_register_fault: std::sync::atomic::AtomicBool,
+    pub inject_post_register_fault: std::sync::atomic::AtomicBool,
+    pre_spawn_fault_consumed_flag: std::sync::atomic::AtomicBool,
+    post_spawn_pre_register_fault_consumed_flag: std::sync::atomic::AtomicBool,
+    post_register_fault_consumed_flag: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(any(test, feature = "test-fixture"))]
@@ -198,6 +208,12 @@ impl Default for TestHooks {
             child_spawns: std::sync::atomic::AtomicUsize::new(0),
             last_proxy_port: std::sync::atomic::AtomicU16::new(0),
             last_reaped_pid: std::sync::atomic::AtomicI64::new(-1),
+            inject_pre_spawn_fault: std::sync::atomic::AtomicBool::new(false),
+            inject_post_spawn_pre_register_fault: std::sync::atomic::AtomicBool::new(false),
+            inject_post_register_fault: std::sync::atomic::AtomicBool::new(false),
+            pre_spawn_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
+            post_spawn_pre_register_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
+            post_register_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -214,6 +230,21 @@ impl TestHooks {
         } else {
             Some(raw as u32)
         }
+    }
+
+    pub fn pre_spawn_fault_consumed(&self) -> bool {
+        self.pre_spawn_fault_consumed_flag
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn post_spawn_pre_register_fault_consumed(&self) -> bool {
+        self.post_spawn_pre_register_fault_consumed_flag
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn post_register_fault_consumed(&self) -> bool {
+        self.post_register_fault_consumed_flag
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -540,6 +571,23 @@ impl PluginSupervisor {
         cmd.env("RFL_TOPIC_ID", &plan.topic_id);
         cmd.current_dir(&paths.project_root);
 
+        #[cfg(any(test, feature = "test-fixture"))]
+        if self
+            .test_hooks
+            .inject_pre_spawn_fault
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.test_hooks
+                .pre_spawn_fault_consumed_flag
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(proxy);
+            drop(core_fd);
+            return Err(SpawnError::SandboxBuild {
+                canonical: plan.canonical.clone(),
+                source: anyhow::anyhow!("test-injected pre-spawn fault"),
+            });
+        }
+
         // Step 13: spawn the child. After this point every error
         // path must SIGKILL + `child.wait().await` to reap before
         // returning, per the post-spawn unwind contract (scope §SP4
@@ -597,6 +645,25 @@ impl PluginSupervisor {
         // Step 17: build server, capture peer, register with broker.
         let server = Server::new(service, transport);
         let peer = server.peer();
+
+        #[cfg(any(test, feature = "test-fixture"))]
+        if self
+            .test_hooks
+            .inject_post_spawn_pre_register_fault
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.test_hooks
+                .post_spawn_pre_register_fault_consumed_flag
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.kill_and_reap(&mut child, cached_pid).await;
+            drop(server);
+            drop(proxy);
+            return Err(SpawnError::SandboxBuild {
+                canonical: plan.canonical.clone(),
+                source: anyhow::anyhow!("test-injected post-spawn-pre-register fault"),
+            });
+        }
+
         let registered = match self
             .broker
             .register_plugin(plan.canonical.clone(), peer.clone())
@@ -648,6 +715,31 @@ impl PluginSupervisor {
                 let _ = watch_tx_clone.send(Some(Arc::new(ReaperOutcome::ReaperPanicked)));
             }
         });
+
+        #[cfg(any(test, feature = "test-fixture"))]
+        if self
+            .test_hooks
+            .inject_post_register_fault
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.test_hooks
+                .post_register_fault_consumed_flag
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(pid) = cached_pid {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+            watcher_join.abort();
+            drop(registered);
+            drop(server);
+            drop(proxy);
+            return Err(SpawnError::SandboxBuild {
+                canonical: plan.canonical.clone(),
+                source: anyhow::anyhow!("test-injected post-register fault"),
+            });
+        }
 
         // Step 19: serve loop drives the per-connection fittings server.
         let serve_join = tokio::spawn(async move {
