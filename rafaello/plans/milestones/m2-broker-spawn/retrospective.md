@@ -837,16 +837,38 @@ cross-platform CI matrix surfaces one.
 implementation range. The pre-commit hook sequence (rustfmt +
 clippy + test) gates every commit.
 
-### 5.7 macOS CI run pending
+### 5.7 ✅ Resolved: macOS CI green after one round of cross-platform fixes
 
-Per scope §"Acceptance summary", the macOS leg is delegated to
-CI. The driver pushes `rafaello-v0.1` to origin after this
-retrospective ratifies; macOS run summary + URL land as a
-follow-up docs-only commit on `rafaello-v0.1`
-(`manual-validation.md` §"macOS CI" already reserves the slot).
-If macOS fails any test, the convention is per-test
-`#[cfg(target_os = "linux")]` gates with retrospective
-follow-up, not blocking ratification (m0/m1 precedent).
+Run: https://github.com/luizribeiro/lab/actions/runs/25623373610
+on commit `7db9da8`. Both `test (ubuntu-latest)` and
+`test (macos-latest)` jobs ✅ green.
+
+**Round-1 push (`7b0daf4`) failed** with two CI-environment
+issues the local devshell didn't expose:
+
+1. **macOS:** `error[E0599]: SOCK_CLOEXEC found for SockFlag` —
+   nix's SockFlag has SOCK_CLOEXEC only on Linux. Fix:
+   cfg-gated CLOEXEC fallback using
+   `nix::fcntl::fcntl(F_SETFD(FD_CLOEXEC))` after socketpair
+   for non-Linux targets.
+2. **Linux (CI):** `Linux sandbox requires syd but could not
+   find it.` The `.#rafaello` devshell (used by CI) didn't
+   export `LOCKIN_SYD_PATH` even though the local devshell
+   did via the `lockin/nix/devenv.nix` overlay. Fix: mirror
+   the `LOCKIN_SYD_PATH` export in `rafaello/nix/devenv.nix`.
+
+Both fixes landed as `7db9da8` (single commit, since they
+were both blocking the green CI run). `manual-validation.md`
+§"macOS CI" captures the URL + result table.
+
+**Lesson for m3+:** local `nix develop --impure` may pick up
+a devshell that aggregates more than just `.#rafaello`'s own
+exports. CI explicitly enters `.#rafaello`, exposing missing
+exports. m2 added the `--features test-fixture` invocation
+to the workflow during this round (per `commits.md` Risks
+#1) — without it, `env!("CARGO_BIN_EXE_rfl-bus-fixture")`
+would have errored before any test ran. m3 inherits the
+workflow shape.
 
 ---
 
@@ -906,7 +928,9 @@ when the follow-up patch lands or the action completes.
 - ✅ `nix develop --impure --command cargo test --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture`
   green on Linux (`manual-validation.md` §1).
-- ⏳ macOS CI — pending driver push (§5.7).
+- ✅ macOS CI green (§5.7 — run 25623373610 on `7db9da8`,
+  both Linux + macOS jobs success after one round of CI-only
+  cross-platform fixes).
 - ✅ `nix develop --impure --command cargo build --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture
   --bin rfl-bus-fixture` green (`manual-validation.md` §6).
@@ -935,13 +959,13 @@ when the follow-up patch lands or the action completes.
   m3-or-m4 follow-up (§2.8); m2 ratification does not depend
   on it.
 
-m2 is **complete pending macOS CI confirmation and owner
-ratification.** The core deliverable (broker + locked plugin
-spawn fixture) landed: 357 tests green, headline
-`supervisor_spawn_fixture_happy_path` running in 2.26 s under
-real lockin + outpost-proxy with two cooperating fixture
-plugins. Pi review converged in two rounds (round 1 found 7
-blocking; round 2 verdict: "no new blocking findings"). All
-seven §"Follow-up commits on this branch" items landed
-2026-05-10. Only macOS CI capture (§5.7) remains before
-owner sign-off.
+m2 is **complete pending owner ratification.** The core
+deliverable (broker + locked plugin spawn fixture) landed:
+357 tests green, headline `supervisor_spawn_fixture_happy_path`
+running in 2.26 s under real lockin + outpost-proxy with two
+cooperating fixture plugins. Pi review converged in two
+rounds (round 1 found 7 blocking; round 2 verdict: "no new
+blocking findings"). All seven §"Follow-up commits on this
+branch" items landed 2026-05-10. macOS CI green on
+`7db9da8` after one round of cross-platform fixes (§5.7).
+**Owner ratification is the only remaining gate.**

@@ -263,14 +263,41 @@ when `RAFAELLO_FIXTURE_BINARY` points to it.
 
 ## macOS CI
 
-Captured by milestone driver post-c31; CI URL: <pending driver
-action>.
+Captured by milestone driver post-c31 (2026-05-10).
+
+**Run:** https://github.com/luizribeiro/lab/actions/runs/25623373610
+(commit `7db9da8` on `rafaello-v0.1`).
+
+**Result:** ✅ both jobs green.
+
+| Job | Conclusion |
+|-----|------------|
+| `test (ubuntu-latest)` | success |
+| `test (macos-latest)` | success |
+
+**Round-1 push (`7b0daf4`) failed** with two CI-environment issues
+the local devshell didn't expose:
+
+1. **macOS:** `error[E0599]: no associated item named SOCK_CLOEXEC found
+   for struct SockFlag` at `supervisor.rs:394`. nix's `SockFlag` exposes
+   `SOCK_CLOEXEC` only on Linux; macOS needs `fcntl(F_SETFD, FD_CLOEXEC)`
+   after socketpair.
+2. **Linux (CI):** `Linux sandbox requires syd but could not find it.
+   Set LOCKIN_SYD_PATH, add syd to PATH, or call .syd_path() explicitly.`
+   The `.#rafaello` devshell didn't export `LOCKIN_SYD_PATH` (the
+   `lockin` devshell does — `lockin/nix/devenv.nix:16`).
+
+**Round-2 fix (`7db9da8`):**
+- `rafaello/crates/rafaello-core/src/supervisor.rs` — cfg-gated CLOEXEC
+  fallback using `nix::fcntl::fcntl(F_SETFD(FD_CLOEXEC))` for non-Linux.
+- `rafaello/nix/devenv.nix` — mirror lockin's `LOCKIN_SYD_PATH` export
+  on Linux.
 
 Per pi-1 B4 + pi-1 c29, branch push is a driver-owned action, not a
-per-commit agent task. The driver pushes `rafaello-v0.1` to origin
-**after** c31 lands and fills in the CI URL + macOS run summary
-in a follow-up docs-only commit on `rafaello-v0.1` (driven from
-`driver-notes.md`, not a `commits.md` row).
+per-commit agent task. The driver pushed `rafaello-v0.1` to origin
+**after** c31 landed; round-1 failure surfaced two cross-platform gaps
+that landed as `7db9da8` and pushed for the round-2 green run above.
+m2 retrospective §5.7 records the CI-discovered gaps + the fix.
 
 ## Follow-ups discovered while exercising this
 
