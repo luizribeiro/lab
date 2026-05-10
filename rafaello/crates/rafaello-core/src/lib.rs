@@ -28,12 +28,13 @@ pub use renderer::{
     ScrollbackClass, UnicodeClass,
 };
 
+pub use broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 pub use compile::{
     compile_plugin, CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan,
     NetworkPlan, ToolMeta,
 };
 pub use error::{
-    BrokerError, CarveOutError, CollisionError, CompileError, DigestError, Error, InReplyToReason,
-    InvalidPlanReason, LockError, ManifestError, PathError, PathKind, Publisher, ReaperOutcome,
-    ShutdownFailure, SpawnError, TrifectaError, ValidationError,
+    AttachIdParseError, BrokerError, CarveOutError, CollisionError, CompileError, DigestError,
+    Error, InReplyToReason, InvalidPlanReason, LockError, ManifestError, PathError, PathKind,
+    Publisher, ReaperOutcome, ShutdownFailure, SpawnError, TrifectaError, ValidationError,
 };

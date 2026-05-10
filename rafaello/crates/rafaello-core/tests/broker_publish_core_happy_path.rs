@@ -30,6 +30,7 @@ fn publish_core_observer_receives_bus_event_with_core_publisher() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

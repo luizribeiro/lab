@@ -104,6 +104,7 @@ async fn shutdown_records_clean_when_child_already_exited() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::with_extra_service(broker, SupervisorConfig::default(), factory);

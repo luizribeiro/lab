@@ -46,6 +46,7 @@ async fn spawn_with_reserved_env_in_pass_returns_reserved_env_in_plan() {
         let broker = Broker::new(BrokerAcl {
             plugins,
             tool_routes: BTreeMap::new(),
+            frontends: BTreeMap::new(),
         })
         .unwrap();
         let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

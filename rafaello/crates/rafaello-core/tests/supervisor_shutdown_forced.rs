@@ -101,6 +101,7 @@ async fn shutdown_sigkill_after_grace_reaps_trapping_child() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
 

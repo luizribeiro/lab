@@ -14,6 +14,7 @@ fn publish_core_rejects_reserved_unknown_and_invalid_topics() {
     let broker = Broker::new(BrokerAcl {
         plugins: BTreeMap::new(),
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .expect("empty acl is well-formed");
 

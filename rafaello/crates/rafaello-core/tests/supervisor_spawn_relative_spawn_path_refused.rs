@@ -35,6 +35,7 @@ fn make_supervisor(canonical: &CanonicalId) -> PluginSupervisor {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     PluginSupervisor::new(broker, SupervisorConfig::default())

@@ -23,6 +23,7 @@ async fn spawn_with_canonical_not_in_acl_returns_not_in_acl() {
     let acl = BrokerAcl {
         plugins: BTreeMap::new(),
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

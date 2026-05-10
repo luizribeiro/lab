@@ -43,6 +43,7 @@ fn publish_round_trip_observer_receives_bus_event() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use fittings_core::error::FittingsError;
 use thiserror::Error;
 
+use crate::broker_acl::AttachId;
 use crate::lock::CanonicalId;
 
 #[derive(Debug, Error)]
@@ -288,6 +289,21 @@ pub enum CollisionError {
 pub enum Publisher {
     Core,
     Plugin(CanonicalId),
+    Frontend(AttachId),
+}
+
+/// Why an [`AttachId`] failed to parse (scope §B1).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AttachIdParseError {
+    #[error("attach id is empty")]
+    Empty,
+    #[error("attach id length {len} exceeds 32 bytes")]
+    TooLong { len: usize },
+    #[error("attach id must start with `[a-z]`, got `{ch}`")]
+    IllegalLeadChar { ch: char },
+    #[error("attach id contains illegal character `{ch}`")]
+    IllegalChar { ch: char },
 }
 
 /// Why an `in_reply_to` field on a publish was rejected (scope §B2).

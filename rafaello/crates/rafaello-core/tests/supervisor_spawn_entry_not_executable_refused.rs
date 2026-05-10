@@ -42,6 +42,7 @@ async fn spawn_with_non_executable_entry_returns_entry_not_executable() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

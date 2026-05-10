@@ -37,6 +37,7 @@ async fn spawn_with_topic_id_mismatch_returns_invalid_plan() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

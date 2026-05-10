@@ -12,10 +12,10 @@
 //! revalidation runs against every publish topic and every
 //! subscribe pattern before emit.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compile::spot_check_v3;
-use crate::error::CompileError;
+use crate::error::{AttachIdParseError, CompileError};
 use crate::lock::canonical_id::CanonicalId;
 use crate::lock::Lock;
 use crate::topic_id;
@@ -25,6 +25,51 @@ use crate::validate::topic::{validate_pattern, validate_topic};
 pub struct BrokerAcl {
     pub plugins: BTreeMap<CanonicalId, PluginAcl>,
     pub tool_routes: BTreeMap<String, CanonicalId>,
+    pub frontends: BTreeMap<AttachId, FrontendAcl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AttachId(String);
+
+impl AttachId {
+    pub fn new(input: impl Into<String>) -> Result<Self, AttachIdParseError> {
+        let s = input.into();
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return Err(AttachIdParseError::Empty);
+        }
+        if bytes.len() > 32 {
+            return Err(AttachIdParseError::TooLong { len: bytes.len() });
+        }
+        let first = bytes[0];
+        if !first.is_ascii_lowercase() {
+            return Err(AttachIdParseError::IllegalLeadChar { ch: first as char });
+        }
+        for &b in &bytes[1..] {
+            let ok = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
+            if !ok {
+                return Err(AttachIdParseError::IllegalChar { ch: b as char });
+            }
+        }
+        Ok(AttachId(s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for AttachId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrontendAcl {
+    pub subscribe_patterns: BTreeSet<String>,
+    pub auto_subscribes: BTreeSet<String>,
+    pub publish_topics: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,5 +139,6 @@ pub fn compile(lock: &Lock) -> Result<BrokerAcl, CompileError> {
     Ok(BrokerAcl {
         plugins,
         tool_routes,
+        frontends: BTreeMap::new(),
     })
 }

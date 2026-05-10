@@ -32,6 +32,7 @@ fn second_register_for_live_canonical_returns_already_registered() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

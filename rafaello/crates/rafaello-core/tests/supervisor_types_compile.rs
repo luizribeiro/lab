@@ -35,6 +35,7 @@ fn test_hooks_counters_start_at_zero() {
     let acl = rafaello_core::broker_acl::BrokerAcl {
         plugins: std::collections::BTreeMap::new(),
         tool_routes: std::collections::BTreeMap::new(),
+        frontends: std::collections::BTreeMap::new(),
     };
     let broker = rafaello_core::bus::Broker::new(acl).expect("empty ACL is valid");
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

@@ -99,6 +99,7 @@ async fn supervisor_peer_call_core_to_plugin() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::with_extra_service(broker, SupervisorConfig::default(), factory);

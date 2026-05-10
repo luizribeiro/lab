@@ -32,6 +32,7 @@ fn tool_result_in_reply_to_multiple_rejected() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

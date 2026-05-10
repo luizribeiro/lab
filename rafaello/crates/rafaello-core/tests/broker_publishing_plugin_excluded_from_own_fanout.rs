@@ -43,6 +43,7 @@ fn publishing_plugin_excluded_from_own_fanout() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

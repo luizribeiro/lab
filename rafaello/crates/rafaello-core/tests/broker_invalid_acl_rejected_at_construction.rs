@@ -29,6 +29,7 @@ fn acl_with_overrides(publish_topics: Vec<String>, subscribe_patterns: Vec<Strin
     BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     }
 }
 

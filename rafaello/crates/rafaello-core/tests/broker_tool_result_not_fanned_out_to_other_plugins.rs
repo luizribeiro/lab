@@ -45,6 +45,7 @@ fn tool_result_not_fanned_out_to_other_plugins() {
     let acl = BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     };
     let broker = Broker::new(acl).expect("acl is well-formed");
 

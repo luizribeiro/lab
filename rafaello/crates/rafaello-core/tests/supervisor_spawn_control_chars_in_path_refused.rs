@@ -38,6 +38,7 @@ async fn spawn_with_control_chars_in_entry_returns_control_chars_in_path() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

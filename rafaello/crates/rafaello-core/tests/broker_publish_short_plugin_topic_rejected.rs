@@ -32,6 +32,7 @@ fn acl_with(canonical: &CanonicalId, topic_id: &str) -> BrokerAcl {
     BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     }
 }
 

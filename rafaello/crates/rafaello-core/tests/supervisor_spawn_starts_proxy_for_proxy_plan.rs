@@ -38,6 +38,7 @@ async fn spawn_with_proxy_plan_starts_proxy_then_unbinds_after_unwind() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

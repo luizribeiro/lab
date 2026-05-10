@@ -44,6 +44,7 @@ async fn spawn_with_provider_lock_returns_provider_not_in_m2() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());

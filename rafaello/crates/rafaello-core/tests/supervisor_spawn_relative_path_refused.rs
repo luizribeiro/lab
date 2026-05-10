@@ -37,6 +37,7 @@ async fn spawn_with_relative_entry_absolute_returns_non_absolute_path() {
     let broker = Broker::new(BrokerAcl {
         plugins,
         tool_routes: BTreeMap::new(),
+        frontends: BTreeMap::new(),
     })
     .unwrap();
     let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
