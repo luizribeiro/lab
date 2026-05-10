@@ -1,19 +1,24 @@
 # m3-tui-sessions — commits
 
-> **Status:** round-2 draft. Round 1 returned 6 blockers + 4
-> high + 5 medium (`commits-pi-review-1.md`). Round 2
-> restructures: (a) moves the **rfl-bus-fixture extensions
-> (formerly c23)** to before the frontend supervisor group
-> so c19+ frontend tests can use the new modes without
-> forward references; (b) moves the
-> **`shutdown_with_outcome` extraction** from c06 into the
-> frontend group alongside `FrontendHandle::shutdown` (it
-> was nonsensical in c06 — those types don't exist yet);
-> (c) fixes the c01/c03 workspace-member registration
-> contradiction; (d) renumbers — m3 now has **34 commits
-> in 12 groups** (round-1 said 11 groups but had 12; pi
-> medium #5). All other pi findings are addressed inline.
-> Awaiting pi convergence.
+> **Status:** round-4 draft. Round 1: 6b + 4h + 5m.
+> Round 2: 3b + 3h + 3m. Round 3: 1b + 3h + 3m
+> (`commits-pi-review-3.md`). m3 = **32 commits in 12
+> groups**. Round-4 highlights:
+> - c08 `Entry::new_*` constructors fully spec'd
+>   (pi-3 B1).
+> - c25 build-only; integration test
+>   `tui_handler_calls_frontend_ready.rs` moves to
+>   c26 (pi-3 H1).
+> - c07 unwind contract pinned: NO private-state-dir
+>   removal assertion (pi-3 H2).
+> - c17 acceptance now lists existing-mode
+>   `respond_peer_call_self_timeout.rs` regression
+>   (pi-3 H3).
+> - c21 adds `frontend_bus_publish_service_routes_to_handle_frontend_publish.rs`
+>   wiring assertion (pi-3 M1).
+> - Stale "round-2 draft" / "34 commits" banner +
+>   "controller landed by c23" checkpoint corrected
+>   (pi-3 M2 + M3).
 
 Drafted from `scope.md` (round 22 — converged after 22 pi
 rounds, 6 zero-blocker rounds; commit `da9473c`). Each
@@ -62,8 +67,9 @@ exercises them per `~/.claude/CLAUDE.md`.
 ## m3a / m3b checkpoint
 
 No internal split is planned. The driver re-evaluates after
-**c14** (renderer pipeline complete) and after **c23**
-(session store + controller landed); if a split becomes
+**c14** (renderer pipeline complete) and after **c24**
+(SessionController landed — c22 SessionStore + c23
+StoredEntry + c24 Controller); if a split becomes
 obviously beneficial, the driver opens an m3a / m3b
 owner-ratification request.
 
@@ -71,7 +77,7 @@ owner-ratification request.
 
 Wherever `scope.md` and `commits.md` both name a test, this
 `commits.md` is canonical. The headline test is
-**`rfl_chat_demo_bar.rs`** (lands at c31).
+**`rfl_chat_demo_bar.rs`** (lands at c32).
 
 ---
 
@@ -228,9 +234,19 @@ Wherever `scope.md` and `commits.md` both name a test, this
 
 ### c07 — test(rafaello-core): re-add m2 unwind tests + new third inject point coverage
 
-- **What.** scope §H6.3 + §I positive matrix
-  (pi-1 medium #5 wording: lists six unwind test
-  files):
+- **What.** scope §H6.3 + §I positive matrix.
+  **Unwind assertion contract** (pi-3 H2 — round 17
+  scope §H6.2 says private-state dirs are NOT
+  cleaned up on unwind, but H6.3 wording implied
+  they were; round-3 commits.md pins it
+  unambiguously): every unwind test asserts
+  fd-count baseline (Linux-only files) + proxy
+  cleanup + `in_flight` cleared + (post-register
+  tests only) broker registration rolled back. Tests
+  do NOT assert private-state-dir removal — m3
+  considers per-frontend dirs user-scoped artifacts
+  that the next `rfl chat` reuses.
+  Six unwind test files:
   - `supervisor_spawn_unwinds_after_register.rs` —
     arms post-register fault.
   - `supervisor_spawn_post_register_reaps_child.rs`
@@ -261,9 +277,10 @@ Wherever `scope.md` and `commits.md` both name a test, this
 
 ## Group 3 — Entry + RenderTree types
 
-### c08 — feat(rafaello-core::entry): Entry + EntryMetadata + helper types + payload structs
+### c08 — feat(rafaello-core::entry): Entry + EntryMetadata + helper types + payload structs + constructors
 
-- **What.** scope §E1 + §E3:
+- **What.** scope §E1 + §E3 + pi-2 H3 + pi-3 B1
+  (constructors must be in c08, not deferred):
   - New module `rafaello_core::entry` with `Entry`,
     `EntryMetadata`, `EntryAuthor`, `EntryFallback`,
     `StreamState` (v1: `Final` only).
@@ -272,10 +289,40 @@ Wherever `scope.md` and `commits.md` both name a test, this
   - All derive `Serialize`, `Deserialize`, `Clone`,
     `Debug`, with `#[serde(deny_unknown_fields)]` on
     payload structs.
-- **Why.** scope §E1 + §E3.
+  - **Public constructor methods on `Entry`** for the
+    eight built-in kinds, so consumers like the
+    rafaello bin's harness can build entries without
+    pulling `serde_json` / `ulid` / `chrono` into
+    their own dep graphs:
+    - `Entry::new_text(text: &str) -> Self`,
+    - `Entry::new_heading(level: u8, text: &str) -> Self`,
+    - `Entry::new_code_block(code: &str, lang: Option<&str>) -> Self`,
+    - `Entry::new_thinking(text: &str) -> Self`,
+    - `Entry::new_tool_call(name: &str, args: serde_json::Value, status: ToolCallStatus) -> Self`,
+    - `Entry::new_tool_result(call_id: &str, ok: bool, content: RenderNode) -> Self`,
+    - `Entry::new_image(uri: &str, mime: &str, alt: &str) -> Self`,
+    - `Entry::new_error(code: &str, message: &str) -> Self`,
+    - `Entry::new_unknown(kind: &str, payload: serde_json::Value, fallback: EntryFallback) -> Self`.
+    Each constructor sets `id: Ulid::new()`,
+    `metadata.created_at: Utc::now()`,
+    `metadata.author` per kind, `metadata.stream_state:
+    Final`, `parent: None`. (Note: `tool_call`,
+    `tool_result`, `unknown` take `Value` directly
+    because their payloads have free-form JSON
+    fields — those callers already need
+    `serde_json` if they're constructing args /
+    payload; the harness uses `serde_json::json!` at
+    its own boundary.)
+- **Why.** scope §E1 + §E3 + pi-2 H3 + pi-3 B1.
 - **Depends on.** c02.
 - **Acceptance.** `entry_serde_round_trip.rs` (eight
-  cases) + `entry_stream_state_rejects_open.rs`.
+  cases) + `entry_stream_state_rejects_open.rs` +
+  `entry_constructors_smoke.rs` — for each of the
+  nine `Entry::new_*` constructors, build a sample,
+  assert the resulting metadata fields are
+  populated correctly (author per kind, stream_state
+  = Final, id is a fresh Ulid, created_at is a
+  recent timestamp).
 
 ### c09 — feat(rafaello-core::entry): RenderNode + RawFormat + node serde
 
@@ -461,11 +508,20 @@ c19+ frontend tests can use `signal_ready` /
       EBADF) else non-zero.
 - **Why.** scope §L1 + §L1a; m2 retro §4.4.
 - **Depends on.** c02.
-- **Acceptance.** Five new tests
-  `rafaello-core/tests/fixture_mode_<NAME>.rs`
-  exercising each mode through `Command::new` +
-  `RFL_FIXTURE_MODE` env. Existing m2 fixture tests
-  still pass.
+- **Acceptance.** Six new tests under
+  `rafaello-core/tests/`:
+  - `fixture_mode_signal_ready.rs`,
+    `fixture_mode_exit_immediately.rs`,
+    `fixture_mode_hold_silent.rs`,
+    `fixture_mode_signal_ready_then_exit_n.rs`,
+    `fixture_mode_probe_fd_closed.rs` (the five new
+    modes through `Command::new` + `RFL_FIXTURE_MODE`
+    env).
+  - `fixture_mode_respond_peer_call_self_timeout.rs`
+    (pi-2 M3 + pi-3 H3 — covers the existing m2
+    `respond_peer_call` mode honoring the new
+    `RFL_FIXTURE_MAX_LIFETIME` env per scope §L1).
+  Existing m2 fixture tests still pass.
 
 ---
 
@@ -615,6 +671,18 @@ c19+ frontend tests can use `signal_ready` /
   - `frontend_handle_shutdown_kills_on_waitfailed.rs`
     (uses `shutdown_with_outcome` directly with
     mock signal_fn / probe_fn).
+  - `frontend_bus_publish_service_routes_to_handle_frontend_publish.rs`
+    (pi-3 M1 — proves the `FrontendBusPublishService`
+    that c21 composes actually routes inbound
+    `bus.publish` notifications to
+    `Broker::handle_frontend_publish` with the
+    spawned frontend's `AttachId`. Uses a fixture
+    that calls `peer.notify("bus.publish", ...)` on
+    a topic in the `tui` ACL's grant — for m3 the
+    grant is empty, so this test asserts the
+    routing path lands at
+    `BrokerError::PublishOutsideGrant`, which
+    proves the service wired correctly).
 
 ---
 
@@ -708,11 +776,15 @@ c19+ frontend tests can use `signal_ready` /
     `peer.call`.
 - **Why.** scope §T1 + §T2 steps 1-3.
 - **Depends on.** c03, c16 (frontend publish).
-- **Acceptance.**
+- **Acceptance.** Build-only at c25 (pi-3 H1: the
   `rafaello-tui/tests/tui_handler_calls_frontend_ready.rs`
-  — spawn rfl-tui in headless mode, assert
-  `frontend.ready` arrives parent-side via test-side
-  `FrontendReadyService` mock.
+  integration test deferred to c26 because it needs
+  the headless-mode early exit semantics to keep
+  the test bounded; c25 itself has no integration
+  test — its `What` is exercised end-to-end via c26
+  + downstream tests. The c25 commit pre-flight
+  cargo build + cargo test suite continues to be
+  green from c24).
 
 ### c26 — feat(rafaello-tui::bin): headless test mode + stderr sentinels + RFL_TUI_MAX_LIFETIME self-timeout
 
@@ -728,7 +800,15 @@ c19+ frontend tests can use `signal_ready` /
   - `RFL_TUI_MAX_LIFETIME` self-timeout in test mode.
 - **Why.** scope §T2 step 4 + sentinels.
 - **Depends on.** c25.
-- **Acceptance.** Four tests:
+- **Acceptance.** Five tests (pi-3 H1: the
+  `tui_handler_calls_frontend_ready.rs` integration
+  test moves here from c25):
+  - `tui_handler_calls_frontend_ready.rs` —
+    spawn rfl-tui in `RFL_TUI_TEST_MODE=1` with
+    `RFL_TUI_MAX_LIFETIME=2`; assert
+    `frontend.ready` arrives parent-side via test-
+    side `FrontendReadyService` mock; child exits
+    cleanly via the self-timeout.
   - `tui_test_mode_logs_bus_events_to_stderr.rs`.
   - `tui_test_mode_exits_on_test_done.rs`.
   - `tui_test_mode_self_timeout_exits_zero.rs`.
