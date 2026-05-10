@@ -926,6 +926,24 @@ Spec: security RFC §5.7.
 > row 27). The local-spawned TUI's capabilities are known at compile
 > time; core uses static defaults for it. `frontend.hello` returns
 > when external attach does in v2.
+>
+> **m3 concrete v1 indexing scheme** (m3 retrospective §2.3):
+> the static defaults are constructed via
+> `Capabilities::tui_default()` (in `rafaello-core::renderer`)
+> with attach-id-keyed dispatch. The `tui_default()` capability
+> set enumerates the 15 v1 RenderNode variant names (`Text`,
+> `Block`, `Heading`, `Paragraph`, `List`, `ListItem`,
+> `CodeBlock`, `Inline`, `Emphasis`, `Strong`, `Link`,
+> `Image`, `Callout`, `Markdown`, `Raw`) plus
+> `raw_formats = {"ansi", "plain"}`. The renderer pipeline
+> consults this set per entry to decide between Path C
+> downgrade (variant unsupported) and the chosen renderer's
+> output. Future v1 frontends would be added as additional
+> compile-time `Capabilities::<name>_default()` constructors
+> keyed by their reserved attach-id; v2's `frontend.hello`
+> handshake replaces the static dispatch with a runtime
+> negotiation but reuses the same `Capabilities` struct
+> shape.
 
 At attach time the frontend sends a fittings request named
 `frontend.hello` carrying its capabilities (renderer-tree
