@@ -1038,7 +1038,9 @@ bar"). The headline test is **`supervisor_spawn_fixture_happy_path.rs`**
       `client.peer().notify(...)` — pi-5 §2: shares the
       `ClientCommand` FIFO with `Client::call`).
     - `client.call("core.fixture.after_publish",
-      Value::Null).await` — flush ack.
+      json!({})).await` — flush ack. (Fittings rejects
+      present `params` values that are not objects or arrays;
+      do not use `Value::Null` here.)
     - Exit 0.
   - **`call_core_then_exit` mode** — **wait for
     `core.fixture.start`** (pi-2 B8 — every real fixture mode

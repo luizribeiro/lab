@@ -3,6 +3,9 @@
 
 pub mod peer_test_kit;
 
+#[cfg(feature = "test-fixture")]
+pub mod m2_harness;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

@@ -221,7 +221,7 @@ async fn run_bus_backed(mode: &str) {
                 .await
                 .expect("bus.publish notify");
             client
-                .call("core.fixture.after_publish", Value::Null)
+                .call("core.fixture.after_publish", json!({}))
                 .await
                 .expect("after_publish ack");
             std::process::exit(0);

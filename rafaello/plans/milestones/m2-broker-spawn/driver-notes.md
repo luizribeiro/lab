@@ -3,6 +3,30 @@
 Operational notes from the milestone driver during Phase 3.
 Append-only; new entries on top.
 
+## c23 publish_one hang diagnosis 2026-05-10
+
+**Root cause.** The bus fan-out / observer path was not the
+problem. The publisher fixture reached the publish path, but
+then tried to use the flush ack as
+`client.call("core.fixture.after_publish", Value::Null)`. The
+fittings wire decoder rejects any present `params` that is not
+an object or array, so that request is an `InvalidRequest`
+(`field \`params\` must be an object or array when present`).
+That made the publisher panic after sending `bus.publish`, which
+sent agents chasing broker/subscription races and, when they
+used unbounded waits or the outer cargo timeout killed the test,
+left the long-lived observer/sydbox children orphaned. The fix is
+to send object params (`json!({})`) for the flush ack (or omit
+params in a future fittings API), and keep integration-test waits
+bounded.
+
+**Verification.** After changing the ack params to `{}`,
+`timeout 30s cargo test -p rafaello-core --features test-fixture
+--test fixture_publish_one_emits_event -- --nocapture` exits via
+the test harness rather than the timeout. A broader
+`timeout 45s cargo test -p rafaello-core --features test-fixture
+--tests -- --nocapture` also exits via the harness.
+
 ## c22 restructure 2026-05-09
 
 **What happened.** c22 round-1 prompt asked for three
