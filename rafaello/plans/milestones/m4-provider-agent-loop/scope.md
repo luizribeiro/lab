@@ -1,6 +1,127 @@
 # m4 — provider fixture + secure agent loop + read-only tool + taint envelope — scope
 
-> **Status:** round-1 — initial draft. Pi review pending.
+> **Status:** round-2 — addresses `pi-review-1.md` (b/8 h/5 m/4;
+> low/notes truncated by pi context overflow — treat as none for
+> this round). Trajectory: r1 8/5/4/—.
+>
+> Round-2 fixes (by pi-1 number):
+>
+> Blockers:
+> - **B-1** New §C `rfl chat` orchestration section spells out
+>   lock load → V3 → `compile_plugin` → `broker_acl::compile` →
+>   `PluginSupervisor::new` → eager spawn of provider + tool →
+>   shutdown. Lazy-spawn is **explicitly out of scope**; both
+>   plugins are eager in the m4 fixture lock (Risk #12
+>   resolved). New negatives for missing/invalid lock and
+>   missing-provider/missing-tool spawn failures.
+> - **B-2** Fixture manifests rewritten in the live m1 schema
+>   (`schema = 1`, top-level `name`/`version`/`entry`/
+>   `rafaello = ">=0.1, <0.2"`), `[load]` shape per m1 §M6,
+>   `${project}` not `${PROJECT_ROOT}` (m1 closed placeholder
+>   set per `manifest/capability_path_template.rs:17`), and
+>   sibling `openrpc.json` files. New §PR3/§TP3 compile-tests
+>   for both fixtures land before any subprocess test.
+> - **B-3** Taint rule is now mechanically single-valued:
+>   inbound `provider.*` / `plugin.*` `msg.taint` is **discarded
+>   at the broker** for tool-shaped topics (`*.tool_request`,
+>   `*.tool_result`); core re-emit synthesises the canonical
+>   envelope solely from publisher-principal identity. B6
+>   rewritten; the negative test renamed
+>   `reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs`
+>   keeps the "discards and replaces" semantics, and a sibling
+>   `broker_provider_tool_request_with_supplied_taint_discards.rs`
+>   asserts the broker drops the inbound `taint` before fan-out
+>   to the internal subscriber.
+> - **B-4** `in_reply_to` model aligned with security RFC
+>   §7.2.6 (lines 1027-1036) verbatim:
+>   - `provider.<id>.tool_request`: **required, ≥0 entries**,
+>     each citing a `core.session.tool_result.request_id` the
+>     provider has already received.
+>   - `provider.<id>.assistant_message`: **required, ≥0
+>     entries** (the conversation context the message is
+>     replying to).
+>   - `plugin.<id>.tool_result`: required, exactly one entry,
+>     citing the matching tool_request (m2 already enforces).
+>   - `frontend.<id>.user_message`: **optional** (user messages
+>     are roots).
+>   `core.session.tool_result.request_id` is **required** on
+>   the wire (per security RFC §5.4.1 line 418 "request_id …
+>   match[es] the subscribed tool binding"). New negative tests
+>   added for provider `assistant_message` missing / empty /
+>   stale-id `in_reply_to` (§I negatives).
+> - **B-5** Provider inbound (`provider.<id>.tool_request` /
+>   `assistant_message`) is **internal-intake-only**: the
+>   broker validates publish authority + `in_reply_to`, sends
+>   the validated `BusEvent` to the trusted `ReemitRouter`
+>   in-process channel, and **does not fan out to external
+>   subscribers**. B6/B9 rewritten. New positive test
+>   `broker_provider_event_not_fanned_to_external_subscribers.rs`.
+> - **B-6** `plugin.<topic-id>.tool_result` publish-grant
+>   resolved **inside m4** as a compiler-inserted auto-publish:
+>   `broker_acl::compile` extends the existing auto-subscribe
+>   logic (line 98) to also auto-add
+>   `plugin.<topic-id>.tool_result` to `publish_topics` for
+>   any plugin with non-empty `bindings.tools`. The manifest
+>   never declares the topic; m4 §M1.3 lands the compiler
+>   change (m1 back-reach, additive — same shape as m1's
+>   existing `auto_subscribes` insertion). §TP1 manifest now
+>   has `publishes = []`.
+> - **B-7** m2 row-39 test name fixed to the live file
+>   `supervisor_spawn_provider_lock_refused.rs`. Successor
+>   uses real `SpawnHandle::wait()` (not the invented
+>   `wait_ready` — `wait_ready` exists on `FrontendHandle`,
+>   not `SpawnHandle`; `supervisor.rs:134` is authoritative).
+> - **B-8** Entry-construction rules pinned in §AL3/AL4/AL5/AL6:
+>   user/assistant messages → `Entry { kind: "text", author:
+>   User/Assistant, payload: TextPayload { text, markdown:
+>   false } }`; tool requests/results → existing
+>   `ToolCallPayload { id, name, args, status }` and
+>   `ToolResultPayload { call_id, ok, content: RenderNode,
+>   details }`. New tests assert rendered tree shape, not just
+>   DB `kind` strings.
+>
+> High:
+> - **H-1** `RFL_PROVIDER_ACTIVE` dropped. `rfl chat` only
+>   spawns the active provider (single provider in m4), so the
+>   env var is unnecessary. `RFL_PROVIDER_ID` retained.
+>   PS3/PS4/PS5/Risk #3 updated.
+> - **H-2** Provider `assistant_message` in_reply_to negative
+>   matrix added (missing / empty array / unknown
+>   tool_result id).
+> - **H-3** Outside-grant test split into two: the existing
+>   plugin-level path-traversal negative
+>   (`readfile_errors_for_outside_project_root.rs`) **plus** a
+>   sandbox-level negative `readfile_lockin_denies_outside_grant.rs`
+>   that invokes `std::fs::read` directly on a path outside
+>   `read_dirs` (bypassing the plugin's own ancestor check) and
+>   asserts the lockin sandbox rejects it.
+> - **H-4** Mock-provider parser pinned: strip trailing
+>   `[.?!,;:]` from the captured path, store `request_id →
+>   path` in an in-memory `BTreeMap` so the assistant reply
+>   knows what file was requested. Tests cover `README.md?`,
+>   missing files, multibyte UTF-8 content.
+> - **H-5** `ProviderIdMismatch` dropped.
+>   `register_provider(canonical, peer)` reads `provider_id`
+>   from `PluginAcl.provider_id` (B5 simplified).
+>
+> Mediums:
+> - **M-1** `subscribe_internal` now returns an RAII
+>   `InternalSubscription` guard; bounded `tokio::sync::mpsc`
+>   channel (default capacity 256) with drop-on-full +
+>   `tracing::warn!`; specified to fire **before** external
+>   fan-out (the internal subscriber observes the canonical
+>   ordering); tests for unregister-on-drop and slow-receiver
+>   behaviour added.
+> - **M-2** TUI test-mode env hook `RFL_TUI_TEST_MESSAGE`
+>   specified in new §T1; lands on rafaello-tui's
+>   `ENV_PASS_ALLOWLIST`; `rfl chat`'s pass-list extended;
+>   send timing pinned to "after `frontend.ready` resolves".
+>   New test `rafaello-tui/tests/tui_sends_test_message_after_ready.rs`.
+> - **M-3** Regex dep dropped. Mock-provider parser is a
+>   hand-written deterministic matcher (case-fold prefix
+>   match on `"what's in "` / `"what is in "`).
+> - **M-4** Commit budget revised upward to ~26-32 commits;
+>   pi-round budget acknowledged at 8+ for scope.
 
 ## Goal
 
@@ -26,8 +147,8 @@ The deliverable is:
    `bindings.provider = true` now spawn through the same path as
    any other plugin. The supervisor wires the
    `Publisher::Provider { provider_id, topic_id }` (new — row 42
-   follow-through) into broker registration and injects two new
-   env vars (`RFL_PROVIDER_ID`, `RFL_PROVIDER_ACTIVE`) so the
+   follow-through) into broker registration and injects one new
+   env var (`RFL_PROVIDER_ID`) so the
    provider child knows its identity. No new supervisor type is
    introduced (see "Lock-correspondence claim, extended" below).
 2. **Broker extension** in `rafaello_core::bus` /
@@ -138,16 +259,26 @@ The deliverable is:
    tool-routes map is well-defined under shared names).
 9. **m2 supervisor row-39 refusal removed**: the
    `InvalidPlanReason::ProviderNotInM2` arm in
-   `supervisor.rs:414-419` is deleted; the
-   `provider_lock_entries_refused.rs` m2 test (verify exact name
-   under §M2 below) flips into a positive
-   `provider_plugin_spawns_through_supervisor.rs` test. The
-   `ProviderNotInM2` variant of `InvalidPlanReason` is removed
-   from `error.rs:401-403` (source-breaking; one consumer is the
-   m2 test). Synthetic-stub-test successor pattern is named here
-   (per `plans/README.md` "Synthetic-stub tests need a planned
-   successor").
-10. **Integration tests** under
+   `supervisor.rs:414-419` is deleted; the live m2 test
+   `rafaello/crates/rafaello-core/tests/supervisor_spawn_provider_lock_refused.rs`
+   (verified at draft time via `ls`) is deleted and a positive
+   `provider_plugin_spawns_through_supervisor.rs` replaces it.
+   The `ProviderNotInM2` variant of `InvalidPlanReason` is
+   removed from `error.rs:401-403` (source-breaking; the only
+   consumer is the m2 test). Synthetic-stub-test successor
+   pattern is named in §M2 (per `plans/README.md`).
+10. **`rfl chat` orchestration extension** (`crates/rafaello/src/lib.rs`):
+    `run_chat` is extended to load `rafaello.lock` from the
+    project root, run V3 validation (m1 `validate::validate_lock`),
+    compile per-plugin `CompiledPlugin` plans via
+    `compile_plugin`, compile the `BrokerAcl` via
+    `broker_acl::compile`, construct the `PluginSupervisor`, and
+    **eagerly spawn the active provider plus every installed
+    tool plugin** before wiring the TUI. Plugin children are
+    held through to shutdown via `SpawnHandle` clones; SIGTERM
+    on `rfl chat` exit reaps cleanly. See §C below for the full
+    step-by-step.
+11. **Integration tests** under
     `rafaello-core/tests/`, `rafaello-mockprovider/tests/`,
     `rafaello-readfile/tests/`, and `rafaello/tests/` exercising
     the demo bar (positive and the six named negatives).
@@ -243,8 +374,8 @@ remain on `FrontendSupervisor` (m3 territory; not changed in m4).
   - §4.4 (provider plugins + core re-emit rule);
   - §4.5 (bus event envelopes — `request_id` v1 status says **m4
     adds it**; banner explicitly names m4);
-  - §4.6 (reserved env vars — m4 adds `RFL_PROVIDER_ID` and
-    `RFL_PROVIDER_ACTIVE`);
+  - §4.6 (reserved env vars — m4 adds `RFL_PROVIDER_ID`;
+    `RFL_PROVIDER_ACTIVE` dropped per pi-1 H-1);
   - §6 (grant compiler — note v1 sinks/confirmation gate is m5;
     m4 only enforces taint envelope presence + origin);
   - §7 (tool dispatch — the canonical 5-step path m4 implements);
@@ -265,12 +396,11 @@ remain on `FrontendSupervisor` (m3 territory; not changed in m4).
   - row **39** — m2 supervisor refuses `bindings.provider = true`;
     **m4 removes this refusal**.
   - row **40** — reserved env-var list. m4 adds
-    `RFL_PROVIDER_ID` and `RFL_PROVIDER_ACTIVE` to
-    `supervisor::RESERVED_ENV_VARS` (m1's `scrubber.rs`
-    `RESERVED_ENV_VARS` also extends symmetrically — this is
-    the m4 §M1.1 backreach if it surfaces; default is "add to
-    both lists in the same commit because m1 v3 catches them
-    pre-compile and m2 supervisor catches them at spawn").
+    `RFL_PROVIDER_ID` (only, per H-1) to
+    `supervisor::RESERVED_ENV_VARS` and to m1's
+    `scrubber.rs` `RESERVED_ENV_VARS` in the same commit
+    (m1 v3 catches reserved-name use pre-compile; m2
+    supervisor catches at spawn).
   - row **41** — `replay: bool` envelope flag on
     `core.session.entry.finalized` (m3 wire shape; m4 does not
     change it but it is load-bearing because m4's TUI replay
@@ -493,16 +623,45 @@ prefer they bundle because they all touch `BusEvent` /
   ProviderAlreadyRegistered(CanonicalId),
   #[error("envelope missing required `request_id` on `{topic}` (publisher {publisher:?})")]
   MissingRequestId { publisher: Publisher, topic: String },
-  #[error("missing or invalid `taint` envelope on `{topic}` from publisher {publisher:?}: {reason}")]
-  InvalidTaint { publisher: Publisher, topic: String, reason: String },
+  #[error("invalid `taint` envelope on `{topic}` from publisher {publisher:?}: {reason}")]
+  InvalidTaint { publisher: Publisher, topic: String, reason: TaintReason },
+  ```
+  And m2's existing `InReplyToReason` (`error.rs:312-316`) is
+  extended:
+  ```rust
+  #[non_exhaustive]
+  pub enum InReplyToReason {
+      Missing,
+      EmptyArray,
+      UnexpectedMultiple,
+      StaleRequestId { id: JsonRpcId },  // NEW in m4 — pi-1 B-4
+  }
+  ```
+  A new structured `TaintReason` enum:
+  ```rust
+  #[non_exhaustive]
+  pub enum TaintReason {
+      Missing,                   // None on core.session.tool_*
+      EmptyArray,                // Some(vec![])
+      UnknownSource { source: String },
+  }
   ```
   - `MissingRequestId` fires when a request-shaped topic
     (`*.tool_request`, `*.user_message`, `*.assistant_message`)
     arrives without `request_id`.
-  - `InvalidTaint` covers the four taint-envelope failure modes
-    (missing, empty array, unknown source taxon, plugin-
-    supplied on a `core.*` topic). The `reason` string is a
-    structured token (see B7 below).
+  - `InvalidTaint` covers the three canonical-side
+    taint-envelope failure modes (missing, empty array,
+    unknown source taxon). It is **never** fired by
+    `handle_provider_publish` / `handle_plugin_publish` —
+    inbound supplied taint is discarded (B6 step 8), not
+    rejected.
+  - `StaleRequestId` is the §7.2.6 enforcement signal for
+    "in_reply_to cites an id the publisher hasn't observed"
+    (provider tool_request / assistant_message).
+  - **No `ProviderIdMismatch` variant** (pi-1 H-5):
+    `register_provider(canonical, peer)` derives the
+    `provider_id` from `PluginAcl.provider_id` directly; there
+    is no caller-supplied id to mismatch against.
 - **B5.** Provider registration surface, symmetric to plugin
   / frontend:
   ```rust
@@ -520,9 +679,13 @@ prefer they bundle because they all touch `BusEvent` /
       pub fn register_provider(
           &self,
           canonical: CanonicalId,
-          provider_id: String,
           peer: PeerHandle,
       ) -> Result<RegisteredProvider, BrokerError>;
+      // provider_id is derived from PluginAcl.provider_id
+      // inside register_provider; ProviderNotInAcl fires when
+      // the ACL lacks the canonical or has provider_id = None
+      // (the plan is malformed — m1 v3 already catches this,
+      // but defence-in-depth at the broker is cheap).
 
       pub fn contains_provider(&self, canonical: &CanonicalId) -> bool;
 
@@ -535,12 +698,14 @@ prefer they bundle because they all touch `BusEvent` /
   ```
   The `BrokerState` (`bus.rs:62-65`) grows
   `providers: BTreeMap<CanonicalId, ProviderConn>` alongside
-  `registry` and `frontends`. `register_provider` checks that
-  the ACL's `PluginAcl.provider_id` matches the
-  `provider_id` arg (round-1 defaults to a hard error if they
-  diverge — `BrokerError::ProviderIdMismatch`; alternative is
-  to drop the arg and read from ACL only — pi-preferred path
-  TBD).
+  `registry` and `frontends`. `register_provider` reads the
+  `provider_id` exclusively from `PluginAcl.provider_id`
+  (pi-1 H-5 — no caller-supplied arg, no mismatch state).
+  Round-2 default: if the `PluginAcl` for `canonical` has
+  `provider_id = None`, registration returns
+  `ProviderNotInAcl` (the ACL was built without recognising
+  this plugin as a provider — almost certainly a m1
+  compilation bug, but a typed error is the safer surface).
 - **B6.** `handle_provider_publish` (mirror of m2
   `handle_plugin_publish` and m3 `handle_frontend_publish`):
   1. Verify the provider is registered (`ProviderNotRegistered`
@@ -559,66 +724,153 @@ prefer they bundle because they all touch `BusEvent` /
      `PluginAcl.publish_topics` (which m1 already validates is
      a `provider.<id>.*` subset for `provider = true` entries
      via `check_lock_publish_topic`).
-  6. **`in_reply_to` enforcement** per security RFC §7.2.6:
-     - `provider.<id>.tool_request` MUST have
-       `in_reply_to = [<user_message_id>]` (length 1; references
-       the `core.session.user_message.request_id` that the
-       provider is responding to);
-     - `provider.<id>.assistant_message` MUST have
-       `in_reply_to = [<user_message_id> or
-       <tool_result_request_id>]` (length 1);
-     - `provider.<id>.rpc_reply` (future) MUST have
-       `in_reply_to = [<call_request_id>]`.
-     Missing / empty array / multiple entries → `InvalidInReplyTo`.
+  6. **`in_reply_to` enforcement** per security RFC §7.2.6
+     (lines 1027-1036, authoritative table):
+     - `provider.<id>.tool_request`: **required, ≥0 entries**.
+       Each entry must reference a
+       `core.session.tool_result.request_id` the provider has
+       already observed (the broker maintains a per-provider
+       in-flight `BTreeSet<JsonRpcId>` of tool_result ids it
+       has fanned out to this provider; an empty `[]` is
+       valid — first-turn requests cite nothing).
+       Missing field → `InvalidInReplyTo { reason: Missing }`;
+       unknown / stale id in the list →
+       `InvalidInReplyTo { reason: StaleRequestId }` (new
+       variant — see B4 patch below).
+     - `provider.<id>.assistant_message`: **required, ≥0
+       entries**, each citing the conversation context the
+       message is replying to (a prior
+       `core.session.tool_result.request_id` or
+       `core.session.user_message.request_id`). Same
+       in-flight-map enforcement.
+     - `plugin.<id>.tool_result`: m2 already enforces "required,
+       exactly one entry"; m4 extends with
+       `StaleRequestId` validation against the per-plugin
+       outstanding-tool_request map the agent loop maintains.
+     - `frontend.<id>.user_message`: **optional** per §7.2.6
+       row 5 (user messages are roots; no taint to inherit).
+     - `plugin.<a>.rpc_reply`: m2 already enforces "required,
+       exactly one entry"; out of m4 scope for stale-id (no
+       in-flight `rpc_call` map yet — m5+).
   7. **`request_id` requirement**: `tool_request`,
-     `assistant_message`, `user_message` → required;
-     `tool_result`, `rpc_reply` → optional (these are *responses*,
-     not requests). Round-1 cut: `request_id` on a request topic
-     missing → `MissingRequestId`.
-  8. Emit the `BusEvent` with `PublisherIdentity::Provider {…}`;
-     **the broker carries `msg.taint` verbatim to the inbound
-     event** — provider-side taint is preserved at this layer
-     because the core re-emit (CR below) is what computes the
-     canonical `core.*` taint, and the inbound provider event
-     is fanned out to the agent loop, the session controller,
-     and any other subscribers granted the
-     `provider.<id>.**` pattern.
-  9. Fan out via the existing `fan_out` path (extended in B9
-     below to include `providers` recipients).
-- **B7.** Taint envelope validation. m4's enforcement is **at
-  re-emission time** (CR §below), not at the inbound publish
-  point — the broker accepts whatever `taint` the provider sends
-  on the `provider.<id>.*` namespace (an empty / absent envelope
-  is fine at that layer) and **core synthesises the canonical
-  envelope when it re-emits to `core.*`**. The hard enforcement
-  is therefore on the `publish_core_with_taint` path, not on
-  `handle_provider_publish`. Concretely:
+     `assistant_message`, `user_message` (request-shaped, may
+     be cited by a future `in_reply_to`) → required;
+     `tool_result`, `rpc_reply` (responses) → required on
+     `core.session.tool_result` (per security RFC §5.4.1 line
+     418), optional on the inbound plugin-side
+     `plugin.<id>.tool_result` (the inbound event carries
+     the same id that surfaces as the canonical
+     `request_id` on the re-emitted `core.*` event — but the
+     broker may synthesise a fresh id if the inbound is
+     absent, since the outstanding-tool_request map already
+     knows the correlation). Round-2 cut: **all request-shaped
+     topics require `request_id`; all response-shaped topics
+     have `request_id: Option`** with synthesis on the
+     re-emit side if absent.
+  8. **`taint` discard rule** (pi-1 B-3 fix): the inbound
+     `msg.taint` is **never carried into the canonical `core.*`
+     event** for tool-shaped topics. The broker has two
+     options for the *inbound* `BusEvent` it places on the
+     internal subscriber channel (B7 below):
+     - **Option A (round-2 default): strip `taint` to `None`
+       at the broker boundary** for `provider.<id>.*` and
+       `plugin.<id>.tool_result` topics. The inbound event
+       carries no provenance claim; the canonical envelope is
+       computed exclusively by the re-emit synthesis (CR §below)
+       from the publishing principal's identity.
+     - Option B (rejected): error on supplied `taint` with
+       `InvalidTaint`. Rejected because v1 plugins / providers
+       may set `taint` for their own audit reasons on their
+       own namespace (overview §4.5 says "plugin authors add
+       to `taint` for their own published events"); a hard
+       error would force every provider to omit it explicitly.
+     The negative test
+     `reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs`
+     proves the discard: a provider publish with `taint:
+     [{source: "user"}]` produces a canonical
+     `core.session.tool_request` with `taint: [{source:
+     "provider", detail: "mock"}]` — the provider's claim is
+     **not** present in the emitted envelope.
+  9. Emit the `BusEvent` with `PublisherIdentity::Provider
+     { canonical, provider_id, topic_id }`, `taint = None`
+     (per step 8). Hand off to step B7 (internal intake).
+- **B7.** Provider / tool-result inbound is **internal-intake-
+  only** (pi-1 B-5 fix). The validated `BusEvent` produced by
+  `handle_provider_publish` (and the analogous tool-result
+  inbound branch of `handle_plugin_publish` — see B7b) is
+  routed into the trusted `ReemitRouter` queue, **not the
+  external fan-out path**.
+  - **`BrokerInner` grows an internal-subscriber field**:
+    `internal_subscribers: Mutex<Vec<InternalSubscriberSlot>>`,
+    where each slot holds a `Sender<BusEvent>` and a subscribe
+    pattern. The `Sender` is created by
+    `Broker::subscribe_internal(pattern) ->
+    (Receiver<BusEvent>, InternalSubscription)`; the
+    `InternalSubscription` is an RAII guard whose Drop removes
+    the slot.
+  - **For provider inbound** (B6 step 9), the broker calls
+    `notify_internal_subscribers(&event)` and **does not**
+    invoke `fan_out(..)`. Subscriber lists are walked once
+    inside the state lock; the lock is dropped; per-recipient
+    `try_send` runs after. External subscribers (plugins,
+    frontends, other providers) never see the inbound
+    `provider.<id>.*` event.
+  - **For `plugin.<id>.tool_result` inbound** (B7b): m2
+    already implements a "result-routing protection"
+    short-circuit at `bus.rs:310-318` that *skips* external
+    fan-out for `tool_result` / `rpc_reply` topics. m4
+    extends that branch to **also** call
+    `notify_internal_subscribers(&event)` so the ReemitRouter
+    sees the inbound tool_result. The external-fan-out skip
+    remains; the internal-intake side is additive.
+  - The `core.session.*` canonical events are emitted by the
+    re-emit path through a new `publish_core_with_taint`
+    helper (B8 below). Those canonical events **do** flow
+    through `fan_out` to external subscribers.
+- **B7b.** Per-provider outstanding-tool_result map. To
+  enforce the §7.2.6 "must reference a tool_result the
+  provider has already received" rule, the broker tracks
+  outstanding ids per `Publisher::Provider`. New shape on
+  `BrokerInner`:
+  ```rust
+  // Keyed by provider canonical id.
+  provider_observed_results:
+      Mutex<BTreeMap<CanonicalId, BTreeSet<JsonRpcId>>>,
+  ```
+  Inserted on every `core.session.tool_result` fan-out
+  delivered to a given provider; cleared when the matching
+  `provider.<id>.tool_request` cites it (the cited id is
+  *consumed* — first-time-use semantics; round-2 default).
+  An empty `in_reply_to: []` on a provider tool_request is
+  valid (first-turn). An id not in the set →
+  `InvalidInReplyTo { reason: StaleRequestId }`.
+  - Analogous structure for `assistant_message`: the agent
+    loop may cite either a tool_result id or the originating
+    user_message id; the broker therefore unions
+    `provider_observed_results` with a
+    `provider_observed_user_messages` set populated on
+    `core.session.user_message` fan-out.
+- **B8.** Taint-envelope synthesis on canonical re-emission.
   - **`Broker::publish_core_with_taint(topic, payload,
     request_id, in_reply_to, taint)`** is a new method that:
     - validates the topic is `core.*`;
-    - validates `taint` is non-empty for `topic` matching the
-      `core.session.tool_request` / `core.session.tool_result`
-      pattern (per overview §4.5 / row 7);
-    - validates each `TaintEntry.source ∈ {"user", "provider",
-      "tool", "system"}` (security RFC §7.2.1 taxon);
+    - **for `core.session.tool_request` /
+      `core.session.tool_result`**: validates `taint` is
+      `Some(non_empty_vec)` and every entry's `source ∈
+      {"user", "provider", "tool", "system"}` (security RFC
+      §7.2.1 taxon); on failure → `InvalidTaint`;
+    - for other `core.*` topics: `taint` may be `None`;
     - emits the `BusEvent` with the supplied
-      `request_id` / `in_reply_to` / `taint`.
+      `request_id` / `in_reply_to` / `taint` and fans out
+      externally (this is the only path that produces
+      canonical `core.session.tool_*` events).
   - The existing `publish_core` becomes a thin wrapper that
-    calls `publish_core_with_taint(topic, payload, None, None,
-    None)`; on `core.session.tool_*` it errors
-    `InvalidTaint { reason: "missing" }`. (Defence in depth:
-    a future core path that forgot to set taint cannot publish
-    a tool_* event.)
-  - **Plugin-supplied taint rejection**: if a plugin or
-    provider attempts to publish on its own namespace **and
-    that namespace would be re-emitted to `core.session.tool_*`**,
-    the re-emit path enforces that the synthesised taint is
-    `[{source: <publisher-kind>, detail: <publisher-id>}]`,
-    not whatever the publisher attached. The publisher's
-    optional `msg.taint` is **discarded at the re-emit
-    boundary** — overview §4.4 / §4.5 reconciliation note
-    ("Core synthesises and validates them before fan-out;
-    plugin authors never write `taint` directly").
+    calls `publish_core_with_taint(topic, payload, None,
+    None, None)`. Publishing `publish_core(
+    "core.session.tool_request", _)` now errors
+    `InvalidTaint { reason: "missing" }` — defence in depth
+    against a future core path that forgot to use the
+    taint-aware variant.
 - **B8.** Topic validation lifecycle for the new
   `core.session.*` topics:
   - `core.session.tool_request`, `core.session.tool_result`,
@@ -633,18 +885,23 @@ prefer they bundle because they all touch `BusEvent` /
     (m4 §PR1 lock fixture); m1's `validate::lock` accepts these
     today (no manifest schema change).
 - **B9.** Fan-out (`bus.rs:546-625`) gains a third recipient
-  band — `providers`. Same shape as `plugin_recipients` and
-  `frontend_recipients`: build the recipient list under the
-  state lock, drop the lock, then per-recipient
-  `peer.notify("bus.event", value.clone())`. Subscribers
-  receive events on `provider.<id>.**` patterns; round-1
-  exclusion rule: a provider does not receive its own
-  re-published `core.session.tool_request` (the agent loop
-  does), to avoid an obvious feedback loop. Specifically, if
-  the publisher is `Core` and the re-emit was synthesised from
-  a `provider.<id>.tool_request`, fan-out **excludes** the
-  source provider from the recipient set. This is the m4
-  analogue of m2's `result-routing protection` (`bus.rs:310-318`).
+  band — `providers` — but **only for canonical `core.*`
+  events**, never for inbound `provider.<id>.*` events
+  (which are internal-intake-only per B7). Same shape as
+  `plugin_recipients` and `frontend_recipients`: build the
+  recipient list under the state lock, drop the lock, then
+  per-recipient `peer.notify("bus.event", value.clone())`.
+  Provider subscribers receive `core.session.tool_result`,
+  `core.session.user_message` events on the patterns their
+  manifest declares (e.g. `["core.session.user_message",
+  "core.session.tool_result"]` for the mock provider).
+  Round-2 exclusion rule: when fan-out emits a
+  `core.session.tool_request` that was synthesised from a
+  particular provider's `tool_request`, that provider is
+  **excluded** from the recipient set (the agent loop alone
+  consumes the canonical tool_request). This is the m4
+  analogue of m2's `result-routing protection`
+  (`bus.rs:310-318`).
 - **B10.** `BrokerAcl` defence-in-depth pattern revalidation
   (m2 §B10, m3 §B6 carryover) — m4 adds nothing structural
   here; the validation already iterates `plugins.publish_topics`
@@ -658,6 +915,147 @@ prefer they bundle because they all touch `BusEvent` /
   second gate so a hand-mutated `BrokerAcl` cannot bypass.
   New test:
   `broker_construct_with_provider_publish_id_mismatch_rejected.rs`.
+
+### C — `rfl chat` orchestration extension
+
+m3's `run_chat` (`crates/rafaello/src/lib.rs:107-220`) constructs
+a `BrokerAcl` with empty `plugins` / `tool_routes` maps and never
+loads a lock (`lib.rs:154-157`). m4 replaces that hard-coded ACL
+construction with a real lock-driven path. This section is the
+load-bearing orchestration spec for the demo bar — without it,
+the headline test has no plugin tree to drive.
+
+- **C1.** Project-root + lock-load. Step 1 (project root
+  canonicalisation) is unchanged from m3. New step 1b: load
+  `<project_root>/rafaello.lock` via `Lock::load(&path)` (m1
+  surface: `rafaello-core/src/lock/lock_file.rs`). On missing
+  lock → `RflChatError::LockNotFound { path }` (new variant);
+  on parse error → `RflChatError::LockParse { source }`.
+- **C2.** V3 validation. Call `validate::validate_lock(&lock)`
+  (m1 surface; round-1 cut: confirm exact symbol name at
+  commits.md time — m1's V3 entry point is in
+  `validate/mod.rs`). On error → `RflChatError::LockValidation
+  { source }`. m4 cannot skip V3 because the broker ACL
+  compilation `spot_check_v3` path
+  (`broker_acl.rs:88`) expects V3 to have already run.
+- **C3.** Per-plugin plan compilation. For each
+  `(canonical, entry)` in `lock.plugins`, call
+  `compile_plugin(&lock, canonical)` (m1 surface) → `CompiledPlugin`.
+  Collect into `BTreeMap<CanonicalId, CompiledPlugin>`. On
+  error → `RflChatError::CompilePlugin { canonical, source }`.
+- **C4.** Broker ACL compilation. `let acl =
+  broker_acl::compile(&lock)?`. Then **extend** the resulting
+  `acl.frontends` with the `tui` `FrontendAcl` entry per §F
+  below (subscribe = `["core.session.**", "core.lifecycle.**"]`,
+  publish = `["frontend.tui.user_message"]`). The m1 compiler
+  emits `acl.frontends = BTreeMap::new()` (`broker_acl.rs:142`);
+  the frontend wiring stays in `rfl chat` because frontends
+  are not plugins.
+- **C5.** Broker + supervisor construction.
+  `let broker = Broker::new(acl)?;` (existing). New:
+  `let supervisor = PluginSupervisor::new(broker.clone(),
+  SupervisorConfig::default());` (m2 surface — verify exact
+  ctor signature at commits.md time; round-1 cut matches
+  `supervisor.rs:259-280` shape).
+- **C6.** Compute `SpawnPaths` per plugin. For each
+  `(canonical, plan)` in C3's map:
+  - `project_root = <C1 project root>`;
+  - `private_state_dir = project_root /
+    ".rafaello-plugin-data" / plan.topic_id` (per decisions
+    row 37). The dir is created in C7 by the supervisor (m2
+    §SP4); m4 does not pre-create.
+- **C7.** Eager spawn of the active provider. Look up
+  `lock.session.provider_active: Option<String>` (m1 surface,
+  `lock/session.rs:11`). On `None` → m4 demo bar cannot run;
+  surface `RflChatError::NoActiveProvider`. On `Some(canonical_str)`:
+  - parse via `CanonicalId::parse`;
+  - look up the matching `CompiledPlugin` in C3's map;
+  - call `supervisor.spawn(&plan, &paths).await?` →
+    `SpawnHandle`; store in a `Vec<SpawnHandle>` held in
+    `run_chat`'s local scope. On error →
+    `RflChatError::ProviderSpawnFailed { canonical, source }`.
+- **C8.** Eager spawn of every installed tool plugin. For
+  each `(canonical, entry)` where
+  `!entry.bindings.tools.is_empty() && !entry.bindings.provider`:
+  - `supervisor.spawn(&plan, &paths).await?`;
+  - store the `SpawnHandle` in the same `Vec`.
+  - **Rationale**: m4 eager-loads every tool to avoid
+    introducing lazy-spawn-on-publish in this milestone (Risk
+    #12 round-1). The fixture lock has exactly one tool
+    plugin (`rfl-readfile`). m5+ may add lazy-spawn once a
+    second tool exists.
+- **C9.** Reemit router + agent loop construction (after
+  plugin spawns so the broker registry is populated):
+  - `let router = ReemitRouter::new(broker.clone(),
+    acl.tool_routes.clone(), provider_canonical.clone()); let
+    router_join = router.start();`
+  - `let agent = AgentLoop::new(broker.clone(), acl.clone(),
+    Arc::new(controller)); let agent_join = agent.start();`
+  Both tasks subscribe before the TUI starts (C10), so the
+  user_message → reemit → tool_request → tool_result chain
+  is wired before any input arrives.
+- **C10.** Frontend (TUI) spawn — unchanged from m3 except
+  the `CompiledFrontend.env.pass` allowlist grows to include
+  `RFL_TUI_TEST_MESSAGE` (per §T1 / M-2).
+- **C11.** Wait loop. `tokio::select!` on:
+  - `handle.wait_ready()` → on `Ok(Ok(()))`, run
+    `controller.replay_history` (m3 path);
+  - TUI exit (`handle.wait().await`) → trigger shutdown;
+  - shutdown signal (Ctrl-C / SIGTERM).
+- **C12.** Shutdown. `supervisor.shutdown(grace).await`
+  reaps every spawned plugin (m2 surface). `router_join`
+  and `agent_join` observe the shared shutdown
+  `watch::Receiver<bool>` and exit. The TUI handle reaps
+  via m3's path. Order: signal shutdown → wait for tasks
+  → supervisor.shutdown → drain stderr forwarder.
+- **C13.** New `RflChatError` variants (additions to
+  m3's existing enum in `rafaello/src/lib.rs`):
+  - `LockNotFound { path: PathBuf }`,
+  - `LockParse { source: LockError }`,
+  - `LockValidation { source: ValidationError }`,
+  - `CompilePlugin { canonical: CanonicalId, source: CompileError }`,
+  - `NoActiveProvider`,
+  - `ProviderSpawnFailed { canonical: CanonicalId, source: SpawnError }`,
+  - `ToolSpawnFailed { canonical: CanonicalId, source: SpawnError }`.
+- **C14.** Negatives for the orchestration path:
+  - `rfl_chat_missing_lock_errors.rs` — no `rafaello.lock` at
+    project root; exit non-zero with `LockNotFound`.
+  - `rfl_chat_invalid_lock_errors.rs` — corrupt TOML;
+    `LockParse`.
+  - `rfl_chat_lock_validation_fails.rs` — lock with an
+    invalid `bindings.tools` entry; `LockValidation`.
+  - `rfl_chat_no_active_provider_errors.rs` — valid lock
+    with `session.provider_active = None`; `NoActiveProvider`.
+  - `rfl_chat_provider_spawn_failure_propagates.rs` —
+    fixture lock points at a non-existent provider binary;
+    `ProviderSpawnFailed`.
+
+### T — TUI test-mode env hook (pi-1 M-2)
+
+- **T1.** New env var **`RFL_TUI_TEST_MESSAGE`** read by the
+  TUI binary (`rafaello-tui/src/bin/rfl_tui.rs`) at startup:
+  - If set and non-empty, after the TUI's
+    `peer.call("frontend.ready", …)` resolves and the
+    `BusEventHandler` is registered, the TUI publishes a
+    single `frontend.tui.user_message` containing
+    `{text: <env-value>}` and a freshly-allocated
+    `request_id` (a new `JsonRpcId::String` synthesised
+    from a `Ulid::new().to_string()`).
+  - If unset, the TUI runs the normal interactive prompt.
+  - The env var is added to `rafaello-tui`'s
+    `ENV_PASS_ALLOWLIST` (the in-crate constant that
+    documents what the bin reads) and to
+    `rafaello/src/lib.rs`'s `ENV_PASS_ALLOWLIST` for
+    `CompiledFrontend.env.pass` so `rfl chat` propagates
+    it to the spawned child.
+  - **Test**:
+    `rafaello-tui/tests/tui_sends_test_message_after_ready.rs`
+    — spawn `rfl-tui` in `RFL_TUI_TEST_MODE=1` with
+    `RFL_TUI_TEST_MESSAGE="what's in README.md"`; in the
+    parent-side broker fixture, register a callback on the
+    `FrontendReadyService`; await the ready signal, then
+    await the `frontend.tui.user_message` publish; assert
+    the payload's `text` matches.
 
 ### F — frontend ACL extension (m3 retro §2.10 handover)
 
@@ -702,18 +1100,19 @@ prefer they bundle because they all touch `BusEvent` /
   filename matches what scope §M2 below references). Per
   `plans/README.md` synthetic-stub-test successor rule (m2
   §3.3): m4 §M2 row below names the successor.
-- **PS3.** Inject `RFL_PROVIDER_ID` and `RFL_PROVIDER_ACTIVE`
-  into the child env when the spawn plan has
-  `acl_provider_id = Some(_)`:
+- **PS3.** Inject **`RFL_PROVIDER_ID`** (only) into the child
+  env when the spawn plan has `acl_provider_id = Some(_)`:
   - `RFL_PROVIDER_ID = <provider_id>` (e.g. `"mock"`) — the
-    public namespace authority key.
-  - `RFL_PROVIDER_ACTIVE = "1"` if this provider is the
-    `[session].provider_active` per the lock; `"0"` otherwise.
-    Round-1 cut: m4 only spawns the active provider via the
-    agent loop's lazy-spawn path, so this var is always `"1"`
-    in m4 practice; the variable exists so a future "multiple
-    providers installed, one active" scenario (overview §8)
-    doesn't need a re-spawn semantics change.
+    public namespace authority key, sourced from
+    `PluginAcl.provider_id` via the broker ACL.
+  - **`RFL_PROVIDER_ACTIVE` is NOT injected** (pi-1 H-1):
+    `PluginSupervisor::spawn` does not receive
+    session-activeness state (`&CompiledPlugin` + `&SpawnPaths`
+    only — `supervisor.rs:310-314`); routing activeness via
+    a new spawn-plan field or a new spawn arg adds surface
+    without a v1 consumer. m4's `rfl chat` spawns only the
+    active provider (§C7), so every provider child is active
+    by construction. Multi-provider activeness is m6+ scope.
   - **Decision and defence**: `RFL_PROVIDER_ID` is the new
     primary env var. Alternative considered: rely on
     `RFL_PLUGIN` + the bindings.toml carried in the lock
@@ -734,23 +1133,22 @@ prefer they bundle because they all touch `BusEvent` /
       "RFL_PRIVATE_STATE_DIR",
       "RFL_TOPIC_ID",
       "RFL_PROVIDER_ID",          // NEW in m4
-      "RFL_PROVIDER_ACTIVE",      // NEW in m4
   ];
   ```
 - **PS5.** Extend m1's `scrubber.rs` `RESERVED_ENV_VARS` to
-  match (row 40 mirror). m1 v3 catches reserved-name use at
-  manifest compile time; the m4 §M1.1 row records this as the
-  m1 back-reach (default: same commit as PS4 — the two lists
-  must move together).
+  match (row 40 mirror) — add `RFL_PROVIDER_ID` only. m1 v3
+  catches reserved-name use at manifest compile time; the m4
+  §M1.1 row records this as the m1 back-reach (default: same
+  commit as PS4 — the two lists must move together).
 - **PS6.** Provider broker registration. At the broker
   registration step in `PluginSupervisor::spawn` (currently
   `Broker::register_plugin` for non-provider plugins), branch
   on `acl_provider_id`:
   ```rust
-  let registered: ProviderOrPlugin = match acl_provider_id.clone() {
-      Some(pid) => ProviderOrPlugin::Provider(
+  let registered: ProviderOrPlugin = match acl_provider_id {
+      Some(_) => ProviderOrPlugin::Provider(
           self.broker.register_provider(plan.canonical.clone(),
-              pid, peer.clone())?,
+              peer.clone())?,
       ),
       None => ProviderOrPlugin::Plugin(
           self.broker.register_plugin(plan.canonical.clone(),
@@ -760,6 +1158,8 @@ prefer they bundle because they all touch `BusEvent` /
   ```
   with a `ProviderOrPlugin` newtype enum (or `Either`)
   carrying the appropriate RAII guard into `ManagedSpawn`.
+  The provider id is read from `PluginAcl.provider_id`
+  inside `register_provider` (pi-1 H-5).
 - **PS7.** `ManagedSpawn` (`supervisor.rs:155-168`) field
   `registered: Option<RegisteredPlugin>` becomes
   `registered: Option<ProviderOrPlugin>` (or two parallel
@@ -793,21 +1193,66 @@ the four wire paths that produce `core.session.*` events:
 - **CR1.** New struct `ReemitRouter` constructed at `rfl chat`
   startup with handles to `Broker`, `BrokerAcl` (for the
   `tool_routes` map), and the `[session].provider_active`
-  canonical id from the lock. The router subscribes via an
-  in-process channel hooked into the broker's fan-out
-  (round-1 mechanism: `Broker::subscribe_internal(pattern,
-  Sender<BusEvent>)` — new method that registers an in-process
-  recipient with no fittings transport; events are deep-cloned
-  into the supplied channel before the bus's `fan_out`
-  outbound notifications run). The internal subscriber is not
-  ACL-gated because it is part of core's trusted internal
-  composition.
+  canonical id from the lock. The router subscribes via the
+  new internal-subscriber API (pi-1 M-1 — lifecycle and
+  backpressure specified up front):
+  ```rust
+  impl Broker {
+      /// Register an in-process subscriber. The returned
+      /// guard removes the slot on Drop. The channel is
+      /// bounded (default cap 256) with drop-on-full
+      /// + tracing::warn!; ordering is deterministic
+      /// (internal notify runs **before** external fan-out
+      /// inside the broker's lock-drop sequence, so the
+      /// router observes events at or before any external
+      /// subscriber sees them — pi-1 M-1 ordering rule).
+      pub fn subscribe_internal(
+          &self,
+          patterns: Vec<String>,
+          capacity: usize,
+      ) -> (mpsc::Receiver<BusEvent>, InternalSubscription);
+  }
+
+  pub struct InternalSubscription {
+      broker: Arc<BrokerInner>,
+      slot_id: u64,
+  }
+  // Drop releases the slot from BrokerInner.internal_subscribers.
+  ```
+  The internal subscriber is not ACL-gated because it is
+  part of core's trusted internal composition (it can only
+  be constructed by code with a `&Broker`, which means
+  inside `rafaello-core`). The `slot_id` is monotonically
+  assigned so a Drop after the broker has already cleared
+  state (shutdown) is a no-op rather than corrupting an
+  unrelated slot.
+  - **Bounded behaviour**: on `try_send` failure (channel
+    full), the broker logs `tracing::warn!(slot_id, topic,
+    "internal subscriber dropped event — channel full")`
+    and continues to the next subscriber. No backpressure
+    on the publisher.
+  - **Send failure on receiver-dropped**: `try_send`
+    returns `TrySendError::Closed`; the broker logs at
+    `tracing::debug!` and the slot is left in place until
+    Drop on the matching `InternalSubscription` clears it.
+  - **Ordering relative to external fan-out**: the broker
+    notifies internal subscribers first (inside the same
+    `fan_out` body, before iterating plugin / frontend /
+    provider recipients). This is load-bearing for the
+    reemit router because the canonical `core.*` event
+    must be observable to the router before any external
+    consumer can re-publish based on it.
+  - **Tests**:
+    `broker_internal_subscriber_unregister_on_drop.rs`,
+    `broker_internal_subscriber_drops_event_when_full.rs`,
+    `broker_internal_subscriber_fires_before_external_fan_out.rs`.
 - **CR2.** Re-emission steps for **provider →
   core.session.tool_request**:
   1. Receive `BusEvent { topic: "provider.mock.tool_request",
      payload, publisher: Provider{…, provider_id}, request_id:
-     Some(rid), in_reply_to: Some([user_msg_id]), taint: _ }`
-     from the internal subscriber.
+     Some(rid), in_reply_to: Some(prior_tool_result_ids),
+     taint: None (broker discarded inbound — B6/B8) }` from
+     the internal subscriber.
   2. Validate `payload` deserialises to
      `{tool: String, args: Value}`.
   3. Look up `BrokerAcl.tool_routes.get(&payload.tool)` —
@@ -820,27 +1265,42 @@ the four wire paths that produce `core.session.*` events:
   4. Synthesise canonical taint:
      `vec![TaintEntry{source: "provider".into(), detail:
      Some(provider_id.clone())}]`. (Security RFC §7.2.1 — the
-     origin half. Propagation half deferred to m5.)
+     origin half. Propagation half — unioning the cited
+     tool_results' taint — deferred to m5.)
   5. Call `broker.publish_core_with_taint(
        "core.session.tool_request",
        json!({tool: <name>, args: <args>, dispatch_target:
          <canonical-id>}),
-       Some(rid),                  // forwarded from provider
-       Some(vec![user_msg_id]),    // forwarded
+       Some(rid),                          // forwarded from provider
+       Some(prior_tool_result_ids),        // forwarded — ≥0 entries
+                                           // per §7.2.6 row 2
        Some(taint))`.
 - **CR3.** Re-emission steps for **plugin →
   core.session.tool_result**:
   1. Receive `BusEvent { topic: "plugin.<topic-id>.tool_result",
      payload, publisher: Plugin{canonical, topic_id},
-     request_id: maybe, in_reply_to: Some([tool_request_id]), … }`.
+     request_id: <inbound, may be None>, in_reply_to:
+     Some([tool_request_id]), taint: None (broker discarded) }`.
   2. Look up `canonical` in `BrokerAcl.plugins` to confirm it
      is a known tool plugin (defence in depth).
-  3. Synthesise taint: `vec![TaintEntry{source: "tool".into(),
+  3. Synthesise the canonical `request_id`. The result event
+     **must carry `request_id`** on the canonical wire per
+     security RFC §5.4.1 line 418 ("request_id, tool name,
+     and result schema match the subscribed tool binding").
+     - If the inbound carries `request_id`, forward it.
+     - If the inbound omits it (the tool plugin author chose
+       not to set one), the agent loop's per-plugin
+     `outstanding_tool_requests: BTreeMap<JsonRpcId,
+     ToolDispatchContext>` (AL5) holds the originating
+     `tool_request.request_id`, which is reused as the
+     result's canonical `request_id`. This guarantees the
+     provider can correlate.
+  4. Synthesise taint: `vec![TaintEntry{source: "tool".into(),
      detail: Some(canonical.to_string())}]`. (m4: origin only.
      m5 will additionally `concat` the originating
      tool_request's taint per security RFC §7.2.2.)
-  4. `publish_core_with_taint("core.session.tool_result",
-     payload, None /* result is a response, not a request */,
+  5. `publish_core_with_taint("core.session.tool_result",
+     payload, Some(canonical_request_id),
      Some([tool_request_id]), Some(taint))`.
 - **CR4.** Re-emission steps for **provider →
   core.session.assistant_message**: payload pass-through;
@@ -884,21 +1344,36 @@ half of the canonical 5-step path (overview §7):
   `core.session.user_message`, `core.session.tool_request`,
   `core.session.tool_result`, and `core.session.assistant_message`.
 - **AL3.** Per `core.session.user_message` event:
-  - persist as a `kind: "user_message"` entry via
-    `SessionController::finalize_entry`;
-  - no further action — the provider plugin is the consumer
+  - persist as an `Entry` with `kind = "text"`,
+    `metadata.author = EntryAuthor::User`, `payload =
+    TextPayload { text, markdown: false }` (pi-1 B-8 fix —
+    m3's renderer registry has no `user_message` kind;
+    `renderer/mod.rs:112-122` lists the eight built-in
+    kinds, and `Entry::new_text` is the canonical
+    constructor). The wire payload's
+    `core.session.user_message.text` field maps directly
+    into `TextPayload.text`.
+  - The TUI renders this as a user-attributed text bubble
+    via the existing `TextRenderer` + the
+    `EntryAuthor::User` distinction (m3 renderer pipeline).
+  - No further action — the provider plugin is the consumer
     (via fan-out on its subscribe set).
 - **AL4.** Per `core.session.assistant_message` event:
-  - persist as a `kind: "assistant_message"` entry via
-    `SessionController::finalize_entry`. (Re-emit via the
-    existing m3 wire shape; the TUI already renders
-    `text` / `assistant_message` kinds via the m3
-    renderer registry, with author = `Assistant`.)
+  - persist as `Entry` with `kind = "text"`,
+    `metadata.author = EntryAuthor::Assistant`, `payload =
+    TextPayload { text, markdown: false }` (the canonical
+    `Entry::new_text` shape at `entry/mod.rs:109-118`).
 - **AL5.** Per `core.session.tool_request` event (the re-emitted
   version with `dispatch_target: <canonical-id>` in payload —
   see CR2):
-  - persist as a `kind: "tool_call"` entry (overview §11 /
-    Stream E §3 — `tool_call` is a built-in renderer kind);
+  - persist as `Entry` with `kind = "tool_call"`,
+    `metadata.author = EntryAuthor::Assistant`, `payload =
+    ToolCallPayload { id: <request_id-as-string>, name:
+    <tool>, args: <args>, status: ToolCallStatus::Pending }`
+    (`entry/payloads.rs:47-52`). The `id` field is the
+    canonical `request_id` rendered as a string so the
+    matching `tool_result` entry (AL6) can be correlated
+    via `ToolResultPayload.call_id`;
   - publish a tool-side request: the agent loop synthesises
     `plugin.<target-topic-id>.tool_request` with the same
     `request_id`, `in_reply_to`, `taint` envelope, and a
@@ -916,8 +1391,25 @@ half of the canonical 5-step path (overview §7):
     `core.session.tool_request` to a tool plugin** — overview
     §7 architectural commitment.
 - **AL6.** Per `core.session.tool_result` event:
-  - persist as a `kind: "tool_result"` entry;
-  - no further action — the provider plugin observes the
+  - persist as `Entry` with `kind = "tool_result"`,
+    `metadata.author = EntryAuthor::Tool`, `payload =
+    ToolResultPayload { call_id: <in_reply_to[0]
+    as-string>, ok, content: RenderNode::Text { ... } or
+    Code { ... } from the file body, details }`
+    (`entry/payloads.rs:56-62`). Round-2 cut: the readfile
+    tool's content is wrapped as
+    `RenderNode::CodeBlock { code: <content>, lang: None }`
+    so the TUI renders it inside a code block. Future
+    tools may emit richer `RenderNode`s.
+  - **Also update** the prior `tool_call` entry's status
+    field to `ToolCallStatus::Ok` / `Error` via a new
+    `SessionStore::update_entry` helper, or simpler:
+    round-2 cut leaves the `tool_call`'s status at
+    `Pending` and lets the `tool_result` entry carry the
+    final state. Pi may push back on the update path; the
+    simpler "no in-place updates" cut keeps SQLite
+    append-only.
+  - No further action — the provider plugin observes the
     re-emitted event (it subscribes to
     `core.session.tool_result` per its manifest) and uses the
     `in_reply_to` correlation to match against its
@@ -939,23 +1431,28 @@ half of the canonical 5-step path (overview §7):
 ### PR — `rafaello-mockprovider` subprocess plugin
 
 - **PR1.** Manifest at
-  `rafaello/fixtures/rafaello-mockprovider/rafaello.toml`:
+  `rafaello/fixtures/rafaello-mockprovider/rafaello.toml`, in
+  the live m1 schema (pi-1 B-2 fix; m1 scope §M1 + §M6 + §M8
+  + §M10 + the closed placeholder set at
+  `manifest/capability_path_template.rs:17`):
   ```toml
-  [plugin]
-  name = "mockprovider"
-  source = "builtin"
-  version = "0.0.0"
+  schema   = 1
+  name     = "mockprovider"
+  version  = "0.0.0"
+  entry    = "bin/rfl-mockprovider"
+  rafaello = ">=0.1, <0.2"
 
   [provides]
   provider = "mock"
 
   [bus]
-  subscribes = ["core.session.user_message", "core.session.tool_result"]
-  publishes = ["provider.mock.tool_request",
-               "provider.mock.assistant_message"]
+  subscribes = ["core.session.user_message",
+                "core.session.tool_result"]
+  publishes  = ["provider.mock.tool_request",
+                "provider.mock.assistant_message"]
 
   [capabilities.default.filesystem]
-  read_dirs = []
+  read_dirs  = []
   write_dirs = []
 
   [capabilities.default.network]
@@ -964,41 +1461,123 @@ half of the canonical 5-step path (overview §7):
   [load]
   eager = true
   ```
+  Plus a sibling `openrpc.json` (required by m1 §M10 — the
+  package-level validator refuses without it). The m4 mock
+  provider exposes no JSON-RPC methods of its own
+  (interaction is bus-only) but the OpenRPC document is still
+  required; the minimum valid shape is an `openrpc` version
+  + an `info` block + `methods: []`.
   The corresponding lock entry (m4 fixture) pins
   `bindings.provider = true`, `bindings.provider_id = "mock"`.
-  `lock.session.provider_active = <canonical>`. The manifest's
-  `subscribes` set is preserved verbatim into
-  `entry.grant.subscribes`; m1's `BrokerAcl::compile` reads it
-  into the ACL.
-- **PR2.** Bin target `src/bin/rfl_mockprovider.rs`:
-  - Reads `RFL_BUS_FD`, `RFL_PROVIDER_ID`,
-    `RFL_PROVIDER_ACTIVE`, `RFL_PLUGIN` from env;
-  - constructs a fittings `Server` on `RFL_BUS_FD`;
-  - handles `bus.event` notifications with the canonical
-    matcher: parse the payload as a `BusEvent`, branch on
-    `topic`:
-    - `core.session.user_message` → run the deterministic
-      matcher:
-      - if regex `(?i)what(?:'s| is) in (?<path>\S+)` matches,
-        publish
-        `bus.publish({topic: "provider.mock.tool_request",
-        payload: {tool: "read-file", args: {path: "<path>"}},
-        request_id: <fresh>, in_reply_to:
-        [<user_message.request_id>]})`.
-      - else publish
-        `bus.publish({topic: "provider.mock.assistant_message",
-        payload: {text: "echo: <input>"}, request_id:
-        <fresh>, in_reply_to: [<user_message.request_id>]})`.
-    - `core.session.tool_result` → publish
-      `bus.publish({topic: "provider.mock.assistant_message",
-      payload: {text: "Here's what's in <path>:\n<content>"},
-      request_id: <fresh>, in_reply_to:
-      [<tool_result.request_id-as-cited-in-its-in_reply_to>]})`.
-- **PR3.** Determinism: the mock provider does not call into
+  `lock.session.provider_active = "<canonical>"` (the canonical
+  id of this plugin entry).
+- **PR2.** Bin target `src/bin/rfl_mockprovider.rs`. The
+  provider is a small `tokio` binary that reads env, opens
+  the fittings peer on `RFL_BUS_FD`, holds three pieces of
+  per-session state, and runs a content-pattern matcher
+  driven by `bus.event` notifications.
+  - **Env**: `RFL_BUS_FD`, `RFL_PROVIDER_ID` (always
+    `"mock"`), `RFL_PLUGIN` (canonical id, for logging),
+    `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`,
+    `RFL_PRIVATE_STATE_DIR`. (No `RFL_PROVIDER_ACTIVE` —
+    pi-1 H-1.)
+  - **State** (all `Mutex<…>`, single tokio task):
+    - `outstanding: BTreeMap<JsonRpcId, String>` — maps
+      provider-issued `tool_request.request_id` → captured
+      path. Lets `tool_result` handling know what file was
+      requested (pi-1 H-4).
+    - `last_user_message: Option<JsonRpcId>` — the most
+      recent `core.session.user_message.request_id` seen,
+      so a no-tool path can cite it in
+      `assistant_message.in_reply_to` (per security RFC
+      §7.2.6 row 3: assistant_message ≥0 entries citing
+      conversation context).
+    - `seen_tool_results: BTreeSet<JsonRpcId>` — the
+      `core.session.tool_result.request_id` values seen, so
+      a follow-up `tool_request` can cite a prior result
+      per §7.2.6 row 2 (≥0 entries citing tool_results the
+      provider has already received).
+  - **Handler logic** per `bus.event`:
+    - `topic == "core.session.user_message"`:
+      - extract `payload.text` and `bus_event.request_id`;
+      - update `last_user_message` to that id;
+      - run the deterministic matcher (pi-1 M-3 — no
+        regex dep). The matcher:
+        1. lowercases the input and trims;
+        2. strips a leading `"what's in "` or `"what is in "`
+           (case-fold prefix match); if neither prefix
+           matches → echo path;
+        3. takes the remaining slice, splits on the first
+           ASCII whitespace, takes segment 0 as the
+           candidate path;
+        4. strips trailing punctuation in `[.?!,;:]`;
+        5. rejects empty / pure-whitespace residues
+           (falls through to echo).
+      - on **match**: synthesise a fresh `request_id` (a
+        ULID stringified, since the provider has no JSON-RPC
+        connection-scoped id to allocate — m4 cut: ULIDs
+        wrap as `JsonRpcId::String`); record `outstanding[request_id] =
+        path`; publish
+        `provider.mock.tool_request` with:
+        - payload `{tool: "read-file", args: {path:
+          "<path>"}}`,
+        - `request_id: <fresh>`,
+        - `in_reply_to:
+          seen_tool_results.iter().cloned().collect()`
+          (≥0 entries citing every prior tool_result the
+          provider has observed — typically `[]` on
+          first turn). Per §7.2.6 row 2.
+      - on **no-match** (echo path): publish
+        `provider.mock.assistant_message` with payload
+        `{text: format!("echo: {}", input)}`,
+        `request_id: <fresh>`,
+        `in_reply_to:
+          [last_user_message.unwrap()]` (citing the
+          conversation context — §7.2.6 row 3 ≥0 entries;
+          m4 cut always cites the immediate user_message
+          when echoing, since that's the only context).
+    - `topic == "core.session.tool_result"`:
+      - extract `in_reply_to[0]` (the cited
+        `tool_request.request_id`) and `payload.content`;
+      - **append `bus_event.request_id` to
+        `seen_tool_results`** (so the next provider
+        tool_request can cite it per §7.2.6 row 2);
+      - look up `outstanding[in_reply_to[0]]` to recover
+        the original path (pi-1 H-4 — explicit
+        request_id → path mapping); on miss, log + ignore
+        (the provider never issued the matching request);
+      - on hit, publish
+        `provider.mock.assistant_message` with
+        - payload `{text: format!("Here's what's in {}:\n{}",
+          path, content_text)}` where `content_text` is
+          extracted from `ToolResultPayload.content`
+          (m4 wraps as `RenderNode::CodeBlock` per AL6;
+          the mock provider unwraps it back to text — a
+          fragile shape, but acceptable for the
+          deterministic fixture);
+        - `request_id: <fresh>`;
+        - `in_reply_to: [<bus_event.request_id of the
+          tool_result>]` (one entry citing the result the
+          message is replying to).
+  - **Round-2 explicit decision**: the mock provider does
+    not subscribe to `core.session.assistant_message` (its
+    own re-emitted output) — that would be a feedback loop;
+    the canonical-`core`-subscribe set is exactly the
+    manifest's `subscribes`
+    (`["core.session.user_message",
+    "core.session.tool_result"]`).
+- **PR3 (compile-test).** Before any subprocess test runs,
+  the fixture manifest must pass m1's
+  `Manifest::parse_at(<fixtures/rafaello-mockprovider/>)`
+  + `validate_with_package` (pi-1 B-2). Lands as
+  `rafaello-mockprovider/tests/mockprovider_manifest_compiles.rs`
+  and gates every other `rafaello-mockprovider/tests/`
+  entry via plan ordering in `commits.md`.
+- **PR4.** Determinism: the mock provider does not call into
   any time-of-day, RNG, or filesystem outside its private
   state dir. Every input message produces the same output
   message. Tests rely on this.
-- **PR4.** **Decision: separate crate
+- **PR5.** **Decision: separate crate
   (`rafaello-mockprovider`) rather than a `[[bin]]` inside
   `rafaello-tui` or `rafaello-core`.** Defence:
   - matches the "ships as a plugin" architecture
@@ -1019,56 +1598,67 @@ half of the canonical 5-step path (overview §7):
 ### TP — `rafaello-readfile` tool plugin
 
 - **TP1.** Manifest at
-  `rafaello/fixtures/rafaello-readfile/rafaello.toml`:
+  `rafaello/fixtures/rafaello-readfile/rafaello.toml`, live
+  m1 schema (pi-1 B-2 + B-6 fixes):
   ```toml
-  [plugin]
-  name = "readfile"
-  source = "builtin"
-  version = "0.0.0"
+  schema   = 1
+  name     = "readfile"
+  version  = "0.0.0"
+  entry    = "bin/rfl-readfile"
+  rafaello = ">=0.1, <0.2"
 
   [provides]
   tools = ["read-file"]
 
   [provides.tool.read-file]
-  sinks = []
+  sinks          = []
   always_confirm = false
 
   [bus]
-  subscribes = []                # m1 auto-subscribe inserts plugin.<id>.tool_request
-  publishes = []                 # auto-publishes plugin.<id>.tool_result (see below)
+  subscribes = []   # m1 compiler auto-inserts
+                    #   plugin.<topic-id>.tool_request
+                    # (broker_acl.rs:98)
+  publishes  = []   # m1 compiler auto-inserts
+                    #   plugin.<topic-id>.tool_result
+                    # (NEW in m4 §M1.3 — see below)
 
   [capabilities.default.filesystem]
-  read_dirs = ["${PROJECT_ROOT}"]
+  read_dirs  = ["${project}"]
   write_dirs = []
 
   [capabilities.default.network]
   mode = "deny"
 
   [load]
-  eager = false
-  triggers = [{ kind = "tool", tool = "read-file" }]
+  eager = true   # m4 round-2: eager-load every tool to
+                 # avoid introducing lazy-spawn-on-publish
+                 # (§C8 / Risk #12)
   ```
-  - The `auto_subscribes = ["plugin.<topic-id>.tool_request"]`
-    entry is *compiler-inserted* per m1 — see
-    `broker_acl.rs:98`. The manifest does not state it.
-  - **`publishes` open question**: m1's `check_publish_topic`
-    requires manifest authors to declare the tool_result
-    topic (line 359-380 — `plugin` namespace is allowed for
-    self-publishes). Round-1 cut sets
-    `publishes = ["plugin.<topic-id>.tool_result"]` *but*
-    the manifest cannot know its own topic-id at author
-    time (the topic-id is derived from the canonical id at
-    install). **Decision**: m1's manifest validator accepts
-    a literal placeholder `plugin.<topic-id>.tool_result`
-    where `<topic-id>` is the literal string (m1 substitutes
-    the hashed form at lock-compile time). Round-1 cut
-    files this as a Risk — if m1's substitution logic
-    doesn't exist, the m4 §M1 backreach adds it. Pi may
-    push back; the alternative is to special-case
-    "tool plugins auto-publish `plugin.<own-topic-id>.tool_result`
-    without manifest declaration" but that bakes a
-    runtime-side rule into the broker that conflicts with
-    overview §5.1's "lock is the grant" rule.
+  Plus a sibling `openrpc.json` (m1 §M10) declaring the
+  `read-file` tool's wire shape — the readfile plugin exposes
+  its tool through bus events, not JSON-RPC methods, so the
+  OpenRPC document carries `methods: []` like the mock
+  provider. m1's validator does not require `methods` to
+  enumerate tools (tools are bus-level, not RPC-level).
+  - **`${project}` placeholder**: the live m1 closed set is
+    `${project}`, `${home}`, `${plugin}`, `${cache}`,
+    `${state}` (`manifest/capability_path_template.rs:17`).
+    `${PROJECT_ROOT}` is **not** valid (pi-1 B-2). m1
+    substitutes `${project}` to the project root at compile
+    time.
+  - **`plugin.<topic-id>.tool_result` auto-publish** (pi-1
+    B-6 resolution): the m1 compiler is extended in m4 §M1.3
+    to auto-insert
+    `format!("plugin.{}.tool_result", topic_id)` into the
+    `PluginAcl.publish_topics` for any plugin with non-empty
+    `bindings.tools`, identical in shape to the existing
+    `auto_subscribes` insertion at `broker_acl.rs:98`. The
+    manifest never declares the topic; authors with a custom
+    tool topic add it explicitly in `[bus].publishes`. The
+    change is purely additive on the manifest side (no
+    literal `<topic-id>` placeholder syntax introduced) and
+    closes the round-1 "non-existent placeholder
+    substitution" gap.
 - **TP2.** Bin target `src/bin/rfl_readfile.rs`:
   - Reads `RFL_BUS_FD`, `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`,
     `RFL_PRIVATE_STATE_DIR`, `RFL_PLUGIN` from env;
@@ -1082,14 +1672,24 @@ half of the canonical 5-step path (overview §7):
     - publish `plugin.<topic-id>.tool_result` with payload
       `{ok: true, content: <utf8>}` (or `{ok: false, error:
       <reason>}`) and `in_reply_to = [<request_id>]`.
-- **TP3.** Read-only grant intersection: `read_dirs =
-  ["${PROJECT_ROOT}"]` ensures the lockin sandbox sees the
-  project root. The demo bar's "what's in README.md" prompt
-  resolves to `${PROJECT_ROOT}/README.md`. m1's existing
-  `${PROJECT_ROOT}` placeholder expansion (compile time) is
-  the substitution path; m4 does not add a new placeholder.
-- **TP4.** Same separate-crate rationale as §PR4. Lives at
-  `rafaello/crates/rafaello-readfile/`.
+- **TP3 (compile-test).** Same as PR3 — fixture manifest +
+  `openrpc.json` parse + `validate_with_package` green
+  before any subprocess test runs. Lands as
+  `rafaello-readfile/tests/readfile_manifest_compiles.rs`.
+- **TP4.** Read-only grant intersection: `read_dirs =
+  ["${project}"]` (the live m1 closed placeholder per
+  `manifest/capability_path_template.rs:17`) ensures the
+  lockin sandbox sees the project root. The demo bar's
+  "what's in README.md" prompt resolves to
+  `<project_root>/README.md`. m1's existing `${project}`
+  placeholder expansion (compile time) is the substitution
+  path; m4 does not add a new placeholder.
+- **TP5.** Same separate-crate rationale as §PR5. Lives at
+  `rafaello/crates/rafaello-readfile/`. The lockin
+  read_dirs intersection (project root) is computed by m1
+  via the `${project}` substitution at compile time —
+  m1's `manifest/capability_path_template.rs:17` is the
+  canonical resolver.
 
 ### TD — tool dispatch wiring (core side)
 
@@ -1114,30 +1714,39 @@ half of the canonical 5-step path (overview §7):
 Per `plans/README.md` "Synthetic-stub tests need a planned
 successor": m4 names the successor up front.
 
-- **M2.1.** Identify the m2 test: scope §SP / m2 §Risk list
-  reference the row-39 `ProviderNotInM2` negative. The likely
-  filename is
-  `rafaello/crates/rafaello-core/tests/supervisor_refuses_provider_lock_entry.rs`.
-  **Action at commits.md time**: verify the exact filename
-  via `ls rafaello/crates/rafaello-core/tests/` and update the
-  successor reference. Round-1 placeholder is the name above.
-- **M2.2.** **Successor pattern**: delete the negative test
-  (the synthetic refusal is gone) and add a positive test
+- **M2.1.** Identify the m2 test: the live file (verified via
+  `ls rafaello/crates/rafaello-core/tests/`) is
+  `rafaello/crates/rafaello-core/tests/supervisor_spawn_provider_lock_refused.rs`
+  (pi-1 B-7 fix — the live name; m2 retrospective entry at
+  line 100-104 confirms).
+- **M2.2.** **Successor pattern**: delete
+  `supervisor_spawn_provider_lock_refused.rs` (the synthetic
+  refusal is gone) and add a positive test
   `provider_plugin_spawns_through_supervisor.rs` that:
   - builds a fixture `CompiledPlugin` with `bindings.provider =
     true`, `bindings.provider_id = "mock"`;
   - spawns through `PluginSupervisor::spawn`;
-  - asserts the spawn succeeds (`SpawnHandle::wait_ready`
-    resolves);
-  - asserts `Broker::contains_provider(canonical) == true`;
+  - awaits `SpawnHandle::wait()` (the **real** API at
+    `supervisor.rs:134-148`; `wait_ready` is on
+    `FrontendHandle` not `SpawnHandle` — pi-1 B-7). Round-2
+    cut: the test uses `try_wait()` to confirm the handle
+    is *not* yet terminal at a fixed sleep point, then
+    triggers shutdown and asserts `wait()` resolves with
+    `ReaperOutcome::Exited(_)`. (Pattern matches m2's
+    existing `supervisor_spawn_fixture_happy_path.rs`.)
+  - asserts `Broker::contains_provider(canonical) == true`
+    while the spawn is live;
   - asserts a `provider.mock.tool_request` publish by the
-    child succeeds (via the existing fixture-mode
-    `frontend_bus_publish` pattern, extended to provider
-    publishes).
+    child reaches the broker's internal subscriber (via the
+    existing fixture-mode `frontend_bus_publish` pattern,
+    extended to provider publishes — round-2 cut: add a
+    `provider_bus_publish` fixture mode to
+    `rfl-bus-fixture` that issues a synthetic provider
+    publish).
   This is the **named successor** that closes the
   synthetic-stub gap for m4.
 - **M2.3.** Note in the commit body: "deletes
-  `supervisor_refuses_provider_lock_entry.rs`; adds
+  `supervisor_spawn_provider_lock_refused.rs`; adds
   `provider_plugin_spawns_through_supervisor.rs`. Synthetic
   stub successor per `plans/README.md`."
 
@@ -1166,10 +1775,12 @@ successor": m4 names the successor up front.
 ### M1 — m1 publishes-grant patches if user-facing failures surface
 
 - **M1.1.** **Reserved env-var list extension (`scrubber.rs`)
-  for `RFL_PROVIDER_ID` + `RFL_PROVIDER_ACTIVE`**. Same
-  rationale as decisions row 40 — additive, m1 v3 catches
-  collisions pre-compile. **Default: land in the same commit
-  as PS4.** This is the only m4-required m1 back-reach.
+  for `RFL_PROVIDER_ID`** (only — `RFL_PROVIDER_ACTIVE`
+  dropped per pi-1 H-1). Same rationale as decisions row 40
+  — additive, m1 v3 catches collisions pre-compile.
+  **Default: land in the same commit as PS4/PS5.** This is
+  one of two required m1 back-reaches in m4 (the other is
+  M1.3 — auto-publish).
 - **M1.2.** **`check_lock_publish_topic` unknown-namespace
   gap** (m3 retro §2.7): default is **no commit**. Filed if
   a user-facing failure surfaces during m4 implementation.
@@ -1182,13 +1793,33 @@ successor": m4 names the successor up front.
   Round-1 documents the rationale (hand-authored locks are
   `--allow-unsafe`; runtime rejection is sufficient defence)
   to keep the default "no commit" stable through pi review.
-- **M1.3.** **Manifest `publishes` literal `<topic-id>`
-  substitution** (referenced in §TP1): if m1 does not
-  currently accept the literal-placeholder form, the §M1.3
-  commit lands the substitution. Round-1 default:
-  investigate at commits.md drafting time by reading m1's
-  `compile.rs` for the substitution path; if the
-  substitution exists, no commit; if not, lands in m4.
+- **M1.3.** **Compiler-inserted `plugin.<topic-id>.tool_result`
+  auto-publish** (pi-1 B-6 resolution; **required**, not
+  contingent). m4 extends `rafaello-core/src/broker_acl.rs`
+  `compile`:
+  ```rust
+  let mut publish_topics = entry.grant.publishes.clone();
+  if !entry.bindings.tools.is_empty() {
+      publish_topics.push(format!("plugin.{}.tool_result",
+                                   topic_id_str));
+  }
+  ```
+  Identical in shape to the existing `auto_subscribes`
+  insertion at `broker_acl.rs:98` (`format!("plugin.{}.tool_request",
+  topic_id_str)`). Defence: a plugin with empty
+  `bindings.tools` never gets the auto-publish; an existing
+  manifest that already declares
+  `plugin.<topic-id>.tool_result` in `publishes` would
+  duplicate — m1 v3 already rejects literal `<topic-id>`
+  (illegal chars `<` `>` per `validate/mod.rs:359-365`), so
+  the only way that string reaches `entry.grant.publishes`
+  is a hand-mutated lock; m4 dedupes inside the compiler via
+  `publish_topics.sort(); publish_topics.dedup();` defensively.
+  New tests: `broker_acl_auto_publishes_tool_result_topic.rs`
+  (positive — confirm the topic appears in
+  `PluginAcl.publish_topics`),
+  `broker_acl_auto_publish_absent_for_non_tool_plugin.rs`
+  (negative — empty `tools` → no auto-publish).
 
 ### I — integration test suite
 
@@ -1249,38 +1880,95 @@ is only reliable inside the bin's own package):
   corresponding `plugin.<topic-id>.tool_request`.
 - `agent_loop_persists_user_message_entry.rs` — assert a
   `core.session.user_message` event causes a row in the
-  `entries` table with `kind = "user_message"`.
-- `agent_loop_persists_tool_call_entry.rs`,
-  `agent_loop_persists_tool_result_entry.rs`,
-  `agent_loop_persists_assistant_message_entry.rs` —
-  analogous.
+  `entries` table with `kind = "text"`, `metadata.author =
+  EntryAuthor::User`, and `payload.text` matching the
+  inbound message (pi-1 B-8).
+- `agent_loop_persists_assistant_message_entry.rs` —
+  analogous: `kind = "text"`, `author = Assistant`.
+- `agent_loop_persists_tool_call_entry.rs` — `kind =
+  "tool_call"`, `payload = ToolCallPayload { id,
+  name: "read-file", args, status: Pending }`.
+- `agent_loop_persists_tool_result_entry.rs` — `kind =
+  "tool_result"`, `payload = ToolResultPayload { call_id,
+  ok: true, content: RenderNode::CodeBlock { .. }, details:
+  None }`.
 - `provider_plugin_spawns_through_supervisor.rs` — the
   successor named in §M2.2 above.
 - `frontend_register_with_broker.rs` — the m3 retro §5.9
   granularity gap closer.
 - `frontend_publish_user_message_reemitted_as_core_session_user_message.rs`
   — m3 §2.10 handover completion.
+- `broker_provider_event_not_fanned_to_external_subscribers.rs`
+  (pi-1 B-5) — register a plugin with subscribe pattern
+  `provider.mock.**`; issue a
+  `provider.mock.tool_request` from a registered provider;
+  assert the registered plugin's peer notify count remains
+  zero (the internal ReemitRouter receives the event; no
+  external subscriber does).
+- `broker_internal_subscriber_unregister_on_drop.rs` (pi-1
+  M-1) — see §CR1.
+- `broker_internal_subscriber_drops_event_when_full.rs`
+  (pi-1 M-1).
+- `broker_internal_subscriber_fires_before_external_fan_out.rs`
+  (pi-1 M-1).
+- `broker_acl_auto_publishes_tool_result_topic.rs` (pi-1
+  B-6 / §M1.3 positive).
+- `broker_acl_auto_publish_absent_for_non_tool_plugin.rs`
+  (pi-1 B-6 / §M1.3 negative).
+- `provider_assistant_message_in_reply_to_missing_rejected.rs`
+  (pi-1 H-2) — provider publishes
+  `provider.mock.assistant_message` with no `in_reply_to`
+  field at all; broker rejects with `InvalidInReplyTo {
+  reason: Missing }`.
+- `provider_assistant_message_in_reply_to_stale_id_rejected.rs`
+  (pi-1 H-2) — `in_reply_to: [<id-never-observed>]`;
+  broker rejects with `StaleRequestId`.
+- `provider_tool_request_in_reply_to_stale_id_rejected.rs`
+  (pi-1 H-2) — analogous for tool_request.
 
 `rafaello-mockprovider/tests/`:
 
+- `mockprovider_manifest_compiles.rs` (pi-1 B-2) — load the
+  fixture manifest + sibling `openrpc.json` via m1's
+  `Manifest::parse_at(...)` and assert successful parse +
+  `validate_with_package` green.
 - `mockprovider_emits_tool_request_for_read_file_pattern.rs`
   — spawn `rfl-mockprovider` against an in-test broker
   fixture; deliver a synthetic `core.session.user_message`
-  with text "what's in README.md"; observe a
+  with text `"what's in README.md"`; observe a
   `provider.mock.tool_request` with
-  `{tool: "read-file", args: {path: "README.md"}}` and
-  proper `request_id` / `in_reply_to`.
+  `{tool: "read-file", args: {path: "README.md"}}`,
+  `request_id: Some(_)`, and `in_reply_to: []` (no prior
+  tool_results observed — §7.2.6 row 2).
+- `mockprovider_strips_trailing_punctuation_from_path.rs`
+  (pi-1 H-4) — input `"what's in README.md?"` produces
+  `args.path = "README.md"` (the `?` is stripped).
+- `mockprovider_records_request_id_to_path_mapping.rs`
+  (pi-1 H-4) — issue two consecutive
+  `core.session.user_message` events for distinct paths
+  ("what's in a.txt", "what's in b.txt"); assert the
+  internal `outstanding` map records both ids; then
+  inject a `tool_result` citing the second; assert the
+  assistant_message text references `b.txt`, not `a.txt`.
 - `mockprovider_emits_echo_assistant_message_on_no_match.rs`
-  — same setup, payload "hello"; observe
+  — same setup, payload `"hello"`; observe
   `provider.mock.assistant_message` with `{text: "echo:
-  hello"}`.
+  hello"}` and `in_reply_to: [<user_message.request_id>]`.
 - `mockprovider_emits_assistant_message_on_tool_result.rs` —
-  inject a `core.session.tool_result` with content "Hello!";
-  observe `provider.mock.assistant_message` with
-  `text` beginning `"Here's what's in"`.
+  drive a request, then inject a `core.session.tool_result`
+  with content "Hello!"; observe
+  `provider.mock.assistant_message` whose `text` begins
+  `"Here's what's in"` and whose `in_reply_to =
+  [<tool_result.request_id>]`.
+- `mockprovider_handles_multibyte_utf8_path.rs` (pi-1 H-4)
+  — input `"what's in données.txt"` produces
+  `args.path = "données.txt"` correctly.
 
 `rafaello-readfile/tests/`:
 
+- `readfile_manifest_compiles.rs` (pi-1 B-2) — analogous to
+  the mockprovider compile test; load + validate the
+  fixture manifest + `openrpc.json`.
 - `readfile_returns_content_for_existing_file.rs` — spawn
   `rfl-readfile` against a tempdir project root containing a
   `README.md`; deliver a synthetic
@@ -1288,11 +1976,31 @@ is only reliable inside the bin's own package):
   `{path: "README.md"}`; observe `tool_result` with `ok:
   true, content: "<file body>"`.
 - `readfile_errors_for_missing_file.rs`,
-  `readfile_errors_for_outside_project_root.rs`,
   `readfile_errors_for_non_utf8.rs` — analogous error paths.
+- `readfile_errors_for_outside_project_root.rs` — request
+  path that resolves outside `read_dirs`; plugin-level
+  ancestor check rejects with `ok: false, error: "path
+  denied"`. (Pi-1 H-3: keeps this as the plugin-level
+  negative.)
+- `readfile_lockin_denies_outside_grant.rs` (pi-1 H-3) —
+  **lockin-level** negative. The readfile bin gains a
+  `RFL_READFILE_TEST_BYPASS_GUARD=1` env (test-only) that
+  skips the in-plugin ancestor check and calls
+  `std::fs::read` on the raw input path. The test spawns
+  the plugin with that env set, requests a file outside
+  `read_dirs`, and asserts the resulting `tool_result`
+  carries `ok: false, error: <io::ErrorKind::PermissionDenied
+  rendered>` — i.e. the sandbox denied the read, not the
+  plugin's own ancestor check.
 
 `rafaello/tests/`:
 
+- `rfl_chat_missing_lock_errors.rs`,
+  `rfl_chat_invalid_lock_errors.rs`,
+  `rfl_chat_lock_validation_fails.rs`,
+  `rfl_chat_no_active_provider_errors.rs`,
+  `rfl_chat_provider_spawn_failure_propagates.rs` (pi-1
+  B-1) — orchestration negatives per §C14.
 - `rfl_chat_demo_bar_read_file.rs` — **headline test, lands
   at the end of the milestone.** Spawn `rfl chat` against a
   tempdir project root containing a `README.md` with known
@@ -1300,12 +2008,14 @@ is only reliable inside the bin's own package):
   `rfl-mockprovider` (active) + `rfl-readfile` installed.
   Drive the TUI's `frontend.tui.user_message` publish via a
   test-mode env hook (`RFL_TUI_TEST_MESSAGE="what's in
-  README.md"` — new env hook in §F3 / rafaello-tui), or via
-  the existing `RFL_HARNESS_FIXTURES` style. Assert (in
-  order):
+  README.md"` per §T1), or via the existing
+  `RFL_HARNESS_FIXTURES` style. Assert (in order):
   - SQLite `entries` table contains rows of kinds
-    `user_message`, `tool_call`, `tool_result`,
-    `assistant_message` in seq order;
+    `text` (user), `tool_call`, `tool_result`,
+    `text` (assistant) in seq order, distinguished by
+    `metadata.author` (`User` / `Assistant` / `Tool`);
+    test asserts via the canonical `Entry` shape, not via
+    the kind string alone (pi-1 B-8);
   - the combined stderr stream contains the canonical
     `"rfl-tui: bus.event topic=core.session.entry.finalized
     seq=N"` lines for `N = 0..=3`;
@@ -1329,11 +2039,13 @@ to test files:
 - **Provider tool_request with stale/unknown id fails closed**
   →
   `rafaello-core/tests/broker_provider_tool_request_missing_in_reply_to_rejected.rs`
-  + `reemit_provider_tool_request_unknown_user_message_id_rejected.rs`
-  (the second test shows that an `in_reply_to` citing a
-  request_id never seen on `core.session.user_message`
-  results in the re-emit path rejecting with a `core.lifecycle.reemit_rejected`
-  event and no `core.session.tool_request` is fanned out).
+  (per §7.2.6 row 2 the field is **required** even if it is
+  `[]`; absent field → `Missing`)
+  + `broker_provider_tool_request_stale_id_rejected.rs`
+  (an `in_reply_to` citing a `tool_result.request_id` never
+  observed by this provider per §B7b's
+  `provider_observed_results` set →
+  `InvalidInReplyTo { reason: StaleRequestId { id } }`).
 - **Tool plugin called directly by another plugin (not via core
   re-emission) doesn't reach the dispatch path** →
   `rafaello-core/tests/cross_plugin_tool_request_blocked_at_broker.rs`
@@ -1356,10 +2068,14 @@ to test files:
   warn or refuse — round-1 records this as a Risk to
   validate with m1).
 - **Tool requested outside its grant denied at lockin** →
-  `rafaello-readfile/tests/readfile_denied_outside_grant.rs`
-  — spawn `rfl-readfile` with `read_dirs = [<tempdir-A>]`;
-  request `{path: "<tempdir-B>/foo"}`; tool result is
-  `ok: false, error: "path denied"`.
+  `rafaello-readfile/tests/readfile_lockin_denies_outside_grant.rs`
+  (pi-1 H-3) — the lockin-level negative described in §TP
+  above. The plugin-level path-traversal check is
+  exercised separately by
+  `readfile_errors_for_outside_project_root.rs`. Both must
+  pass; the H-3 fix is to ensure the lockin path is
+  independently tested without the plugin's ancestor check
+  short-circuiting it.
 - **Bus event missing the `taint` envelope rejected** →
   `rafaello-core/tests/broker_publish_core_session_tool_request_missing_taint_rejected.rs`
   — call `publish_core` directly on
@@ -1379,9 +2095,11 @@ to test files:
 
 Plus the m2-supervisor symmetry tests:
 
-- `broker_publish_provider_id_mismatch_rejected.rs` —
-  provider publishes on `provider.other.foo`;
-  `PublishOnReservedNamespace`.
+- `broker_publish_provider_id_segment_mismatch_rejected.rs`
+  — a provider registered as `provider_id = "mock"` publishes
+  on `provider.other.foo`; `PublishOnReservedNamespace`
+  (the `provider.<id>` segment must match the registered id
+  per §B6 step 4).
 - `broker_publish_provider_two_segment_topic_rejected.rs` —
   `provider.mock`; symmetric to m2's plugin / m3's frontend
   two-segment rule.
@@ -1391,7 +2109,8 @@ Plus the m2-supervisor symmetry tests:
   `provider.mock.confidential` not in `publish_topics`;
   `PublishOutsideGrant`.
 - `broker_register_provider_unknown_canonical_rejected.rs` —
-  `ProviderNotInAcl`.
+  `ProviderNotInAcl` (canonical absent from `BrokerAcl.plugins`
+  or present with `provider_id = None` per §B5 round-2 cut).
 - `broker_register_provider_duplicate_rejected.rs` —
   `ProviderAlreadyRegistered`.
 
@@ -1460,10 +2179,14 @@ sneak in via implementation drift:
 - **External UDS-attached frontends, `rfl serve`** —
   decisions rows 27, 34.
 - **Subprocess plugin renderers** — decisions row 29.
-  m4 reuses m3's built-in renderers for
-  `user_message`/`tool_call`/`tool_result`/`assistant_message`
-  via the existing `text`/`tool_call`/`tool_result` renderer
-  registry; no new renderer kinds.
+  m4 reuses m3's built-in renderers exclusively: user
+  and assistant bus messages map to `kind = "text"` with
+  distinct `metadata.author` (User vs Assistant); tool
+  call/result events map to `kind = "tool_call"` /
+  `"tool_result"` with the canonical
+  `ToolCallPayload` / `ToolResultPayload` shapes from
+  `entry/payloads.rs`. **No new entry kinds, no new
+  renderers** (pi-1 B-8 fix).
 - **Multi-session daemon, attach-multiplexing, branching
   sessions** (`parent` field non-NULL) — post-v1.
 - **Lazy-load orchestrator beyond what m2's supervisor
@@ -1520,7 +2243,7 @@ sneak in via implementation drift:
 5. **The demo bar uses `read-file` against `README.md` —
    the read-only grant must intersect with the project
    root.** The fixture lock pins `read_dirs =
-   ["${PROJECT_ROOT}"]`; the headline test's tempdir is
+   ["${project}"]`; the headline test's tempdir is
    the project root. The test writes a fixture `README.md`
    into the tempdir before spawning `rfl chat`. Pi may
    push back: alternative is to read a specific
@@ -1554,20 +2277,22 @@ sneak in via implementation drift:
      `rfl chat` to cover all three children;
    - the deterministic test_done signal pattern from m3
      reused.
-8. **m1's `publishes` literal-placeholder substitution
-   may not exist** (§TP1 open question). Round-1 cut:
-   investigate at commits.md drafting time; if absent,
-   the §M1.3 commit lands the substitution. Worst-case
-   workaround: hand-compute the topic-id from the
-   canonical id and write the literal into the manifest
-   (fragile but unblocks m4 while §M1.3 is pending).
-9. **Provider-id mismatch detection at registration**
-   (B5): the `register_provider` arg `provider_id` could
-   diverge from the ACL's `PluginAcl.provider_id`.
-   Round-1 cut: hard-error
-   `BrokerError::ProviderIdMismatch`. Pi may prefer the
-   simpler "drop the arg, read from ACL" path — that's
-   a 5-line refactor if pi asks.
+8. **Compiler-inserted `tool_result` auto-publish** —
+   pi-1 B-6 closed the round-1 open question. m4 §M1.3
+   adds the auto-publish in `broker_acl::compile`; the
+   readfile manifest's `[bus].publishes` is empty.
+   Risk: the m1 grant compiler is touched in m4, so an
+   m1 regression must be caught. Mitigation: the two
+   §M1.3 tests
+   (`broker_acl_auto_publishes_tool_result_topic.rs` +
+   `broker_acl_auto_publish_absent_for_non_tool_plugin.rs`)
+   plus a re-run of m1's existing
+   `broker_acl_extraction.rs` test suite.
+9. **Provider-id mismatch detection at registration** —
+   pi-1 H-5 closed this. `register_provider(canonical,
+   peer)` reads `provider_id` from `PluginAcl.provider_id`;
+   no caller-supplied id, no mismatch state, no
+   `BrokerError::ProviderIdMismatch` variant.
 10. **`request_id` on the frontend side**. m3's TUI does
     not generate JSON-RPC ids today (m3's frontend
     `publish_topics = []`). m4's §F3 introduces TUI-side
@@ -1589,31 +2314,23 @@ sneak in via implementation drift:
     §5.7 push-to-CI-early lesson applies — push the new
     crates to CI as the W2/W3 commits land, not at
     retrospective.
-12. **Tool plugin lazy-load timing**. The fixture sets
-    `load.triggers = [{kind = "tool", tool = "read-file"}]`
-    so `rfl-readfile` is spawned on first dispatch. The
-    agent loop's `publish_for_tool_dispatch` must
-    therefore trigger a supervisor spawn before the
-    publish reaches the broker. m2/m3 do not yet
-    implement lazy-spawn-on-publish — round-1 cut: m4
-    bypasses lazy-load by making `rfl-readfile` eager
-    (`load.eager = true`) in the m4 fixture lock, even
-    though its manifest declares `load.eager = false`.
-    Lock-side `bindings` overrides manifest `load`
-    per m1 (the lock is the grant); m4's `rfl init`
-    fixture writes `eager = true`. Pi may push back if
-    this conflates lazy-load with m4 scope — the
-    alternative is to land a lazy-spawn primitive in
-    m4 (significantly more surface). Round-1 takes the
-    eager-fixture path; lazy-spawn is m5+ scope.
+12. **Lazy-load is out of scope** (pi-1 B-1 resolution). m4
+    eager-spawns every installed plugin via §C7/C8; the
+    fixture manifests set `load.eager = true` for both
+    plugins. m2/m3 ship no lazy-spawn-on-publish primitive
+    and m4 does not introduce one. Out of scope explicitly
+    documents this; m5+ will revisit when a second tool
+    plugin lands.
 
 ## Internal split (driver guidance for `commits.md`)
 
 Suggested grouping; `commits.md` picks final granularity.
 Pi review may reshape. m4's surface is high (new broker
 publisher class + new envelope field + two new plugin
-crates + new agent loop + new re-emit module) — expect
-**~20-26 commits sequential**, comparable to m3's 31.
+crates + new agent loop + new re-emit module + new `rfl
+chat` orchestration) — expect **~26-32 commits sequential**
+(pi-1 M-4 revised upward from round-1's optimistic
+~22), comparable to m3's 31.
 
 1. **Workspace + crate scaffolds + m1 reserved-env
    extension (M1.1)** (W1-W4 + M1.1): ~2-3 commits. The
@@ -1636,8 +2353,9 @@ crates + new agent loop + new re-emit module) — expect
    commits.
 5. **Fan-out extension to provider recipients + provider
    defence-in-depth ACL check** (B8-B10): ~1 commit.
-6. **Frontend ACL extension (F1-F4)** + retro §5.9 test
-   gap (`frontend_register_with_broker.rs`): ~1-2 commits.
+6. **Frontend ACL extension (F1-F4) + TUI test-mode env
+   hook (T1)** + retro §5.9 test gap
+   (`frontend_register_with_broker.rs`): ~2-3 commits.
 7. **m2 row-39 refusal removal + supervisor provider
    path** (PS1-PS8 + M2.1-M2.3): ~2 commits. Synthetic
    stub successor lands in the same commit as the m2
@@ -1651,7 +2369,12 @@ crates + new agent loop + new re-emit module) — expect
     its own integration tests: ~2 commits.
 11. **`rafaello-readfile` plugin (TP1-TP4)** with its
     own integration tests: ~2 commits.
-12. **Demo-bar headline + manual validation** (the
+12. **`rfl chat` orchestration (C1-C13) + orchestration
+    negatives (C14)**: ~3-4 commits. Lock-load + V3 +
+    compile_plugin per-plugin + supervisor construction +
+    eager spawn + shutdown; orchestration negatives land
+    alongside.
+13. **Demo-bar headline + manual validation** (the
     `rfl_chat_demo_bar_read_file.rs` test +
     `manual-validation.md`): ~2 commits.
 
@@ -1664,13 +2387,19 @@ Forced-monolithic commits called out explicitly:
   positive successor test (synthetic-stub-successor
   rule).
 
-Realistic total: **~22 commits sequential**. No m4a /
-m4b split anticipated — the surface threads through
-broker + supervisor + agent loop + two plugin crates
-without natural chasms. If a split materialises during
-Phase 3 (e.g. the agent loop blows out a budget),
-owner-ratified mid-milestone; default is "ship m4 as
-one milestone".
+Realistic total: **~26-32 commits sequential** (pi-1 M-4
+revised upward from round-1's 22). m3 took 31 plan-row
+commits at comparable surface area; m4 adds new broker
+publisher class + `request_id` envelope cutover + provider
+registration + internal-subscriber primitive + agent loop +
+re-emit pipeline + two new plugin crates + `rfl chat`
+orchestration + manifest fixtures. Pi round budget:
+**plan for 8+ scope rounds** (m3 took 22; m2 took 8).
+No m4a / m4b split anticipated — the surface threads
+through broker + supervisor + agent loop + two plugin
+crates without natural chasms. If a split materialises
+during Phase 3, owner-ratified mid-milestone; default is
+"ship m4 as one milestone".
 
 ## Acceptance summary
 
@@ -1726,9 +2455,9 @@ m4 is done when:
     failure surfaced; otherwise it stays as runtime-only
     enforcement and is re-filed for m5+.
   - **Provider-side env-var documentation in
-    overview §4.6** — `RFL_PROVIDER_ID` and
-    `RFL_PROVIDER_ACTIVE` get added to the reserved env
-    vars table.
+    overview §4.6** — `RFL_PROVIDER_ID` gets added to the
+    reserved env vars table (pi-1 H-1 dropped
+    `RFL_PROVIDER_ACTIVE`).
 - No follow-up Stream RFC drift is owed by m4 BEYOND the
   items above. m4 does NOT modify Stream A's body in this
   branch (banner-only, m1 / m3 precedent).
