@@ -855,21 +855,24 @@ follow-up, not blocking ratification (m0/m1 precedent).
 Per pi review-1 of m1's retrospective, drift fixes land
 **before** the retrospective ratifies. Planned for this branch:
 
-1. ⏳ `feat(rafaello-decisions): rows 39 (provider rejection) +
-   40 (reserved-env extension)` — §2.1 + §2.5.
-2. ⏳ `docs(rafaello-overview): §4.5 request_id v1 staging
-   note` — §2.2.
-3. ⏳ `docs(rafaello-stream-a): banner — m2 wire schemas
-   (bus.event, BusEvent, PublisherIdentity, core.lifecycle.*)` —
-   §2.3 + §2.4.
-4. ⏳ `fix(rafaello-core): SpawnHandle doc-link cargo-doc
-   warning` — §2.10 / §5.2 / F3.
-5. ⏳ `test(rafaello-core): init tracing-subscriber in headline
-   spawn test` — §2.11 / §5.3 / F1.
-6. ⏳ `docs(rafaello-m2): scope wording sweep — bus/ +
-   supervisor/ submodule references` — §2.12 / §5.4 / F2.
-7. ⏳ `docs(rafaello-plans): promote pi-as-diagnostic + driver
-   gotchas to README` — §4.2 + §4.5 + §4.6.
+1. ✅ `docs(rafaello-decisions): rows 39 (provider rejection in
+   m2) + 40 (reserved-env extension)` — `2d49215`. §2.1 + §2.5.
+2. ✅ `docs(rafaello-overview): §4.5 v1 staging — request_id is
+   m4, m2 BusEvent adds publisher` — `73d83f9`. §2.2.
+3. ✅ `docs(rafaello-stream-a): banner — m2 wire schemas
+   (bus.publish, bus.event, BusEvent, PublisherIdentity,
+   core.lifecycle.*)` — `7979f54`. §2.3 + §2.4.
+4. ✅ `fix(rafaello-core): cargo doc — disambiguate SpawnHandle
+   intra-doc link` — `08cc458`. §2.10 / §5.2 / F3.
+5. ✅ `test(rafaello-core): init tracing-subscriber in
+   supervisor_spawn_fixture_happy_path` — `cae8601`. §2.11 /
+   §5.3 / F1.
+6. ✅ `docs(rafaello-m2): scope wording sweep — bus/ +
+   supervisor/ submodule references (single-file landed)` —
+   `a350380`. §2.12 / §5.4 / F2.
+7. ✅ `docs(rafaello-plans): promote pi-as-diagnostic +
+   Cargo.lock + prek-symlink gotchas to README` — `cd00a75`.
+   §4.2 + §4.5 + §4.6.
 
 Items 1–6 are scope-§"Acceptance summary"-mandated. Item 7 is
 optional polish; the m3 driver inherits the lessons from this
@@ -907,24 +910,23 @@ when the follow-up patch lands or the action completes.
 - ✅ `nix develop --impure --command cargo build --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture
   --bin rfl-bus-fixture` green (`manual-validation.md` §6).
-- 📝 `nix develop --impure --command cargo doc --manifest-path
-  rafaello/Cargo.toml -p rafaello-core --no-deps` — currently
-  one warning (§2.10 / §5.2); fix is specified but the
-  follow-up patch has not landed.
+- ✅ `nix develop --impure --command cargo doc --manifest-path
+  rafaello/Cargo.toml -p rafaello-core --no-deps` warning-free
+  (§2.10 / §5.2; fix landed in `08cc458`).
 - ✅ `manual-validation.md` records the items in the manual-
   validation list (`1d68b5b` c31).
-- 📝 `retrospective.md` records the eight anticipated drift
-  items with their canonical fixes (this file, §2.1–§2.8); the
-  drift-fix commits 1–6 in §"Follow-up commits on this branch"
-  are still pending.
-- 📝 Stream A schema additions — §2.3 + §2.4 fix specified;
-  follow-up commit pending.
-- 📝 Reserved-env list update + decisions row — §2.5 fix
-  specified; follow-up commit pending.
-- 📝 Provider-rejection staging — §2.1 fix specified;
-  follow-up commit pending.
-- 📝 `request_id` v1 staging note — §2.2 fix specified;
-  follow-up commit pending.
+- ✅ `retrospective.md` records the eight anticipated drift
+  items with their canonical fixes (this file, §2.1–§2.8);
+  drift-fix commits 1–7 in §"Follow-up commits on this branch"
+  all landed.
+- ✅ Stream A schema additions — banner landed at `7979f54`
+  (§2.3 + §2.4).
+- ✅ Reserved-env list update + decisions row — landed
+  alongside provider rejection in `2d49215` (§2.5 → row 40).
+- ✅ Provider-rejection staging — `decisions.md` row 39 landed
+  in `2d49215` (§2.1).
+- ✅ `request_id` v1 staging note — `overview.md` §4.5 banner
+  landed in `73d83f9` (§2.2).
 - ✅ Lock-correspondence claim — recorded; no v1 patch
   required (§2.6).
 - ✅ Result-routing protection m4 handover — recorded only;
@@ -933,11 +935,13 @@ when the follow-up patch lands or the action completes.
   m3-or-m4 follow-up (§2.8); m2 ratification does not depend
   on it.
 
-m2 is **draft-complete pending pi review and follow-up
-commits 1–6**. The core deliverable (broker + locked plugin
-spawn fixture) has landed: 357 tests green, headline
+m2 is **complete pending macOS CI confirmation and owner
+ratification.** The core deliverable (broker + locked plugin
+spawn fixture) landed: 357 tests green, headline
 `supervisor_spawn_fixture_happy_path` running in 2.26 s under
 real lockin + outpost-proxy with two cooperating fixture
-plugins. Pi review of this retrospective starts when the
-driver hands it off; the §"Follow-up commits on this branch"
-items land before owner sign-off.
+plugins. Pi review converged in two rounds (round 1 found 7
+blocking; round 2 verdict: "no new blocking findings"). All
+seven §"Follow-up commits on this branch" items landed
+2026-05-10. Only macOS CI capture (§5.7) remains before
+owner sign-off.
