@@ -5,6 +5,7 @@ pub mod bus;
 pub mod carveout;
 pub mod compile;
 pub mod digest;
+pub mod entry;
 pub mod error;
 pub mod lock;
 pub mod manifest;
@@ -15,6 +16,11 @@ pub mod supervisor;
 pub mod topic_id;
 pub mod trifecta;
 pub mod validate;
+
+pub use entry::{
+    Entry, EntryAuthor, EntryFallback, EntryMetadata, RawFormat, RenderNode, StreamState,
+    ToolCallStatus,
+};
 
 pub use compile::{
     compile_plugin, CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan,
