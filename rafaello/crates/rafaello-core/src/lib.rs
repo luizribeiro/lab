@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod paths;
 pub mod renderer;
 pub mod scrubber;
+pub mod session;
 pub mod sinks;
 pub mod supervisor;
 pub mod topic_id;
@@ -46,3 +47,5 @@ pub use frontend::{
     FrontendHandle, FrontendPaths, FrontendReadyError, FrontendReadyService, FrontendSupervisor,
     PaintError, ShutdownReport,
 };
+
+pub use session::{SessionError, SessionStore};
