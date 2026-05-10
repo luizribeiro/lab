@@ -139,27 +139,24 @@ expanded surface (rafaello-tui, rafaello/lib).
 
 ## 4. macOS CI gate — hard ratification gate
 
-**Status:** ⏳ pending the post-retrospective branch
-push. Per `scope.md` round-6 tightening, macOS CI green
-is a hard ratification gate and not deferrable.
+**Status:** ✅ green — run `25640214987` captured
+2026-05-10. The `macos-latest` job executed the five
+newly-un-gated rafaello-tui integration tests
+without surfacing macOS-specific failures, confirming
+§5.8's "the gate was overcautious" prediction.
 
-**Push attempt 2026-05-10 14:22:** the driver attempted
-`git push origin rafaello-v0.1` directly after
-landing the §5.8 macOS un-gating commit (`1e839b3`).
-The push hung for ~20 minutes, then on retry failed
-with `sign_and_send_pubkey: signing failed for RSA
-".../cardno:27_054_871" from agent: agent refused
-operation` — the SSH agent is locked / the
-hardware-token is not authorising signatures.
-Resolution requires the user to unlock the agent
-interactively (e.g. `! ssh-add -l` then unlock the
-hardware-key PIN); the driver cannot complete this
-step autonomously. The eight commits queued for
-push (the six follow-ups plus the post-§5.8 Linux
-re-run capture and the round-3/round-4 retrospective
-revisions) are all on the local `rafaello-v0.1` HEAD
-at `21d2ceb` and will land on origin once the user
-re-runs the push.
+- Workflow run: <https://github.com/luizribeiro/lab/actions/runs/25640214987>
+- `test (macos-latest)`: <https://github.com/luizribeiro/lab/actions/runs/25640214987/job/75259243796>
+- `test (ubuntu-latest)`: <https://github.com/luizribeiro/lab/actions/runs/25640214987/job/75259243793>
+
+The push to origin was completed by the user after
+the §5.8 macOS un-gating commit (`1e839b3`) landed;
+the driver's autonomous push attempt earlier had
+failed with `sign_and_send_pubkey: signing failed
+... agent refused operation` (SSH-agent /
+hardware-token PIN not unlocked from the driver's
+shell). User-driven re-push at HEAD `b57fad7`
+triggered run `25640214987`.
 
 **Capture procedure** (matches m2 manual-validation §5.7):
 
@@ -210,12 +207,11 @@ cannot. Recording lands here once captured.
 
 ## 6. CI green — Linux + macOS workflow run URL
 
-**Status:** ⏳ pending the post-retrospective push (same
-push as §4).
+**Status:** ✅ green. Run `25640214987`,
+2026-05-10. Both `ubuntu-latest` and `macos-latest`
+jobs of the `rafaello.yml` workflow passed.
 
-Both `ubuntu-latest` and `macos-latest` jobs in the
-`rafaello.yml` workflow must be green. Workflow run
-URL captured here once available.
+- <https://github.com/luizribeiro/lab/actions/runs/25640214987>
 
 ---
 
@@ -224,11 +220,11 @@ URL captured here once available.
 | `scope.md` §"Acceptance summary" bullet | Section | Status |
 |-----------------------------------------|---------|--------|
 | `cargo test --workspace --features test-fixture` green on Linux | §1 | ✅ |
-| **macOS CI green** (hard gate) | §4 | ⏳ pending push |
+| **macOS CI green** (hard gate) | §4 | ✅ run 25640214987 |
 | `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ✅ |
 | `cargo doc --workspace --no-deps` warning-free | §3 | ✅ |
 | Real interactive `rfl chat` recording | §5 | ⏳ pending capture |
-| CI green Linux + macOS | §6 | ⏳ pending push |
+| CI green Linux + macOS | §6 | ✅ run 25640214987 |
 
 The retrospective remains pre-evidence on §4 / §5 / §6;
 ratification waits on those captures plus pi

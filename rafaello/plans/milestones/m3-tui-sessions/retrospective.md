@@ -711,16 +711,16 @@ auto-enable the feature).
 |-----------------------------------------|--------|
 | Every named test in §"Positive" / §"Negative" matrices implemented and passing | ✅ §1 (with 4 file-name reconciliations recorded) |
 | `cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture` green on Linux inside devshell | ✅ 516/0/0 captured 2026-05-10 (`manual-validation.md` §1) |
-| **macOS CI green** (hard gate) | ⏳ pending the post-retrospective branch push (`manual-validation.md` §4 + §5.1 below) |
+| **macOS CI green** (hard gate) | ✅ run `25640214987` captured 2026-05-10 (`manual-validation.md` §4); the five §5.8 un-gated rafaello-tui tests executed cleanly on `macos-latest` |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
-| `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 ✅ archived round 1; §4 (macOS CI URL) / §5 (interactive smoke) / §6 (CI run URL) ⏳ pending the post-retrospective push |
-| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 4 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.8 macOS-harness code commit have NOT YET LANDED |
-| Stream E renderer-RFC drift patch | ⏳ §2.1 — follow-up commit pre-named, NOT YET LANDED |
-| `PublisherIdentity::Frontend` Stream A schema additions | ⏳ §2.2 — follow-up commit pre-named, NOT YET LANDED |
-| Capabilities staging note in overview §10.1 | ⏳ §2.3 — follow-up commit pre-named, NOT YET LANDED |
-| Replay-via-`entry.finalized` decisions row | ⏳ §2.4 — follow-up commit pre-named, NOT YET LANDED |
-| Broker error variant additions decisions row | ⏳ §2.5 — follow-up commit pre-named, NOT YET LANDED |
+| `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 / §4 / §6 ✅ captured; §5 (real interactive smoke recording) ⏳ pending owner capture |
+| `retrospective.md` written with anticipated drift addressed | ✅ document round 4 records the canonical fixes; all six follow-up commits (§2.1–§2.5 docs + §5.8 macOS un-gating code) have landed at `1e839b3..691145c` |
+| Stream E renderer-RFC drift patch | ✅ `51f97fd` (§2.1) |
+| `PublisherIdentity::Frontend` Stream A schema additions | ✅ `51f20d6` (§2.2) |
+| Capabilities staging note in overview §10.1 | ✅ `691145c` (§2.3) |
+| Replay-via-`entry.finalized` decisions row | ✅ `e863d90` row 41 (§2.4) |
+| Broker error variant additions decisions row | ✅ `e863d90` row 42 (§2.5) |
 | m1 publishes-grant unknown-namespace tightening | ✅ landed in c05 (`b8bff38`) |
 | m1 lock-side `check_lock_publish_topic` deferral | §2.7 — recorded for m4, no commit needed |
 | `FrontendSupervisor` lock-correspondence claim extension | §2.8 — recorded for v2, no commit needed |
