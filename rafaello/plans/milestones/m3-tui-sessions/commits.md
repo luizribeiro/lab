@@ -14,16 +14,8 @@
 > - c26 deps c08 for RenderNode (was c09; pi-5 M3).
 > - Phase 4 "all 31 commits" (was "32"; pi-5 M4).
 >
-> Round-5 highlights (kept for trajectory):
-> Round 5 collapses c08+c09 into a single commit (the
-> RenderNode dep on `tool_result.content` made the
-> split unimplementable per pi-4 B1) and accepts a
-> direct `serde_json` dep in the rafaello bin (pi-4 B2
-> — the no-direct-dep claim was unnecessary friction
-> for the harness's `tool_call` args). Net: m3 =
-> **31 commits in 12 groups**.
->
-> Round-5 highlights:
+> Round-5 highlights (kept for trajectory; pi-6 M3
+> dedupes the duplicate header):
 > - **c08+c09 merge**: scope's `tool_result { content:
 >   RenderNode }` couples Entry payloads to RenderNode
 >   irreducibly. New consolidated c08 covers Entry +
@@ -156,10 +148,13 @@ Wherever `scope.md` and `commits.md` both name a test, this
 
 ### c02 — chore(rafaello-core): wire m3 deps to `rafaello-core/Cargo.toml`
 
-- **What.** scope §W2: `[dependencies]` adds `rusqlite`,
-  `ulid`, `chrono` with `workspace = true`. No new
-  features (the existing `test-fixture` feature is
-  unchanged per scope §W5).
+- **What.** scope §W2: `[dependencies]` adds `rusqlite`
+  and `ulid` with `workspace = true` (pi-6 M2 — the
+  existing `chrono = { workspace = true }` entry is
+  ALREADY present in the live `rafaello-core/Cargo.toml`;
+  c02 keeps it as-is, no add). No new features (the
+  existing `test-fixture` feature is unchanged per
+  scope §W5).
 - **Why.** scope §W2 — renderer types and SessionStore
   live in rafaello-core; ratatui/crossterm do NOT.
 - **Depends on.** c01.
@@ -418,8 +413,25 @@ Wherever `scope.md` and `commits.md` both name a test, this
 - **What.** scope §R1 + §R2 + §R4 + §R5:
   - `Renderer` trait, `RendererRegistry` (with
     `new`, `with_builtins`, `register`, `get`),
-    `Capabilities` (with `raw_formats`),
     `RendererError`.
+  - **Full `Capabilities` shape** per scope §R4
+    (pi-6 M1): `unicode`, `color`, `width`,
+    `height`, `image`, `interactive`, `scrollback`,
+    `nodes: BTreeSet<String>`, `raw_formats:
+    BTreeSet<String>`. Plus enums `UnicodeClass`,
+    `ColorClass`, `ScrollbackClass`.
+  - **`Capabilities::tui_default()` constant
+    constructor** (pi-6 M1) — returns the m3 TUI's
+    baked-in capabilities: `nodes` = full set of all
+    15 RenderNode variant names; `raw_formats =
+    {"ansi", "plain"}`; `unicode = Full`,
+    `color = Truecolor`, `width = 120`,
+    `height = None`, `image = vec![]`,
+    `interactive = true`,
+    `scrollback = AppendOnly`. c23
+    (`SessionController`) and c30 (rfl chat
+    orchestration step 9) call `Capabilities::tui_default()`
+    instead of inventing local caps values.
   - `with_builtins()` is empty in c09 (registers
     nothing yet); built-in renderers land in c11 + c12.
 - **Why.** scope §R1 + §R2 + §R4 + §R5.
@@ -798,7 +810,15 @@ c18+ frontend tests can use `signal_ready` /
     mkdir, open lockfile O_CLOEXEC,
     `Flock::lock(file, LockExclusiveNonblock)`,
     write own pid, open SQLite + PRAGMAs + tables.
-  - `session_id()`, `lock_fd_for_test()` (cfg-gated).
+  - `session_id()`.
+  - `#[cfg(any(test, feature = "test-fixture"))] pub fn
+    lock_fd_for_test(&self) -> std::os::fd::RawFd`
+    (pi-6 H2 — exact cfg spelled out so the
+    integration test under
+    `rafaello-core/tests/` can call it when the
+    standard m3 `--features rafaello-core/test-fixture`
+    flag is set; a plain `#[cfg(test)]` would not be
+    visible to integration tests).
   - `SessionError` enum with `Io`, `Sqlite`, `Serde`,
     `Locked { holder_pid: Option<u32> }`,
     `SchemaMismatch` (the `Publish` variant lands at
@@ -988,11 +1008,28 @@ c18+ frontend tests can use `signal_ready` /
 
 ### c29 — feat(rafaello::lib): rfl chat orchestration steps 1-7 — open/spawn/wait_ready
 
-- **What.** scope §C2 steps 1-7. Includes the EnvPlan
-  `pass` allowlist construction (scope §C2 step 5),
-  child stderr forwarder task with serialised writer,
-  `wait_ready` three-outcome mapping with parent-side
-  `"rfl-chat: frontend-ready-observed"` sentinel.
+- **What.** scope §C2 steps 1-7 + a c29-only
+  successful-ready tail (pi-6 H1: c29 owns steps
+  1-7; on `Ok(Ok(()))` the full scope flow proceeds
+  to step 8, which c30 lands. This commit needs a
+  temporary tail so the tests' real `rfl chat`
+  invocations terminate cleanly):
+  - On `Ok(Ok(()))` from `wait_ready`: print
+    `"rfl-chat: frontend-ready-observed"` to
+    parent stderr, then call
+    `frontend_handle.shutdown().await` (bounded by
+    handle config), then `let _ =
+    stderr_forwarder.await` to drain, then return
+    `Ok(())` (process exits 0).
+  - c30 replaces this temporary tail with the full
+    cleanup-guard pattern (replay → harness →
+    wait → guard's shutdown+drain).
+  Rest of the scope: EnvPlan `pass` allowlist
+  construction (scope §C2 step 5), child stderr
+  forwarder task with serialised writer,
+  `wait_ready` three-outcome mapping with parent-
+  side `"rfl-chat: frontend-ready-observed"`
+  sentinel.
 - **Why.** scope §C2 steps 1-7.
 - **Depends on.** c16 (fixture modes used by tests),
   c20 (FrontendHandle — round-3 consolidated),
