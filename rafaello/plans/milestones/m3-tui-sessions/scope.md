@@ -1,9 +1,41 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-8 draft. Round 1: 10b + 3c. Round 2:
+> **Status:** round-9 draft. Round 1: 10b + 3c. Round 2:
 > 5b + 2m. Round 3: 3b + 3m. Round 4: 3b + 3hm + 1l.
 > Round 5: 2b + 11m + 3l. Round 6: 6b + 5m + 3l.
-> Round 7: 5b + 3m + 1l. Round 8 highlights:
+> Round 7: 5b + 3m + 1l. Round 8: 3b + 5m. Round 9
+> highlights:
+> - §M1 namespace patch made role-aware: provider
+>   plugin manifests still publish on
+>   `provider.<own-id>.*`; `core.*` and `frontend.*`
+>   stay forbidden; unknown namespaces stay
+>   `PublishNamespaceUnknown`. `ValidationError`
+>   variants instead of `ManifestError` (pi-8 B1).
+> - `FrontendHandle::shutdown` checks
+>   `reaper_outcome.borrow()` first; if exit already
+>   observed, skip SIGTERM/SIGKILL (PID-recycle
+>   safety). Drop applies the same check (pi-8 B2).
+> - `crates/rafaello/src/lib.rs` added so
+>   `resolve_tui_path` is reachable from
+>   `rafaello/tests/` (pi-8 B3).
+> - `CompiledFrontend.attach_id: String` (round-9 —
+>   pi-8 M1: validation moves to spawn-time so the
+>   invalid-attach-id test can construct a plan).
+> - Phase B unwind matrix spec'd for spawn failures
+>   after child spawn (pi-8 M3).
+> - `ReaperOutcome::WaitFailed` and
+>   `ReaperPanicked` mapped to
+>   `RflChatError::FrontendExitedAbnormally`
+>   (pi-8 M4).
+> - Replay-readiness test uses single combined
+>   stderr stream via `rfl chat`'s child-stderr
+>   forwarding task (pi-8 M2).
+> - `probe_fd_closed` fixture mode uses
+>   `nix::fcntl::F_GETFD` instead of `lsof` for
+>   cross-platform fd-not-inherited verification
+>   (pi-8 M5).
+>
+> Round-8 highlights (kept for trajectory context):
 > - `CompiledFrontend.attach_id: AttachId` (pi-7 #1).
 > - `EnvPlan` matches m1's actual shape:
 >   `pass: Vec<String>` + `set: BTreeMap<String,String>`,
@@ -337,6 +369,19 @@ test matrix.
   - `[dev-dependencies]`: `tempfile`, `serial_test`,
     `tracing-test` with `workspace = true`.
 - **W4.** Edit `rafaello/crates/rafaello/Cargo.toml`:
+  - **Add a `[lib]` target** (pi-8 B3 — round 8 spec'd
+    `pub fn resolve_tui_path` for use from
+    `rafaello/tests/`, but binary-only crates do not
+    expose public items to integration tests. Round 9
+    adds a library target so `resolve_tui_path` and
+    other CLI helpers are reachable from
+    `rafaello/tests/*.rs`). Layout:
+    - `crates/rafaello/src/lib.rs` — exports
+      `resolve_tui_path`, `RflChatError`,
+      `RflChatCli` (clap `Cli`), `run_chat(...)` —
+      the orchestration entry point.
+    - `crates/rafaello/src/main.rs` — minimal:
+      `fn main() -> RflChatResult { rafaello::run_cli() }`.
   - `[dependencies]` adds `rafaello-core` (path-dep —
     NOT `rafaello-tui`; pi-3 #6 — `rfl` only spawns
     `rfl-tui` as a subprocess via `RFL_TUI_PATH` /
@@ -425,16 +470,17 @@ m2-style if needed.
     Mirrors m2's `SupervisorConfig` shape so future
     consolidation is mechanical.
   - `pub struct CompiledFrontend` — the spawn-time plan.
-    Fields (pi-7 #1 + #9 — round 7 had `attach_id:
-    String` clashing with the `AttachId`-typed broker
-    APIs and ALSO duplicated the broker ACL fields,
-    creating a dual source of truth. Round 8 uses
-    `AttachId` consistently and drops the duplicate
-    ACL fields — the `BrokerAcl` is the single source
-    of truth for subscribe/publish authority):
-    - `attach_id: AttachId` (kebab-case validated by
-      `AttachId::new` returning `Result<AttachId,
-      AttachIdParseError>` against `^[a-z][a-z0-9-]{0,31}$`).
+    Fields (pi-7 #9 — drops duplicate ACL fields;
+    pi-8 M1 — keeps `attach_id` as `String` so the
+    invalid-attach-id spawn test can construct an
+    invalid plan. The validated `AttachId` type is
+    used everywhere downstream of spawn-time
+    validation; `CompiledFrontend.attach_id` is the
+    pre-validation wire form):
+    - `attach_id: String` (raw — Phase A validates via
+      `AttachId::new(&plan.attach_id)`; on failure,
+      `FrontendSpawnError::InvalidPlan { reason:
+      AttachIdInvalid { attach_id } }`).
     - `entry_absolute: PathBuf`.
     - `argv: Vec<OsString>`.
     - `env: EnvPlan` (m1's type, unchanged: `pass:
@@ -597,7 +643,13 @@ m2-style if needed.
   (cheap validation) + Phase B (resource allocation), but
   shorter:
   - **Phase A** (cheap validation, no resources):
-    - Validate `attach_id` against the regex.
+    - **Validate `attach_id`** by calling
+      `AttachId::new(&plan.attach_id)` (pi-8 M1).
+      On error, return
+      `FrontendSpawnError::InvalidPlan { reason:
+      AttachIdInvalid { attach_id: plan.attach_id.clone() } }`.
+      The validated `AttachId` is then used for
+      every subsequent broker API call.
     - Reject control chars in `entry_absolute` (m2 §SP4
       pattern).
     - Reject relative paths.
@@ -646,9 +698,37 @@ m2-style if needed.
       tokio::spawn(server.serve())` (pi-3 #1).
       Store `serve_handle` in the `FrontendHandle` so
       `FrontendSupervisor::shutdown` can await it.
-    - Return `FrontendHandle { attach_id, child_pid,
-      peer, _register_guard, serve_handle, ready:
-      watch_rx, reaper_outcome: ... }`.
+    - Return `FrontendHandle { attach_id, child_pid:
+      Some(_), peer, register_guard: Some(_),
+      serve_handle: Some(_), ready: watch_rx,
+      reaper_outcome: ... }`.
+
+  **Phase B unwind rules** (pi-8 M3 — round 8 spawned
+  the child before transport / register / serve setup
+  but did not specify cleanup if a later step
+  failed). On any post-`tokio_command.spawn` error,
+  before returning `Err(_)`:
+  1. If `serve_handle` was spawned, `serve_handle.abort()`
+     and `let _ = serve_handle.await`.
+  2. If `register_guard` was acquired (broker register
+     succeeded), drop it (broker registration
+     releases).
+  3. If `child` was spawned, `child.start_kill()`
+     (sends SIGKILL on Unix) then `let _ =
+     child.wait().await` to reap. The reaper task
+     might or might not have started; if it has, it
+     observes the wait and finishes cleanly.
+  4. Drop the socketpair fds (RAII).
+  5. Drop the proxy handle (m3 frontends don't have
+     one but the unwind framework should be the same
+     as m2).
+  Phase A failures (validation, before any resource
+  allocation) need no unwind — no resources are held.
+  This mirrors m2 §SP4's Phase B unwind matrix
+  (m2 retrospective §3.3 — m3's §H6 fault-injection
+  exercises the equivalent unwind windows in
+  `PluginSupervisor`; the same discipline applies
+  here).
 - **F4.** Lifecycle (pi-1 #4 + pi-5 B1: handle-owned
   model — all lifecycle state lives on
   `FrontendHandle`):
@@ -687,14 +767,46 @@ m2-style if needed.
     (broker registration releases). All idempotent on
     dead/already-cleared values.
   - `pub async fn FrontendHandle::shutdown(mut self)
-    -> ShutdownReport`: `take()` the three
-    disarmable fields BEFORE doing anything async, so
-    a panic in the shutdown body still leaves Drop a
-    no-op (the takes happened before the panic point).
-    Then proceed with SIGTERM + grace + SIGKILL +
-    serve abort + register guard drop. Returning
-    `ShutdownReport` consumes `self`; the implicit
-    Drop has no fields left to act on.
+    -> ShutdownReport`:
+    1. `take()` the three disarmable fields
+       (`child_pid`, `serve_handle`, `register_guard`)
+       BEFORE doing anything async, so a panic in the
+       shutdown body still leaves Drop a no-op.
+    2. **Check reaper outcome first** (pi-8 B2 —
+       round 8 had `shutdown` send SIGTERM
+       unconditionally, but if the caller already
+       observed exit via `wait()` the PID may have
+       been recycled; signalling it would hit an
+       unrelated process). Read
+       `*self.reaper_outcome.borrow()`:
+       - If `Some(_)` (terminal outcome cached): the
+         child has already exited; **skip
+         SIGTERM/SIGKILL entirely**. Just abort the
+         taken `serve_handle` and drop the taken
+         `register_guard`.
+       - If `None`: proceed with SIGTERM + grace +
+         SIGKILL flow.
+    3. Send SIGTERM to the taken `child_pid`.
+    4. `tokio::time::timeout(config.shutdown_grace,
+       reaper_outcome.changed())` — await the
+       reaper-outcome watch flipping to `Some`.
+    5. On timeout, send SIGKILL; another
+       `tokio::time::timeout(config.shutdown_kill_grace,
+       reaper_outcome.changed())`.
+    6. Abort `serve_handle.abort()` and `let _ =
+       serve_handle.await`.
+    7. Drop `register_guard`.
+    8. Return `ShutdownReport`.
+
+    The same hazard applies to `Drop` (pi-8 B2):
+    `FrontendHandle::Drop` first reads the cached
+    reaper outcome via `*self.reaper_outcome.borrow()`;
+    if `Some`, skip SIGKILL entirely (only
+    `serve_handle.abort()` if still `Some` and drop
+    `register_guard`). Otherwise, the round-7
+    best-effort SIGKILL applies. This closes the
+    PID-recycle window for both the cooperative and
+    the implicit-drop paths.
   - Cooperative shutdown: `pub async fn
     FrontendHandle::shutdown(self) -> ShutdownReport`
     (consumes `self`):
@@ -1043,11 +1155,20 @@ that could drift — one path for both is the contract.
   - The lock is released on `Drop` (close fd → kernel
     releases). No explicit release path.
   - **New negative test** `session_store_lock_fd_not_inherited_by_child.rs`:
-    open store, spawn a probe child via `tokio::process::
-    Command` (no special inheritance), check
-    `/proc/<pid>/fd` (Linux) / `lsof -p <pid>` (macOS;
-    gated `#[cfg(target_os = "macos")]`) and assert the
-    lock fd is NOT in the child's fd table.
+    pi-8 M5 — round 8 used `lsof` on macOS, an
+    avoidable external dep on a CI hard gate. Round 9
+    uses a portable probe child instead:
+    `rfl-bus-fixture` gains a new `probe_fd_closed`
+    mode that takes the lock fd number via a CLI arg
+    (e.g. `--probe-fd <N>`), calls
+    `nix::fcntl::fcntl(N, FcntlArg::F_GETFD)`, and
+    exits 0 if the call returns `EBADF` (fd not in
+    table — desired) or non-zero otherwise. The test
+    opens the store (acquiring the lock fd), passes
+    the fd number to the probe child via the arg, and
+    asserts the child exits 0. Cross-platform: `EBADF`
+    after `O_CLOEXEC`-on-exec is the same on Linux
+    and macOS; no `/proc` or `lsof` involved.
   Cross-platform: Linux + macOS both support
   `LockExclusiveNonblock`. flock is per-fd, not per-pid;
   with `O_CLOEXEC` set, fork+exec preserves the lock in
@@ -1474,7 +1595,7 @@ together.
      the bundled TUI:
      ```rust
      CompiledFrontend {
-         attach_id: AttachId::new("tui").expect("valid"),
+         attach_id: "tui".to_string(),
          entry_absolute: tui_path,  // §C3 resolved
          argv: vec![],
          env: EnvPlan {
@@ -1508,9 +1629,19 @@ together.
      listed here are ALL non-reserved.
   6. **Spawn the TUI first**:
      `frontend_supervisor.spawn(&compiled,
-     &paths).await?`. This registers the frontend with
-     the broker and the broker fan-out is now live for
-     `frontend.tui`.
+     &paths).await?`. This registers the frontend
+     with the broker and the broker fan-out is now
+     live for `frontend.tui`. **Stderr forwarding
+     contract** (pi-8 M2): the supervisor's spawn
+     uses `Command::stderr(Stdio::piped())` for the
+     child; `rfl chat` spawns a task that line-buffers
+     the child's stderr and writes each line back to
+     `rfl chat`'s own stderr prefixed with
+     `"rfl-tui: "`. This produces a single combined
+     stream where parent sentinels and child events
+     are line-ordered by construction. The forwarder
+     task also handles EOF (child stderr closed)
+     without disturbing the rest of `rfl chat`.
   7. **Wait for TUI subscription readiness.** The
      fittings server fans out `bus.event` notifications
      best-effort with a bounded drop-on-full sink (m2
@@ -1594,6 +1725,24 @@ together.
         `rfl chat` replays them as usual. Map to
         `RflChatError::FrontendExitedAbnormally {
         outcome }`.
+      - **`WaitFailed { errno }`** (pi-8 M4 — round 8
+        only handled `Exited`; m2's `ReaperOutcome`
+        also has `WaitFailed` and `ReaperPanicked`
+        variants the supervisor inherits): `rfl
+        chat` exits non-zero, citing the errno.
+        Treat as abnormal exit;
+        `RflChatError::FrontendExitedAbnormally {
+        outcome }` covers it.
+      - **`ReaperPanicked`** (pi-8 M4): the reaper
+        task itself panicked while awaiting the
+        child. Same treatment — abnormal exit, log
+        the panic.
+      In all three abnormal cases, `rfl chat` still
+      runs `frontend_handle.shutdown().await` to
+      drain the serve loop and broker registration
+      (pi-8 B2's reaper-outcome check makes shutdown
+      a no-kill drain when the outcome is already
+      cached).
       Then call `frontend_handle.shutdown().await` to
       drain the serve loop and release the broker
       registration guard, capturing the
@@ -1726,36 +1875,64 @@ validation accepts unknown top-level namespaces in
 runtime as `UnknownNamespace`. The mirror at parse time was
 never tightened. m3 owns it.
 
-- **M1.1.** In `rafaello_core::validate::manifest`, extend
-  the publishes-grant validation. Pi-1 #11: round-1
-  wording was self-contradictory ("first segment must be
-  one of `{plugin, frontend}`" then "frontend rejected"
-  then test expects `frontend.foo` rejected). The
-  correct rule, scoped to plugin manifests:
-  - **For a plugin manifest**, every `publishes` entry's
-    first segment must be exactly `plugin` (the plugin's
-    own `plugin.<topic-id>.*` namespace) — and the
-    existing topic-id-matches-this-plugin check applies.
-  - Top-level segments `core` / `provider` / `frontend`
-    are publish-authority of core / provider plugins /
-    frontends, and a plugin manifest declaring publish
-    on those is a category error. Reject with a typed
-    `ManifestError::PublishNamespaceForbidden { topic,
-    namespace }`.
-  - Top-level segments not in `{core, provider, plugin,
-    frontend}` (`evil.foo`, `random.thing`) are not
-    valid namespaces at all. Reject with
-    `ManifestError::PublishNamespaceUnknown { topic,
-    namespace }`.
+- **M1.1.** Extend `rafaello_core::validate::manifest_standalone`
+  (the existing path that returns `ValidationError`,
+  which is then wrapped as `ManifestError::Validation`
+  per m1's surface — pi-8 B1: round 7/8 invented
+  `ManifestError::Publish*` variants but the actual
+  validator returns `ValidationError`). The new
+  publishes-grant rules — **role-aware**, NOT a
+  blanket `frontend / provider / core` reject (pi-8
+  B1: provider plugin manifests legitimately publish
+  on `provider.<id>.*` per m1's existing
+  `manifest_publishes_provider_topic.rs`):
+  - For every `publishes` entry, the top-level
+    segment must be in `{plugin, provider}` AND must
+    match the manifest's own role:
+    - A non-provider plugin manifest (no
+      `[provides] provider = ...`): only `plugin.<own-topic-id>.*`
+      is permitted (existing m1 check).
+    - A provider plugin manifest (`[provides]
+      provider = "<id>"`): both `plugin.<own-topic-id>.*`
+      AND `provider.<own-id>.*` are permitted
+      (existing m1 logic per
+      `manifest_publishes_provider_topic.rs`).
+  - **New rejections m3 adds**:
+    - Top-level segment in `{core, frontend}` →
+      `ValidationError::PublishNamespaceForbidden {
+      topic, namespace }` for ANY plugin manifest
+      (pi-8 B1: these remain forbidden because no
+      plugin role legitimately publishes on `core.*`
+      or `frontend.<id>.*`; that authority belongs to
+      core itself and to authenticated frontend
+      principals respectively).
+    - Top-level segment not in
+      `{core, provider, plugin, frontend}` (`evil.foo`)
+      → `ValidationError::PublishNamespaceUnknown {
+      topic, namespace }`.
+  - Both new variants land in `ValidationError` (not
+    `ManifestError` directly); m1's existing
+    `ManifestError::Validation { source:
+    ValidationError }` wrapper carries them up.
 - **M1.2.** New test `tests/manifest_publishes_unknown_namespace_rejected.rs`
-  in `rafaello-core` covering the four cases:
-  `core.foo`, `provider.foo`, `frontend.foo`, `evil.foo`
-  → all reject with a typed error variant on
-  `ManifestError`.
-- **M1.3.** Existing m1 tests must continue to pass; the
-  tightening is additive (manifests that previously
-  accepted unknown namespaces would have failed at runtime
-  anyway).
+  in `rafaello-core`:
+  - `core.foo` → `PublishNamespaceForbidden`.
+  - `frontend.foo` → `PublishNamespaceForbidden`.
+  - `evil.foo` → `PublishNamespaceUnknown`.
+  - **Existing positive**: `provider.<own-id>.*` from
+    a provider manifest stays accepted (pi-8 B1: m1's
+    `manifest_publishes_provider_topic.rs` continues
+    to pass; m3 doesn't break it).
+  - **New negative**: `provider.<other-id>.*` from a
+    provider manifest declared with provider id `myid`
+    → existing `ValidationError::PublishProviderTopicMismatch`
+    (m1 — round 7/8 conflated this with the new
+    forbidden-namespace rule; round 9 keeps them
+    distinct).
+- **M1.3.** Existing m1 tests must continue to pass;
+  the tightening is additive on the namespace-unknown
+  axis and a no-op on the existing provider-topic-id
+  axis.
 
 ### I — integration test suite
 
@@ -1997,24 +2174,30 @@ integration test is being built):
   going through `RFL_HARNESS_FIXTURES`, so no
   test_done event would have been published; default
   60 s lifetime would have hung the test). Capture
-  both `rfl chat`'s stderr (parent-side) and
-  `rfl-tui`'s stderr (child-side); assert (pi-6 B3):
+  the **single combined stderr stream** from `rfl
+  chat` (pi-8 M2 — round 8 used two separate streams
+  with read-time timestamps which is scheduler-flaky.
+  Round 9: `rfl chat` line-buffers the spawned
+  `rfl-tui` child's stderr and re-emits each line on
+  its own stderr with a `"rfl-tui: "` prefix; see
+  §C2 step 6's stderr-pipe note. Single combined
+  stream is line-ordered by construction because
+  `rfl chat` writes both its own
+  `"rfl-chat: frontend-ready-observed"` line and the
+  forwarded TUI lines into one fd from a single
+  forwarding task that runs after `wait_ready`
+  resolves). Assert (pi-6 B3):
   - `"rfl-chat: frontend-ready-observed"` appears on
-    parent stderr (§C2 step 7's `Ok(Ok(()))` arm
+    rfl chat's stderr (§C2 step 7's `Ok(Ok(()))` arm
     prints this after `wait_ready` resolves and
-    BEFORE `controller.replay_history()` is called);
-  - between the parent's
-    `frontend-ready-observed` timestamp and the FIRST
-    `"rfl-tui: bus.event"` timestamp, the order MUST
-    be parent-first. Both streams are captured via
-    `Command::stderr(Stdio::piped())`; each line is
-    timestamped at read-time using
-    `std::time::Instant::now()`; the test asserts
-    monotonic ordering on those timestamps. This
-    removes the round-6 ordering race between the
-    RPC response and the TUI's sentinel print;
-  - exactly three `"rfl-tui: bus.event"` lines appear
-    within an upper bound of 1 s after the parent
+    BEFORE `controller.replay_history()` is
+    called);
+  - that line appears BEFORE the first
+    `"rfl-tui: bus.event"` line in the same stream
+    (line-order assertion only — no wall-clock
+    timestamps);
+  - exactly three `"rfl-tui: bus.event"` lines
+    follow within
     sentinel.
 - `rfl_chat_frontend_ready_timeout_errors.rs` — pi-3 #2 +
   pi-2 #6 + pi-5 M4: spawn `rfl chat` with
@@ -2164,6 +2347,14 @@ filed; m3 picks the **fixture self-timeout** option (option
     readiness; `exit_immediately` would trip
     `SenderDropped` instead, and a child that doesn't
     adopt `RFL_BUS_FD` would trip transport failure).
+  - `probe_fd_closed` (pi-8 M5) — takes a CLI arg
+    `--probe-fd <N>`, calls
+    `nix::fcntl::fcntl(N, FcntlArg::F_GETFD)`, exits
+    0 if the call returns `EBADF`, non-zero otherwise.
+    Used by `session_store_lock_fd_not_inherited_by_child.rs`
+    to portably verify the lock fd was NOT inherited
+    across exec (replaces round-8's `lsof`-on-macOS
+    approach).
   All three modes reuse the existing fixture
   transport scaffolding from m2 c20.
 - **L2.** Tests don't override the default; the 60 s ceiling
