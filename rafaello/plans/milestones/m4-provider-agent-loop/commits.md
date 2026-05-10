@@ -1,7 +1,54 @@
 # m4-provider-agent-loop — commits
 
-> **Status:** round-2 — addresses `commits-pi-review-1.md`
-> (b/7 h/4 m/3 l/2).
+> **Status:** round-3 — pi-2 b/1 h/1 l/1 closed.
+> Trajectory: r1 7/4/3/2 → r2 1/1/0/1.
+>
+> Round-3 fixes (by pi-2 number):
+> - **B-1** c10 grows a test-only seed seam
+>   `Broker::seed_provider_observed_user_message_for_test(
+>   canonical: &CanonicalId, id: JsonRpcId)` symmetric to
+>   the c11 result-id seed accessor, cfg-gated by
+>   `any(test, feature = "test-fixture")`. The two tests
+>   `provider_tool_request_in_reply_to_user_message_id_rejected.rs`
+>   and
+>   `provider_assistant_message_in_reply_to_user_message_id_accepted.rs`
+>   stay in c10 and use the new seam to populate
+>   `provider_observed_user_messages` directly — no
+>   dependency on c12's `publish_core_with_taint` fan-out
+>   side-effect. c12 deletes the seed seam when
+>   `publish_core_with_taint`'s user_message-fan-out side
+>   effect can populate the set naturally.
+> - **H-1** c17 grows a test-only fault-injection seam on
+>   `ReemitRouter`: `ReemitRouter::with_test_fault_injector(
+>   inject: Arc<dyn Fn(&BusEvent) ->
+>   Option<BrokerError> + Send + Sync>) -> Self`,
+>   cfg-gated by `any(test, feature = "test-fixture")`.
+>   When set, each inbound event is offered to the
+>   injector before per-direction dispatch; on
+>   `Some(err)` the router returns the error from the
+>   re-emit path. c17's acceptance now includes the
+>   seam in the router type. c18's
+>   `reemit_invalid_taint_emits_reemit_rejected_event.rs`
+>   uses the seam to inject
+>   `BrokerError::InvalidTaint { ... }` on the next
+>   matching event, drives a provider publish through
+>   the **real** ReemitRouter path, and asserts the
+>   router emits `core.lifecycle.reemit_rejected`.
+>   The previous "directly call `publish_core`"
+>   alternative is removed.
+> - **L-1** c01 description rewritten: the contradicting
+>   "members edit only" / "crate directories land in
+>   c03/c04" sentence is deleted. Round-3 wording is
+>   simply "workspace-member placeholder cutover —
+>   `members` edit + minimal `Cargo.toml` + `src/lib.rs`
+>   placeholders in the two new crate dirs land in this
+>   commit so the workspace resolves cleanly. Full deps +
+>   bin targets land in c03/c04."
+>
+> ---
+>
+> Round-2 history (kept for trajectory; addresses
+> `commits-pi-review-1.md` b/7 h/4 m/3 l/2):
 >
 > Round-2 fixes (by pi-1 number):
 >
@@ -275,15 +322,17 @@ this `commits.md` is canonical. The headline test is
   "crates/rafaello-readfile"]`. No
   `[workspace.dependencies]` edits (m4 adds no new
   third-party crates; `ulid` was already added in m3's
-  c01 at line 38). c01 lands the `members` edit only —
-  the crate directories themselves land in c03/c04 — and
-  this commit is a **workspace-member placeholder
-  cutover** (pi-1 L-1 — round-1 wording
-  "members-list-only" was wrong; the commit also lands
-  minimal crate placeholders): the `members` edit AND
-  two minimal `Cargo.toml` + `src/lib.rs` placeholders
-  land together so the workspace resolves cleanly. Full
-  deps + bin targets land in c03/c04. Concretely:
+  c01 at line 38). This commit is a
+  **workspace-member placeholder cutover** (pi-2 L-1
+  rewording — the round-2 "members edit only" /
+  "directories land in c03/c04" wording contradicted
+  the placeholder bullets and is deleted): the
+  `members` edit AND two minimal `Cargo.toml` +
+  `src/lib.rs` placeholders in the new crate dirs land
+  together so the workspace resolves cleanly. Full deps
+  + bin targets (and the `bin/` shim files for the
+  manifest compile-tests in c20/c22) land in
+  c03/c04/c20/c22. Concretely:
   - `rafaello/crates/rafaello-mockprovider/Cargo.toml`
     with `[package] name = "rafaello-mockprovider";
     version = "0.0.0"; edition = "2021"; publish =
@@ -706,6 +755,29 @@ this `commits.md` is canonical. The headline test is
        seam and replaces it with the `mpsc::Sender`-based
        `notify_internal_subscribers` real path. External
        fan-out is **not** invoked (B7 internal-intake-only).
+  - **Two new test-only seed accessors** (pi-2 B-1)
+    for the observed-id maps, cfg-gated by `any(test,
+    feature = "test-fixture")`:
+    ```rust
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn seed_provider_observed_result_for_test(
+        &self, canonical: &CanonicalId, id: JsonRpcId);
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn seed_provider_observed_user_message_for_test(
+        &self, canonical: &CanonicalId, id: JsonRpcId);
+    ```
+    Both insert the supplied `JsonRpcId` into the
+    matching `Mutex<BTreeMap<…, BTreeSet<JsonRpcId>>>`
+    field. The accessors let c10's stale-id /
+    user-message-id-rejected tests populate the maps
+    without depending on c12's
+    `publish_core_with_taint` fan-out side-effect
+    (which is the runtime path that populates them in
+    production). c12 deletes BOTH accessors when
+    `publish_core_with_taint`'s
+    `core.session.tool_result` /
+    `core.session.user_message` fan-out can populate
+    the maps naturally.
   - **Extend `handle_plugin_publish` and
     `handle_frontend_publish`** with the same §B0
     `request_id` topic-suffix check (pi-1 B-3 — the
@@ -762,16 +834,28 @@ this `commits.md` is canonical. The headline test is
     - `rafaello-core/tests/provider_tool_request_in_reply_to_stale_id_rejected.rs`
       — same shape, tool_request topic.
     - `rafaello-core/tests/provider_tool_request_in_reply_to_user_message_id_rejected.rs`
-      (pi-3 B-2) — fan out a `user_message` to populate
-      `provider_observed_user_messages`; provider then
-      publishes `tool_request` citing the user_message
-      id → `StaleRequestId` (per §7.2.6 row 2 —
-      tool_requests may cite only results).
+      (pi-3 B-2 + pi-2 B-1 seed seam) — call
+      `broker.seed_provider_observed_user_message_for_test(
+      &provider_canonical, user_msg_id)` to populate
+      `provider_observed_user_messages` without any
+      fan-out side-effect (c12's
+      `publish_core_with_taint` is not available at
+      c10; the seam is the c10-only test path); the
+      provider then publishes `tool_request` citing
+      `[user_msg_id]` → `StaleRequestId` (per §7.2.6
+      row 2 — tool_requests may cite only results).
   - **Positives (small, observed via the drain-Vec
     seam):**
     - `rafaello-core/tests/provider_assistant_message_in_reply_to_user_message_id_accepted.rs`
-      — same setup as the stale-tool_request test but
-      broker accepts (row 3 union).
+      (pi-2 B-1 seed seam) — same seed setup as the
+      preceding tool_request test
+      (`seed_provider_observed_user_message_for_test`)
+      but provider publishes
+      `provider.mock.assistant_message` citing the
+      same id; broker accepts (row 3 union); the
+      drain-Vec inbound event carries
+      `in_reply_to: Some(vec![user_msg_id])`,
+      `taint: None`.
     - `rafaello-core/tests/broker_provider_tool_request_with_supplied_taint_discards.rs`
       — provider publishes with `taint: [{source:
       "user"}]`; drain-Vec inbound event carries
@@ -895,24 +979,15 @@ this `commits.md` is canonical. The headline test is
     `notify` count on that plugin's peer stays at zero
     (internal subscriber observes; external does not).
   - `rafaello-core/tests/broker_publish_provider_topic_to_internal_subscriber.rs`
-    **(moved from c10 — pi-1 B-2)**. Setup (pi-2 L-2):
-    register the provider; **first** publish a
-    `core.session.tool_result` via
-    `Broker::publish_core_with_taint` does not exist
-    yet (lands in c12) — round-2 instead fans out a
-    synthetic `core.session.tool_result` via the
-    `core.session.entry.finalized` path on `publish_core`
-    (m3 surface) to populate the
-    `provider_observed_results` set, OR uses a new
-    test-only `Broker::seed_provider_observed_result_for_test(
-    canonical: &CanonicalId, id: JsonRpcId)` accessor
-    (cfg-gated, in this commit). Round-2 default: the
-    seed accessor — `publish_core_with_taint` isn't
-    available yet at c11, and indirect setup via
-    `core.session.entry.finalized` would not insert
-    into `provider_observed_results` (B7b only inserts
-    on `core.session.tool_result` fan-out specifically,
-    which only `publish_core_with_taint` produces).
+    **(moved from c10 — pi-1 B-2)**. Setup (pi-2 L-2 +
+    pi-2 B-1 seed seam reused from c10): call
+    `broker.seed_provider_observed_result_for_test(
+    &provider_canonical, result_id)` (the seam landed
+    in c10; still available here) to populate
+    `provider_observed_results` directly —
+    `publish_core_with_taint` isn't available until
+    c12, and the seam is the canonical c10-introduced
+    way to populate the map for tests at c10/c11.
     **Then** the provider publishes
     `provider.mock.assistant_message` with `in_reply_to:
     [<that-id>]`; the `subscribe_internal` receiver
@@ -1222,22 +1297,52 @@ this `commits.md` is canonical. The headline test is
   - New module `rafaello/crates/rafaello-core/src/reemit/mod.rs`
     + `pub mod reemit;` in `lib.rs:14` (after
     `pub mod renderer;`).
-  - New public struct:
+  - New public struct (with the pi-2 H-1
+    fault-injection seam):
     ```rust
     pub struct ReemitRouter {
         broker: Broker,
         acl: BrokerAcl,
         active_provider: CanonicalId,
         shutdown_rx: watch::Receiver<bool>,
+        #[cfg(any(test, feature = "test-fixture"))]
+        fault_injector: Option<TestFaultInjector>,
     }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub type TestFaultInjector = std::sync::Arc<
+        dyn Fn(&BusEvent) -> Option<BrokerError>
+            + Send + Sync,
+    >;
+
     impl ReemitRouter {
         pub fn new(broker: Broker, acl: BrokerAcl,
                    active_provider: CanonicalId,
                    shutdown_rx: watch::Receiver<bool>)
                    -> Self;
         pub fn start(self) -> JoinHandle<()>;
+
+        #[cfg(any(test, feature = "test-fixture"))]
+        pub fn with_test_fault_injector(
+            mut self, inject: TestFaultInjector
+        ) -> Self {
+            self.fault_injector = Some(inject);
+            self
+        }
     }
     ```
+    Per-direction dispatch (c17 placeholders; c18
+    lights them up) calls
+    `self.fault_injector.as_ref().and_then(|f| f(event))`
+    BEFORE the real re-emit; on `Some(err)` the
+    handler skips the canonical publish and runs the
+    same §CR7 failure path (log at
+    `tracing::error!`, emit
+    `core.lifecycle.reemit_rejected` with the
+    structured reason). This makes the failure path
+    drivable from tests through the **real** router
+    body, not a side-channel that bypasses it (pi-2
+    H-1).
     `start` resolves the public `provider_id` segment
     via `acl.plugins[&active_provider].provider_id`
     (the `Option<String>` field at `broker_acl.rs:81`;
@@ -1395,19 +1500,33 @@ this `commits.md` is canonical. The headline test is
     `text`, the canonical `request_id` is forwarded,
     and `taint = [{source: "user"}]`.
   - `rafaello-core/tests/reemit_invalid_taint_emits_reemit_rejected_event.rs`
-    (pi-1 H-1) — induce a re-emit failure by
-    publishing a synthetic provider tool_request whose
-    re-emit would call `publish_core_with_taint` with
-    an invalid taint shape (e.g. by patching the
-    router to call `publish_core` instead of
-    `publish_core_with_taint` via a test-only seam —
-    or by directly calling
-    `publish_core("core.session.tool_request", _)`
-    which the broker now rejects with
-    `InvalidTaint{Missing}`); assert the router
-    catches the error, logs at `tracing::error!`, and
-    emits a `core.lifecycle.reemit_rejected` event
-    with the failure reason in the payload.
+    (pi-1 H-1 + pi-2 H-1 — uses the c17
+    `with_test_fault_injector` seam to drive the
+    failure through the **real** router body): build
+    a `ReemitRouter::new(...)` then
+    `.with_test_fault_injector(Arc::new(|event| {
+    if event.topic == "provider.mock.tool_request" {
+        Some(BrokerError::InvalidTaint {
+            publisher: Publisher::Core,
+            topic: "core.session.tool_request".into(),
+            reason: TaintReason::Missing,
+        })
+    } else { None }
+    }))`; spawn the router; the provider publishes
+    `provider.mock.tool_request` through
+    `handle_provider_publish`; the router observes
+    the inbound event via its internal subscriber,
+    consults the injector, receives `Some(err)`,
+    runs the §CR7 failure path, and emits
+    `core.lifecycle.reemit_rejected` whose payload
+    carries the structured reason. Assert: no
+    canonical `core.session.tool_request` is fanned
+    out (a subscriber registered on
+    `core.session.**` sees the
+    `core.lifecycle.reemit_rejected` event but not
+    the tool_request). The previous "directly call
+    `publish_core`" alternative is removed (pi-2
+    H-1).
   - `rafaello-core/tests/reemit_unknown_tool_emits_tool_dispatch_rejected_event.rs`
     (pi-1 H-1) — provider publishes
     `provider.mock.tool_request` for a tool name
