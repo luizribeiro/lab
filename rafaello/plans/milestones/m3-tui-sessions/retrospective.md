@@ -1,19 +1,22 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — retrospective
 
-> **Status:** draft round 1 on 2026-05-10 by the milestone
-> driver. Worktree `/home/luiz/lab` directly on
-> `rafaello-v0.1` (m3 commits accumulated on the milestone
-> branch — no separate merge step). 31 plan-row commits
-> (`165916e..267607f`) land in 1:1 correspondence with
-> `commits.md` round 9 ratification. `scope.md` round 22
+> **Status:** revised round 2 on 2026-05-10 by the milestone
+> driver after `retro-pi-review-1.md` (5 blockers + 4
+> non-blocking polish). Worktree `/home/luiz/lab` directly
+> on `rafaello-v0.1` (m3 commits accumulated on the
+> milestone branch — no separate merge step). 31 plan-row
+> commits (`165916e..267607f`) land in 1:1 correspondence
+> with `commits.md` round 9 ratification. `scope.md` round 22
 > converged after 22 pi review rounds; `commits.md` round 9
 > ratified after 9 pi review rounds. Per `plans/README.md`
 > §"Patterns from prior milestones", retrospectives need
 > adversarial review; m1 needed four rounds and m2 needed
-> two — another pi pass is expected after this draft.
+> two — another pi pass is expected after this revision.
 >
-> Companion: `manual-validation.md` (driver-owned, written
-> alongside this retrospective).
+> Companion: `manual-validation.md` round 1 (Linux test /
+> build / doc transcripts captured 2026-05-10; macOS CI URL,
+> interactive smoke recording, and CI run URL all marked
+> ⏳ pending the post-retrospective branch push).
 
 This is the milestone-level review against `scope.md` round
 22 and `commits.md` round 9 per `plans/README.md` Phase 3.
@@ -31,94 +34,179 @@ The five sections match m1 / m2's structure.
 
 ## 1. Coverage
 
-Every named test in `scope.md` §I integration matrix and the
-per-§ test enumerations is implemented under
+`scope.md` §I positive + negative matrices and the per-§
+test enumerations name a total of 41 test files. All 41
+behaviours are implemented under
 `rafaello/crates/rafaello-core/tests/`,
 `rafaello/crates/rafaello-tui/tests/`, and
-`rafaello/crates/rafaello/tests/`. The
-`cargo test --workspace --features rafaello-core/test-fixture`
-acceptance gate (`scope.md` §"Acceptance summary") aggregates
-**516 tests passed; 0 failed; 0 ignored** across 308 test
-binaries on Linux inside the devshell (run captured
-2026-05-10).
+`rafaello/crates/rafaello/tests/`. **Four files** landed
+under different names than scope; the reconciliation
+below records each rename, split, or indirect coverage
+case.
+
+The `nix develop --impure --command cargo test
+--manifest-path rafaello/Cargo.toml --workspace --features
+test-fixture` acceptance gate (verbatim from `scope.md`
+§"Acceptance summary"; the `test-fixture` feature
+resolves to `rafaello-core/test-fixture` via the
+`rafaello-core` crate's feature exposure) aggregates
+**516 tests passed; 0 failed; 0 ignored** across 308
+test binaries on Linux inside the devshell (`/tmp/m3-acceptance.log`,
+captured 2026-05-10; transcript archived in
+`manual-validation.md` §1).
 
 ### Scope-vs-landed file-name reconciliation
 
-No 1:1 deviations from the scope-named test files were
-detected during Phase 3. The full per-test reconciliation
-table is omitted because the scope and the on-disk file
-listing match name-for-name.
+Four scope-named files do not match the landed file
+names 1:1; the behaviours are covered, but the files
+were renamed, split, or fold into adjacent setup. Recorded
+explicitly so the on-disk inventory can be cross-checked
+without surprise:
+
+| `scope.md` test name | Landed file(s) | Reason |
+|----------------------|----------------|--------|
+| `renderer_pipeline_built_in_kinds.rs` | split into eight files: `renderer_builtin_text.rs`, `renderer_builtin_heading.rs`, `renderer_builtin_code_block.rs`, `renderer_builtin_thinking.rs`, `renderer_builtin_tool_call.rs`, `renderer_builtin_tool_result.rs`, `renderer_builtin_image.rs`, `renderer_builtin_error.rs` | c11/c12 — one test per built-in renderer per `commits.md` row split, per pi-9 polish: per-renderer files are easier to bisect than a single eight-case table. |
+| `tui_subscribes_to_core_session_events.rs` | landed at the **core** layer as `frontend_subscribes_to_core_session_events.rs` (c14) | pi-13 reconciliation — the subscription is enforced on the broker side via `BrokerAcl.frontends[].subscribe_patterns` (m3 §B); the TUI's role is to register the `BusEventHandler` (covered by `tui_test_mode_logs_bus_events_to_stderr.rs` and `tui_sends_frontend_ready_after_handler_registration.rs`). The "subscribe behaviour" the scope test name implied is broker-layer enforcement, not TUI-layer routing. |
+| `frontend_register_with_broker.rs` | covered indirectly as setup in `frontend_subscribes_to_core_session_events.rs`, `frontend_publish_*.rs` (4 files), and `broker_register_frontend_*.rs` (2 files) | The positive happy-path "frontend lands in registry, guard drops cleanly" is the precondition for every frontend-layer integration test; no test-file specialised on registration alone landed because no row in `commits.md` had it as primary acceptance. **Recorded as a coverage gap of test-file granularity, not behaviour:** the path is exercised in setup of seven adjacent tests. Filed below. |
+| `frontend_register_duplicate_rejected.rs` | landed as `broker_register_frontend_duplicate_rejected.rs` (c14, `79d4c0d`) | The behaviour is broker-side ACL enforcement, not a frontend-side surface; pi-14 reconciliation moved the file to the `broker_*` namespace to match m2's broker-test naming convention. |
 
 ### Positive matrix verification
 
-The §I positive matrix is satisfied. Spot checks:
+The §I positive matrix is satisfied. Per-row mapping:
 
-| scope.md test file | Landed in | Notes |
-|--------------------|-----------|-------|
-| `rfl_chat_demo_bar.rs` | `267607f` (c31) | Headline: nine entries → nine `bus.event` lines + nine SQLite rows. |
-| `rfl_chat_harness_finalizes_nine_entries.rs` | `9d338c0` (c30) | Harness path positive. |
-| `rfl_chat_replay_withheld_until_frontend_ready.rs` | `9d338c0` (c30) | Combined-stream line-order proof. |
-| `rfl_chat_resolves_tui_via_env_override.rs` | `59e8b61` (c29) | End-to-end env override + sentinel. |
-| `rfl_chat_relative_project_root_canonicalises.rs` | `59e8b61` (c29) | §C2 step 1 canonicalize. |
-| `tui_handler_calls_frontend_ready.rs` | `8e87edf` (c25) | Headless TUI → parent ready RPC. |
-| `tui_test_mode_logs_bus_events_to_stderr.rs`, `tui_test_mode_exits_on_test_done.rs`, `tui_test_mode_self_timeout_exits_zero.rs`, `tui_sends_frontend_ready_after_handler_registration.rs` | `8e87edf` (c25) | Headless-mode contract. |
-| `frontend_handle_*` (4 tests, signal/exit-before/timeout/post-ready) | `7822575` (c20) | Phase-B + handle lifecycle. |
-| `frontend_shutdown_dead_watch_paths.rs` | `2f4cea9` (c19) | `shutdown_with_outcome` seam. |
-| `session_store_round_trip.rs`, `session_store_seq_monotonic.rs` | `4a76a2d` (c22) | SessionStore round-trip + seq. |
-| `session_store_lock_*` (3 tests) | `50156a5` (c21) | Flock + lock-first ordering + fd-not-inherited. |
-| `session_controller_finalize_entry.rs`, `session_controller_replay_history.rs` | `82a1f6a` (c23) | Controller publish path. |
-| `renderer_pipeline_path_*` (A/B/C — 3 tests) | `6e62ad9` (c10) | Three-path pipeline. |
-| `entry_*_round_trip.rs` (9 tests) | `cff03b6` (c08) | Entry + RenderNode constructors. |
-| `manifest_publishes_unknown_namespace_rejected.rs` | `b8bff38` (c05) | m1 §M1 publishes-grant tightening. |
-| `supervisor_*_inject_fault_*` (3 tests) | `adc1e8a` (c07) + `779724d` (c06) | TestHooks 3 inject points (m2 §5.1 carryover). |
-| `tui_paint_panic_isolation` lib unit test | `5f9ac1b` (c26) | `Painter::draw_with_panic_isolation` seam. |
-| `workspace_bin_path_resolves_*` (2 tests) | `b87a74f` (c28) | Helper smoke tests. |
+| `scope.md` positive test | Landed file | Commit |
+|--------------------------|-------------|--------|
+| `frontend_register_with_broker.rs` | indirect (see reconciliation row 3) | c14 setup paths |
+| `session_store_round_trip.rs` | `session_store_round_trip.rs` | `4a76a2d` (c22) |
+| `session_store_lock_fd_not_inherited_by_child.rs` | `session_store_lock_fd_not_inherited_by_child.rs` | `50156a5` (c21) |
+| `session_controller_finalize_entry.rs` | `session_controller_finalize_entry.rs` | `82a1f6a` (c23) |
+| `session_controller_replay_history.rs` | `session_controller_replay_history.rs` | `82a1f6a` (c23) |
+| `renderer_pipeline_built_in_kinds.rs` | 8 split `renderer_builtin_*.rs` (see reconciliation row 1) | `b6e3791` (c11) + `0336ff2` (c12) |
+| `renderer_pipeline_unknown_kind_falls_back_with_author_fallback.rs` | `renderer_pipeline_unknown_kind_falls_back_with_author_fallback.rs` | `6e62ad9` (c10) |
+| `renderer_pipeline_unknown_kind_no_fallback_uses_default_callout.rs` | `renderer_pipeline_unknown_kind_no_fallback_uses_default_callout.rs` | `6e62ad9` (c10) |
+| `renderer_pipeline_panic_falls_through_to_path_a.rs` | `renderer_pipeline_panic_falls_through_to_path_a.rs` | `6e62ad9` (c10) |
+| `renderer_pipeline_renderer_err_falls_through_to_path_a.rs` | `renderer_pipeline_renderer_err_falls_through_to_path_a.rs` | `6e62ad9` (c10) |
+| `renderer_capabilities_downgrade_unsupported_node.rs` | `renderer_capabilities_downgrade_unsupported_node.rs` | `6e62ad9` (c10) |
+| `renderer_capabilities_downgrade_unsupported_raw_format.rs` | `renderer_capabilities_downgrade_unsupported_raw_format.rs` | `6e62ad9` (c10) |
+| `supervisor_spawn_unwinds_after_register.rs` | `supervisor_spawn_unwinds_after_register.rs` | `adc1e8a` (c07) |
+| `supervisor_spawn_post_register_reaps_child.rs` (Linux-only) | `supervisor_spawn_post_register_reaps_child.rs` | `adc1e8a` (c07) |
+| `supervisor_spawn_unwinds_after_socketpair.rs` | `supervisor_spawn_unwinds_after_socketpair.rs` | `adc1e8a` (c07) |
+| `supervisor_spawn_unwinds_post_spawn_pre_register.rs` | `supervisor_spawn_unwinds_post_spawn_pre_register.rs` | `adc1e8a` (c07) |
+| `supervisor_spawn_unwinds_post_spawn_pre_register_fd_baseline.rs` | `supervisor_spawn_unwinds_post_spawn_pre_register_fd_baseline.rs` | `adc1e8a` (c07) |
+| `frontend_handle_wait_resolves_on_child_exit.rs` | `frontend_handle_wait_resolves_on_child_exit.rs` | `7822575` (c20) |
+| `frontend_handle_drop_does_not_leak_zombie.rs` (Linux-only) | `frontend_handle_drop_does_not_leak_zombie.rs` | `7822575` (c20) |
+| `frontend_handle_wait_ready_resolves_on_signal.rs` | `frontend_handle_wait_ready_resolves_on_signal.rs` | `7822575` (c20) |
+| `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `7822575` (c20) |
+| `manifest_publishes_unknown_namespace_rejected.rs` | `manifest_publishes_unknown_namespace_rejected.rs` | `b8bff38` (c05) |
+| `tui_subscribes_to_core_session_events.rs` | `frontend_subscribes_to_core_session_events.rs` (see reconciliation row 2) | c14 |
+| `tui_handler_calls_frontend_ready.rs` | `tui_handler_calls_frontend_ready.rs` | `8e87edf` (c25) |
+| `tui_test_mode_logs_bus_events_to_stderr.rs` | `tui_test_mode_logs_bus_events_to_stderr.rs` | `8e87edf` (c25) |
+| `tui_test_mode_exits_on_test_done.rs` | `tui_test_mode_exits_on_test_done.rs` | `8e87edf` (c25) |
+| `tui_test_mode_self_timeout_exits_zero.rs` | `tui_test_mode_self_timeout_exits_zero.rs` | `8e87edf` (c25) |
+| `tui_sends_frontend_ready_after_handler_registration.rs` | `tui_sends_frontend_ready_after_handler_registration.rs` | `8e87edf` (c25) |
+| `rfl_chat_demo_bar.rs` (headline) | `rfl_chat_demo_bar.rs` | `267607f` (c31) |
+| `rfl_chat_resolves_tui_via_env_override.rs` | `rfl_chat_resolves_tui_via_env_override.rs` | `59e8b61` (c29) |
+| `rfl_chat_relative_project_root_canonicalises.rs` | `rfl_chat_relative_project_root_canonicalises.rs` | `59e8b61` (c29) |
+| `rfl_chat_replay_withheld_until_frontend_ready.rs` | `rfl_chat_replay_withheld_until_frontend_ready.rs` | `9d338c0` (c30) |
 
 ### Negative matrix verification
 
-The §I negative matrix is satisfied:
+The §I negative matrix is satisfied. The 15 negative
+rows in scope §I + §C2 (locked-session, project-root,
+ready-timeout / before-ready / post-ready abnormal-exit)
+all land:
 
-| scope.md test file | Landed in |
-|--------------------|-----------|
-| `rfl_chat_locked_session_errors_with_holder_pid.rs` | `59e8b61` (c29) |
-| `rfl_chat_locked_session_unknown_holder_errors.rs` | `59e8b61` (c29) |
-| `rfl_chat_nonexistent_project_root_errors.rs` | `59e8b61` (c29) |
-| `rfl_chat_frontend_exits_before_ready_errors.rs` | `59e8b61` (c29) |
-| `rfl_chat_frontend_ready_timeout_errors.rs` | `59e8b61` (c29) |
-| `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs` | `9d338c0` (c30) |
-| `bus_publish_unknown_publisher_kind_rejected.rs` (frontend) | `dbfeebc` (c15) |
-| `bus_register_frontend_not_in_acl_rejected.rs` | `79d4c0d` (c14) |
-| `bus_register_frontend_duplicate_rejected.rs` | `79d4c0d` (c14) |
-| `frontend_handle_drop_*` (Linux-only zombie test) | `7822575` (c20) |
+| `scope.md` negative test | Landed file | Commit |
+|--------------------------|-------------|--------|
+| `frontend_publish_on_reserved_namespace_rejected.rs` | `frontend_publish_on_reserved_namespace_rejected.rs` | `dbfeebc` (c15) |
+| `frontend_publish_two_segment_topic_rejected.rs` | `frontend_publish_two_segment_topic_rejected.rs` | `dbfeebc` (c15) |
+| `frontend_publish_unknown_namespace_rejected.rs` | `frontend_publish_unknown_namespace_rejected.rs` | `dbfeebc` (c15) |
+| `frontend_publish_outside_grant_rejected.rs` | `frontend_publish_outside_grant_rejected.rs` | `dbfeebc` (c15) |
+| `frontend_register_unknown_attach_id_rejected.rs` | `frontend_register_unknown_attach_id_rejected.rs` | `79d4c0d` (c14) |
+| `frontend_register_duplicate_rejected.rs` | `broker_register_frontend_duplicate_rejected.rs` (see reconciliation row 4) | `79d4c0d` (c14) |
+| `frontend_spawn_invalid_attach_id_rejected.rs` | `frontend_spawn_invalid_attach_id_rejected.rs` | `22a345c` (c18) |
+| `frontend_spawn_relative_entry_path_refused.rs` | `frontend_spawn_relative_entry_path_refused.rs` | `22a345c` (c18) |
+| `frontend_spawn_control_chars_in_path_refused.rs` | `frontend_spawn_control_chars_in_path_refused.rs` | `22a345c` (c18) |
+| `frontend_spawn_entry_not_executable_refused.rs` | `frontend_spawn_entry_not_executable_refused.rs` | `22a345c` (c18) |
+| `frontend_spawn_reserved_env_in_pass_refused.rs` | `frontend_spawn_reserved_env_in_pass_refused.rs` | `22a345c` (c18) |
+| `frontend_spawn_reserved_env_in_set_refused.rs` | `frontend_spawn_reserved_env_in_set_refused.rs` | `22a345c` (c18) |
+| `session_store_concurrent_open_errors.rs` | `session_store_concurrent_open_errors.rs` | `50156a5` (c21) |
+| `session_store_locked_unknown_holder_errors.rs` | `session_store_locked_unknown_holder_errors.rs` | `50156a5` (c21) |
+| `session_store_schema_mismatch_errors.rs` | `session_store_schema_mismatch_errors.rs` | `50156a5` (c21) |
+
+### CLI negative tests (additional matrix)
+
+`scope.md` §C2 enumerates `rfl chat`-shell-level error
+paths. These are CLI-layer negatives, separate from the
+broker / frontend / session core-layer negatives above:
+
+| `scope.md` CLI negative test | Landed file | Commit |
+|------------------------------|-------------|--------|
+| `rfl_chat_locked_session_errors_with_holder_pid.rs` | same | `59e8b61` (c29) |
+| `rfl_chat_locked_session_unknown_holder_errors.rs` | same | `59e8b61` (c29) |
+| `rfl_chat_nonexistent_project_root_errors.rs` | same | `59e8b61` (c29) |
+| `rfl_chat_frontend_exits_before_ready_errors.rs` | same | `59e8b61` (c29) |
+| `rfl_chat_frontend_ready_timeout_errors.rs` | same | `59e8b61` (c29) |
+| `rfl_chat_frontend_post_ready_nonzero_exit_errors.rs` | same | `9d338c0` (c30) |
 
 ### Tests added beyond the matrix (examples)
 
-- `m3_types_compile.rs` patterns (per c14, c17, c18) —
-  build-only compile-surface assertions matching the
+The list below is illustrative, not exhaustive. Other
+non-matrix tests required by individual `commits.md`
+acceptance lines include compile-surface assertions and
+unit-level seam tests.
+
+- `m3_frontend_error_surface_compiles.rs` (or similar
+  build-only landed name; per c14, c17, c18 acceptance
+  rows) — compile-surface assertions matching the
   m1/m2 c02-style pattern.
-- `tui_paint_panic_isolation` lib unit test — driven by
-  `TestBackend` (ratatui), exercises both
-  `RunPanicking` and `RunReturningError` synthetic
-  PaintAction variants.
-- `frontend_shutdown_dead_watch_paths.rs` — three
-  dead-watch branches (`waitfailed_child_already_gone`,
-  `reaperpanicked_child_already_gone`,
-  `live_terminates_after_sigterm`).
+- `tui_paint_panic_isolation` — `#[cfg(test)]` lib unit
+  test in `rafaello-tui/src/paint.rs`, driven by
+  `ratatui::backend::TestBackend`, exercising both
+  `PaintAction::RunPanicking` and `PaintAction::RunReturningError`
+  synthetic variants (c26 acceptance).
+- `frontend_shutdown_dead_watch_paths.rs` (c19) — three
+  dead-watch branches: `waitfailed_child_already_gone`,
+  `reaperpanicked_child_already_gone`, and
+  `live_terminates_after_sigterm`.
+- `frontend_handle_shutdown_skips_kill_on_exited.rs` and
+  `frontend_handle_shutdown_kills_on_waitfailed.rs` (c20)
+  — the disarmable-Drop semantics matrix.
+- `rfl_chat_harness_finalizes_nine_entries.rs` (c30) —
+  harness-path positive that the `rfl_chat_demo_bar.rs`
+  headline depends on for SQLite-row coverage.
+
+All extras are additive; none replace a scope-named
+behaviour.
 
 ### Coverage verdict
 
-No coverage loss recorded. The three m2-deleted unwind
-tests (m2 retro §5.1) returned in c07 (`adc1e8a`) re-tied
-to the new `TestHooks` 3-inject-point seam (pre-spawn,
-post-spawn-pre-register, post-register), restoring the
-pre-register socketpair-window coverage that m2 §5.1 left
-open. No c-level test deletion occurred during Phase 3.
+No behavioural coverage loss recorded. The three
+m2-deleted unwind tests (m2 retro §5.1) returned in
+c07 (`adc1e8a`) re-tied to the new `TestHooks`
+3-inject-point seam, restoring the pre-register
+socketpair-window coverage that m2 §5.1 left open.
+No c-level test deletion occurred during Phase 3.
+
+**Test-file granularity gap, recorded explicitly:**
+`frontend_register_with_broker.rs` from scope §I did
+not land as a stand-alone file; the positive
+registration path is the precondition for seven
+other frontend-layer integration tests and is
+exercised in their setup blocks. A future driver
+hardening pass may wish to land a dedicated
+`frontend_register_*` file purely for grep-ability;
+this is filed in §5.8 below as a non-blocking m4
+follow-up.
 
 The 516 tests / 0 failed result on Linux satisfies
-`scope.md` §"Acceptance summary"'s first three bullets
-(workspace tests; build of all three bins via the explicit
-`--features rafaello-core/test-fixture` flag — verified
-during c25 macOS CI gating; cargo doc warning-free).
+`scope.md` §"Acceptance summary"'s **first**
+bullet (Linux `cargo test`); the **second** bullet
+(macOS CI green hard gate) remains pending the
+post-retrospective branch push (`manual-validation.md`
+§4); the **third** and **fourth** bullets (cargo
+build green; cargo doc warning-free) are captured in
+`manual-validation.md` §2 and §3.
 
 ---
 
@@ -258,11 +346,22 @@ issue.
 
 ### 2.11 Verdict
 
-All nine drift items pre-named in `scope.md`
-§"Acceptance summary" are addressed by either the
-follow-up commits enumerated below or by code already
-landed during Phase 3 (§2.6 / §2.9). No additional
-unprompted drift surfaced during the Phase 3 review.
+Two of the ten drift items already landed as Phase-3
+code commits (§2.6 in `b8bff38` / c05; §2.9 in
+`4db235d` / c16). Two are recorded-only with no action
+needed (§2.7 `check_lock_publish_topic` deferral;
+§2.8 lock-correspondence v2 nice-to-have). One is an
+m4 / m5 inflow item (§2.10 frontend ACL handover).
+**The remaining five (§2.1 / §2.2 / §2.3 / §2.4 /
+§2.5) are pending follow-up commits**, pre-named in
+the "Follow-up commits on this branch" section below.
+This retrospective records the canonical fix for each
+pending item; the actual decisions.md / overview /
+banner patches land as separate commits before
+ratification, mirroring the m1 / m2 close pattern.
+
+No additional unprompted drift surfaced during the
+Phase 3 review.
 
 ---
 
@@ -476,6 +575,22 @@ The pattern is documented in `scope.md` §C2 step 8
 verbatim and the c30 implementation matches it
 line-for-line.
 
+### 5.8 `frontend_register_with_broker.rs` test-file granularity gap (m4 follow-up)
+
+`scope.md` §I positive matrix names a stand-alone
+positive test for the frontend-registration happy
+path. No file by that name landed; the path is
+exercised only as setup in seven adjacent integration
+tests (`frontend_subscribes_to_core_session_events.rs`,
+the four `frontend_publish_*.rs` files, and the two
+`broker_register_frontend_*.rs` files). The
+behavioural coverage is complete; the file-name
+granularity is the gap. Recorded as a non-blocking m4
+hardening pass — landing a dedicated
+`frontend_register_with_broker.rs` would make the
+positive path grep-discoverable without changing
+behaviour.
+
 ---
 
 ## Follow-up commits on this branch
@@ -512,25 +627,37 @@ inflow item, not an m3 follow-up.
 
 ## Acceptance summary check
 
+The table maps each `scope.md` §"Acceptance summary"
+bullet to its current status. The exact cargo commands
+quoted match scope verbatim — note `--manifest-path
+rafaello/Cargo.toml --workspace --features test-fixture`
+(no `rafaello-core/` prefix; `test-fixture` is the
+workspace-feature alias defined on `rafaello-core` and
+exposed through the workspace member resolution).
+`--workspace --bins --features rafaello-core/test-fixture`
+is the build gate's exact form (the explicit `rafaello-core/`
+prefix is required there because `--bins` does not
+auto-enable the feature).
+
 | `scope.md` §"Acceptance summary" bullet | Status |
 |-----------------------------------------|--------|
-| Every named test in §"Positive" / §"Negative" matrices implemented and passing | ✅ §1 |
-| `cargo test --workspace --features test-fixture` green on Linux inside devshell | ✅ 516/0/0 captured 2026-05-10 |
-| **macOS CI green** (hard gate) | ⏳ pending push (§5.1) |
-| `cargo build --workspace --bins --features rafaello-core/test-fixture` green | ✅ verified during c25 / c27 |
-| `cargo doc --workspace --no-deps` warning-free | ✅ verified post-c31 |
-| `manual-validation.md` records manual-validation list | ⏳ writing alongside this retro |
-| `retrospective.md` written with anticipated drift addressed | ⏳ this document |
-| Stream E renderer-RFC drift patch | §2.1 — follow-up commit pre-named |
-| `PublisherIdentity::Frontend` Stream A schema additions | §2.2 — follow-up commit pre-named |
-| Capabilities staging note in overview §10.1 | §2.3 — follow-up commit pre-named |
-| Replay-via-`entry.finalized` decisions row | §2.4 — follow-up commit pre-named |
-| Broker error variant additions decisions row | §2.5 — follow-up commit pre-named |
+| Every named test in §"Positive" / §"Negative" matrices implemented and passing | ✅ §1 (with 4 file-name reconciliations recorded) |
+| `cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture` green on Linux inside devshell | ✅ 516/0/0 captured 2026-05-10 (`manual-validation.md` §1) |
+| **macOS CI green** (hard gate) | ⏳ pending the post-retrospective branch push (`manual-validation.md` §4 + §5.1 below) |
+| `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
+| `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
+| `manual-validation.md` records manual-validation list | ✅ round 1 written alongside this retro; §4 / §5 / §6 ⏳ pending the post-retrospective push |
+| `retrospective.md` written with anticipated drift addressed | ✅ this document, round 2 |
+| Stream E renderer-RFC drift patch | ⏳ §2.1 — follow-up commit pre-named, NOT YET LANDED |
+| `PublisherIdentity::Frontend` Stream A schema additions | ⏳ §2.2 — follow-up commit pre-named, NOT YET LANDED |
+| Capabilities staging note in overview §10.1 | ⏳ §2.3 — follow-up commit pre-named, NOT YET LANDED |
+| Replay-via-`entry.finalized` decisions row | ⏳ §2.4 — follow-up commit pre-named, NOT YET LANDED |
+| Broker error variant additions decisions row | ⏳ §2.5 — follow-up commit pre-named, NOT YET LANDED |
 | m1 publishes-grant unknown-namespace tightening | ✅ landed in c05 (`b8bff38`) |
-| m1 lock-side `check_lock_publish_topic` deferral | §2.7 — recorded for m4 |
-| `FrontendSupervisor` lock-correspondence claim extension | §2.8 — recorded for v2 |
+| m1 lock-side `check_lock_publish_topic` deferral | §2.7 — recorded for m4, no commit needed |
+| `FrontendSupervisor` lock-correspondence claim extension | §2.8 — recorded for v2, no commit needed |
 | Fixture self-timeout documentation | ✅ landed in c16 (`4db235d`) |
-| m3 frontend ACL `publish_topics = []` handover to m4 | §2.10 — anticipated, no action |
+| m3 frontend ACL `publish_topics = []` handover to m4 | §2.10 — anticipated, no commit needed |
 
 ---
 
