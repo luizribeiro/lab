@@ -12,7 +12,8 @@ path = "src/bin/rfl_tui.rs"
 [dependencies]
 rafaello-core = { path = "../rafaello-core" }
 ratatui = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
+futures = "0.3"
 tui-input = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

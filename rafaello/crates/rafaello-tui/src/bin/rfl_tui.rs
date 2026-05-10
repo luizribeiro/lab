@@ -1,6 +1,7 @@
-//! `rfl-tui` — TUI front-end binary (scope §T1, §T2 steps 1–4).
+//! `rfl-tui` — TUI front-end binary (scope §T1, §T2 steps 1–7, §T6).
 
-use std::io::Write;
+use std::collections::VecDeque;
+use std::io::{self, Write};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -8,16 +9,30 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use fittings_client::Client;
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
+};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use fittings_client::{Client, InboundNotification};
 use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_transport::stdio::StdioTransport;
+use futures::stream::StreamExt;
+use rafaello_core::RenderNode;
 use rafaello_tui::env;
+use rafaello_tui::paint::draw_with_panic_isolation;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use serde_json::{json, Value};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 
 const MAX_FRAME_BYTES: usize = 1 << 20;
 const DEFAULT_MAX_LIFETIME_SECS: u64 = 60;
+const RENDER_BUFFER_CAP: usize = 1024;
 
 type BusTransport = StdioTransport<OwnedReadHalf, OwnedWriteHalf>;
 
@@ -44,6 +59,8 @@ async fn main() -> Result<()> {
         .context("rfl-tui: connect fittings client")?
         .with_notification_handler(handler);
 
+    let notifications = client.subscribe_notifications();
+
     if let Some(ms) = cfg.ready_delay_ms {
         tokio::time::sleep(Duration::from_millis(ms)).await;
     }
@@ -54,7 +71,11 @@ async fn main() -> Result<()> {
         .await
         .context("rfl-tui: frontend.ready RPC")?;
 
-    std::future::pending::<Result<()>>().await
+    if cfg.test_mode {
+        std::future::pending::<Result<()>>().await
+    } else {
+        run_production_mode(notifications).await
+    }
 }
 
 fn emit_sentinel(line: &str) {
@@ -96,6 +117,142 @@ fn bus_event_handler(test_mode: bool) -> impl Fn(String, Value) + Send + Sync + 
             std::process::exit(0);
         }
     }
+}
+
+async fn run_production_mode(
+    mut notifications: broadcast::Receiver<InboundNotification>,
+) -> Result<()> {
+    install_panic_hook();
+
+    let mut stdout = io::stdout();
+    enable_raw_mode().context("enable raw mode")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("build ratatui terminal")?;
+
+    let result = ui_loop(&mut terminal, &mut notifications).await;
+
+    restore_terminal();
+    result
+}
+
+async fn ui_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    notifications: &mut broadcast::Receiver<InboundNotification>,
+) -> Result<()> {
+    let mut buffer: VecDeque<RenderNode> = VecDeque::with_capacity(RENDER_BUFFER_CAP);
+    let mut scroll: u16 = 0;
+    let mut events = EventStream::new();
+
+    loop {
+        let dirty = tokio::select! {
+            biased;
+            key = events.next() => {
+                let Some(ev) = key else { return Ok(()); };
+                let ev = ev.context("crossterm event stream error")?;
+                match handle_terminal_event(ev, &mut scroll, buffer.len()) {
+                    EventOutcome::Quit => return Ok(()),
+                    EventOutcome::Redraw => true,
+                    EventOutcome::Ignore => false,
+                }
+            }
+            note = notifications.recv() => {
+                match note {
+                    Ok(n) => ingest_notification(n, &mut buffer),
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    Err(broadcast::error::RecvError::Lagged(_)) => true,
+                }
+            }
+        };
+
+        if dirty {
+            redraw(terminal, &buffer, scroll);
+        }
+    }
+}
+
+enum EventOutcome {
+    Quit,
+    Redraw,
+    Ignore,
+}
+
+fn handle_terminal_event(ev: Event, scroll: &mut u16, len: usize) -> EventOutcome {
+    let Event::Key(key) = ev else {
+        return EventOutcome::Ignore;
+    };
+    if key.kind == KeyEventKind::Release {
+        return EventOutcome::Ignore;
+    }
+    match key.code {
+        KeyCode::Char('q') => EventOutcome::Quit,
+        KeyCode::Up => {
+            *scroll = scroll.saturating_sub(1);
+            EventOutcome::Redraw
+        }
+        KeyCode::Down => {
+            let max = len.saturating_sub(1) as u16;
+            if *scroll < max {
+                *scroll += 1;
+            }
+            EventOutcome::Redraw
+        }
+        _ => EventOutcome::Ignore,
+    }
+}
+
+fn ingest_notification(note: InboundNotification, buffer: &mut VecDeque<RenderNode>) -> bool {
+    if note.method != "bus.event" {
+        return false;
+    }
+    let Some(params) = note.params else {
+        return false;
+    };
+    let topic = params.get("topic").and_then(|v| v.as_str()).unwrap_or("");
+    if !topic.starts_with("core.entry.") {
+        return false;
+    }
+    let Some(payload) = params.get("payload") else {
+        return false;
+    };
+    let Some(tree) = payload.get("tree") else {
+        return false;
+    };
+    let node: RenderNode = match serde_json::from_value(tree.clone()) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    if buffer.len() == RENDER_BUFFER_CAP {
+        buffer.pop_front();
+    }
+    buffer.push_back(node);
+    true
+}
+
+fn redraw(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    buffer: &VecDeque<RenderNode>,
+    scroll: u16,
+) {
+    let start = scroll as usize;
+    let nodes: Vec<RenderNode> = buffer.iter().skip(start).cloned().collect();
+    let frame = RenderNode::Block { children: nodes };
+    let _ = draw_with_panic_isolation(terminal, &frame);
+}
+
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default(info);
+    }));
+}
+
+fn restore_terminal() {
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+    let _ = disable_raw_mode();
 }
 
 struct OneShotConnector {
