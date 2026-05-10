@@ -1002,6 +1002,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "nix",
  "rafaello-core",
  "serde_json",
  "serial_test",
