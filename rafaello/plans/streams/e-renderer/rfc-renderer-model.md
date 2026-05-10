@@ -3,6 +3,39 @@
 Status: draft (stream E research artifact)
 Owner: stream-e-renderer
 
+> **v1 status (m3 implementation):** §7 (patch ops),
+> §8 (`frontend.hello` capability handshake), and §9
+> (subprocess `renderer.render`) describe v2-only
+> mechanisms. m3 implements the v1 alternatives:
+>
+> - **Panic-isolated in-process rendering** instead of
+>   the §9 subprocess pattern. The v1
+>   `RenderPipeline` calls each `Renderer` impl in
+>   the same process, wrapped in
+>   `std::panic::catch_unwind`; a panicking renderer
+>   falls into Path A (the unknown-kind callout)
+>   rather than crashing the TUI. Author errors
+>   (`Renderer::render` returning `Err`) take the
+>   same Path A. See `decisions.md` row 29.
+> - **Compile-time-baked `Capabilities`** instead of
+>   the §8 handshake. m3's TUI uses
+>   `Capabilities::tui_default()` enumerating the
+>   15 RenderNode variant names plus
+>   `raw_formats = {"ansi", "plain"}`. See
+>   `decisions.md` row 27 + overview §10.1.
+> - **Full-tree `RenderNode` republish per finalize**
+>   instead of §7 patch ops. The
+>   `core.session.entry.finalized` event carries the
+>   full rendered tree; replay republishes the same
+>   tree with `replay: true` in the envelope. See
+>   `decisions.md` row 28 + the m3-introduced
+>   replay-envelope row.
+>
+> Per `plans/README.md` §"Authoring conventions" stream
+> RFCs are not retroactively rewritten; m3's v1
+> alternatives are referenced via this banner rather
+> than inlined into §7 / §8 / §9. m3 retrospective §2.1.
+
 ## 1. Goals & non-goals
 
 rafaello has many simultaneous frontends (default ratatui TUI, daemon
