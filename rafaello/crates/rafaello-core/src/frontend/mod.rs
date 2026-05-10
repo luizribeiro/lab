@@ -4,7 +4,9 @@
 //! bodies are placeholders.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,11 +19,30 @@ use fittings_core::service::Service;
 use crate::broker_acl::AttachId;
 use crate::bus::{Broker, PeerHandle, RegisteredFrontend};
 use crate::compile::EnvPlan;
-use crate::error::{FrontendSpawnError, ReaperOutcome};
+use crate::error::{BrokerError, FrontendSpawnError, InvalidFrontendPlanReason, ReaperOutcome};
+
+const RESERVED_ENV_VARS: &[&str] = &[
+    "RFL_BUS_FD",
+    "RFL_PLUGIN",
+    "RFL_HELPER_FD",
+    "RFL_PROJECT_ROOT",
+    "RFL_PRIVATE_STATE_DIR",
+    "RFL_TOPIC_ID",
+];
+
+fn path_has_control_chars(path: &Path) -> bool {
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .any(|b| *b < 0x20 || *b == 0x7f)
+}
+
+fn invalid(reason: InvalidFrontendPlanReason) -> FrontendSpawnError {
+    FrontendSpawnError::InvalidPlan { reason }
+}
 
 /// Stateless factory for [`FrontendHandle`]s (scope §F1).
 pub struct FrontendSupervisor {
-    #[allow(dead_code)]
     broker: Broker,
     #[allow(dead_code)]
     config: FrontendConfig,
@@ -34,10 +55,63 @@ impl FrontendSupervisor {
 
     pub async fn spawn(
         &self,
-        _plan: &CompiledFrontend,
+        plan: &CompiledFrontend,
         _paths: &FrontendPaths,
     ) -> Result<FrontendHandle, FrontendSpawnError> {
-        unimplemented!("FrontendSupervisor::spawn lands in a later c-commit")
+        let attach_id = AttachId::new(plan.attach_id.clone()).map_err(|_| {
+            invalid(InvalidFrontendPlanReason::AttachIdInvalid {
+                attach_id: plan.attach_id.clone(),
+            })
+        })?;
+
+        if path_has_control_chars(&plan.entry_absolute) {
+            return Err(invalid(InvalidFrontendPlanReason::ControlCharsInPath {
+                path: plan.entry_absolute.clone(),
+            }));
+        }
+        if !plan.entry_absolute.is_absolute() {
+            return Err(invalid(InvalidFrontendPlanReason::EntryNotAbsolute {
+                path: plan.entry_absolute.clone(),
+            }));
+        }
+
+        match std::fs::metadata(&plan.entry_absolute) {
+            Ok(md) if md.is_file() && md.permissions().mode() & 0o111 != 0 => {}
+            _ => {
+                return Err(invalid(InvalidFrontendPlanReason::EntryNotExecutable {
+                    path: plan.entry_absolute.clone(),
+                }));
+            }
+        }
+
+        for key in plan.env.set.keys() {
+            if RESERVED_ENV_VARS.contains(&key.as_str()) {
+                return Err(invalid(InvalidFrontendPlanReason::ReservedEnvName {
+                    var: key.clone(),
+                }));
+            }
+        }
+        for name in &plan.env.pass {
+            if RESERVED_ENV_VARS.contains(&name.as_str()) {
+                return Err(invalid(InvalidFrontendPlanReason::ReservedEnvName {
+                    var: name.clone(),
+                }));
+            }
+        }
+
+        self.broker
+            .try_reserve_frontend_registration(&attach_id)
+            .map_err(|e| match e {
+                BrokerError::FrontendNotInAcl(a) => {
+                    invalid(InvalidFrontendPlanReason::AttachIdNotInAcl { attach_id: a })
+                }
+                BrokerError::FrontendAlreadyRegistered(a) => {
+                    invalid(InvalidFrontendPlanReason::AttachIdAlreadyRegistered { attach_id: a })
+                }
+                other => FrontendSpawnError::BrokerRegister { source: other },
+            })?;
+
+        unreachable!("FrontendSupervisor::spawn Phase B lands at c19+")
     }
 
     pub fn with_extra_services<F: FrontendExtraServiceFactory + 'static>(

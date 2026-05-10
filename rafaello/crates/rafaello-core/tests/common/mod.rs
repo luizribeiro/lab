@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 //! Shared lock-fixture helpers for c22+ V3 integration tests.
 
+pub mod frontend_test_kit;
 pub mod peer_test_kit;
 
 #[cfg(feature = "test-fixture")]
