@@ -703,11 +703,19 @@ impl PluginSupervisor {
         // owner) and translates a panic into `ReaperPanicked`.
         let (watch_tx, watch_rx) = watch::channel::<Option<Arc<ReaperOutcome>>>(None);
         let watch_tx_clone = watch_tx.clone();
+        #[cfg(any(test, feature = "test-fixture"))]
+        let reap_hooks = Arc::clone(&self.test_hooks);
         let reaper_handle = tokio::spawn(async move {
             let outcome = match child.wait().await {
                 Ok(s) => ReaperOutcome::Exited(s),
                 Err(e) => ReaperOutcome::WaitFailed(e),
             };
+            #[cfg(any(test, feature = "test-fixture"))]
+            if let Some(pid) = cached_pid {
+                reap_hooks
+                    .last_reaped_pid
+                    .store(pid as i64, std::sync::atomic::Ordering::SeqCst);
+            }
             let _ = watch_tx.send(Some(Arc::new(outcome)));
         });
         let watcher_join = tokio::spawn(async move {
