@@ -1,13 +1,41 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-16 draft. Trajectory of finding
+> **Status:** round-17 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
-> r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0.
-> Round 16 highlights:
+> r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
+> r16 0/3/2/2 (NO BLOCKERS — second 0-blocker round).
+> Round 17 highlights:
+> - H6 inject points renamed/clarified:
+>   `inject_pre_spawn_fault` (post-socketpair, pre-
+>   `tokio_command.spawn`) and
+>   `inject_post_register_fault` (post-register, pre-
+>   serve-install). Maps to m2 retro §3.3's two
+>   distinct unwind windows (pi-16 #1).
+> - §M1 simplified to a minimal additive patch:
+>   keep existing m1 `PublishOnReservedNamespace` /
+>   `PublishOnFrontendNamespace` /
+>   `ProviderNamespaceMismatch`; add only one new
+>   variant `PublishUnknownNamespace` for truly
+>   unknown top-level segments (`evil.foo`).
+>   Fixes the round-9-through-16 invented
+>   variant/file-name conflicts (pi-16 #2 + #3).
+> - Headless TUI log format pinned: human-readable
+>   sentinel lines, NOT JSON (pi-16 #4).
+> - `tui_sends_frontend_ready_after_handler_registration.rs`
+>   uses deterministic callback signals, not
+>   wall-clock 1-ms timing (pi-16 #5).
+> - Manual validation drops Ctrl+C (raw mode)
+>   (pi-16 #6).
+> - Banner shutdown-seam signature aligned with
+>   detailed split form (pi-16 #7).
+>
+> Round-16 highlights (kept for trajectory context):
 > - shutdown_with_outcome seam signature uses
->   `Fn(Pid, Option<Signal>)` for signals + a separate
+>   `FnMut(Pid, Signal)` for signals + a separate
+>   `FnMut(Pid)` probe (split form, not the
+>   Option<Signal> form pi-15 first proposed) so
 >   `Fn(Pid)` probe so `kill(pid, 0)` is representable;
 >   tests assert exact signal/probe call sequences
 >   per branch (pi-15 #1).
@@ -1798,9 +1826,14 @@ identified as `frontend.tui`.
      the first `core.lifecycle.test_done` event with
      `exit_code = 0`. No keyboard handling, no crossterm
      calls. The log is reachable via stderr (one line
-     per received entry, JSON-encoded) so test harnesses
-     can parse-and-assert without involving a fake
-     terminal.
+     per received entry, **with the human-readable
+     sentinel format spec'd below — NOT JSON; pi-16
+     #4 — round-9 said JSON, round-6 said sentinel
+     lines, round-17 picks sentinel because the
+     replay-withheld test asserts on substring
+     matches over the combined parent+child stream).
+     Test harnesses can parse-and-assert without
+     involving a fake terminal.
      **Stderr sentinels** (pi-5 M10 + pi-6 B3 + pi-9
      Medium 7):
      - **TUI side (rfl-tui stderr — RAW, no
@@ -2278,9 +2311,9 @@ those tests should have been written against.
 
   impl TestHooks {
       // m2 fields unchanged.
-      pub fn inject_pre_register_fault(&self);
+      pub fn inject_pre_spawn_fault(&self);
       pub fn inject_post_register_fault(&self);
-      pub fn pre_register_fault_consumed(&self) -> bool;
+      pub fn pre_spawn_fault_consumed(&self) -> bool;
       pub fn post_register_fault_consumed(&self) -> bool;
   }
   ```
@@ -2291,15 +2324,32 @@ those tests should have been written against.
   (or post-register equivalent) instead of completing
   Phase B. Identical reuse of `SandboxBuild` is fine
   because the synthetic source is clearly tagged.
-- **H6.2.** Inject points (one-line annotations in the
-  spawn body):
-  - **Pre-register**: after socketpair / proxy /
-    `tokio_command` allocation, immediately before
-    `broker.register_plugin(...)`.
-  - **Post-register**: after `register_plugin`, before
+- **H6.2.** Inject points (pi-16 #1: m2 retro §3.3
+  identified two distinct unwind windows; round-16
+  conflated them. Round 17 names them precisely
+  against the m2 `PluginSupervisor::spawn` body):
+  - **Pre-spawn-post-socketpair**: after socketpair /
+    proxy / sandbox-builder allocation, BEFORE
+    `tokio_command.spawn()` produces the `Child`. On
+    fault, no child exists; unwind verifies fd-count
+    returns to baseline + proxy / private-state dirs
+    cleaned up. This is the m2 `unwinds_after_socketpair`
+    coverage.
+  - **Post-register**: after
+    `broker.register_plugin(...)` succeeds and BEFORE
     the function returns `Ok(handle)` (i.e. between
-    register and the `SpawnHandle` construction +
-    transport `Server::serve` install).
+    register and `Server::serve` install). On fault,
+    the child IS spawned and the reaper is already
+    running; unwind verifies the broker registration
+    was rolled back, the child was reaped, and
+    `in_flight` was cleared. This is the m2
+    `unwinds_after_register` + `post_register_reaps_child`
+    coverage.
+  Round-17 explicitly does NOT inject between
+  `tokio_command.spawn()` and `register_plugin`
+  because the reaper-task ownership transition
+  happens in that window and a fault there has the
+  same unwind shape as the post-socketpair point.
 - **H6.3.** Re-add three deleted tests:
   - `tests/supervisor_spawn_unwinds_after_register.rs` —
     arms post-register fault; spawn returns
@@ -2312,9 +2362,10 @@ those tests should have been written against.
     post-register fault; assert `last_reaped_pid` is the
     spawned child via the reaper.
   - `tests/supervisor_spawn_unwinds_after_socketpair.rs`
-    — arms pre-register fault; spawn returns
-    `SpawnError::SandboxBuild`; Linux fd-count returns to
-    the pre-spawn baseline (read `/proc/self/fd`); proxy
+    — arms **pre-spawn-post-socketpair** fault;
+    spawn returns `SpawnError::SandboxBuild`; no
+    child was created; Linux fd-count returns to the
+    pre-spawn baseline (read `/proc/self/fd`); proxy
     and private-state dirs are cleaned up.
 - **H6.4.** Production builds compile out the
   inject_fault counters entirely (cfg-gated on `test-
@@ -2329,64 +2380,56 @@ validation accepts unknown top-level namespaces in
 runtime as `UnknownNamespace`. The mirror at parse time was
 never tightened. m3 owns it.
 
-- **M1.1.** Extend `rafaello_core::validate::manifest_standalone`
-  (the existing path that returns `ValidationError`,
-  which is then wrapped as `ManifestError::Validation`
-  per m1's surface — pi-8 B1: round 7/8 invented
-  `ManifestError::Publish*` variants but the actual
-  validator returns `ValidationError`). The new
-  publishes-grant rules — **role-aware**, NOT a
-  blanket `frontend / provider / core` reject (pi-8
-  B1: provider plugin manifests legitimately publish
-  on `provider.<id>.*` per m1's existing
-  `manifest_publishes_provider_topic.rs`):
-  - For every `publishes` entry, the top-level
-    segment must be in `{plugin, provider}` AND must
-    match the manifest's own role:
-    - A non-provider plugin manifest (no
-      `[provides] provider = ...`): only `plugin.<own-topic-id>.*`
-      is permitted (existing m1 check).
-    - A provider plugin manifest (`[provides]
-      provider = "<id>"`): both `plugin.<own-topic-id>.*`
-      AND `provider.<own-id>.*` are permitted
-      (existing m1 logic per
-      `manifest_publishes_provider_topic.rs`).
-  - **New rejections m3 adds**:
-    - Top-level segment in `{core, frontend}` →
-      `ValidationError::PublishNamespaceForbidden {
-      topic, namespace }` for ANY plugin manifest
-      (pi-8 B1: these remain forbidden because no
-      plugin role legitimately publishes on `core.*`
-      or `frontend.<id>.*`; that authority belongs to
-      core itself and to authenticated frontend
-      principals respectively).
-    - Top-level segment not in
-      `{core, provider, plugin, frontend}` (`evil.foo`)
-      → `ValidationError::PublishNamespaceUnknown {
-      topic, namespace }`.
-  - Both new variants land in `ValidationError` (not
-    `ManifestError` directly); m1's existing
-    `ManifestError::Validation { source:
-    ValidationError }` wrapper carries them up.
-- **M1.2.** New test `tests/manifest_publishes_unknown_namespace_rejected.rs`
-  in `rafaello-core`:
-  - `core.foo` → `PublishNamespaceForbidden`.
-  - `frontend.foo` → `PublishNamespaceForbidden`.
-  - `evil.foo` → `PublishNamespaceUnknown`.
-  - **Existing positive**: `provider.<own-id>.*` from
-    a provider manifest stays accepted (pi-8 B1: m1's
-    `manifest_publishes_provider_topic.rs` continues
-    to pass; m3 doesn't break it).
-  - **New negative**: `provider.<other-id>.*` from a
-    provider manifest declared with provider id `myid`
-    → existing `ValidationError::PublishProviderTopicMismatch`
-    (m1 — round 7/8 conflated this with the new
-    forbidden-namespace rule; round 9 keeps them
-    distinct).
+- **M1.1.** Extend `rafaello_core::validate::check_publish_topic`
+  (the existing helper called by `manifest_standalone`,
+  the topic-grammar+namespace gatekeeper that does
+  NOT have access to the canonical id). Pi-16 #2 +
+  #3: round-9-through-16 invented variants and
+  cross-cut rules that conflicted with m1's existing
+  shape. Round 17 lands the **minimal additive
+  patch**:
+  - The existing variants
+    `PublishOnReservedNamespace { topic }` (for
+    `core.*`) and `PublishOnFrontendNamespace
+    { topic }` (for `frontend.*`) are unchanged.
+    `provider.*` is already permitted at this layer
+    and cross-checked for own-id by
+    `manifest_with_id`'s `ProviderNamespaceMismatch`
+    rule (also unchanged).
+  - **NEW**: add `ValidationError::PublishUnknownNamespace
+    { topic, namespace }` for truly unknown top-level
+    segments (`evil.foo`, `random.thing`). Currently
+    `check_publish_topic`'s `_ => Ok(())` arm
+    accepts anything outside `{core, frontend}`;
+    round-17 changes it to reject anything outside
+    `{core, frontend, plugin, provider}`. The
+    `plugin.*` and `provider.*` arms remain
+    accepting at this layer; they're cross-checked
+    by `manifest_with_id` against the canonical /
+    provider id (m1 logic, unchanged).
+  - The `manifest_with_id` layer is **unchanged**
+    by m3 — own-topic-id and provider-id mismatch
+    rules already exist.
+- **M1.2.** New test
+  `tests/manifest_publishes_unknown_namespace_rejected.rs`:
+  - `evil.foo` →
+    `ValidationError::PublishUnknownNamespace`.
+  - **Existing positives** (m1 — verify they still
+    pass after the new variant lands):
+    `core.foo` → `PublishOnReservedNamespace`,
+    `frontend.foo` → `PublishOnFrontendNamespace`,
+    `provider.<own-id>.foo` from a provider manifest
+    → accepted, `provider.<other-id>.foo` →
+    `ProviderNamespaceMismatch`,
+    `plugin.<own-topic-id>.foo` → accepted,
+    `plugin.<other-topic-id>.foo` →
+    existing m1 own-topic-id mismatch error.
 - **M1.3.** Existing m1 tests must continue to pass;
-  the tightening is additive on the namespace-unknown
-  axis and a no-op on the existing provider-topic-id
-  axis.
+  the tightening is purely additive — the new
+  `PublishUnknownNamespace` variant only fires on
+  inputs that the prior validator's `_ => Ok(())`
+  arm accepted (i.e. truly unknown namespaces),
+  which no m1 test exercises positively.
 
 ### I — integration test suite
 
@@ -2572,17 +2615,24 @@ integration test is being built):
   contamination. No cfg(test) variant on production
   enums. No subprocess, no headless mode.
 - `tui_sends_frontend_ready_after_handler_registration.rs`
-  — pi-2 #6 / pi-3 #2: positive — spawn `rfl-tui` in
-  `RFL_TUI_TEST_MODE`. The TUI's startup sends
-  `frontend.ready` only after its `BusEventHandler` is
-  registered. Assertion: the test publishes a
-  `core.session.entry.finalized` event 1 ms after
-  `frontend.ready` has arrived parent-side; the TUI's
-  in-memory log records the event. (Inverted — the
-  test asserts ordering: ready BEFORE the handler
-  starts processing events would mean the event got
-  dropped, so observing the event proves the handler
-  was wired.)
+  — pi-2 #6 / pi-3 #2 / pi-16 #5: positive ordering
+  test. Spawn `rfl-tui` in `RFL_TUI_TEST_MODE`. The
+  TUI's startup sends `frontend.ready` only after
+  its `BusEventHandler` is registered. Assertion
+  (round 17 — replaces the round-6 `1 ms after`
+  timing that pi-16 #5 flagged as flaky):
+  the parent-side `FrontendReadyService` invokes a
+  test-injected callback the moment the
+  `frontend.ready` RPC handler runs (a
+  `oneshot::Sender<()>` registered via the
+  `FrontendExtraServiceFactory`); the test awaits
+  that signal, **then** publishes a
+  `core.session.entry.finalized` event, **then**
+  awaits the TUI's in-memory log via a second
+  callback when the handler observes the event. No
+  wall-clock waits; the test fails deterministically
+  if the ordering is wrong rather than passing
+  flakily on schedule.
 
 `rafaello/tests/`:
 
@@ -2590,16 +2640,20 @@ integration test is being built):
   the end of the milestone.** Spawn `rfl chat` against
   a tempdir project root with
   `RFL_HARNESS_FIXTURES=1` and `RFL_TUI_TEST_MODE=1`;
-  let the parent + TUI run; assert the SQLite store
-  contains nine `entries` rows after shutdown (eight
-  built-in kinds + one unknown kind); assert each row's
-  `kind`, `seq`, and `payload` match the harness
-  inputs. The `rfl-tui` path is provided to the spawned
-  `rfl chat` via `RFL_TUI_PATH` set by the test, which
-  itself reads the workspace target dir from the
-  `CARGO_TARGET_DIR` env (with a fallback to
-  `target/debug/rfl-tui` from the workspace root, m2
-  c30's pattern).
+  let the parent + TUI run; assert (pi-16 #4):
+  - The SQLite store contains nine `entries` rows
+    after shutdown (eight built-in kinds + one
+    unknown kind); each row's `kind`, `seq`, and
+    `payload` match the harness inputs.
+  - The combined stderr stream contains nine
+    `"rfl-tui: bus.event topic=core.session.entry
+    .finalized seq=N"` lines for `N = 0..=8` (the
+    "renders all of them" assertion is the bus-event
+    receipt count; m3 does NOT assert on rendered
+    pixels because the headless TUI doesn't paint).
+  The `rfl-tui` path is provided via `workspace_bin_path("rfl-tui")`
+  (see §H below — single resolver shared with the
+  `rfl-bus-fixture`-targeting tests).
 - `rfl_chat_resolves_tui_via_env_override.rs` — see
   §C3 positive.
 - `rfl_chat_locked_session_errors_with_holder_pid.rs` —
@@ -2820,7 +2874,7 @@ m3's `manual-validation.md` records:
    `RFL_HARNESS_FIXTURES=1`), screen-recorded; verify
    eight built-in kinds render readably; verify
    unknown-kind falls back to the author-supplied
-   fallback text; verify Ctrl+C / `q` quit cleanly
+   fallback text; verify `q` quits cleanly
    restoring the terminal; verify second `rfl chat`
    in the same project errors with the holder pid.
 3. CI green on Linux + macOS.
@@ -2900,9 +2954,9 @@ New / extended in m3 (added on top of m2's struct):
 ```rust
 impl TestHooks {
     // m2 fields unchanged.
-    pub fn inject_pre_register_fault(&self);
+    pub fn inject_pre_spawn_fault(&self);
     pub fn inject_post_register_fault(&self);
-    pub fn pre_register_fault_consumed(&self) -> bool;
+    pub fn pre_spawn_fault_consumed(&self) -> bool;
     pub fn post_register_fault_consumed(&self) -> bool;
 }
 ```
