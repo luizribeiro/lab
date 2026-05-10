@@ -1543,10 +1543,15 @@ Path: `rafaello/plans/milestones/m2-broker-spawn/manual-validation.md`
   init via `tracing_test::traced_test` or explicit setup
   (pi-1 §197).
 - `find rafaello/crates/rafaello-core/src -name '*.rs' | sort`
-  showing the new modules `bus.rs`, `bus/publish_msg.rs`,
-  `supervisor.rs`, `supervisor/lifecycle.rs`,
+  showing the new modules `bus.rs`, `supervisor.rs`,
   `bin/rfl_bus_fixture.rs`, plus the additions to `error.rs`
-  / `lib.rs`.
+  / `lib.rs`. (m2 retrospective sweep 2026-05-10: c14/c20 row
+  sketches named `bus/publish_msg.rs` and
+  `supervisor/lifecycle.rs` as submodule paths; actual
+  landed layout is single-file `bus.rs` + `supervisor.rs`
+  since neither grew large enough to warrant a submodule
+  split — call this out as scope-vs-landed wording drift,
+  not a coverage gap.)
 - `ls /proc/<fixture-pid>/fd/` snapshot during a
   `respond_peer_call` fixture run. Documented invariants
   (NOT exact-count assertions per pi-1 §32, §553):
