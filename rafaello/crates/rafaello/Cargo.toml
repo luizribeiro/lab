@@ -7,8 +7,24 @@ license = "MIT"
 repository = "https://github.com/luizribeiro/lab"
 homepage = "https://github.com/luizribeiro/lab/tree/main/rafaello"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "rfl"
 path = "src/main.rs"
 
 [dependencies]
+rafaello-core = { path = "../rafaello-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-test = { workspace = true }

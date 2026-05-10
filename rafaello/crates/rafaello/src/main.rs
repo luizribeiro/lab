@@ -1,4 +1,3 @@
-fn main() {
-    // Toolchain pin verification touch — see commit message.
-    println!("rfl: scaffolding only. Architecture pending design review.");
+fn main() -> std::process::ExitCode {
+    rafaello::run_cli()
 }
