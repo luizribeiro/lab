@@ -1,9 +1,33 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-7 draft. Round 1: 10b + 3c. Round 2:
+> **Status:** round-8 draft. Round 1: 10b + 3c. Round 2:
 > 5b + 2m. Round 3: 3b + 3m. Round 4: 3b + 3hm + 1l.
 > Round 5: 2b + 11m + 3l. Round 6: 6b + 5m + 3l.
-> Round-7 highlights:
+> Round 7: 5b + 3m + 1l. Round 8 highlights:
+> - `CompiledFrontend.attach_id: AttachId` (pi-7 #1).
+> - `EnvPlan` matches m1's actual shape:
+>   `pass: Vec<String>` + `set: BTreeMap<String,String>`,
+>   no `clear` field (pi-7 #2).
+> - Disarmable `FrontendHandle` — Option<>-wrapped
+>   pid/serve/register; `shutdown(mut self)` `take()`s
+>   them; Drop is a no-op after shutdown (pi-7 #3).
+> - `ReaperOutcome::Exited(ExitStatus)` is the
+>   canonical shape; assertion sites use
+>   `status.success()` and `status.signal()` rather
+>   than a fictional `Signaled` variant (pi-7 #4).
+> - `FrontendConfig` fields pinned (pi-7 #5).
+> - `RFL_TUI_MAX_LIFETIME=2` in replay-withheld test so
+>   the headless TUI self-terminates without test_done
+>   (pi-7 #6).
+> - `record_subscriber` helper now registers as a
+>   plugin via a new `observer` plugin ACL entry
+>   (pi-7 #7).
+> - `session_store_lock_fd_not_inherited` moved to
+>   rafaello-core/tests/ (pi-7 #8).
+> - `CompiledFrontend` ACL fields removed; `BrokerAcl`
+>   is the single source of truth (pi-7 #9).
+>
+> Round-7 highlights (kept for trajectory context):
 > - §C2 step 5 spec'd `EnvPlan.pass` allowlist for
 >   the bundled TUI so test-only knobs survive
 >   `env_clear` (B1).
@@ -374,21 +398,56 @@ m2-style if needed.
 - **F1.** New module `rafaello_core::frontend`. Public
   surface:
   - `pub struct FrontendSupervisor` — stateless factory
-    holding only a `Broker` clone (used to construct
-    `FrontendHandle`s via `spawn`). The returned
-    handle owns lifecycle resources (pi-6 M1 — round 6
-    intro paragraph fixed this language at the section
-    level but this bullet still said "owns ... the
-    spawned frontend's lifecycle"; round 7 corrects).
+    holding only a `Broker` clone + a `FrontendConfig`
+    (used to construct `FrontendHandle`s via `spawn`).
+    The returned handle owns lifecycle resources.
     `new(broker: Broker, config: FrontendConfig) -> Self`.
+  - `pub struct FrontendConfig` (pi-7 #5 — round 7
+    referenced this without spec'ing fields):
+    ```rust
+    pub struct FrontendConfig {
+        /// Grace period between SIGTERM and SIGKILL during
+        /// shutdown. Default 2s.
+        pub shutdown_grace: Duration,
+        /// Additional grace after SIGKILL before giving up
+        /// on the reaper. Default 1s.
+        pub shutdown_kill_grace: Duration,
+        /// Bounded notification sink size for the parent's
+        /// fittings server. Default 1024 (matches m2).
+        pub notification_capacity: usize,
+        /// Maximum frame size for the inherited socketpair
+        /// transport. Default 1MiB.
+        pub max_frame_bytes: usize,
+    }
+
+    impl Default for FrontendConfig { /* the values above */ }
+    ```
+    Mirrors m2's `SupervisorConfig` shape so future
+    consolidation is mechanical.
   - `pub struct CompiledFrontend` — the spawn-time plan.
-    Fields: `attach_id: String` (kebab-case, validated
-    against `^[a-z][a-z0-9-]{0,31}$`), `entry_absolute:
-    PathBuf`, `argv: Vec<OsString>`, `env: EnvPlan` (m1's
-    type, unchanged), `subscribe_patterns:
-    BTreeSet<String>`, `auto_subscribes: BTreeSet<String>`,
-    `publish_topics: BTreeSet<String>`. No filesystem /
-    network plan because frontends are not sandboxed.
+    Fields (pi-7 #1 + #9 — round 7 had `attach_id:
+    String` clashing with the `AttachId`-typed broker
+    APIs and ALSO duplicated the broker ACL fields,
+    creating a dual source of truth. Round 8 uses
+    `AttachId` consistently and drops the duplicate
+    ACL fields — the `BrokerAcl` is the single source
+    of truth for subscribe/publish authority):
+    - `attach_id: AttachId` (kebab-case validated by
+      `AttachId::new` returning `Result<AttachId,
+      AttachIdParseError>` against `^[a-z][a-z0-9-]{0,31}$`).
+    - `entry_absolute: PathBuf`.
+    - `argv: Vec<OsString>`.
+    - `env: EnvPlan` (m1's type, unchanged: `pass:
+      Vec<String>`, `set: BTreeMap<String, String>`;
+      pi-7 #2 — round 7 used a `BTreeSet<String>` /
+      `clear: vec![]` shape that did not match m1).
+    The broker ACL fields (`subscribe_patterns`,
+    `auto_subscribes`, `publish_topics`) are NOT
+    duplicated on `CompiledFrontend` — they live on
+    `BrokerAcl.frontends.<attach-id>` only (pi-7 #9).
+    `FrontendSupervisor::spawn` reads them from the
+    broker via `Broker::frontend_acl(attach_id)` if
+    needed.
   - `pub struct FrontendPaths` — `project_root: PathBuf`
     (passed to the child as `RFL_PROJECT_ROOT`).
   - `pub async fn FrontendSupervisor::spawn(&self, plan:
@@ -604,13 +663,38 @@ m2-style if needed.
     Arc<ReaperOutcome>` resolves on that watch
     (mirroring m2 §SP4 step 18). Late `wait` callers
     see the cached `Arc` immediately.
-  - `FrontendHandle::Drop` sends a best-effort SIGKILL
-    (idempotent on a dead pid; logged at `warn!` if the
-    syscall fails) and **does not block**; the reaper
-    task completes asynchronously and observes the exit.
-    The drop also aborts the spawned `Server::serve`
-    `JoinHandle` so the fittings server tears down
-    promptly.
+  - **Disarmable Drop** (pi-7 #3 — round 7's
+    `shutdown(self)` consumed the handle but Drop
+    still fired afterward, sending SIGKILL to a
+    possibly-recycled PID. Round 8 makes the
+    SIGKILL/abort fields `Option<>` so `shutdown` can
+    `take()` them, leaving Drop a no-op):
+    ```rust
+    pub struct FrontendHandle {
+        attach_id: AttachId,
+        // Disarmed-by-shutdown fields:
+        child_pid: Option<u32>,
+        serve_handle: Option<tokio::task::JoinHandle<...>>,
+        register_guard: Option<RegisteredFrontend>,
+        // Always-live fields:
+        ready: tokio::sync::watch::Receiver<bool>,
+        reaper_outcome: tokio::sync::watch::Receiver<Option<Arc<ReaperOutcome>>>,
+    }
+    ```
+    `Drop` semantics: if `child_pid.is_some()`, send
+    best-effort SIGKILL; if `serve_handle.is_some()`,
+    `abort()`; if `register_guard.is_some()`, drop it
+    (broker registration releases). All idempotent on
+    dead/already-cleared values.
+  - `pub async fn FrontendHandle::shutdown(mut self)
+    -> ShutdownReport`: `take()` the three
+    disarmable fields BEFORE doing anything async, so
+    a panic in the shutdown body still leaves Drop a
+    no-op (the takes happened before the panic point).
+    Then proceed with SIGTERM + grace + SIGKILL +
+    serve abort + register guard drop. Returning
+    `ShutdownReport` consumes `self`; the implicit
+    Drop has no fields left to act on.
   - Cooperative shutdown: `pub async fn
     FrontendHandle::shutdown(self) -> ShutdownReport`
     (consumes `self`):
@@ -1390,34 +1474,26 @@ together.
      the bundled TUI:
      ```rust
      CompiledFrontend {
-         attach_id: AttachId::new("tui"),
+         attach_id: AttachId::new("tui").expect("valid"),
          entry_absolute: tui_path,  // §C3 resolved
          argv: vec![],
          env: EnvPlan {
-             pass: btreeset![
+             // m1 EnvPlan: pass: Vec<String>, set:
+             // BTreeMap<String,String>. No `clear`
+             // field (pi-7 #2 — round 7 invented one).
+             pass: vec![
                  "TERM".into(), "COLORTERM".into(),
                  "LANG".into(), "LC_ALL".into(),
                  "LC_CTYPE".into(),
-                 // Test-only knobs (pi-6 B1 — round 6
-                 // had FrontendSupervisor env_clear
-                 // strip these, breaking every CLI
-                 // test that needs RFL_TUI_TEST_MODE
-                 // or RFL_TUI_READY_DELAY_MS):
+                 // Test-only knobs (pi-6 B1):
                  "RFL_TUI_TEST_MODE".into(),
                  "RFL_TUI_READY_DELAY_MS".into(),
                  "RFL_TUI_MAX_LIFETIME".into(),
                  "RFL_FIXTURE_MODE".into(),
                  "RFL_FIXTURE_MAX_LIFETIME".into(),
              ],
-             set: btreemap![],
-             clear: vec![],
+             set: BTreeMap::new(),
          },
-         subscribe_patterns: btreeset![
-             "core.session.**".into(),
-             "core.lifecycle.**".into(),
-         ],
-         auto_subscribes: btreeset![],
-         publish_topics: btreeset![],
      }
      ```
      The `pass` set above is the allowlist of env vars
@@ -1500,18 +1576,22 @@ together.
      `core.lifecycle.test_done` (which the headless TUI
      uses for clean exit per §T2 step 4).
   10. Wait on `frontend_handle.wait().await` ->
-      `Arc<ReaperOutcome>`. On TUI exit:
-      - If `ReaperOutcome::Exited(0)`: clean exit;
-        proceed.
-      - If `ReaperOutcome::Exited(n)` (n != 0) or
-        `Signaled(_)`: post-ready abnormal exit
-        (pi-6 M3 — round 6 left this undefined; round
-        7: `rfl chat` exits non-zero with stderr
-        citing the TUI exit status. Persisted entries
-        in SQLite are NOT rolled back — they
-        committed during replay/finalize and are
-        durable across restarts; the next `rfl chat`
-        replays them as usual). Map to
+      `Arc<ReaperOutcome>`. The current `ReaperOutcome`
+      shape is `Exited(std::process::ExitStatus)` —
+      no `Signaled` variant; signal info is read via
+      `ExitStatus::signal()` on Unix (pi-7 #4 — round
+      7 invented `Signaled(_)` matching). On TUI exit:
+      - `Exited(status)` where `status.success()` →
+        clean exit; proceed.
+      - `Exited(status)` where `!status.success()` —
+        any non-zero exit code OR signal termination
+        (pi-6 M3): `rfl chat` exits non-zero with
+        stderr citing both `status.code()` and
+        `status.signal()` if either is `Some`.
+        Persisted entries in SQLite are NOT rolled
+        back — they committed during replay/finalize
+        and are durable across restarts; the next
+        `rfl chat` replays them as usual. Map to
         `RflChatError::FrontendExitedAbnormally {
         outcome }`.
       Then call `frontend_handle.shutdown().await` to
@@ -1716,6 +1796,10 @@ integration test is being built):
   in a tempdir, append three entries (`text`,
   `code_block`, `tool_call`), close, reopen, load — see
   the three back in `seq` order.
+- `session_store_lock_fd_not_inherited_by_child.rs` —
+  see §S5 (pi-7 #8: this is a pure SessionStore test;
+  belongs in rafaello-core/tests/, not
+  rafaello/tests/).
 - `session_controller_finalize_entry.rs` — wire a
   `SessionController` against an in-memory broker; call
   `finalize_entry(entry)`; assert (a) the row is in
@@ -1890,8 +1974,6 @@ integration test is being built):
   `SessionStore::open`); spawn `rfl chat` in pid B
   against the same project root; B exits non-zero with
   stderr citing pid A.
-- `session_store_lock_fd_not_inherited_by_child.rs` —
-  see §S5.
 - `rfl_chat_replay_withheld_until_frontend_ready.rs` —
   pi-3 #2 + pi-2 #6 + pi-4 #5: this assertion lives at
   the CLI layer because the readiness gate is in `rfl
@@ -1908,7 +1990,14 @@ integration test is being built):
   step 3 — it inserts a `tokio::time::sleep` BEFORE
   the `peer.call("frontend.ready", ...)` so the
   parent's readiness wait is delayed); capture
-  capture both `rfl chat`'s stderr (parent-side) and
+  set `RFL_TUI_MAX_LIFETIME=2` so the headless TUI
+  self-terminates after 2 s without needing a
+  `core.lifecycle.test_done` event (pi-7 #6 — round
+  7's test pre-seeded entries via SQLite without
+  going through `RFL_HARNESS_FIXTURES`, so no
+  test_done event would have been published; default
+  60 s lifetime would have hung the test). Capture
+  both `rfl chat`'s stderr (parent-side) and
   `rfl-tui`'s stderr (child-side); assert (pi-6 B3):
   - `"rfl-chat: frontend-ready-observed"` appears on
     parent stderr (§C2 step 7's `Ok(Ok(()))` arm
@@ -2001,12 +2090,22 @@ the rafaello-tui crate's tests.
   positive renderer test.
 - `TestSessionStore::open_in_tempdir() -> (SessionStore,
   TempDir)` — common setup for store tests.
-- `in_memory_broker_with_tui_acl()` — constructs a
-  `Broker` with a single `tui` frontend ACL and the
-  `core.session.**` / `core.lifecycle.**` subscribe set.
-- `record_subscriber()` — registers an in-process plugin-
-  shaped subscriber that records every event into a
-  `Vec<BusEvent>`. Used by §I controller tests.
+- `in_memory_broker_with_tui_and_observer_acl()` —
+  constructs a `Broker` with: (a) a `tui` frontend ACL
+  with `core.session.**` / `core.lifecycle.**`
+  subscribe set; (b) a synthetic `observer` PLUGIN
+  ACL (pi-7 #7 — round 7 had only the tui frontend
+  ACL but `record_subscriber` needs to register as a
+  plugin to receive events; round 8 adds an
+  observer-plugin entry). The observer plugin's ACL
+  has the same subscribe set as the tui frontend and
+  empty publish authority.
+- `record_subscriber(broker)` — registers an in-process
+  plugin-shaped subscriber on the `observer` ACL
+  entry that records every event into a `Mutex<Vec<BusEvent>>`.
+  Used by §I controller tests
+  (`session_controller_finalize_entry.rs`,
+  `session_controller_replay_history.rs`).
 
 `tui_harness.rs` (in rafaello-tui):
 
