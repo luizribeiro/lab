@@ -29,6 +29,8 @@ outpost-proxy = { workspace = true }
 nix = { workspace = true }
 parking_lot = { workspace = true }
 anyhow = { workspace = true }
+rusqlite = { workspace = true }
+ulid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
