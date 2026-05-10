@@ -1057,6 +1057,7 @@ dependencies = [
  "fittings-core",
  "fittings-server",
  "fittings-transport",
+ "nix",
  "rafaello-core",
  "ratatui 0.29.0",
  "serde",
