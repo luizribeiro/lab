@@ -3,7 +3,10 @@
 > Companion to `retrospective.md`. Records the exact
 > acceptance-gate transcripts and out-of-band evidence
 > that `scope.md` §"Acceptance summary" requires before
-> ratification. Status: round 1, 2026-05-10.
+> ratification. Status: round 2, 2026-05-10 (round 1
+> archived only the cargo aggregate counts; round 2
+> inlines tail snippets durably and corrects the §5.8
+> root-cause attribution).
 
 The scope's acceptance summary names four cargo-driven
 gates and one out-of-band manual smoke. This document
@@ -55,16 +58,17 @@ gates split into two classes:
   `tui_test_mode_self_timeout_exits_zero.rs`,
   `tui_sends_frontend_ready_after_handler_registration.rs`)
   is currently `#![cfg(target_os = "linux")]` because
-  the c25 test harness uses `nix::sys::socket::socketpair`
-  with `SOCK_CLOEXEC` directly, which fails on macOS
-  (m2 retro §5.7 captured the same failure mode for
-  `rfl-bus-fixture` and fixed it via an `fcntl` fallback
-  in `7db9da8`). **This is not an inherent macOS
-  limitation**; it is a harness gap that needs the
-  m2 fix applied to the rafaello-tui test harness
-  before macOS CI can prove m3's TUI integration
-  coverage. Filed in `retrospective.md` §5.9 as a
-  required follow-up code commit before ratification.
+  the c25 agent applied a defensive Linux gate without
+  a real macOS try-and-fail run. The harness already
+  uses the m2-pattern `SockFlag::empty()` +
+  `fcntl(F_SETFD, FD_CLOEXEC)` (no SOCK_CLOEXEC), so
+  there is no reason to expect a macOS-specific
+  socketpair failure. **This is not an inherent macOS
+  limitation**; the gate is overcautious. Filed in
+  `retrospective.md` §5.8 as a required follow-up code
+  commit before ratification — the commit drops the
+  gate, pushes, and lets `macos-latest` CI prove (or
+  surface a real unanticipated issue).
 
 > Per `scope.md` round-9 polish: the headline
 > `rfl_chat_demo_bar.rs` test ran in under 30 s under
@@ -151,7 +155,7 @@ is a hard ratification gate and not deferrable.
    `#[cfg(target_os = "linux")]`-gated tests; an exact
    arithmetic is not pre-named here because the
    exemption inventory depends on whether the
-   §5.9-filed rafaello-tui-harness macOS port lands
+   §5.8-filed rafaello-tui-harness macOS port lands
    before the macOS CI run captures.
 5. Any non-platform-inherent failure must be fixed in
    m3 before ratification (per scope round-6: macOS

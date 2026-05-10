@@ -1,13 +1,16 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — retrospective
 
-> **Status:** revised round 3 on 2026-05-10 by the milestone
-> driver after `retro-pi-review-2.md` (5 blockers + 3
-> non-blocking polish). Round 2 had closed the round-1
-> blockers but introduced four new factual errors
-> (inventory count, c14/c15/c18 row mismatches,
-> tui_subscribes split reconciliation, macOS Linux-only
-> exemption framing) plus over-greened the acceptance
-> table. Round 3 corrects each. Worktree `/home/luiz/lab` directly
+> **Status:** revised round 4 on 2026-05-10 by the milestone
+> driver after `retro-pi-review-3.md` (3 blockers + 3
+> non-blocking polish). Round 3 had corrected the
+> coverage and acceptance-table issues but left three
+> precision errors: a stale positive-matrix row for
+> `tui_subscribes_to_core_session_events.rs`, an inaccurate
+> SOCK_CLOEXEC-based root-cause attribution for §5.8, and
+> a closing ratification sentence that named only five
+> follow-up commits instead of six. Round 4 corrects
+> each, swaps §5.8 / §5.9 ordering, and updates the
+> companion's banner to "round 2". Worktree `/home/luiz/lab` directly
 > on `rafaello-v0.1` (m3 commits accumulated on the
 > milestone branch — no separate merge step). 31 plan-row
 > commits (`165916e..267607f`) land in 1:1 correspondence
@@ -18,10 +21,12 @@
 > adversarial review; m1 needed four rounds and m2 needed
 > two — another pi pass is expected after this revision.
 >
-> Companion: `manual-validation.md` round 1 (Linux test /
-> build / doc transcripts captured 2026-05-10; macOS CI URL,
-> interactive smoke recording, and CI run URL all marked
-> ⏳ pending the post-retrospective branch push).
+> Companion: `manual-validation.md` round 2 (Linux test /
+> build / doc transcripts archived inline 2026-05-10;
+> §5.8 root-cause attribution corrected to match the actual
+> landed harness; macOS CI URL, interactive smoke recording,
+> and CI run URL all marked ⏳ pending the post-retrospective
+> branch push).
 
 This is the milestone-level review against `scope.md` round
 22 and `commits.md` round 9 per `plans/README.md` Phase 3.
@@ -83,7 +88,7 @@ The §I positive matrix is satisfied. Per-row mapping:
 
 | `scope.md` positive test | Landed file | Commit |
 |--------------------------|-------------|--------|
-| `frontend_register_with_broker.rs` | indirect (see reconciliation row 3) | c14 setup paths |
+| `frontend_register_with_broker.rs` | indirect (see reconciliation row 3) | setup paths across c14 + c15 + c18 |
 | `session_store_round_trip.rs` | `session_store_round_trip.rs` | `4a76a2d` (c22) |
 | `session_store_lock_fd_not_inherited_by_child.rs` | `session_store_lock_fd_not_inherited_by_child.rs` | `50156a5` (c21) |
 | `session_controller_finalize_entry.rs` | `session_controller_finalize_entry.rs` | `82a1f6a` (c23) |
@@ -105,7 +110,7 @@ The §I positive matrix is satisfied. Per-row mapping:
 | `frontend_handle_wait_ready_resolves_on_signal.rs` | `frontend_handle_wait_ready_resolves_on_signal.rs` | `7822575` (c20) |
 | `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `frontend_handle_wait_ready_errors_on_child_exit_before_signal.rs` | `7822575` (c20) |
 | `manifest_publishes_unknown_namespace_rejected.rs` | `manifest_publishes_unknown_namespace_rejected.rs` | `b8bff38` (c05) |
-| `tui_subscribes_to_core_session_events.rs` | `frontend_subscribes_to_core_session_events.rs` (see reconciliation row 2) | c14 |
+| `tui_subscribes_to_core_session_events.rs` | scope behaviour split across four files (see reconciliation row 2): `frontend_subscribes_to_core_session_events.rs` (c15), `tui_test_mode_logs_bus_events_to_stderr.rs` (c25), `tui_test_mode_exits_on_test_done.rs` (c25), and the end-to-end exercises in `rfl_chat_demo_bar.rs` (c31) + `rfl_chat_replay_withheld_until_frontend_ready.rs` (c30). | c15 + c25 + c30 + c31 |
 | `tui_handler_calls_frontend_ready.rs` | `tui_handler_calls_frontend_ready.rs` | `8e87edf` (c25) |
 | `tui_test_mode_logs_bus_events_to_stderr.rs` | `tui_test_mode_logs_bus_events_to_stderr.rs` | `8e87edf` (c25) |
 | `tui_test_mode_exits_on_test_done.rs` | `tui_test_mode_exits_on_test_done.rs` | `8e87edf` (c25) |
@@ -581,17 +586,12 @@ The pattern is documented in `scope.md` §C2 step 8
 verbatim and the c30 implementation matches it
 line-for-line.
 
-### 5.9 rafaello-tui-test-harness macOS port (BLOCKING ratification — code follow-up)
+### 5.8 rafaello-tui-test-harness macOS port (BLOCKING ratification — code follow-up)
 
 `rafaello/crates/rafaello-tui/tests/common/mod.rs` is
-gated `#![cfg(target_os = "linux")]` because it calls
-`nix::sys::socket::socketpair` with the
-`SockFlag::SOCK_CLOEXEC` flag, which is unavailable on
-macOS (the same failure mode m2 retro §5.7 captured for
-`rfl-bus-fixture` and fixed in `7db9da8` via an
-`fcntl(F_SETFD, FD_CLOEXEC)` fallback). All five
-`rafaello-tui/tests/*.rs` integration tests inherit the
-gate transitively:
+gated `#![cfg(target_os = "linux")]`, and all five
+`rafaello-tui/tests/*.rs` integration tests inherit
+the gate via the shared `mod common;`:
 
 - `tui_handler_calls_frontend_ready.rs`
 - `tui_test_mode_logs_bus_events_to_stderr.rs`
@@ -610,15 +610,33 @@ gate** precisely so cross-platform TUI/session
 behaviour is proven; a green macOS run that skips all
 five files would not satisfy that gate.
 
-**Required follow-up code commit before m3
-ratification:** apply the m2 `7db9da8` SOCK_CLOEXEC →
-`fcntl` fallback pattern to
-`rafaello-tui/tests/common/mod.rs`, then drop the
-blanket `#![cfg(target_os = "linux")]` from each of
-the five test files. The m2 retro records this as a
-proven 5-line patch.
+**Note on root cause** (pi-review-3 B2 correction):
+the round-2 retrospective draft mis-attributed the
+Linux gate to `SockFlag::SOCK_CLOEXEC` usage, which
+would have echoed m2 retro §5.7's actual macOS failure
+mode. The landed harness already uses
+`SockFlag::empty()` followed by an explicit
+`fcntl(F_SETFD, FD_CLOEXEC)` (the m2 fix, applied at
+c25 spawn time), so SOCK_CLOEXEC is *not* the
+underlying issue. The blanket `#![cfg(target_os =
+"linux")]` was added defensively at c25 by the agent
+without an actual macOS try-and-fail run; the
+agent's prompt did not ask it to test on macOS, and
+the m3 driver did not catch this during the c25 ff-merge.
 
-### 5.8 `frontend_register_with_broker.rs` test-file granularity gap (m4 follow-up)
+**Required follow-up code commit before m3
+ratification:** drop the `#![cfg(target_os = "linux")]`
+from `rafaello-tui/tests/common/mod.rs` and from each
+of the five test files, push the branch, and let
+`macos-latest` CI run them. If a real macOS-specific
+failure surfaces (e.g. tokio runtime + crossterm
+behaviour, fittings transport semantics, fd-handling
+edge case the m2 fcntl pattern doesn't cover), apply
+a targeted fix in the same commit. The risk of "the
+gate was unnecessary" vs "the gate masked a real bug"
+is exactly what a CI run resolves.
+
+### 5.9 `frontend_register_with_broker.rs` test-file granularity gap (m4 follow-up)
 
 `scope.md` §I positive matrix names a stand-alone
 positive test for the frontend-registration happy
@@ -642,7 +660,7 @@ Per the m1 / m2 precedent, the drift items in §2 land
 as **separate commits on this branch before milestone
 close**. The list below pre-names them; items 1–5 are
 docs-only/banner-only patches addressing §2 drift; item
-6 is a code patch addressing §5.9.
+6 is a code patch addressing §5.8.
 
 1. `docs(rafaello-streams-e): v1-status banner — point at
    decisions rows 27–29, no body rewrite` — addresses §2.1.
@@ -656,9 +674,13 @@ docs-only/banner-only patches addressing §2 drift; item
 5. `docs(rafaello-decisions): BrokerError variant additions +
    PublishOutsideGrant / InvalidInReplyTo reshape to take
    publisher: Publisher` — addresses §2.5.
-6. `fix(rafaello-tui::tests/common): SOCK_CLOEXEC fallback via
-   fcntl — un-gate rafaello-tui integration tests on macOS`
-   — addresses §5.9. Mirrors m2 `7db9da8`.
+6. `fix(rafaello-tui::tests/common): un-gate macOS — drop
+   #![cfg(target_os = "linux")] + apply targeted fixes if
+   macOS CI surfaces real failures` — addresses §5.8. The
+   commit lands the gate removal + any platform-specific
+   tweaks the macOS run actually demonstrates; expectation
+   is "gate was overcautious" but ratification waits on
+   the macOS run.
 
 Items §2.6 (m1 publishes-grant tightening) and §2.9
 (fixture self-timeout) landed as Phase-3 code commits
@@ -694,7 +716,7 @@ auto-enable the feature).
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-10 (`manual-validation.md` §2) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-10 (`manual-validation.md` §3) |
 | `manual-validation.md` records manual-validation list | ⏳ partial — §1 / §2 / §3 ✅ archived round 1; §4 (macOS CI URL) / §5 (interactive smoke) / §6 (CI run URL) ⏳ pending the post-retrospective push |
-| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 3 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.9 macOS-harness code commit have NOT YET LANDED |
+| `retrospective.md` written with anticipated drift addressed | ⏳ partial — document round 3 records the canonical fixes, but the five required follow-up commits (§2.1 / §2.2 / §2.3 / §2.4 / §2.5) and the §5.8 macOS-harness code commit have NOT YET LANDED |
 | Stream E renderer-RFC drift patch | ⏳ §2.1 — follow-up commit pre-named, NOT YET LANDED |
 | `PublisherIdentity::Frontend` Stream A schema additions | ⏳ §2.2 — follow-up commit pre-named, NOT YET LANDED |
 | Capabilities staging note in overview §10.1 | ⏳ §2.3 — follow-up commit pre-named, NOT YET LANDED |
@@ -708,11 +730,28 @@ auto-enable the feature).
 
 ---
 
-m3 ratifies once macOS CI captures green and the five
-pre-named follow-up commits land. The ratification
-sequence mirrors m2: pi reviews this retrospective →
-driver lands drift fixes + macOS CI URL in
-`manual-validation.md` → pi re-reviews → driver merges
-or declares the milestone closed (since m3 commits
-accumulated on `rafaello-v0.1` directly, no separate
-merge step is needed).
+m3 ratifies once **all of the following** are
+captured:
+
+1. The five docs/drift follow-up commits (items 1–5
+   in the list above) land on `rafaello-v0.1`.
+2. The §5.8 rafaello-tui-test-harness un-gating code
+   commit (item 6) lands.
+3. `manual-validation.md` §4 captures a green
+   `macos-latest` CI run URL with the five
+   newly-un-gated TUI integration tests actually
+   executed (not skipped by the cfg).
+4. `manual-validation.md` §5 captures the real
+   interactive `rfl chat` recording.
+5. `manual-validation.md` §6 captures the workflow
+   run URL with both `ubuntu-latest` and
+   `macos-latest` jobs green.
+6. Pi re-reviews this retrospective and returns
+   zero blockers.
+
+The ratification sequence mirrors m1 / m2: driver
+lands drift fixes → driver pushes branch → macOS CI
+captures → pi re-reviews → driver declares the
+milestone closed. Since m3 commits accumulate on
+`rafaello-v0.1` directly, no separate merge step is
+needed beyond the ratification sign-off.
