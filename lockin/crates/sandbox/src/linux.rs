@@ -124,6 +124,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
             rules.push(format!(
                 "allow/lock/connect+{loopback_port}-{loopback_port}"
             ));
+            rules.push("allow/net/bind+!unnamed".to_string());
         }
         NetworkMode::Deny => {}
     }

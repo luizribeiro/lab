@@ -31,7 +31,7 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
 use rafaello_core::broker_acl::{self, BrokerAcl};
 use rafaello_core::bus::Broker;
-use rafaello_core::compile::{compile_plugin, CompiledPlugin};
+use rafaello_core::compile::{compile_plugin, CompiledPlugin, NetworkPlan};
 use rafaello_core::digest::{content_digest, manifest_digest, RecomputedDigests};
 use rafaello_core::lock::{
     Bindings, CanonicalId, Grant, GrantBundle, GrantFilesystem, GrantNetwork, Lock, LockFlags,
@@ -66,6 +66,7 @@ pub struct FixtureSpec {
     pub publishes: Vec<String>,
     pub subscribes: Vec<String>,
     pub env_set: BTreeMap<String, String>,
+    pub network_plan: Option<NetworkPlan>,
 }
 
 impl FixtureSpec {
@@ -80,7 +81,13 @@ impl FixtureSpec {
             publishes: Vec::new(),
             subscribes: Vec::new(),
             env_set,
+            network_plan: None,
         }
+    }
+
+    pub fn with_network_plan(mut self, plan: NetworkPlan) -> Self {
+        self.network_plan = Some(plan);
+        self
     }
 
     pub fn topic_id(&self) -> String {
@@ -255,6 +262,9 @@ impl FixtureLockBuilder {
                 .expect("spec for canonical");
             for (k, v) in &spec.env_set {
                 plan.env.set.insert(k.clone(), v.clone());
+            }
+            if let Some(np) = &spec.network_plan {
+                plan.network = np.clone();
             }
             plans.push(plan);
         }
