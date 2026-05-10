@@ -1,9 +1,20 @@
 # m3-tui-sessions — commits
 
-> **Status:** round-8 draft. Trajectory blockers per
+> **Status:** round-9 draft. Trajectory blockers per
 > round (commits): r1 6 → r2 3 → r3 1 → r4 2 → r5
-> 1 → r6 0 → r7 0. Round 8 cleans the remaining
-> r7 precision gaps:
+> 1 → r6 0 → r7 0 → r8 0. Round 9 closes the
+> remaining r8 precision gaps:
+> - c31 demo-bar test: nine
+>   `"bus.event topic=core.session.entry.finalized"`
+>   lines (was generic "bus.event"; pi-8 H1 — the
+>   `test_done` lifecycle event also produces a
+>   bus.event line, so topic-qualified count is the
+>   only stable assertion).
+> - c25 `Depends on` adds c17 + c20 (pi-8 M1 —
+>   tests reference FrontendReadyService /
+>   FrontendSupervisor types from those commits).
+>
+> Round 8 cleaned the round-7 precision gaps:
 > - c30 harness contract fully spec'd: nine entries
 >   enumerated, `Capabilities::tui_default()` called,
 >   `core.lifecycle.test_done` published after the
@@ -941,7 +952,10 @@ c18+ frontend tests can use `signal_ready` /
     `"project-root=<abs-path>"`.
   - `RFL_TUI_MAX_LIFETIME` self-timeout in test mode.
 - **Why.** scope §T2 step 4 + sentinels.
-- **Depends on.** c24.
+- **Depends on.** c17 (FrontendReadyService type
+  used in the parent-side mock — pi-8 M1), c20
+  (FrontendSupervisor / spawn path used by the
+  integration tests — pi-8 M1), c24.
 - **Acceptance.** Five tests (pi-3 H1: the
   `tui_handler_calls_frontend_ready.rs` integration
   test moves here from c24):
@@ -1172,8 +1186,16 @@ c18+ frontend tests can use `signal_ready` /
     — explicit so the test is deterministic
     regardless of dev-machine sibling state).
     Assert nine SQLite rows (kinds match c30's
-    enumeration) + nine `"rfl-tui: bus.event"`
-    lines on the combined parent stderr.
+    enumeration) + nine
+    `"rfl-tui: bus.event topic=core.session.entry.finalized"`
+    lines on the combined parent stderr (pi-8 H1
+    — round 8 said "nine bus.event lines" but the
+    `core.lifecycle.test_done` publish from c30
+    ALSO produces a `bus.event` line for that
+    topic; the topic-qualified count is what the
+    test asserts on. The
+    `"rfl-tui: bus.event topic=core.lifecycle.test_done"`
+    line is allowed but not asserted).
 - **Why.** scope §I + §"Acceptance summary".
 - **Depends on.** c28 (workspace_bin_path), c30.
 - **Acceptance.** `rfl_chat_demo_bar.rs` passes on
