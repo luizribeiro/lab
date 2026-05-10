@@ -48,6 +48,7 @@ pub struct BusEvent {
 pub enum PublisherIdentity {
     Core,
     Plugin { canonical: String, topic_id: String },
+    Frontend { attach_id: String },
 }
 
 struct PluginConn {
@@ -55,7 +56,6 @@ struct PluginConn {
 }
 
 struct FrontendConn {
-    #[allow(dead_code)]
     peer: PeerHandle,
 }
 
@@ -317,7 +317,75 @@ impl Broker {
             return Ok(());
         }
 
-        self.fan_out(&event, Some(canonical));
+        self.fan_out(&event, Some(canonical), None);
+        Ok(())
+    }
+
+    pub fn handle_frontend_publish(
+        &self,
+        attach_id: &AttachId,
+        raw_params: &serde_json::Value,
+    ) -> Result<(), BrokerError> {
+        if !self.0.state.lock().frontends.contains_key(attach_id) {
+            return Err(BrokerError::FrontendNotRegistered(attach_id.clone()));
+        }
+        let msg: PublishMsg = serde_json::from_value(raw_params.clone()).map_err(|e| {
+            BrokerError::InvalidPayload {
+                publisher: Publisher::Frontend(attach_id.clone()),
+                reason: e.to_string(),
+            }
+        })?;
+        validate_topic(&msg.topic).map_err(|ve| BrokerError::InvalidTopic {
+            publisher: Publisher::Frontend(attach_id.clone()),
+            topic: msg.topic.clone(),
+            reason: ve.to_string(),
+        })?;
+        let segments: Vec<&str> = msg.topic.split('.').collect();
+        let frontend_acl = self
+            .0
+            .acl
+            .frontends
+            .get(attach_id)
+            .expect("registered frontend has acl entry");
+        match segments[0] {
+            "core" | "provider" | "plugin" => {
+                return Err(BrokerError::PublishOnReservedNamespace {
+                    publisher: Publisher::Frontend(attach_id.clone()),
+                    topic: msg.topic.clone(),
+                });
+            }
+            "frontend" => {
+                if segments.len() < 3 || segments[1] != attach_id.as_str() {
+                    return Err(BrokerError::PublishOnReservedNamespace {
+                        publisher: Publisher::Frontend(attach_id.clone()),
+                        topic: msg.topic.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(BrokerError::UnknownNamespace {
+                    publisher: Publisher::Frontend(attach_id.clone()),
+                    topic: msg.topic.clone(),
+                });
+            }
+        }
+        if !frontend_acl.publish_topics.iter().any(|t| t == &msg.topic) {
+            return Err(BrokerError::PublishOutsideGrant {
+                publisher: Publisher::Frontend(attach_id.clone()),
+                topic: msg.topic.clone(),
+            });
+        }
+
+        let event = BusEvent {
+            topic: msg.topic.clone(),
+            payload: msg.payload.clone(),
+            publisher: PublisherIdentity::Frontend {
+                attach_id: attach_id.as_str().to_string(),
+            },
+            in_reply_to: msg.in_reply_to.clone(),
+            taint: msg.taint.clone(),
+        };
+        self.fan_out(&event, None, Some(attach_id));
         Ok(())
     }
 
@@ -381,7 +449,7 @@ impl Broker {
             in_reply_to: None,
             taint: None,
         };
-        self.fan_out(&event, None);
+        self.fan_out(&event, None, None);
         Ok(())
     }
 
@@ -428,15 +496,22 @@ impl Broker {
         let _ = self.publish_core_internal("core.lifecycle.publish_rejected", payload);
     }
 
-    fn fan_out(&self, event: &BusEvent, exclude: Option<&CanonicalId>) {
+    fn fan_out(
+        &self,
+        event: &BusEvent,
+        exclude_plugin: Option<&CanonicalId>,
+        exclude_frontend: Option<&AttachId>,
+    ) {
         let value =
             serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
-        let recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)> = {
+        let plugin_recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)>;
+        let frontend_recipients: Vec<(AttachId, PeerHandle, Vec<String>)>;
+        {
             let state = self.0.state.lock();
-            state
+            plugin_recipients = state
                 .registry
                 .iter()
-                .filter(|(c, _)| exclude != Some(*c))
+                .filter(|(c, _)| exclude_plugin != Some(*c))
                 .filter_map(|(c, conn)| {
                     self.0.acl.plugins.get(c).map(|acl| {
                         let patterns: Vec<String> = acl
@@ -448,10 +523,26 @@ impl Broker {
                         (c.clone(), conn.peer.clone(), patterns)
                     })
                 })
-                .collect()
-        };
+                .collect();
+            frontend_recipients = state
+                .frontends
+                .iter()
+                .filter(|(a, _)| exclude_frontend != Some(*a))
+                .filter_map(|(a, conn)| {
+                    self.0.acl.frontends.get(a).map(|acl| {
+                        let patterns: Vec<String> = acl
+                            .subscribe_patterns
+                            .iter()
+                            .chain(acl.auto_subscribes.iter())
+                            .cloned()
+                            .collect();
+                        (a.clone(), conn.peer.clone(), patterns)
+                    })
+                })
+                .collect();
+        }
 
-        for (recipient, peer, patterns) in recipients {
+        for (recipient, peer, patterns) in plugin_recipients {
             let matches = patterns
                 .iter()
                 .any(|pat| pattern_matches_topic(pat, &event.topic));
@@ -464,6 +555,23 @@ impl Broker {
                     topic = %event.topic,
                     error = ?e,
                     "bus.event fan-out notify failed"
+                );
+            }
+        }
+
+        for (recipient, peer, patterns) in frontend_recipients {
+            let matches = patterns
+                .iter()
+                .any(|pat| pattern_matches_topic(pat, &event.topic));
+            if !matches {
+                continue;
+            }
+            if let Err(e) = peer.notify("bus.event", value.clone()) {
+                tracing::warn!(
+                    recipient = %recipient,
+                    topic = %event.topic,
+                    error = ?e,
+                    "bus.event fan-out notify failed (frontend)"
                 );
             }
         }
