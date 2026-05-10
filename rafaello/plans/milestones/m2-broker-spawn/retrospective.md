@@ -1,14 +1,17 @@
 # m2 — broker + locked plugin spawn — retrospective
 
-> **Status:** drafted 2026-05-10 by the milestone driver after
-> all 31 m2 git commits (`8ea4502` → `1d68b5b`) landed on
-> `rafaello-v0.1` from `scope.md` (round 11, ratified) and
-> `commits.md` (round 5, ratified). Worktree
-> `/home/luiz/lab-wt/m2-retro-claude` on
-> `agents/m2/retro` off `rafaello-v0.1`. Pi review pending —
-> per `plans/README.md` §"Patterns from prior milestones",
+> **Status:** revised round 2 on 2026-05-10 by the milestone
+> driver after pi review-1, addressing all seven blocking
+> findings + three non-blocking polish items. The `8ea4502^..1d68b5b`
+> range carries **31 plan-row commits + one docs-only restructure
+> commit (`d7c7705`)** = 32 commits total landed on
+> `rafaello-v0.1` before the retrospective; scope (`scope.md`
+> round 11, ratified) and commits (`commits.md` round 5,
+> ratified). Worktree `/home/luiz/lab-wt/m2-retro-r2` on
+> `agents/m2/retro-r2` off `rafaello-v0.1`. Per
+> `plans/README.md` §"Patterns from prior milestones",
 > retrospectives need adversarial review and m1 needed four
-> rounds.
+> rounds; another pi pass is expected after this revision.
 >
 > Companion: `manual-validation.md` (c31 evidence — 357 tests
 > green, headline `supervisor_spawn_fixture_happy_path` runs in
@@ -31,15 +34,35 @@ match the questions the driver was asked to answer.
 
 ## 1. Coverage
 
-Every named test in `scope.md` §"Demo bar" — both the positive
-and the negative integration matrices — landed under
-`rafaello/crates/rafaello-core/tests/`. The on-disk listing
-contains the full broker (`broker_*.rs`, 28 files), supervisor
-(`supervisor_*.rs`, 27 files), fixture (`fixture_*.rs`, 6
-files), and crate-level (`error_*.rs`, `topic_id_*.rs`,
-m1-carryover) suites. The c31 capture aggregates **357 tests
-passed; 0 failed; 0 ignored** under `--features test-fixture`
-(`manual-validation.md` §1).
+Every named **behaviour** in `scope.md` §"Demo bar" — both the
+positive and the negative integration matrices — is covered
+under `rafaello/crates/rafaello-core/tests/`, with the
+file-name changes / merges enumerated in the reconciliation
+table below (§"Scope-vs-landed file-name reconciliation"). The
+on-disk listing contains the full broker (`broker_*.rs`),
+supervisor (`supervisor_*.rs`, **32** files), fixture
+(`fixture_*.rs`, **7** files), and crate-level (`error_*.rs`,
+`topic_id_*.rs`, m1-carryover) suites. The c31 capture
+aggregates **357 tests passed; 0 failed; 0 ignored** under
+`--features test-fixture` (`manual-validation.md` §1).
+
+### Scope-vs-landed file-name reconciliation
+
+Three scope-named files do not match the landed file names
+1:1; the behaviours are covered, but the files were renamed or
+merged during implementation. Recording these explicitly so
+the on-disk inventory can be cross-checked without surprise:
+
+| `scope.md` test name | Landed file(s) | Reason |
+|----------------------|----------------|--------|
+| `bus_event_schema_round_trip.rs` | `bus_wire_types_schema.rs` | c06 — `BusEvent` derives are `Serialize`-only (one-way), so the round-trip framing was dropped in favour of schema/wire-type assertions on the serialised form (per pi-1 B1 of `commits.md` round 1). |
+| `supervisor_lifecycle_drop_kills_child.rs` | `supervisor_drop_kills_managed_children.rs` | c26 — clearer name reflecting the actual `Drop for PluginSupervisor` reaper-handoff behaviour rather than a per-handle "lifecycle" framing. |
+| `supervisor_spawn_reserved_env_helper_refused.rs` | folded into `supervisor_spawn_reserved_env_in_pass_refused.rs` + `supervisor_spawn_reserved_env_in_set_refused.rs` | c16 — the reserved-env coverage became table-driven across both `[env.pass]` and `[env.set]` matrices; `RFL_HELPER_FD` is one row of those tables rather than its own file. |
+
+Plus one file-name disambiguation already documented below
+(`supervisor_spawn_fixture_lifecycle.rs` at c21 vs the
+canonical headline `supervisor_spawn_fixture_happy_path.rs` at
+c30 — pi-2 B5).
 
 ### Positive matrix verification
 
@@ -80,8 +103,9 @@ under their canonical names (`supervisor_spawn_canonical_not_in_acl_refused`,
 `supervisor_spawn_provider_lock_refused`). Broker negatives
 (`broker_publish_*_rejected.rs`, `broker_*_in_reply_to_*_rejected.rs`,
 `broker_publish_extra_field_rejected.rs`) all landed across
-c09–c13. Spot-check against `ls tests/` confirms file presence
-for every scope-named row.
+c09–c13. Spot-check against `ls tests/` confirms presence for
+every scope-named behaviour, with the three file-name
+changes/merges enumerated in the reconciliation table above.
 
 ### Test renamed during Phase 3
 
@@ -93,10 +117,14 @@ files land at their planned commits; the disambiguation is
 already documented in `commits.md` lines 989–994 and is not a
 post-hoc rename.
 
-### Tests added beyond the matrix
+### Tests added beyond the matrix (examples)
 
-These were required by individual `commits.md` acceptance lines
-or by per-commit greenness:
+The list below is illustrative, not exhaustive — other
+non-matrix tests required by individual `commits.md`
+acceptance lines or per-commit greenness include
+`m2_error_surface_compiles.rs`, `bus_wire_types_schema.rs`,
+`supervisor_spawn_starts_proxy_for_proxy_plan.rs`, and
+`supervisor_spawn_skips_proxy_for_deny_plan.rs`. Examples:
 
 - `supervisor_types_compile.rs` (c14), `fixture_modes_compile.rs`
   (c22) — build-only compile-surface assertions, the same
@@ -113,19 +141,32 @@ All extras are additive; none replace a scope-named test.
 
 ### Coverage verdict
 
-**One real coverage loss**, recorded explicitly: the two unwind
-tests `supervisor_spawn_unwinds_after_register.rs` and
-`supervisor_spawn_post_register_reaps_child.rs` listed in
-`commits.md` c19's acceptance section (lines 837 + 847) were
-**deleted by c21** because the synthetic "Phase B step 18+ not
-yet implemented" failure path they exercised no longer exists
-once c21 finalised steps 18–20. The canonical happy-path
+**Real coverage loss, recorded explicitly:** c21 (`5378718`)
+deleted **three** synthetic-stub unwind tests staged at c19:
+
+- `supervisor_spawn_unwinds_after_register.rs` — post-register
+  unwind window;
+- `supervisor_spawn_post_register_reaps_child.rs` — Linux-only
+  post-register reap observation;
+- `supervisor_spawn_unwinds_after_socketpair.rs` — earlier
+  Phase-B unwind window after socketpair / sandbox-builder
+  setup but **before** `register_plugin` and child spawn,
+  including the Linux fd-count return-to-baseline assertion.
+
+All three covered synthetic "Phase B step 18+ not yet
+implemented" failure paths that c21 removed when it finalised
+steps 18–20. The canonical happy-path
 (`supervisor_spawn_fixture_happy_path.rs`) and the duplicate
 refusal (`supervisor_spawn_duplicate_canonical_refused.rs`)
-both rely on a working spawn end-to-end and don't exercise the
-synthetic unwind path. **No fault-injection coverage of the
-Phase B post-register-but-pre-handle-return failure window
-remains in m2.** Filed for m3 as §5.1 below.
+both rely on a working spawn end-to-end and don't exercise any
+unwind. **No fault-injection coverage of the Phase B unwind
+windows remains in m2** — neither the post-register window
+nor the pre-register socketpair / proxy / `tokio_command`
+window. The proposed §5.1 m3 fault-injection follow-up only
+injects after `register_plugin`, so it does **not** restore
+the pre-register socketpair-window coverage on its own; a
+separate pre-register injection point is filed alongside it.
+Filed for m3 as §5.1 below.
 
 Outside that one loss every scope-named positive and negative
 test is implemented and passing; the c31 acceptance gate is
@@ -154,10 +195,13 @@ this branch" pattern (m1 retrospective §"Follow-up commits").
 
 ### 2.1 Provider-rejection staging (anticipated)
 
-m2's `SpawnError::InvalidPlan { reason: ProviderNotInM2 }`
-refuses lock entries with `bindings.provider = true`
-(`supervisor_spawn_provider_lock_refused.rs`). m4 owns the
-provider plugin path (`provider.<id>.*` publish authority,
+m2's `SpawnError::InvalidPlan { reason: ProviderNotInM2 {
+provider_id } }` refuses lock entries with `bindings.provider
+= true` (`supervisor_spawn_provider_lock_refused.rs`). The
+`provider_id` payload carries the offending lock entry's
+provider id from the compiled ACL/provider metadata (c16
+acceptance). m4 owns the provider plugin path
+(`provider.<id>.*` publish authority,
 `core.session.tool_request` re-emission per `decisions.md` row
 6). Until then, m2 ships the refusal so the demo bar is
 unambiguous: m2 spawns plugins, not providers.
@@ -166,8 +210,9 @@ unambiguous: m2 spawns plugins, not providers.
 
 > 39 | 2026-05-10 | m2 supervisor refuses lock entries with
 > `bindings.provider = true` (`SpawnError::InvalidPlan {
-> reason: ProviderNotInM2 }`). m4 removes this refusal and
-> implements provider routing per row 6. | Provider plugins
+> reason: ProviderNotInM2 { provider_id } }`, with the
+> provider id surfaced in the error). m4 removes this refusal
+> and implements provider routing per row 6. | Provider plugins
 > have distinct publish authority + tool re-emission semantics
 > that m4 owns end-to-end; refusing them at m2 keeps the demo
 > bar tight and prevents partial implementations from leaking
@@ -196,7 +241,13 @@ note:
 
 ### 2.3 `core.lifecycle.publish_rejected` + `core.lifecycle.boot` schemas (anticipated)
 
-m2 introduces both events (c08 + c13 + scope §B9). The security
+m2 introduces both events. The `core.lifecycle.boot` event is
+specified at scope §B1 (the `publish_boot` bullet) with the
+acceptance-summary callout for its schema; the
+`core.lifecycle.publish_rejected` family is specified at scope
+§B9, which also discusses the boot schema in the rejected-
+event family context. Cite both §B1 and §B9 when referencing
+the boot event's location (c08 + c13). The security
 RFC has no entries for them. Per `decisions.md` row 23 (Stream
 A owns payload schemas), this is Stream A drift — analogous to
 m1's helper / external-attach drift at security RFC §7.4.1 +
@@ -220,17 +271,26 @@ m2 fixes:
 - the outbound notification method as `bus.event` (c06,
   `bus.rs`),
 - the `BusEvent` JSON shape per scope §B8,
-- the `PublisherIdentity` enum (`Core | Plugin(CanonicalId) |
-  Provider(ProviderId) | Frontend(AttachId)`) per scope §B6.
+- the `PublisherIdentity` enum — **m2's live wire schema is
+  exactly two variants**: `Core` and
+  `Plugin { canonical: String, topic_id: String }` (per the
+  landed `bus.rs:48-51`). `Provider` and `Frontend` are
+  reserved/future variants for m3–m5 and are **not** part of
+  the m2 wire schema; scope §B8 already lists them only as
+  future-commented variants.
 
-None of these appear in Stream A's RFC body. Same Stream A
-drift bucket as §2.3.
+None of the live m2 variants appear in Stream A's RFC body.
+Same Stream A drift bucket as §2.3.
 
 **Canonical fix.** Same Stream A banner / follow-up section as
-§2.3. The single banner can carry §2.3 + §2.4 together:
+§2.3. The single banner can carry §2.3 + §2.4 together, and
+must document only the live m2 variants of `PublisherIdentity`
+(`Core` + `Plugin { canonical, topic_id }`); future
+provider/frontend variants are out of scope for the m2 banner:
 
 > `docs(rafaello-stream-a): banner — m2 wire schemas
-> (bus.event, BusEvent, PublisherIdentity, core.lifecycle.*)`
+> (bus.event, BusEvent, PublisherIdentity { Core, Plugin },
+> core.lifecycle.*)`
 
 ### 2.5 m1 reserved-env list extended (anticipated)
 
@@ -387,8 +447,8 @@ are explicitly waived. m1 set this precedent (m1 retrospective
 
 Every entry in scope's `W` / `B` / `SP` / `H` / `F` / `I` / `H6`
 / `E` lists landed. Every named test (positive + negative
-matrices) is implemented except the two unwind tests at §3.3
-below, which were **deleted with cause**, not slipped.
+matrices) is implemented except the three unwind tests at
+§3.3 below, which were **deleted with cause**, not slipped.
 
 ### 3.2 c22 → c23 mid-Phase-3 restructure (relocation, not slip)
 
@@ -424,9 +484,10 @@ driver doesn't re-discover it.
 
 **Lesson promoted to §4.1 below.**
 
-### 3.3 Two unwind tests deleted by c21 with cause
+### 3.3 Three unwind tests deleted by c21 with cause
 
-`commits.md` c19 acceptance lines 837 + 847 list:
+`commits.md` c19 acceptance lines list three c19-staged
+synthetic-stub unwind tests, all deleted by c21 (`5378718`):
 
 - `tests/supervisor_spawn_unwinds_after_register.rs` —
   asserts spawn returns the synthetic "Phase B step 18+ not
@@ -438,32 +499,55 @@ driver doesn't re-discover it.
   c19's stub returns `Err`, observed via a `TestHooks`
   `last_reaped_pid` counter; `/proc/<pid>/status` returns
   `ENOENT`.
+- `tests/supervisor_spawn_unwinds_after_socketpair.rs` —
+  asserts the **earlier** Phase-B unwind window after
+  socketpair / sandbox-builder setup but **before**
+  `register_plugin` and child spawn, including the Linux
+  fd-count return-to-baseline assertion. This is a different
+  failure window from the post-register pair above.
 
-Both tests exercised the synthetic stub failure path baked
+All three tests exercised synthetic stub failure paths baked
 into c19. **c21 finalises Phase B steps 18–20** — the stub is
 removed and replaced with the real `Server::serve` /
 `SpawnHandle` return. Once c21 lands, the synthetic `Err` no
 longer exists; the tests have nothing to assert against. The
-c21 agent (per the per-commit prompt) deleted both files
+c21 agent (per the per-commit prompt) deleted all three files
 rather than rewriting them.
 
-**This is a real coverage loss.** The window the tests covered
-— "spawn body fails after `register_plugin` succeeded; verify
-broker rolled back, child reaped, in_flight cleared, no fd /
-proxy / private-state leaks" — has no successor in m2's suite.
-Real-world failures in that window can come from:
+**This is a real coverage loss spanning two distinct windows:**
 
-- transport setup faults after broker register (e.g. `Server`
-  construction or transport binding errors);
-- `peer.call` / supervisor extra-service installation errors
-  before the spawn returns `Ok`;
-- panics / cancellation in the spawn body's tail.
+- the **post-register** window covered by
+  `unwinds_after_register` + `post_register_reaps_child` —
+  spawn body fails after `register_plugin` succeeded; verify
+  broker rolled back, child reaped, `in_flight` cleared, no
+  fd / proxy / private-state leaks. Real-world failures here
+  can come from:
+  - transport setup faults after broker register (e.g.
+    `Server` construction or transport binding errors);
+  - `peer.call` / supervisor extra-service installation errors
+    before the spawn returns `Ok`;
+  - panics / cancellation in the spawn body's tail.
+- the **pre-register / post-socketpair** window covered by
+  `unwinds_after_socketpair` — sandbox builder / socketpair /
+  proxy / `tokio_command` setup succeeded but a downstream
+  step before `register_plugin` fails; verify fd counts return
+  to baseline and no proxy / private-state leaks. Real-world
+  failures here can come from socketpair errors,
+  outpost-proxy bind failures, or `tokio_command` spawn
+  errors.
+
+Neither window has a successor in m2's suite.
 
 **For m3 fault-injection coverage.** The right successor isn't
 "resurrect the synthetic stub" — it's a `TestHooks::inject_fault`
-mechanism that lets a test force a failure between
-`register_plugin` and `Ok(handle)`-return without modifying
-production code. Filed as §5.1.
+mechanism with **two** inject points (one pre-register, one
+post-register) so the suite can re-cover both windows without
+modifying production code. The post-register injection point
+restores the `unwinds_after_register` /
+`post_register_reaps_child` window; the pre-register
+injection point (after socketpair / proxy / `tokio_command`,
+before `register_plugin`) restores the
+`unwinds_after_socketpair` window. Filed as §5.1.
 
 ### 3.4 No m2a / m2b split was triggered
 
@@ -522,6 +606,19 @@ is the surface.
 reconstruct the change. m1 had no such entry because m1 had no
 mid-Phase-3 restructure; m2 sets the precedent for capturing
 them.
+
+**Generalised lesson — synthetic stub tests.** c19 staged
+three unwind tests against a synthetic stub-failure path that
+c21 was scheduled to remove (see §3.3); c21 deleted the tests
+rather than rewriting them, leaving the unwind windows
+uncovered. The lesson generalises beyond c22/c23: **any
+synthetic-stub test must have a planned successor (a
+fault-injection point or equivalent permanent assertion
+mechanism scheduled at the commit that removes the stub) or
+an explicit deletion rationale recorded in `commits.md`
+acceptance lines.** Without that, the stub deletion silently
+costs coverage. Add this requirement to the m3 commit-prompt
+template.
 
 ### 4.2 Pi-as-diagnostic-tool worked beautifully on the c23 publish_one hang
 
@@ -660,26 +757,38 @@ discussion document. Both numbers are now well-attested.
 
 ## 5. Known issues to track
 
-### 5.1 Phase B post-register failure-window coverage gap (NEW — m3 follow-up)
+### 5.1 Phase B unwind-window coverage gap (NEW — proposed m3 follow-up)
 
-The two unwind tests deleted by c21 (§3.3) leave m2 without
-fault-injection coverage of the spawn-body window between
-`broker.register_plugin(...)` succeeding and `Ok(handle)`
-returning. Real-world failures there (transport setup,
-extra-service installation, panic / cancellation in the spawn
-tail) would hit the `Drop`-time SIGKILL handoff (c26) rather
-than the cooperative cleanup, but the cooperative path itself
-is unverified.
+The three unwind tests deleted by c21 (§3.3) leave m2 without
+fault-injection coverage of two distinct spawn-body windows:
 
-**Proposed m3 fix.** Add `TestHooks::inject_fault` (set a
-one-shot fault token; supervisor checks it at known
-inject-points after register; on hit, returns
+- the **post-register** window, between
+  `broker.register_plugin(...)` succeeding and `Ok(handle)`
+  returning. Real-world failures there (transport setup,
+  extra-service installation, panic / cancellation in the spawn
+  tail) would hit the `Drop`-time SIGKILL handoff (c26) rather
+  than the cooperative cleanup, but the cooperative path itself
+  is unverified.
+- the **pre-register / post-socketpair** window, between
+  socketpair / proxy / `tokio_command` setup succeeding and
+  `register_plugin` being called. Real-world failures there
+  (proxy bind errors, command spawn errors, sandbox builder
+  errors after fd allocation) need fd-count and proxy-cleanup
+  verification with no successor in m2's suite.
+
+**Proposed m3 fix.** Add `TestHooks::inject_fault` with **two**
+one-shot inject points — one pre-register (after socketpair /
+proxy / `tokio_command` setup, before `register_plugin`) and
+one post-register (between `register_plugin` and
+`Ok(handle)`). On hit, the supervisor returns
 `SpawnError::SandboxBuild { source }` and triggers the unwind
-path). Re-add `supervisor_spawn_unwinds_after_register.rs` +
-`supervisor_spawn_post_register_reaps_child.rs` against the
-fault-injection mechanism. Owner-blessed because m3 is the
-TUI / loop milestone and supervisor fault-injection is in its
-neighbourhood.
+path. Re-add `supervisor_spawn_unwinds_after_register.rs`,
+`supervisor_spawn_post_register_reaps_child.rs`, and
+`supervisor_spawn_unwinds_after_socketpair.rs` against the
+fault-injection mechanism. **Proposed** (not yet
+owner-blessed) because m3 is the TUI / loop milestone and
+supervisor fault-injection is in its neighbourhood; owner
+sign-off pending m3 scoping.
 
 This is the single largest known coverage gap in m2.
 
@@ -705,21 +814,26 @@ shape is single-file `bus.rs` (443 lines) + `supervisor.rs`
 (925 lines). Cosmetic; F2 in `manual-validation.md`. Reword
 in the §2 batch.
 
-### 5.5 No new flakes introduced by m2 in `rafaello-core`
+### 5.5 No flakes observed in the recorded run
 
-Three full reruns of the 357-test suite under `--features
-test-fixture` during c31 capture: 0 flakes. Across the
-fault-injection-heavy supervisor surface this is reassuring;
-the `supervisor_drop_kills_managed_children`,
+The c31 manual-validation capture records **one aggregated
+run** of the 357-test suite under `--features test-fixture`
+with 0 failures (`manual-validation.md` §1). Flake re-runs
+(repeated full-suite passes) were **not** done as part of
+this milestone; the supervisor surface is largely
+deterministic by construction
+(`supervisor_drop_kills_managed_children`,
 `supervisor_shutdown_*`, and `supervisor_spawn_*_refused`
-families are all deterministic by construction (they assert on
-counters / error variants, not on timing windows).
+assert on counters / error variants, not on timing windows),
+but a flake budget remains a future-validation item if a
+cross-platform CI matrix surfaces one.
 
 ### 5.6 No clippy warnings suppressed by agents
 
-`git log -p HEAD~31..HEAD | grep -E '#\[allow\(clippy'`
-matches zero new sites in the m2 commits. The pre-commit hook
-sequence (rustfmt + clippy + test) gates every commit.
+`git log -p 8ea4502^..1d68b5b -- rafaello/ | grep -E
+'#\[allow\(clippy'` matches zero new sites across the m2
+implementation range. The pre-commit hook sequence (rustfmt +
+clippy + test) gates every commit.
 
 ### 5.7 macOS CI run pending
 
@@ -769,11 +883,19 @@ four rounds, plan calendar for at least two).
 
 `scope.md` §"Acceptance summary" requires:
 
+Legend: ✅ = both recorded **and** the underlying patch has
+landed; 📝 = recorded in this retrospective with the canonical
+fix specified, but the follow-up code/docs patch is still
+pending; ⏳ = recorded and explicitly pending external action
+(CI run, owner sign-off). Items in the 📝 / ⏳ states are
+**not** ratified by this retrospective alone — they ratify
+when the follow-up patch lands or the action completes.
+
 - ✅ Every named test in the positive + negative matrices
   implemented and passing — §1 above; `manual-validation.md`
   §1: 357 `rafaello-core` tests passing under `--features
-  test-fixture` on Linux. Two unwind tests (c19) deleted with
-  cause by c21; m3 follow-up §5.1.
+  test-fixture` on Linux. Three unwind tests (c19) deleted
+  with cause by c21; m3 follow-up §5.1.
 - ✅ `nix develop --impure --command cargo test --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture`
   green on Linux (`manual-validation.md` §1).
@@ -781,22 +903,31 @@ four rounds, plan calendar for at least two).
 - ✅ `nix develop --impure --command cargo build --manifest-path
   rafaello/Cargo.toml -p rafaello-core --features test-fixture
   --bin rfl-bus-fixture` green (`manual-validation.md` §6).
-- ⏳ `nix develop --impure --command cargo doc --manifest-path
+- 📝 `nix develop --impure --command cargo doc --manifest-path
   rafaello/Cargo.toml -p rafaello-core --no-deps` — currently
-  one warning (§2.10 / §5.2); fix lands in follow-up commit
-  before milestone close.
+  one warning (§2.10 / §5.2); fix is specified but the
+  follow-up patch has not landed.
 - ✅ `manual-validation.md` records the items in the manual-
   validation list (`1d68b5b` c31).
-- ✅ `retrospective.md` written with the eight anticipated
-  drift items addressed (this file, §2.1–§2.8).
-- ⏳ Stream A schema additions — §2.3 + §2.4 follow-up commit.
-- ⏳ Reserved-env list update + decisions row — §2.5 follow-up.
-- ⏳ Provider-rejection staging — §2.1 follow-up.
-- ⏳ `request_id` v1 staging note — §2.2 follow-up.
-- ✅ Lock-correspondence claim — recorded; no v1 patch (§2.6).
-- ✅ Result-routing protection m4 handover — recorded (§2.7).
+- 📝 `retrospective.md` records the eight anticipated drift
+  items with their canonical fixes (this file, §2.1–§2.8); the
+  drift-fix commits 1–6 in §"Follow-up commits on this branch"
+  are still pending.
+- 📝 Stream A schema additions — §2.3 + §2.4 fix specified;
+  follow-up commit pending.
+- 📝 Reserved-env list update + decisions row — §2.5 fix
+  specified; follow-up commit pending.
+- 📝 Provider-rejection staging — §2.1 fix specified;
+  follow-up commit pending.
+- 📝 `request_id` v1 staging note — §2.2 fix specified;
+  follow-up commit pending.
+- ✅ Lock-correspondence claim — recorded; no v1 patch
+  required (§2.6).
+- ✅ Result-routing protection m4 handover — recorded only;
+  m4 owns the closure (§2.7).
 - ✅ m1 publishes-grant unknown-namespace gap — recorded as
-  m3-or-m4 follow-up (§2.8).
+  m3-or-m4 follow-up (§2.8); m2 ratification does not depend
+  on it.
 
 m2 is **draft-complete pending pi review and follow-up
 commits 1–6**. The core deliverable (broker + locked plugin
