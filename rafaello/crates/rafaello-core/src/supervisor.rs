@@ -105,7 +105,7 @@ struct SpawnObservation {
 ///
 /// Holds only the `Arc<SpawnObservation>` — dropping every
 /// `SpawnHandle` clone does not affect child lifetime; the
-/// supervisor owns the child via [`ManagedSpawn`] and kills
+/// supervisor owns the child via `ManagedSpawn` and kills
 /// it on `shutdown` / `Drop` regardless.
 #[derive(Clone)]
 pub struct SpawnHandle(Arc<SpawnObservation>);
