@@ -198,6 +198,47 @@ phases. The milestone driver should be aware before starting:
   directory" assertion. Always invoke `nix develop` with
   `--impure` for these flows. CI already does this. m0
   retrospective §4.6 / `manual-validation.md` §4.
+- **Dirty `Cargo.lock` in `/home/luiz/lab` silently aborts
+  `git merge --ff-only` from agent branches.** During Phase 3
+  the driver may run `cargo metadata` / `cargo doc` against the
+  main lab worktree to spot-check things; these update
+  `rafaello/Cargo.lock`. The next `git merge --ff-only
+  agents/m<N>/c<NN>` then fails with "Please commit your
+  changes or stash them before you merge. Aborting" — but the
+  output also prints "Updating ..." which makes the failure
+  easy to miss when the orchestrator pipes through `tail -2`.
+  Mitigation: stash `Cargo.lock` (or any other dirty file)
+  before each ff-merge, OR run all driver-side cargo commands
+  inside an agent worktree, never in `/home/luiz/lab`. m2
+  Phase 3 lost ~10 minutes to this between c02 and c03; m2
+  retrospective §4.5.
+- **`.pre-commit-config.yaml` symlink missing in worktrees
+  outside `/home/luiz/lab`.** The repo's pre-commit config is
+  a Nix-store symlink only present in the main worktree.
+  Per-commit agent sessions in `/home/luiz/lab-wt/...` hit
+  "config file not found" from `prek` and lose 5-15 min
+  trying workarounds. Mitigation: symlink it at every
+  worktree creation: `ln -s
+  /nix/store/.../pre-commit-config.json
+  /home/luiz/lab-wt/m<N>-c<NN>/.pre-commit-config.yaml`. m2
+  c17 lost 6 minutes to this until the driver added the
+  symlink; subsequent commits had it pre-applied. m2
+  retrospective §4.6.
+- **Pi-as-diagnostic-tool when an agent thrashes.** When a
+  per-commit agent has been thrashing for >30 min on what
+  looks like a single concrete bug (test hangs, weird API
+  mismatch), spawning a parallel pi session in a snapshot
+  worktree to root-cause the issue can collapse the loop. m2
+  c23: the per-commit agent thrashed for 1h+ on a
+  `fixture_publish_one_emits_event` hang; pi root-caused it
+  in <30 min (`Value::Null` is invalid `bus.publish` params —
+  fittings rejects, publisher panics, observer hangs forever)
+  AND landed the fix as a diagnostic commit that the driver
+  cherry-picked as the canonical c23. Pattern: copy the
+  agent's in-progress files into a fresh `pi`-worktree;
+  prompt pi with concrete hypotheses and ask for verdict +
+  fix; if pi succeeds, cherry-pick the fix with the canonical
+  commit subject. m2 retrospective §4.2.
 
 ## Patterns from prior milestones
 
