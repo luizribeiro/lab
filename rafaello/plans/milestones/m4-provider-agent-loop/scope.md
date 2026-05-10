@@ -1,8 +1,11 @@
 # m4 — provider fixture + secure agent loop + read-only tool + taint envelope — scope
 
-> **Status:** round-2 — addresses `pi-review-1.md` (b/8 h/5 m/4;
-> low/notes truncated by pi context overflow — treat as none for
-> this round). Trajectory: r1 8/5/4/—.
+> **Status:** round-2 — addresses `pi-review-1.md` (b/8 h/5 m/4
+> l/3). Pi recovered from the auto-compact and added the 3 Low
+> items + Summary after the initial fold; the Low items landed
+> as a small follow-on commit (`docs(rafaello-m4): scope.md
+> round-2 follow-up — pi-review-1 Low items`).
+> Trajectory: r1 8/5/4/3.
 >
 > Round-2 fixes (by pi-1 number):
 >
@@ -122,6 +125,43 @@
 >   match on `"what's in "` / `"what is in "`).
 > - **M-4** Commit budget revised upward to ~26-32 commits;
 >   pi-round budget acknowledged at 8+ for scope.
+>
+> Lows (follow-on commit):
+> - **L-1** `Publisher` and `PublisherIdentity` enum shapes
+>   pinned to one canonical form across the doc.
+>   `Publisher::Provider { canonical: CanonicalId, provider_id:
+>   String }` is the broker-error / authority enum;
+>   `PublisherIdentity::Provider { canonical: String,
+>   provider_id: String, topic_id: String }` is the wire-side
+>   serialised event identity. Top-level deliverable item 1 +
+>   B2 list entry rewritten to match §B1/§B3.
+> - **L-2** Tool-name spelling convention pinned: **manifest
+>   tool name and bus payload `tool:` field use `"read-file"`
+>   (kebab-case)**; Rust crate / bin / module identifiers use
+>   `read_file` / `readfile` (snake-case where required by
+>   syntax). The security RFC's `read_file` taint-source
+>   example (§7.2.1 around line 880) is a *taint source label*
+>   (free-form `detail` string), not the routing key; m4
+>   treats it as illustrative and does not adopt it as the
+>   canonical spelling. All bus payload snippets in this
+>   scope.md already use `"read-file"`; new §"Naming
+>   conventions" subsection at the end of §TP records the
+>   rule.
+> - **L-3** Frontend-user-message taint-synthesis bullet
+>   sharpened in §CR5: the broker's re-emit of
+>   `frontend.tui.user_message` → `core.session.user_message`
+>   sets `taint = [{source: "user", detail: None}]` per
+>   security RFC §7.2.1 (lines 878-886). The frontend's
+>   inbound `msg.taint` is **discarded** (consistent with the
+>   provider/plugin discard rule in §B6 step 8); a fresh
+>   `request_id` is assigned by core if the frontend did not
+>   supply one. New test
+>   `reemit_user_message_synthesises_user_taint.rs` asserts
+>   the canonical envelope shape; sibling test
+>   `reemit_user_message_discards_frontend_supplied_taint.rs`
+>   proves a TUI that publishes `taint: [{source:
+>   "provider"}]` cannot launder a message as
+>   provider-originated.
 
 ## Goal
 
@@ -146,8 +186,9 @@ The deliverable is:
    InvalidPlanReason::ProviderNotInM2 }`) is removed; entries with
    `bindings.provider = true` now spawn through the same path as
    any other plugin. The supervisor wires the
-   `Publisher::Provider { provider_id, topic_id }` (new — row 42
-   follow-through) into broker registration and injects one new
+   `Publisher::Provider { canonical, provider_id }` (new — row 42
+   follow-through; exact shape pinned in §B1) into broker
+   registration and injects one new
    env var (`RFL_PROVIDER_ID`) so the
    provider child knows its identity. No new supervisor type is
    introduced (see "Lock-correspondence claim, extended" below).
@@ -156,9 +197,12 @@ The deliverable is:
    - `BusEvent.request_id: Option<JsonRpcId>` lands as a
      first-class envelope field (overview §4.5: "m2 omits this
      field; m4 adds it").
-   - `Publisher::Provider { provider_id: String, topic_id:
-     TopicId }` variant (row 42 — m2 staged the reshape, m4
-     adds the third arm).
+   - `Publisher::Provider { canonical: CanonicalId,
+     provider_id: String }` variant (row 42 — m2 staged the
+     reshape, m4 adds the third arm). Exact shape defined in
+     §B1; the sibling `PublisherIdentity::Provider`
+     (`bus.rs`-side serialised shape) carries an additional
+     `topic_id` for symmetry with `Plugin` (§B3).
    - `BrokerAcl` gains provider registration: `register_provider`
      / `handle_provider_publish` symmetric to the plugin path;
      `try_reserve_provider_registration`; provider publish
@@ -1307,15 +1351,51 @@ the four wire paths that produce `core.session.*` events:
   taint = `[{source: "provider", detail: provider_id}]`;
   `in_reply_to` forwarded; `request_id` forwarded.
 - **CR5.** Re-emission for **frontend.tui.user_message →
-  core.session.user_message**: payload pass-through; taint =
-  `[{source: "user", detail: None}]` (security RFC §7.2.1
-  user-source taxon); `in_reply_to = None` (user messages
-  initiate a turn); `request_id` forwarded from the frontend's
-  publish. **Validation**: the frontend's publish must carry
-  `request_id` (security RFC §7.2.6); if missing,
-  `MissingRequestId` is returned to the frontend via the
-  publish error path and no `core.session.user_message` is
-  re-emitted.
+  core.session.user_message** (pi-1 L-3 — pinned). The
+  user-message root event is the only canonical `core.*` event
+  whose taint source is `"user"`; the synthesis lives here, not
+  on any other code path.
+  1. Receive `BusEvent { topic: "frontend.tui.user_message",
+     payload, publisher: Frontend{attach_id: "tui"},
+     request_id: <maybe>, in_reply_to: None, taint: <broker
+     discarded — see step 3> }` from the internal subscriber.
+  2. Validate payload deserialises to `{text: String}`.
+  3. **Discard any frontend-supplied `taint`** (consistent
+     with the provider/plugin discard rule in §B6 step 8; the
+     broker already strips it before delivering to the
+     internal subscriber, but the re-emit path re-asserts the
+     invariant by ignoring the inbound field even if a future
+     refactor stops stripping at the broker).
+  4. **Synthesise canonical user-source taint**:
+     `vec![TaintEntry { source: "user".into(), detail: None
+     }]`. Per security RFC §7.2.1 (lines 878-886) the
+     user-source label carries no `detail` because the user
+     is a singleton principal in the v1 trust model. m4 is
+     the **only** point in v1 where the `"user"` taxon
+     originates.
+  5. `request_id` handling: if the frontend supplied one,
+     forward it; if absent, synthesise a fresh
+     `JsonRpcId::String(Ulid::new().to_string())` —
+     `core.session.user_message.request_id` must be present
+     on the canonical wire so a provider can cite it in a
+     future `assistant_message.in_reply_to`. (Round-1 errored
+     on missing `request_id`; round-2 + L-3 cut: synthesise
+     instead, since the user is a singleton and a missing
+     id is benign.)
+  6. `in_reply_to` is forced to `None`: user messages are
+     conversation roots and inherit no prior taint (security
+     RFC §7.2.6 row 5 confirms the optional + root semantic).
+  7. Call `publish_core_with_taint(
+       "core.session.user_message",
+       json!({text: <text>}),
+       Some(canonical_request_id),
+       None,                              // user messages are roots
+       Some(vec![TaintEntry{source: "user".into(), detail: None}]),
+     )`.
+  Tests:
+  `reemit_user_message_synthesises_user_taint.rs`,
+  `reemit_user_message_discards_frontend_supplied_taint.rs`,
+  `reemit_user_message_synthesises_request_id_when_absent.rs`.
 - **CR6.** Active-provider scoping. The router subscribes to
   `provider.<active-id>.**` only (round-1 cut: m4 installs
   exactly one provider plugin, named `mock`). If a future
@@ -1690,6 +1770,33 @@ half of the canonical 5-step path (overview §7):
   via the `${project}` substitution at compile time —
   m1's `manifest/capability_path_template.rs:17` is the
   canonical resolver.
+- **TP6 (naming conventions).** Pi-1 L-2 pinned. Two
+  spellings appear in the m4 surface and they refer to
+  different layers:
+  - **`"read-file"`** (kebab-case, single-segment) is the
+    **manifest tool name** (`[provides] tools =
+    ["read-file"]`) and the **bus payload `tool:` field**
+    routing key — i.e. the public identity that flows
+    through `BrokerAcl.tool_routes` and any
+    `provider.<id>.tool_request` payload's `tool` field.
+    Every bus snippet in this scope.md uses `"read-file"`
+    (no exceptions).
+  - **`read_file` / `readfile`** (snake-case) is permitted
+    inside **Rust identifiers** where syntax requires
+    (`crate rafaello-readfile`, `bin rfl-readfile`, module
+    paths, struct names). Crate / bin file names use the
+    `rafaello-readfile` / `rfl-readfile` kebab-case form
+    consistent with the workspace's `rafaello-tui` /
+    `rafaello-mockprovider` precedent.
+  - The security RFC's `read_file` taint-source label
+    (`streams/a-security/rfc-security-model.md` §7.2.1
+    around lines 878-886) is a *free-form `detail` string*
+    on a `TaintEntry`, **not a routing key**. m4 does not
+    adopt that spelling as the canonical tool name. If a
+    future taint-propagation pass (m5) wants to round-trip
+    the tool name into `TaintEntry.detail`, it uses the
+    same `"read-file"` spelling as the manifest, not the
+    RFC's illustrative `read_file`.
 
 ### TD — tool dispatch wiring (core side)
 
@@ -1874,6 +1981,18 @@ is only reliable inside the bin's own package):
 - `reemit_frontend_user_message_to_core_session_user_message.rs`
   — drive a frontend `frontend.tui.user_message`; observe
   canonical re-emit with taint `[{source: "user"}]`.
+- `reemit_user_message_synthesises_user_taint.rs` (pi-1 L-3)
+  — assert the user-source synthesis at §CR5 step 4
+  produces exactly `[{source: "user", detail: None}]`,
+  regardless of inbound `taint`.
+- `reemit_user_message_discards_frontend_supplied_taint.rs`
+  (pi-1 L-3) — TUI publishes with `taint: [{source:
+  "provider", detail: "mock"}]`; the canonical re-emit
+  carries `[{source: "user", detail: None}]` only.
+- `reemit_user_message_synthesises_request_id_when_absent.rs`
+  (pi-1 L-3) — frontend publish omits `request_id`; the
+  canonical event nonetheless carries a synthesised
+  `request_id`.
 - `agent_loop_dispatches_tool_request_to_target_plugin.rs` —
   drive a `core.session.tool_request` with
   `dispatch_target` set; the agent loop publishes the
