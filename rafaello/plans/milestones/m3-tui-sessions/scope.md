@@ -1,14 +1,27 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-19 draft. Trajectory of finding
+> **Status:** round-20 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
 > r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
-> r16 0/3/2/2, r17 0/2/2/1, r18 1/2/2/0 (round-18
-> cleanup-guard introduced a regression with step 10
-> double-shutdown).
-> Round 19 highlights:
+> r16 0/3/2/2, r17 0/2/2/1, r18 1/2/2/0,
+> r19 1/0/2/0. Round 20 highlights:
+> - Step-10 explicit shutdown+drain block fully
+>   replaced with a forward reference to the
+>   cleanup guard (pi-19 #1).
+> - Lock-side `check_lock_publish_topic` deferral
+>   added to anticipated-drift list in Acceptance
+>   summary (pi-19 #2).
+> - Post-spawn-pre-register unwind test split into
+>   cross-platform (`unwinds_post_spawn_pre_register.rs`,
+>   asserts hook consumed + no broker registration
+>   + in_flight cleared) and Linux-only
+>   (`unwinds_post_spawn_pre_register_fd_baseline.rs`,
+>   asserts `/proc/self/fd` returns to baseline)
+>   (pi-19 #3).
+>
+> Round-19 highlights (kept for trajectory context):
 > - Cleanup guard is now the SOLE teardown path;
 >   step 10 only reads outcome / returns errors,
 >   never calls shutdown directly (pi-18 #1).
@@ -2230,23 +2243,20 @@ together.
         task itself panicked while awaiting the
         child. Same treatment — abnormal exit, log
         the panic.
-      **Order: shutdown FIRST, then drain stderr**
-      (pi-10 High 2 + pi-14 #2 — round 14 drained
-      stderr before shutdown, but on `WaitFailed` /
-      `ReaperPanicked` the child may still be alive
-      and its stderr would never EOF, hanging the
-      drain forever):
-      1. `let report = frontend_handle.shutdown().
-         await;` — shutdown ensures the child is
-         dead (via the Exited-skip / abnormal-reaper
-         force-kill paths in §F4); at that point
-         the child's stderr fd closes (EOF).
-      2. `let _ = stderr_forwarder.await;` — the
-         forwarder hits EOF on the now-closed child
-         stderr and exits naturally. The parent-
-         side serialised writer guarantees all
-         forwarded lines flush before this await
-         resolves.
+      **Teardown order is owned by the cleanup
+      guard** at the top of step 8 (pi-19 #1 —
+      round 19 retained an in-step-10 explicit
+      shutdown+drain block that contradicted "guard
+      is the sole teardown"). The guard performs:
+      (1) `let report = handle.shutdown().await;`
+      (the handle has not yet been moved out by
+      step 10's outcome read, because the guard
+      takes ownership before the async block
+      starts), (2) `let _ = forwarder.await;` —
+      EOF-on-close drain. Step 10 itself reads
+      `*reaper_outcome.borrow()` for outcome
+      mapping; the guard handles the actual
+      shutdown call afterward.
 
       **Test coverage** (pi-10 Medium 5 + pi-11 #4 —
       round 10 incorrectly claimed
@@ -2668,8 +2678,24 @@ integration test is being built):
 - `supervisor_spawn_unwinds_after_socketpair.rs` — see
   §H6.3.
 - `supervisor_spawn_unwinds_post_spawn_pre_register.rs`
-  (Linux-only) — see §H6.2 (pi-18 #2 third inject
-  point).
+  — see §H6.2 (pi-18 #2 third inject point + pi-19
+  #3 platform split). **Cross-platform** assertions:
+  hook consumed (`post_spawn_pre_register_fault_consumed`),
+  `SpawnError::SandboxBuild` returned, no broker
+  registration acquired (`broker.is_registered(canonical)`
+  false), `in_flight` cleared. The child is reaped
+  synchronously via `child.wait().await` during
+  unwind; on success the test asserts the spawn
+  function returned without leaving a zombie
+  (covered by reading exit_status from the wait
+  call inside the unwind path).
+- `supervisor_spawn_unwinds_post_spawn_pre_register_fd_baseline.rs`
+  (Linux-only — `#[cfg(target_os = "linux")]`) —
+  the Linux-specific complement that reads
+  `/proc/self/fd` before and after the spawn-with-
+  fault to assert fd count returns to baseline
+  (the same check `unwinds_after_socketpair`
+  uses).
 - `frontend_handle_wait_resolves_on_child_exit.rs` — see
   §F4 (pi-6 B6 — round 6 had §F4 say `signal_ready`
   but §I say `respond_peer_call`; round 7 picks
@@ -3449,6 +3475,18 @@ m3 is done when:
     m3; retrospective records the back-reach and points
     at `manifest_publishes_unknown_namespace_rejected.rs`
     as the regression baseline.
+  - **m1 lock-side `check_lock_publish_topic`
+    unknown-namespace gap** (pi-18 #4 / pi-19 #2 —
+    `check_publish_topic` (manifest side) was
+    tightened by §M1 to reject unknown top-level
+    segments, but `check_lock_publish_topic` (lock
+    side) still accepts them via its `_ => {}` arm.
+    m3 leaves this as runtime-only enforcement at
+    the broker; the rationale: hand-authored locks
+    are an `--allow-unsafe` user-override path
+    where runtime rejection is sufficient defence.
+    Recorded for m4 if a user-facing failure
+    surfaces.).
   - **`FrontendSupervisor` lock-correspondence claim
     extension.** Same v2 nice-to-have as m2 §2.6, now
     covering both supervisors.
