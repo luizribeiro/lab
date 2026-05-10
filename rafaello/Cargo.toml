@@ -13,7 +13,7 @@ semver = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 outpost = { path = "../outpost/crates/outpost" }
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
@@ -29,6 +29,12 @@ anyhow = "1"
 serial_test = "3"
 tracing-test = "0.2"
 tokio-util = "0.7"
+ratatui = "0.29"
+crossterm = "0.28"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tui-input = "0.10"
+unicode-width = "0.2"
+ulid = { version = "1", features = ["serde"] }
 
 [profile.dist]
 inherits = "release"
