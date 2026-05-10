@@ -1,13 +1,38 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-14 draft. Trajectory of finding
+> **Status:** round-15 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
-> r12 0/2/2/1, r13 1/1/2/1 (round 13's reaper-
-> watcher addition introduced a regression by
-> treating WaitFailed/ReaperPanicked as
-> proof-of-exit). Round 14 highlights:
+> r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0 (round 14's
+> dead-watch logic introduced two new contradictions
+> with shutdown semantics).
+> Round 15 highlights:
+> - Drop's skip-kill aligned with shutdown: only
+>   Exited(_) skips; WaitFailed/ReaperPanicked still
+>   best-effort SIGKILL (pi-14 #1).
+> - §C2 step 10 reordered: shutdown FIRST, then
+>   stderr drain. WaitFailed/ReaperPanicked no
+>   longer cause infinite stderr-drain hangs
+>   (pi-14 #2).
+> - Shutdown algorithm split explicitly into
+>   live-watch and dead-watch branches; SIGCONT
+>   probe replaced with `kill(pid, 0)` (no-op
+>   liveness probe); shutdown_kill_grace correctly
+>   used for the post-SIGKILL wait (pi-14 #3 + #4
+>   + #5).
+> - Reaper-outcome injection seam added: shutdown
+>   algorithm extracted as `shutdown_with_outcome`
+>   pure async function; tests
+>   `frontend_shutdown_dead_watch_paths.rs` cover
+>   WaitFailed and ReaperPanicked with mock kill_fn
+>   (pi-14 #6).
+> - `SessionError::Locked.holder_pid` is now
+>   `Option<u32>` (None on unknown holder); new
+>   negative test for empty/corrupt lockfile
+>   (pi-14 #7).
+>
+> Round-14 highlights (kept for trajectory context):
 > - shutdown skip-kill is now Exited(_)-only;
 >   WaitFailed/ReaperPanicked proceed with bounded
 >   SIGTERM+SIGKILL using `kill(SIGCONT)` ESRCH
@@ -971,41 +996,53 @@ m2-style if needed.
          used_sigkill = false`.
        - `Some(Arc<ReaperOutcome::WaitFailed(_)>)` or
          `Some(Arc<ReaperOutcome::ReaperPanicked>)`:
-         the reaper failed but the child may still be
-         alive. **Treat the reaper-outcome watch as
-         dead** — it will not produce further
-         notifications. Proceed with the SIGTERM +
-         SIGKILL flow below, but instead of awaiting
-         the (dead) watch, sleep for the configured
-         grace and verify the pid is gone via
-         `nix::sys::signal::kill(Pid, Signal::SIGCONT)`
-         returning `ESRCH` (a portable
-         "is-this-pid-alive" probe that does not
-         interrupt the process).
-       - `None`: proceed with SIGTERM + grace +
-         SIGKILL flow with reaper-watch-based wait.
-    3. Send SIGTERM to the taken `child_pid`.
-    4. Wait for the configured grace
-       (`self.config.shutdown_grace`):
-       - If reaper-outcome watch is live: `tokio::
-         time::timeout(self.config.shutdown_grace,
-         reaper_outcome.changed())`.
-       - If watch is dead (WaitFailed/ReaperPanicked
-         path): `tokio::time::sleep(self.config
-         .shutdown_grace)`.
-    5. **Re-check the cached outcome** before
-       escalation (pi-13 #2 — between step 4's
-       timeout return and step 5's SIGKILL, the
-       reaper could have published `Exited`; sending
-       SIGKILL after that hits a recycled PID).
-       Read `*self.reaper_outcome.borrow()` again:
-       - On `Some(Exited(_))`: skip SIGKILL, fall
-         through to step 6.
-       - Otherwise: send SIGKILL; another
-         grace/sleep per step 4's branching, then
-         re-check. Failure to confirm exit after
-         this is logged at `tracing::warn!` but
-         does not block shutdown.
+         the reaper failed; the child may still be
+         alive. **Watch is dead** (no further
+         notifications). Take the **dead-watch
+         branch** below: SIGTERM + sleep + probe;
+         SIGKILL + sleep + probe.
+       - `None`: take the **live-watch branch**:
+         SIGTERM + watch-await + re-check; SIGKILL +
+         watch-await + re-check.
+
+    Pi-14 #5 separates the two branches explicitly
+    so the algorithm is unambiguous. Pi-14 #4
+    replaces the unsafe `SIGCONT` liveness probe
+    with `kill(pid, 0)` (the portable
+    "is-this-pid-alive" no-op signal — Linux+macOS;
+    `Errno::ESRCH` means gone, `Ok(())` /
+    `Errno::EPERM` mean alive but inaccessible).
+
+    **Live-watch branch** (`reaper_outcome` was
+    `None` at the cache check):
+    3a. SIGTERM `child_pid`. `used_sigterm = true`.
+    3b. `tokio::time::timeout(self.config.shutdown_grace,
+        reaper_outcome.changed()).await`.
+    3c. Re-check `*self.reaper_outcome.borrow()`:
+        - `Some(Exited(_))`: skip SIGKILL; jump to
+          step 6.
+        - Otherwise: SIGKILL `child_pid`; `used_sigkill
+          = true`; `tokio::time::timeout(self.config
+          .shutdown_kill_grace, reaper_outcome
+          .changed()).await` (pi-14 #3 — the kill
+          grace is `shutdown_kill_grace`, not
+          `shutdown_grace` again). Failure to confirm
+          exit after this is logged at `warn!` but
+          does not block.
+
+    **Dead-watch branch** (`reaper_outcome` was
+    `WaitFailed`/`ReaperPanicked`):
+    3a'. SIGTERM `child_pid`. `used_sigterm = true`.
+    3b'. `tokio::time::sleep(self.config.shutdown_grace)`.
+    3c'. Probe with `kill(pid, 0)`:
+        - `Err(Errno::ESRCH)`: child gone; jump to
+          step 6.
+        - Otherwise: SIGKILL `child_pid`;
+          `used_sigkill = true`; `tokio::time::sleep
+          (self.config.shutdown_kill_grace)`; probe
+          again. Failure to confirm `ESRCH` after
+          this is logged at `warn!` but does not
+          block.
     6. Abort `serve_handle.abort()` and `let _ =
        serve_handle.await`.
     7. Drop `register_guard`.
@@ -1023,15 +1060,26 @@ m2-style if needed.
        is `start.elapsed()`.
     9. Return the populated `ShutdownReport`.
 
-    The same hazard applies to `Drop` (pi-8 B2):
-    `FrontendHandle::Drop` first reads the cached
-    reaper outcome via `*self.reaper_outcome.borrow()`;
-    if `Some`, skip SIGKILL entirely (only
-    `serve_handle.abort()` if still `Some` and drop
-    `register_guard`). Otherwise, the round-7
-    best-effort SIGKILL applies. This closes the
-    PID-recycle window for both the cooperative and
-    the implicit-drop paths.
+    The same hazard applies to `Drop` (pi-8 B2 +
+    pi-14 #1 — round 14 had Drop skip on any
+    `Some(_)` outcome, contradicting shutdown's
+    Exited-only rule):
+    `FrontendHandle::Drop` reads
+    `*self.reaper_outcome.borrow()`:
+    - `Some(Arc<ReaperOutcome::Exited(_)>)`: child
+      already exited; skip SIGKILL (only
+      `serve_handle.abort()` if still `Some` and
+      drop `register_guard`).
+    - `Some(Arc<ReaperOutcome::WaitFailed(_)>)` or
+      `Some(Arc<ReaperOutcome::ReaperPanicked>)`:
+      reaper failed but the child may still be
+      alive — best-effort SIGKILL on `child_pid`
+      (errors logged at `warn!`), then abort
+      serve_handle and drop register_guard. NOT
+      blocking; Drop does not wait on a kill
+      response.
+    - `None`: best-effort SIGKILL (the round-7 base
+      behaviour for this branch).
   - (Pi-9 Blocker 1: round 9 left a stale "Cooperative
     shutdown" block here that conflicted with the
     canonical one above — round 10 deletes it.
@@ -1345,8 +1393,14 @@ that could drift — one path for both is the contract.
   branching is post-v1 (overview §12).
 - **S3.** `SessionError` typed enum: `Io { source }`,
   `Sqlite { source: rusqlite::Error }`, `Serde { source:
-  serde_json::Error }`, `Locked { holder_pid: u32 }` (see
-  §S5 below), `SchemaMismatch { found, expected }`,
+  serde_json::Error }`, **`Locked { holder_pid:
+  Option<u32> }`** (pi-14 #7 — the contender may
+  observe the lockfile empty/stale/corrupt because
+  the holder writes its pid AFTER acquiring the
+  lock, leaving a window where contention reads
+  before the write; `None` represents "lock held
+  by an unknown process"), `SchemaMismatch {
+  found, expected }`,
   **`Publish { source: BrokerError }`** (pi-6 B2 —
   round 6 had `SessionController::finalize_entry` call
   `broker.publish_core` whose error is a
@@ -2007,15 +2061,23 @@ together.
         task itself panicked while awaiting the
         child. Same treatment — abnormal exit, log
         the panic.
-      **Drain the stderr forwarder** (pi-10 High 2)
-      before tearing down: `let _ =
-      stderr_forwarder.await;` — the forwarder's
-      EOF-on-close path makes this a bounded await
-      (the child's stderr fd closes when the child
-      process exits, which the reaper has already
-      observed). With the drain in place, the
-      combined-stream assertions in §I are
-      deterministic.
+      **Order: shutdown FIRST, then drain stderr**
+      (pi-10 High 2 + pi-14 #2 — round 14 drained
+      stderr before shutdown, but on `WaitFailed` /
+      `ReaperPanicked` the child may still be alive
+      and its stderr would never EOF, hanging the
+      drain forever):
+      1. `let report = frontend_handle.shutdown().
+         await;` — shutdown ensures the child is
+         dead (via the Exited-skip / abnormal-reaper
+         force-kill paths in §F4); at that point
+         the child's stderr fd closes (EOF).
+      2. `let _ = stderr_forwarder.await;` — the
+         forwarder hits EOF on the now-closed child
+         stderr and exits naturally. The parent-
+         side serialised writer guarantees all
+         forwarded lines flush before this await
+         resolves.
 
       **Test coverage** (pi-10 Medium 5 + pi-11 #4 —
       round 10 incorrectly claimed
@@ -2040,8 +2102,31 @@ together.
         `RflChatError::FrontendExitedAbnormally`,
         exits non-zero with stderr citing the child's
         exit code.
-      - **`WaitFailed` and `ReaperPanicked`** are
-        **intentionally untested** in m3: triggering them requires
+      - **`WaitFailed` and `ReaperPanicked`** —
+        previously marked untested, but pi-14 #6
+        flagged that round 14's split branching
+        materially changed these paths. **Round 15
+        adds a unit-level test seam** in
+        `rafaello_core::frontend::shutdown` (the
+        shutdown algorithm extracted as a pure
+        async function `shutdown_with_outcome(
+        cached: ReaperOutcome, ...) ->
+        ShutdownReport`) that takes a synthetic
+        `ReaperOutcome` and a mock `kill_fn` (so
+        tests can inject WaitFailed/ReaperPanicked
+        and verify the dead-watch branch ran +
+        SIGKILL was attempted + the kill_fn was
+        called twice + the report fields are
+        correct). Tests live in
+        `rafaello-core/tests/frontend_shutdown_dead_watch_paths.rs`
+        with two cases: `dead_watch_waitfailed`,
+        `dead_watch_reaper_panicked`. They do NOT
+        spawn a child or signal real PIDs; the
+        kill_fn is a `Fn(Pid, Signal) -> Result<(),
+        Errno>` mock. (Round 15: this is the
+        **strict-blocking-coverage** standard pi-14
+        asked for; the prior "intentionally
+        untested" framing is now retracted.) triggering them requires
       fault-injection inside the reaper task, which
       m3's `TestHooks::inject_fault` points (§H6 —
       pre-register / post-register) do not cover.
@@ -2589,7 +2674,14 @@ integration test is being built):
 - `session_store_concurrent_open_errors.rs` — open store
   in pid A; spawn a probe child that calls `open()` on
   the same path; child gets `SessionError::Locked {
-  holder_pid: A }`. Cross-platform Linux + macOS.
+  holder_pid: Some(A) }`. Cross-platform Linux + macOS.
+- `session_store_locked_unknown_holder_errors.rs` —
+  pi-14 #7: pre-create `session.lock` empty and
+  acquire flock from a separate test thread (without
+  writing a pid); a second `SessionStore::open` call
+  errors with `SessionError::Locked { holder_pid:
+  None }`. Same test class for a corrupt lockfile
+  (random non-numeric bytes).
 - `session_store_schema_mismatch_errors.rs` — open store
   whose `session_meta.schema_version = "0"` (manually
   pre-seeded); errors with `SessionError::SchemaMismatch
