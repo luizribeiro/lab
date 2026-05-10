@@ -1,13 +1,42 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-21 draft. Trajectory of finding
-> counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
+> **Status:** round-22 — m3 scope.md considered
+> CONVERGED by the milestone driver after pi
+> reported 0 blockers in 6 of the last 10 rounds
+> (r12, r16, r17, r19, r20, r21) and explicitly
+> said "Round-21 fixes themselves look integrated"
+> on round 21. Trajectory of finding counts
+> (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
 > r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0,
 > r16 0/3/2/2, r17 0/2/2/1, r18 1/2/2/0,
-> r19 1/0/2/0, r20 0/1/2/1 (fifth 0-blocker round
-> overall). Round 21 highlights:
+> r19 1/0/2/0, r20 0/1/2/1, r21 0/1/3/2.
+> Round 22 highlights (clean sweep of round-21
+> findings):
+> - Cleanup-guard pseudocode rewritten as an
+>   ownership-valid Option/take pattern (pi-21 #1).
+> - `*reaper_outcome.borrow()` patterns rewritten
+>   compilably as
+>   `match self.reaper_outcome.borrow().as_deref()
+>   { Some(ReaperOutcome::Variant(_)) => ... }`
+>   (pi-21 #2).
+> - H6 pre-spawn hook clarified to fire AFTER
+>   private-state-dir creation; dir cleanup
+>   explicitly NOT in the unwind contract (pi-21
+>   #3).
+> - H6.1 fault marker uses `"<hook-name>"`-
+>   parameterised messages so each hook is
+>   distinguishable; tests match on hook-consumed
+>   counter + variant (pi-21 #4).
+> - F3 unwind step 5 (proxy drop) marked N/A for
+>   frontends with mapping rationale to m2 (pi-21
+>   #5).
+>
+> The milestone driver moves to commits.md
+> drafting.
+>
+> Round-21 highlights (kept for trajectory context):
 > - Step-10 outcome read switched to public
 >   `frontend_handle.wait().await` API instead of
 >   internal `reaper_outcome.borrow()` (pi-20 #1).
@@ -1032,9 +1061,13 @@ m2-style if needed.
        wait; also drop the `RegisteredFrontend`
        guard.
   4. Drop the socketpair fds (RAII).
-  5. Drop the proxy handle (m3 frontends don't have
-     one but the unwind framework should be the same
-     as m2).
+  5. (Proxy handle drop — N/A for m3 frontends;
+     pi-21 #5. The m2 plugin spawn path drops a
+     proxy here; m3 frontends don't allocate one,
+     so this step is a no-op. Listed only to make
+     the structural mapping to m2's unwind matrix
+     unambiguous; the per-commit agent does not
+     emit any code here.)
   Phase A failures (validation, before any resource
   allocation) need no unwind — no resources are held.
   This mirrors m2 §SP4's Phase B unwind matrix
@@ -1110,16 +1143,19 @@ m2-style if needed.
        has actually exited. `WaitFailed(_)` /
        `ReaperPanicked` mean the reaper itself
        failed; the child process may still be alive
-       and must be cleaned up). Read
-       `*self.reaper_outcome.borrow()`:
-       - `Some(Arc<ReaperOutcome::Exited(_)>)`: the
+       and must be cleaned up). Read the cached
+       outcome — pi-21 #2: written compilably as
+       `match self.reaper_outcome.borrow().as_deref()
+       { ... }`, NOT the type-shaped literal
+       patterns earlier rounds used:
+       - `Some(ReaperOutcome::Exited(_))`: the
          child has already exited; **skip SIGTERM/
          SIGKILL entirely**. Just abort the taken
          `serve_handle` and drop the taken
          `register_guard`. Set `used_sigterm =
          used_sigkill = false`.
-       - `Some(Arc<ReaperOutcome::WaitFailed(_)>)` or
-         `Some(Arc<ReaperOutcome::ReaperPanicked>)`:
+       - `Some(ReaperOutcome::WaitFailed(_))` or
+         `Some(ReaperOutcome::ReaperPanicked)`:
          the reaper failed; the child may still be
          alive. **Watch is dead** (no further
          notifications). Take the **dead-watch
@@ -1175,7 +1211,7 @@ m2-style if needed.
        filled): `exit_status` reads
        `*self.reaper_outcome.borrow()` after the
        SIGTERM/KILL flow completes; on
-       `Some(Arc<ReaperOutcome::Exited(status)>)`
+       `Some(ReaperOutcome::Exited(status))`
        store `Some(status)`; otherwise (no outcome
        observed, or `WaitFailed`/`ReaperPanicked`)
        store `None`. `used_sigterm` /
@@ -1190,12 +1226,12 @@ m2-style if needed.
     Exited-only rule):
     `FrontendHandle::Drop` reads
     `*self.reaper_outcome.borrow()`:
-    - `Some(Arc<ReaperOutcome::Exited(_)>)`: child
+    - `Some(ReaperOutcome::Exited(_))`: child
       already exited; skip SIGKILL (only
       `serve_handle.abort()` if still `Some` and
       drop `register_guard`).
-    - `Some(Arc<ReaperOutcome::WaitFailed(_)>)` or
-      `Some(Arc<ReaperOutcome::ReaperPanicked>)`:
+    - `Some(ReaperOutcome::WaitFailed(_))` or
+      `Some(ReaperOutcome::ReaperPanicked)`:
       reaper failed but the child may still be
       alive — best-effort SIGKILL on `child_pid`
       (errors logged at `warn!`), then abort
@@ -2184,30 +2220,46 @@ together.
   error). The orchestration uses an explicit
   cleanup guard pattern:
   ```rust
-  let mut cleanup_state = Some((frontend_handle,
-      stderr_forwarder));
+  // pi-21 #1: implementable shape — handle is owned
+  // by the orchestration scope and only `take()`n
+  // once at the end. wait() takes &mut self per §F4
+  // so it does NOT consume the handle.
+  let mut handle: FrontendHandle = /* from spawn */;
+  let mut forwarder: tokio::task::JoinHandle<()> =
+      /* from step 6 */;
+  let mut step10_outcome: Option<RflChatStep10Outcome> = None;
   let result: Result<(), RflChatError> = async {
-      // steps 8, 9, 10's wait
+      // step 7's wait_ready handling already happened
+      // before we get here.
       controller.replay_history(&caps).await?;
       if let Some(harness) = harness {
           harness.run(&controller, &caps).await?;
       }
-      let outcome = frontend_handle_ref.wait().await;
-      // outcome handling per step 10 below
+      let outcome: Arc<ReaperOutcome> =
+          handle.wait().await;
+      step10_outcome = Some(map_outcome(&outcome));
       Ok(())
   }.await;
-  // Always run teardown, regardless of result:
-  if let Some((handle, forwarder)) = cleanup_state.take() {
-      let _ = handle.shutdown().await;
-      let _ = forwarder.await;
+  // Always run teardown — `handle` is still owned at
+  // this point; `shutdown(self)` consumes it here:
+  let report = handle.shutdown().await;
+  let _ = forwarder.await;
+  match (result, step10_outcome) {
+      (Ok(()), Some(RflChatStep10Outcome::Clean)) =>
+          Ok(()),
+      (Ok(()), Some(RflChatStep10Outcome::Abnormal(o))) =>
+          Err(RflChatError::FrontendExitedAbnormally
+              { outcome: o, report }),
+      (Err(e), _) => Err(e),
+      _ => unreachable!(/* result Ok implies outcome set */),
   }
-  result.map_err(|e| /* exit non-zero with stderr cite */)
   ```
-  (Pseudocode — implementation may use
-  `scopeguard::defer!` or an async drop guard
-  pattern; the contract is "exactly one
-  shutdown+drain call regardless of which step
-  errored".)
+  Implementation may use `scopeguard::defer!` or an
+  async drop guard pattern equivalently; the
+  load-bearing contract is "exactly one
+  shutdown+drain regardless of which inner step
+  errored, and `handle` is moved into shutdown
+  exactly once."
   8. Replay session history through the controller:
      `controller.replay_history(&caps).await?`. Every
      entry is published on `core.session.entry.finalized`
@@ -2459,7 +2511,14 @@ those tests should have been written against.
   Each `inject_*` arms a one-shot atomic; the next spawn
   through that supervisor consumes it and returns
   `SpawnError::SandboxBuild { canonical, source:
-  anyhow::anyhow!("test-injected pre-register fault") }`
+  anyhow::anyhow!("test-injected <hook-name> fault") }`
+  where `<hook-name>` is one of `"pre-spawn"`,
+  `"post-spawn-pre-register"`, or `"post-register"`
+  matching the consumed hook (pi-21 #4: round-9's
+  generic "or post-register equivalent" wording is
+  ambiguous now that there are three hooks; tests
+  match on the variant + the hook-consumed
+  counter, not on the message string)
   (or post-register equivalent) instead of completing
   Phase B. Identical reuse of `SandboxBuild` is fine
   because the synthetic source is clearly tagged.
@@ -2468,12 +2527,20 @@ those tests should have been written against.
   conflated them. Round 17 names them precisely
   against the m2 `PluginSupervisor::spawn` body):
   - **Pre-spawn-post-socketpair**: after socketpair /
-    proxy / sandbox-builder allocation, BEFORE
-    `tokio_command.spawn()` produces the `Child`. On
-    fault, no child exists; unwind verifies fd-count
-    returns to baseline + proxy / private-state dirs
-    cleaned up. This is the m2 `unwinds_after_socketpair`
-    coverage.
+    proxy / sandbox-builder allocation, AFTER
+    private-state-dir creation (§F3 step 5),
+    BEFORE `tokio_command.spawn()` produces the
+    `Child`. On fault, no child exists; the
+    private-state dir was created and remains on
+    disk (m3 does NOT remove it on unwind — pi-21
+    #3: per-frontend state dirs are user-scoped
+    artifacts, not subprocess-owned, and the next
+    `rfl chat` reuses the same path. The m2
+    `unwinds_after_socketpair` coverage focused on
+    fd-count + proxy cleanup, NOT on dir cleanup;
+    m3 inherits that scope). Unwind verifies
+    fd-count returns to baseline + proxy cleaned
+    up.
   - **Post-register**: pinned in code-order terms
     (pi-17 #2: m2's actual ordering is
     `register_plugin` → drop in-flight guard →
