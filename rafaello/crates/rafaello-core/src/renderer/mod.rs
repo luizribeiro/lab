@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::entry::{Entry, RenderNode};
 
+pub mod builtins;
 pub mod pipeline;
 pub use pipeline::RenderPipeline;
 
@@ -109,7 +110,12 @@ impl RendererRegistry {
     }
 
     pub fn with_builtins() -> Self {
-        Self::new()
+        let mut registry = Self::new();
+        registry.register("text".into(), Arc::new(builtins::TextRenderer));
+        registry.register("heading".into(), Arc::new(builtins::HeadingRenderer));
+        registry.register("code_block".into(), Arc::new(builtins::CodeBlockRenderer));
+        registry.register("thinking".into(), Arc::new(builtins::ThinkingRenderer));
+        registry
     }
 
     pub fn register(
