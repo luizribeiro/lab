@@ -1,10 +1,26 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-12 draft. Trajectory of finding
+> **Status:** round-13 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
-> r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1.
-> Round 12 highlights:
+> r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
+> **r12 0/2/2/1 ("no new blocking issues found")**.
+> Round 13 highlights:
+> - Reaper-watcher task added to §F3 step 10 to
+>   produce `ReaperPanicked` outcomes via JoinHandle
+>   bridging (pi-12 #1).
+> - `ShutdownReport.exit_status` population spec'd
+>   from `reaper_outcome.borrow()` after the
+>   SIGTERM/KILL flow (pi-12 #2).
+> - `RFL_FIXTURE_EXIT_CODE` added to the env.pass
+>   allowlist in §C2 step 5 (pi-12 #3).
+> - `peer: PeerHandle` added to FrontendHandle
+>   struct sketch (pi-12 #4).
+> - `self.config.shutdown_*` qualified throughout;
+>   stale `flock(LOCK_EX | LOCK_NB)` shorthand
+>   replaced with `Flock::lock` invocation (pi-12 #5).
+>
+> Round-12 highlights (kept for trajectory context):
 > - `FrontendHandle.config: FrontendConfig` field
 >   added so `shutdown` can read the grace durations
 >   (pi-11 #1).
@@ -776,13 +792,24 @@ m2-style if needed.
     9. **Construct the reaper-outcome watch**:
        `let (reaper_tx, reaper_rx) =
        tokio::sync::watch::channel::<Option<Arc<ReaperOutcome>>>(None);`.
-    10. **Spawn the reaper task**: moves `Child` and
-        `reaper_tx` into a `tokio::spawn`-ed task that
-        awaits `child.wait()` and pushes the outcome
-        through the watch. The `Child` is no longer
-        accessible after this step; subsequent unwind
-        signals via `nix::sys::signal::kill(Pid, ...)`
-        on `child_pid` and observes the reaper watch.
+    10. **Spawn the reaper + reaper-watcher tasks**.
+        The reaper is a `tokio::spawn`ed task that
+        moves `Child` in and awaits `child.wait()`,
+        pushing `Exited(status)` (or
+        `WaitFailed(io::Error)` if `wait()` itself
+        errors) into `reaper_tx`. A second
+        `tokio::spawn`ed **watcher task** holds the
+        reaper's `JoinHandle` and awaits it; on
+        `JoinError` (panic / cancellation), it
+        pushes `ReaperOutcome::ReaperPanicked` into
+        `reaper_tx` (pi-12 #1 — round 11/12 had
+        `ReaperPanicked` mapped at the CLI layer
+        but no producer; m2's same-shape watcher
+        bridges the panic into the watch). After
+        step 10, `Child` is no longer accessible;
+        unwind / shutdown signals via
+        `nix::sys::signal::kill(Pid, ...)` on
+        `child_pid` and observes the reaper watch.
     11. Build a `fittings_server::Server` over the
         parent socketpair end with the composed
         services from `FrontendExtraServiceFactory`
@@ -875,6 +902,7 @@ m2-style if needed.
     ```rust
     pub struct FrontendHandle {
         attach_id: AttachId,
+        peer: PeerHandle,                          // pi-12 #4 — round 11 omitted from sketch
         // Disarmed-by-shutdown fields:
         child_pid: Option<u32>,
         serve_handle: Option<tokio::task::JoinHandle<...>>,
@@ -926,16 +954,28 @@ m2-style if needed.
        - If `None`: proceed with SIGTERM + grace +
          SIGKILL flow.
     3. Send SIGTERM to the taken `child_pid`.
-    4. `tokio::time::timeout(config.shutdown_grace,
+    4. `tokio::time::timeout(self.config.shutdown_grace,
        reaper_outcome.changed())` — await the
        reaper-outcome watch flipping to `Some`.
     5. On timeout, send SIGKILL; another
-       `tokio::time::timeout(config.shutdown_kill_grace,
+       `tokio::time::timeout(self.config.shutdown_kill_grace,
        reaper_outcome.changed())`.
     6. Abort `serve_handle.abort()` and `let _ =
        serve_handle.await`.
     7. Drop `register_guard`.
-    8. Return `ShutdownReport`.
+    8. **Populate `ShutdownReport`** (pi-12 #2 — round
+       11 added the field but didn't say how it was
+       filled): `exit_status` reads
+       `*self.reaper_outcome.borrow()` after the
+       SIGTERM/KILL flow completes; on
+       `Some(Arc<ReaperOutcome::Exited(status)>)`
+       store `Some(status)`; otherwise (no outcome
+       observed, or `WaitFailed`/`ReaperPanicked`)
+       store `None`. `used_sigterm` /
+       `used_sigkill` / `serve_aborted` are local
+       flags set during the steps above; `elapsed`
+       is `start.elapsed()`.
+    9. Return the populated `ShutdownReport`.
 
     The same hazard applies to `Drop` (pi-8 B2):
     `FrontendHandle::Drop` first reads the cached
@@ -1143,7 +1183,11 @@ that could drift — one path for both is the contract.
     1. `fs::create_dir_all(state_dir)`.
     2. Open `${state_dir}/session.lock` with `O_CLOEXEC`
        (§S5).
-    3. `flock(LOCK_EX | LOCK_NB)`. On `EWOULDBLOCK`, read
+    3. `Flock::lock(file, FlockArg::LockExclusiveNonblock)`
+       (per §S5 — the RAII helper is the canonical
+       form; pi-12 #5 — round 12 left a stale
+       `flock(LOCK_EX | LOCK_NB)` shorthand here).
+       On `EWOULDBLOCK`, read
        holder pid from file content → `SessionError::
        Locked { holder_pid }`. **Do not touch SQLite.**
     4. Truncate the lockfile and write
@@ -1758,6 +1802,7 @@ together.
                  "RFL_TUI_MAX_LIFETIME".into(),
                  "RFL_FIXTURE_MODE".into(),
                  "RFL_FIXTURE_MAX_LIFETIME".into(),
+                 "RFL_FIXTURE_EXIT_CODE".into(),  // pi-12 #3
              ],
              set: BTreeMap::new(),
          },
@@ -1841,8 +1886,8 @@ together.
        may or may not have exited yet (pi-9 High 5).
        Map to `RflChatError::FrontendExitedBeforeReady`
        and run `handle.shutdown().await` (bounded by
-       `config.shutdown_grace +
-       config.shutdown_kill_grace`). **Then drain
+       `self.config.shutdown_grace +
+       self.config.shutdown_kill_grace`). **Then drain
        the stderr forwarder**: `let _ =
        stderr_forwarder.await;` (pi-11 #3 — round 11
        only drained in step 10; SenderDropped/timeout
