@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rafaello", "crates/rafaello-core"]
+members = ["crates/rafaello", "crates/rafaello-core", "crates/rafaello-tui"]
 resolver = "2"
 
 [workspace.dependencies]

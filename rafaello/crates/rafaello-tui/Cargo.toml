@@ -1,0 +1,32 @@
+[package]
+name = "rafaello-tui"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+
+[[bin]]
+name = "rfl-tui"
+path = "src/bin/rfl_tui.rs"
+
+[dependencies]
+rafaello-core = { path = "../rafaello-core" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tui-input = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+fittings-core = { workspace = true }
+fittings-server = { workspace = true }
+fittings-client = { workspace = true }
+fittings-transport = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-test = { workspace = true }
