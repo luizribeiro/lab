@@ -10,6 +10,7 @@ pub mod error;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
+pub mod renderer;
 pub mod scrubber;
 pub mod sinks;
 pub mod supervisor;
@@ -20,6 +21,11 @@ pub mod validate;
 pub use entry::{
     Entry, EntryAuthor, EntryFallback, EntryMetadata, RawFormat, RenderNode, StreamState,
     ToolCallStatus,
+};
+
+pub use renderer::{
+    Capabilities, ColorClass, Renderer, RendererError, RendererRegistry, ScrollbackClass,
+    UnicodeClass,
 };
 
 pub use compile::{
