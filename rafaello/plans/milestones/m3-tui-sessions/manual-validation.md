@@ -143,6 +143,24 @@ expanded surface (rafaello-tui, rafaello/lib).
 push. Per `scope.md` round-6 tightening, macOS CI green
 is a hard ratification gate and not deferrable.
 
+**Push attempt 2026-05-10 14:22:** the driver attempted
+`git push origin rafaello-v0.1` directly after
+landing the §5.8 macOS un-gating commit (`1e839b3`).
+The push hung for ~20 minutes, then on retry failed
+with `sign_and_send_pubkey: signing failed for RSA
+".../cardno:27_054_871" from agent: agent refused
+operation` — the SSH agent is locked / the
+hardware-token is not authorising signatures.
+Resolution requires the user to unlock the agent
+interactively (e.g. `! ssh-add -l` then unlock the
+hardware-key PIN); the driver cannot complete this
+step autonomously. The eight commits queued for
+push (the six follow-ups plus the post-§5.8 Linux
+re-run capture and the round-3/round-4 retrospective
+revisions) are all on the local `rafaello-v0.1` HEAD
+at `21d2ceb` and will land on origin once the user
+re-runs the push.
+
 **Capture procedure** (matches m2 manual-validation §5.7):
 
 1. Push `rafaello-v0.1` to GitHub: `git push origin
