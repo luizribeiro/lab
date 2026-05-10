@@ -1,13 +1,29 @@
 # m3 — sessions, local-spawned TUI, built-in rendering — scope
 
-> **Status:** round-15 draft. Trajectory of finding
+> **Status:** round-16 draft. Trajectory of finding
 > counts (b/h/m/l): r1 10/-/-/3, r2 5/-/2/-, r3 3/-/3/-,
 > r4 3/3/0/1, r5 2/-/11/3, r6 6/-/5/3, r7 5/-/3/1,
 > r8 3/-/5/0, r9 3/2/3/2, r10 1/2/2/1, r11 1/3/1/1,
-> r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0 (round 14's
-> dead-watch logic introduced two new contradictions
-> with shutdown semantics).
-> Round 15 highlights:
+> r12 0/2/2/1, r13 1/1/2/1, r14 2/3/2/0, r15 1/1/3/0.
+> Round 16 highlights:
+> - shutdown_with_outcome seam signature uses
+>   `Fn(Pid, Option<Signal>)` for signals + a separate
+>   `Fn(Pid)` probe so `kill(pid, 0)` is representable;
+>   tests assert exact signal/probe call sequences
+>   per branch (pi-15 #1).
+> - Stale "intentionally untested" para deleted from
+>   §C2 step 10 — only the new strict-coverage para
+>   remains (pi-15 #2).
+> - Drop summary line replaced with a forward
+>   reference to the cached-outcome rules (pi-15 #3).
+> - `rfl chat` Locked-error message format spec'd
+>   for both `Some(pid)` and `None` cases; new test
+>   for unknown-holder branch (pi-15 #4).
+> - `workspace_bin_path` helper added to
+>   rafaello/tests/common/ for cross-crate binary
+>   resolution (pi-15 #5).
+>
+> Round-15 highlights (kept for trajectory context):
 > - Drop's skip-kill aligned with shutdown: only
 >   Exited(_) skips; WaitFailed/ReaperPanicked still
 >   best-effort SIGKILL (pi-14 #1).
@@ -970,11 +986,14 @@ m2-style if needed.
             -> Option<tokio::process::ChildStderr>;
     }
     ```
-    `Drop` semantics: if `child_pid.is_some()`, send
-    best-effort SIGKILL; if `serve_handle.is_some()`,
-    `abort()`; if `register_guard.is_some()`, drop it
-    (broker registration releases). All idempotent on
-    dead/already-cleared values.
+    `Drop` semantics: see the **cached-outcome rules
+    below** (after the shutdown algorithm — pi-15 #3:
+    Drop is Exited-skip / WaitFailed-or-ReaperPanicked-
+    or-None-bestkill, NOT unconditional SIGKILL).
+    Always-applied: `serve_handle.abort()` if still
+    `Some`; drop `register_guard` if still `Some`. All
+    operations idempotent on dead / already-cleared
+    values.
   - `pub async fn FrontendHandle::shutdown(mut self)
     -> ShutdownReport`:
     1. `take()` the three disarmable fields
@@ -1871,8 +1890,18 @@ together.
   2. Resolve `rfl-tui` binary path (§C3 below).
   3. Open `SessionStore` → acquire flock → on
      `SessionError::Locked { holder_pid }` print a
-     friendly error citing the holder pid and exit non-
-     zero (matches the demo-bar negative).
+     friendly error and exit non-zero (matches the
+     demo-bar negative). The error message format
+     (pi-15 #4):
+     - `Some(pid)`: "session lock held by pid {pid};
+       another rfl chat is running for this project."
+     - `None`: "session lock held by an unknown
+       process; remove `.rafaello/state/session.lock`
+       if no other rfl chat is running for this
+       project."
+     The unknown-holder branch happens when the
+     contender races the holder's pid-write (§S5 +
+     §S3 — `holder_pid: Option<u32>`).
   4. Build the `BrokerAcl` for m3: zero plugins, one
      frontend `tui` with `subscribe_patterns =
      ["core.session.**", "core.lifecycle.**"]`,
@@ -2102,40 +2131,61 @@ together.
         `RflChatError::FrontendExitedAbnormally`,
         exits non-zero with stderr citing the child's
         exit code.
-      - **`WaitFailed` and `ReaperPanicked`** —
-        previously marked untested, but pi-14 #6
-        flagged that round 14's split branching
-        materially changed these paths. **Round 15
-        adds a unit-level test seam** in
-        `rafaello_core::frontend::shutdown` (the
-        shutdown algorithm extracted as a pure
-        async function `shutdown_with_outcome(
-        cached: ReaperOutcome, ...) ->
-        ShutdownReport`) that takes a synthetic
-        `ReaperOutcome` and a mock `kill_fn` (so
-        tests can inject WaitFailed/ReaperPanicked
-        and verify the dead-watch branch ran +
-        SIGKILL was attempted + the kill_fn was
-        called twice + the report fields are
-        correct). Tests live in
-        `rafaello-core/tests/frontend_shutdown_dead_watch_paths.rs`
-        with two cases: `dead_watch_waitfailed`,
-        `dead_watch_reaper_panicked`. They do NOT
-        spawn a child or signal real PIDs; the
-        kill_fn is a `Fn(Pid, Signal) -> Result<(),
-        Errno>` mock. (Round 15: this is the
-        **strict-blocking-coverage** standard pi-14
-        asked for; the prior "intentionally
-        untested" framing is now retracted.) triggering them requires
-      fault-injection inside the reaper task, which
-      m3's `TestHooks::inject_fault` points (§H6 —
-      pre-register / post-register) do not cover.
-      The branches are defensive pattern matches
-      against m2's existing `ReaperOutcome` shape;
-      m4 may add reaper-task fault injection if a
-      real-world failure surfaces. This
-      intentional-untested status is filed in the
-      retrospective drift section.
+      - **`WaitFailed` and `ReaperPanicked` —
+        covered by a unit-level shutdown test seam.**
+        Pi-14 #6 + pi-15 #1 + pi-15 #2 — round 15
+        proposed an `Fn(Pid, Signal)` mock that
+        couldn't represent the `kill(pid, 0)` no-op
+        liveness probe. Round 16 fixes the signature:
+        ```rust
+        // Pure-async extraction of the shutdown
+        // algorithm; production `FrontendHandle::
+        // shutdown` calls this with the real signal
+        // / probe functions.
+        pub async fn shutdown_with_outcome(
+            cached: Option<Arc<ReaperOutcome>>,
+            child_pid: Pid,
+            config: &FrontendConfig,
+            mut signal_fn: impl FnMut(Pid, Signal)
+                -> Result<(), Errno>,
+            mut probe_fn: impl FnMut(Pid)
+                -> Result<(), Errno>,
+            // ... reaper_outcome rx, serve handle, register guard ...
+        ) -> ShutdownReport;
+        ```
+        `signal_fn(pid, SIGTERM | SIGKILL)` sends a
+        signal; `probe_fn(pid)` is the no-op
+        liveness probe (production wires
+        `nix::sys::signal::kill(pid, None)` for the
+        probe — `None` is the "no-op" form;
+        equivalent to `kill(pid, 0)` in C). The
+        live-watch branch ignores `probe_fn`; the
+        dead-watch branch uses it after each
+        sleep.
+        Tests live in
+        `rafaello-core/tests/frontend_shutdown_dead_watch_paths.rs`:
+        - `dead_watch_waitfailed_child_already_gone`:
+          `cached = Some(WaitFailed(...))`,
+          `signal_fn` records the SIGTERM,
+          `probe_fn` returns `Err(ESRCH)` on first
+          call → SIGKILL is NOT sent (skipped per
+          step 3c'), `used_sigkill = false`.
+        - `dead_watch_reaper_panicked_child_alive`:
+          `cached = Some(ReaperPanicked)`,
+          `signal_fn` records SIGTERM and SIGKILL,
+          `probe_fn` returns `Ok(())` (alive) on
+          first call, `Err(ESRCH)` on second →
+          `used_sigkill = true`. Verifies kill_fn
+          call sequence and ShutdownReport flags.
+        These tests do NOT spawn a real child; they
+        exercise the algorithm purely against
+        synthetic outcomes and mock signal/probe
+        function calls. (Pi-15 #2: the prior
+        "intentionally untested" framing is retracted
+        — these branches ARE covered by these unit
+        tests; only full reaper-task fault injection
+        in production code is deferred to m4 if a
+        real-world failure surfaces.)
 
       Across all four cases (clean Exited, abnormal
       Exited, WaitFailed, ReaperPanicked), `rfl chat`
@@ -2557,6 +2607,12 @@ integration test is being built):
   `SessionStore::open`); spawn `rfl chat` in pid B
   against the same project root; B exits non-zero with
   stderr citing pid A.
+- `rfl_chat_locked_session_unknown_holder_errors.rs` —
+  pi-15 #4: pre-create `session.lock` empty and hold
+  flock from a separate test thread (without writing
+  a pid); spawn `rfl chat`; exits non-zero with
+  stderr citing "unknown process" and pointing at
+  the lockfile path.
 - `rfl_chat_replay_withheld_until_frontend_ready.rs` —
   pi-3 #2 + pi-2 #6 + pi-4 #5: this assertion lives at
   the CLI layer because the readiness gate is in `rfl
@@ -2729,6 +2785,31 @@ the rafaello-tui crate's tests.
 - `parent_socket_pair()` — creates a socketpair and
   returns the parent end as a `tokio::net::UnixStream`,
   child fd as `OwnedFd` to inherit.
+
+`workspace_bin_path.rs` (in rafaello/tests/common/, the
+CLI test layer): pi-15 #5 — the rafaello/tests/ negative
+tests need to point `RFL_TUI_PATH` at both `rfl-tui`
+(rafaello-tui crate) AND `rfl-bus-fixture` (rafaello-core
+crate); `env!("CARGO_BIN_EXE_*")` only works for binaries
+in the SAME crate as the test, so neither resolves cleanly
+from `rafaello/tests/`. Round 16 introduces a shared
+helper:
+```rust
+// rafaello/tests/common/workspace_bin_path.rs
+pub fn workspace_bin(name: &str) -> PathBuf {
+    // Prefer CARGO_TARGET_DIR if set; otherwise walk up
+    // from CARGO_MANIFEST_DIR to the workspace root and
+    // use `target/<profile>/<name>`. Profile is "debug"
+    // for cargo test, "release" for cargo test --release.
+    // Returns an absolute path; panics if the binary is
+    // not present (test harness should run cargo build
+    // --workspace --bins --features rafaello-core/test-fixture
+    // first; the m3 CI workflow does this).
+}
+```
+The headline `rfl_chat_demo_bar.rs`, the negative tests
+that point `RFL_TUI_PATH` at `rfl-bus-fixture` modes, and
+the env-override end-to-end test all use this helper.
 
 Manual validation: §I integration tests are the contract;
 m3's `manual-validation.md` records:
