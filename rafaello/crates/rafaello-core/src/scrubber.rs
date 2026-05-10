@@ -27,6 +27,7 @@ const RESERVED_ENV_VARS: &[&str] = &[
     "RFL_TOPIC_ID",
     "RFL_PROJECT_ROOT",
     "RFL_PRIVATE_STATE_DIR",
+    "RFL_PROVIDER_ID",
 ];
 
 /// Scope §Sc2: scrub an `env.pass` list against `SECRET_PATTERNS`.

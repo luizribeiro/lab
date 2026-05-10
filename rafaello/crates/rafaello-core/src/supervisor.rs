@@ -53,6 +53,7 @@ const RESERVED_ENV_VARS: &[&str] = &[
     "RFL_PROJECT_ROOT",
     "RFL_PRIVATE_STATE_DIR",
     "RFL_TOPIC_ID",
+    "RFL_PROVIDER_ID",
 ];
 
 /// Supervisor-wide tunables (scope §SP1).
