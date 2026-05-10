@@ -6,6 +6,9 @@ pub mod peer_test_kit;
 #[cfg(feature = "test-fixture")]
 pub mod m2_harness;
 
+#[cfg(all(feature = "test-fixture", target_os = "linux"))]
+pub mod fixture_smoke;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

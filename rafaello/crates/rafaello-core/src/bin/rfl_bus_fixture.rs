@@ -1,5 +1,6 @@
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use fittings_client::Client;
@@ -142,12 +143,22 @@ const REAL_BUS_MODES: &[&str] = &[
     "publish_bad_in_reply_to_multiple",
     "call_core_then_exit",
     "observer",
+    "signal_ready",
+    "hold_silent",
+    "signal_ready_then_exit_n",
+    "frontend_bus_publish",
 ];
 
 fn main() {
     let mode = std::env::var("RFL_FIXTURE_MODE").unwrap_or_default();
     if mode == "scaffold_only" {
         return;
+    }
+    if mode == "exit_immediately" {
+        std::process::exit(0);
+    }
+    if mode == "probe_fd_closed" {
+        run_probe_fd_closed();
     }
     if !REAL_BUS_MODES.contains(&mode.as_str()) {
         eprintln!("rfl-bus-fixture: unknown mode '{}'", mode);
@@ -163,6 +174,7 @@ fn main() {
 }
 
 async fn run_bus_backed(mode: &str) {
+    install_max_lifetime();
     maybe_install_sigterm_trap();
     let transport = build_bus_transport();
     let client = Client::connect(OneShotConnector::new(transport))
@@ -173,6 +185,44 @@ async fn run_bus_backed(mode: &str) {
         "respond_peer_call" => {
             let client = client.with_service(RespondPeerCallService);
             ack_ready(&client, mode).await;
+            std::future::pending::<()>().await;
+        }
+        "signal_ready" => {
+            client
+                .peer()
+                .call("frontend.ready", json!({}))
+                .await
+                .expect("frontend.ready ack");
+            std::future::pending::<()>().await;
+        }
+        "hold_silent" => {
+            std::future::pending::<()>().await;
+        }
+        "signal_ready_then_exit_n" => {
+            client
+                .peer()
+                .call("frontend.ready", json!({}))
+                .await
+                .expect("frontend.ready ack");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let n: i32 = std::env::var("RFL_FIXTURE_EXIT_CODE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(7);
+            std::process::exit(n);
+        }
+        "frontend_bus_publish" => {
+            client
+                .peer()
+                .call("frontend.ready", json!({}))
+                .await
+                .expect("frontend.ready ack");
+            let topic = std::env::var("RFL_FIXTURE_PUBLISH_TOPIC")
+                .expect("RFL_FIXTURE_PUBLISH_TOPIC not set");
+            client
+                .notify("bus.publish", json!({"topic": topic, "payload": {}}))
+                .await
+                .expect("bus.publish notify");
             std::future::pending::<()>().await;
         }
         "observer" => {
@@ -228,6 +278,32 @@ async fn run_bus_backed(mode: &str) {
             std::process::exit(0);
         }
         _ => unreachable!("mode dispatch already validated"),
+    }
+}
+
+fn install_max_lifetime() {
+    let secs: u64 = std::env::var("RFL_FIXTURE_MAX_LIFETIME")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(secs)).await;
+        std::process::exit(0);
+    });
+}
+
+fn run_probe_fd_closed() -> ! {
+    let mut args = std::env::args().skip(1);
+    let mut probe_fd: Option<RawFd> = None;
+    while let Some(a) = args.next() {
+        if a == "--probe-fd" {
+            probe_fd = args.next().and_then(|s| s.parse().ok());
+        }
+    }
+    let fd = probe_fd.expect("--probe-fd <N> required");
+    match nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFD) {
+        Err(nix::errno::Errno::EBADF) => std::process::exit(0),
+        _ => std::process::exit(1),
     }
 }
 
