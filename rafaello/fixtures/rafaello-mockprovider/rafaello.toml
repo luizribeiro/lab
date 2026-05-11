@@ -1,0 +1,20 @@
+schema = 1
+name = "mockprovider"
+version = "0.0.0"
+entry = "bin/rfl-mockprovider"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+provider = "mock"
+
+[bus]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.mock.tool_request", "provider.mock.assistant_message"]
+
+[capabilities.default.filesystem]
+read_dirs = []
+write_dirs = []
+
+[capabilities.default.network]
+mode = "deny"
