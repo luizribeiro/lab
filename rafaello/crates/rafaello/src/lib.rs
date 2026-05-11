@@ -307,6 +307,8 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     subscribe_patterns.insert("core.lifecycle.**".to_string());
     let mut publish_topics = BTreeSet::new();
     publish_topics.insert("frontend.tui.user_message".to_string());
+    publish_topics.insert("frontend.tui.confirm_answer".to_string());
+    publish_topics.insert("frontend.tui.slash_command".to_string());
     acl.frontends.insert(
         attach,
         FrontendAcl {
