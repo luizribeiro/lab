@@ -4,6 +4,7 @@
 pub mod frontend_test_kit;
 pub mod peer_test_kit;
 pub mod provider_test_kit;
+pub mod reemit_test_kit;
 pub mod session_test_kit;
 
 #[cfg(feature = "test-fixture")]
