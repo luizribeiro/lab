@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use rafaello_core::agent::AgentLoop;
 use rafaello_core::broker_acl::{self, AttachId, FrontendAcl};
 use rafaello_core::bus::Broker;
 use rafaello_core::compile::{compile_plugin, CompiledPlugin, EnvPlan};
@@ -28,6 +29,7 @@ use rafaello_core::frontend::{
 use rafaello_core::lock::{CanonicalId, Lock};
 use rafaello_core::manifest::Manifest;
 use rafaello_core::paths::PathContext;
+use rafaello_core::reemit::ReemitRouter;
 use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
 use rafaello_core::supervisor::{PluginSupervisor, SpawnHandle, SpawnPaths, SupervisorConfig};
@@ -315,6 +317,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     );
 
     // Step C5: broker → plugin supervisor → frontend supervisor → registry → pipeline → controller.
+    let acl_for_routing = acl.clone();
     let broker = Broker::new(acl).map_err(|e| RflChatError::Broker(Box::new(e)))?;
     let plugin_supervisor = PluginSupervisor::new(broker.clone(), SupervisorConfig::default());
 
@@ -355,11 +358,33 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         spawn_handles.push(h);
     }
 
+    // Steps C9–C10: shutdown channel + ReemitRouter + AgentLoop spawned
+    // BEFORE the TUI starts, so the user_message → reemit → tool_request
+    // → tool_result chain is wired before any input arrives.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let router = ReemitRouter::new(
+        broker.clone(),
+        acl_for_routing.clone(),
+        provider_canonical.clone(),
+        shutdown_rx.clone(),
+    );
+    let router_join = router.start();
+
     let supervisor = FrontendSupervisor::new(broker.clone(), FrontendConfig::default());
     let registry = Arc::new(RendererRegistry::with_builtins());
     let pipeline = RenderPipeline::new(registry);
-    let controller = SessionController::new(store, pipeline, broker.clone());
+    let controller = Arc::new(SessionController::new(store, pipeline, broker.clone()));
     let caps = Capabilities::tui_default();
+
+    let agent = AgentLoop::new(
+        broker.clone(),
+        acl_for_routing,
+        controller.clone(),
+        caps.clone(),
+        shutdown_rx.clone(),
+    );
+    let agent_join = agent.start();
 
     let pass: Vec<String> = ENV_PASS_ALLOWLIST
         .iter()
@@ -390,17 +415,62 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         tokio::spawn(forward_child_stderr(stderr, lock))
     });
 
-    // Step 7: wait_ready with 5s timeout.
-    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.wait_ready()).await;
+    // Step 7: wait_ready (5s timeout) + post-ready wait; both race against
+    // ctrl_c to trigger the shared shutdown sequence at the bottom.
+    let inner = run_chat_after_spawns(
+        handle,
+        forwarder,
+        &stderr_writer_lock,
+        &controller,
+        &broker,
+        &caps,
+    )
+    .await;
 
-    match outcome {
-        Ok(Ok(())) => {
-            write_parent_sentinel(&stderr_writer_lock, "rfl-chat: frontend-ready-observed").await;
-            run_post_ready(handle, forwarder, &controller, &broker, &caps).await?;
-            drop(spawn_handles);
+    // Steps C11–C12: signal shutdown → join router + agent → drop plugin
+    // handles → plugin supervisor shutdown.
+    let _ = shutdown_tx.send(true);
+    let _ = router_join.await;
+    let _ = agent_join.await;
+    drop(spawn_handles);
+    let _shutdown_report = plugin_supervisor.shutdown().await;
+
+    inner
+}
+
+async fn run_chat_after_spawns(
+    mut handle: FrontendHandle,
+    forwarder: Option<tokio::task::JoinHandle<()>>,
+    stderr_writer_lock: &Arc<tokio::sync::Mutex<()>>,
+    controller: &Arc<SessionController>,
+    broker: &Broker,
+    caps: &Capabilities,
+) -> Result<(), RflChatError> {
+    let ready = tokio::select! {
+        biased;
+        _ = tokio::signal::ctrl_c() => ReadyOutcome::CtrlC,
+        res = tokio::time::timeout(Duration::from_secs(5), handle.wait_ready()) => {
+            match res {
+                Ok(Ok(())) => ReadyOutcome::Ready,
+                Ok(Err(_)) => ReadyOutcome::SenderDropped,
+                Err(_) => ReadyOutcome::Timeout,
+            }
+        }
+    };
+
+    match ready {
+        ReadyOutcome::Ready => {
+            write_parent_sentinel(stderr_writer_lock, "rfl-chat: frontend-ready-observed").await;
+            run_post_ready(handle, forwarder, controller, broker, caps).await
+        }
+        ReadyOutcome::CtrlC => {
+            let _ = handle.shutdown().await;
+            if let Some(j) = forwarder {
+                let _ = j.await;
+            }
             Ok(())
         }
-        Ok(Err(_ready_err)) => {
+        ReadyOutcome::SenderDropped => {
             let _ = handle.shutdown().await;
             if let Some(j) = forwarder {
                 let _ = j.await;
@@ -409,7 +479,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
                 reason: "ready-watch sender dropped before ready was signalled".to_string(),
             })
         }
-        Err(_elapsed) => {
+        ReadyOutcome::Timeout => {
             let _ = handle.shutdown().await;
             if let Some(j) = forwarder {
                 let _ = j.await;
@@ -417,6 +487,13 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             Err(RflChatError::FrontendReadyTimeout)
         }
     }
+}
+
+enum ReadyOutcome {
+    Ready,
+    CtrlC,
+    SenderDropped,
+    Timeout,
 }
 
 fn print_lock_held(holder_pid: Option<u32>) {
@@ -457,7 +534,7 @@ async fn write_parent_sentinel(writer_lock: &Arc<tokio::sync::Mutex<()>>, line: 
 async fn run_post_ready(
     mut handle: FrontendHandle,
     forwarder: Option<tokio::task::JoinHandle<()>>,
-    controller: &SessionController,
+    controller: &Arc<SessionController>,
     broker: &Broker,
     caps: &Capabilities,
 ) -> Result<(), RflChatError> {
@@ -470,8 +547,17 @@ async fn run_post_ready(
         if std::env::var_os("RFL_HARNESS_FIXTURES").as_deref() == Some(std::ffi::OsStr::new("1")) {
             run_fixture_harness(controller, broker, caps).await?;
         }
-        let outcome = handle.wait().await;
-        step10_outcome = Some(map_outcome(&outcome));
+        let exited_via_ctrl_c = tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() => true,
+            outcome = handle.wait() => {
+                step10_outcome = Some(map_outcome(&outcome));
+                false
+            }
+        };
+        if exited_via_ctrl_c {
+            step10_outcome = Some(Ok(()));
+        }
         Ok(())
     }
     .await;

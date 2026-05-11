@@ -12,8 +12,10 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use rafaello_core::digest;
 use rafaello_core::lock::{
-    Bindings, CanonicalId, Grant, LoadPolicy, Lock, LockFlags, PluginEntry, SessionTable,
+    Bindings, CanonicalId, Grant, GrantBundle, GrantFilesystem, GrantNetwork, LoadPolicy, Lock,
+    LockFlags, PluginEntry, SessionTable,
 };
+use rafaello_core::manifest::capabilities::NetworkMode;
 use rafaello_core::manifest::{Manifest, SafePath};
 use rafaello_core::topic_id;
 
@@ -128,13 +130,40 @@ fn install_plugin(
     let manifest_digest = digest::manifest_digest(&manifest.canonical_bytes());
     let content_digest = digest::content_digest(&install_dir).expect("content digest");
 
+    let (bus_subscribes, bus_publishes) = manifest
+        .bus
+        .as_ref()
+        .map(|b| (b.subscribes.clone(), b.publishes.clone()))
+        .unwrap_or_default();
+
+    let mut bundles = std::collections::BTreeMap::new();
+    bundles.insert(
+        "default".to_string(),
+        GrantBundle {
+            filesystem: Some(GrantFilesystem {
+                read_dirs: vec![project_root.to_string_lossy().into_owned()],
+                exec_dirs: runtime_exec_dirs(),
+                ..GrantFilesystem::default()
+            }),
+            network: Some(GrantNetwork {
+                mode: NetworkMode::AllowAll,
+                allow_hosts: Vec::new(),
+            }),
+            ..GrantBundle::default()
+        },
+    );
+
     let granted_at: DateTime<Utc> = "2026-05-10T00:00:00Z".parse().unwrap();
     let entry = PluginEntry {
         entry: SafePath::parse(entry_rel).unwrap(),
         digest: content_digest,
         manifest_digest,
         granted_at,
-        grant: Grant::default(),
+        grant: Grant {
+            bundles,
+            subscribes: bus_subscribes,
+            publishes: bus_publishes,
+        },
         bindings: Bindings {
             provider,
             provider_id: provider_id.map(str::to_string),
@@ -146,4 +175,19 @@ fn install_plugin(
         flags: LockFlags::default(),
     };
     (canonical, entry)
+}
+
+fn runtime_exec_dirs() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(val) = std::env::var_os("LOCKIN_TEST_EXEC_DIRS") {
+        for d in std::env::split_paths(&val) {
+            if d.is_absolute() {
+                out.push(d.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push("/nix/store".to_string());
+    }
+    out
 }
