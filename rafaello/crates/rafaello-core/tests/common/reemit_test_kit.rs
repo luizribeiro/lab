@@ -9,10 +9,16 @@
 //! plugin and tool-route map.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::Arc;
 
+use rafaello_core::audit::AuditWriter;
 use rafaello_core::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use rafaello_core::bus::{Broker, BusEvent, InternalSubscription};
 use rafaello_core::lock::CanonicalId;
+use rafaello_core::renderer::{RenderPipeline, RendererRegistry};
+use rafaello_core::session::{SessionController, SessionStore};
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 use super::peer_test_kit::fresh_peer;
@@ -51,10 +57,13 @@ pub fn readfile_plugin_acl() -> PluginAcl {
     }
 }
 
-pub fn tui_frontend_acl(publish_user_message: bool) -> FrontendAcl {
+pub fn tui_frontend_acl(publish_user_message: bool, publish_confirm_answer: bool) -> FrontendAcl {
     let mut publish_topics = BTreeSet::new();
     if publish_user_message {
         publish_topics.insert(format!("frontend.{TUI_ATTACH_ID}.user_message"));
+    }
+    if publish_confirm_answer {
+        publish_topics.insert(format!("frontend.{TUI_ATTACH_ID}.confirm_answer"));
     }
     FrontendAcl {
         subscribe_patterns: BTreeSet::new(),
@@ -68,6 +77,7 @@ pub struct RigOpts {
     pub include_readfile_plugin: bool,
     pub tool_routes: Vec<(&'static str, &'static str)>,
     pub include_tui_frontend: bool,
+    pub tui_publish_confirm_answer: bool,
     pub extra_plugins: Vec<(CanonicalId, PluginAcl)>,
 }
 
@@ -108,7 +118,10 @@ pub fn build_rig(opts: RigOpts) -> ReemitRig {
     };
     let mut frontends = BTreeMap::new();
     if let Some(aid) = &frontend_attach {
-        frontends.insert(aid.clone(), tui_frontend_acl(true));
+        frontends.insert(
+            aid.clone(),
+            tui_frontend_acl(true, opts.tui_publish_confirm_answer),
+        );
     }
 
     let acl = BrokerAcl {
@@ -217,6 +230,57 @@ pub async fn drain_for(
         }
     }
     out
+}
+
+/// Audit-writer rig for §CT5 re-emit tests. Holds the SQLite tempdir
+/// and `SessionController` so the writer's underlying connection stays
+/// alive; exposes `writer` for wiring into `ReemitRouter` and `rows()`
+/// for raw-SQLite readback of `audit_events`.
+pub struct AuditRig {
+    pub writer: Arc<AuditWriter>,
+    pub sqlite_path: PathBuf,
+    _tmp: TempDir,
+    _controller: SessionController,
+}
+
+impl AuditRig {
+    pub fn new(broker: &Broker) -> Self {
+        let tmp = tempfile::tempdir().expect("audit tempdir");
+        let sqlite_path = tmp.path().join("session.sqlite");
+        let store = SessionStore::open(tmp.path()).expect("session store opens");
+        let pipeline = RenderPipeline::new(Arc::new(RendererRegistry::with_builtins()));
+        let controller = SessionController::new(store, pipeline, broker.clone());
+        let writer = controller.audit_writer();
+        Self {
+            writer,
+            sqlite_path,
+            _tmp: tmp,
+            _controller: controller,
+        }
+    }
+
+    /// Read all `audit_events` rows back via raw SQLite (sequence,
+    /// kind, request_id, payload JSON).
+    pub fn rows(&self) -> Vec<(i64, String, Option<String>, serde_json::Value)> {
+        let conn = rusqlite::Connection::open(&self.sqlite_path).expect("audit readback");
+        let mut stmt = conn
+            .prepare("SELECT seq, kind, request_id, payload FROM audit_events ORDER BY seq")
+            .expect("prepare select");
+        let rows = stmt
+            .query_map([], |row| {
+                let seq: i64 = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let rid: Option<String> = row.get(2)?;
+                let payload: String = row.get(3)?;
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload).expect("payload is JSON");
+                Ok((seq, kind, rid, payload))
+            })
+            .expect("query")
+            .map(|r| r.expect("row"))
+            .collect();
+        rows
+    }
 }
 
 /// Assert the event carries exactly one taint entry with the given
