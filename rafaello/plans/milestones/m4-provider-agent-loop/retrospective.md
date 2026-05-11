@@ -1,16 +1,19 @@
 # m4 — provider fixture + secure agent loop + one read-only tool — retrospective
 
-> **Status: round-3, 2026-05-11.** Round-2 pi review
-> (`retrospective-pi-review-2.md`) flagged 2 blockers + 2
-> nits; **pi-review-2 addressed: 2/2 blockers + 2/2 nits
-> closed** in this revision (see "Round-3 patch summary"
-> immediately below). Round 1 (5b + 2n) was closed by
-> the round-2 patch summary further down. m0 needed 2
-> retro rounds, m1 needed 4, m2 needed 2, m3 needed 4.
+> **Status: round-4, 2026-05-11.** Round-3 pi review
+> (`retrospective-pi-review-3.md`) flagged 3 blockers + 2
+> nits; **pi-review-3 addressed: 3/3 blockers + 2/2 nits
+> closed** in this revision (see "Round-4 patch summary"
+> immediately below). Round 2 pi review (2b + 2n) was
+> closed by the round-3 patch summary further down;
+> round 1 (5b + 2n) was closed by the round-2 patch
+> summary. m0 needed 2 retro rounds, m1 needed 4, m2
+> needed 2, m3 needed 4.
 >
-> Worktree `/home/luiz/lab-wt/m4-retro-r3` on branch
-> `agents/m4/retro-r3`, forked off `agents/m4/driver` at
-> `70e0114` (the round-2 retrospective commit). 28
+> Worktree `/home/luiz/lab-wt/m4-retro-r4` on branch
+> `agents/m4/retro-r4`, forked off `agents/m4/driver` at
+> `442731b` (the round-3 retrospective commit, after
+> pi-review-3 landed on the driver branch). 28
 > plan-row commits (`8c4a1f1..462f8e7`) land in 1:1
 > correspondence with `commits.md` round 3 ratification,
 > plus the Phase-3 follow-up fix commit (`0a0e824`) that
@@ -35,6 +38,47 @@
 > chat` recording and macOS CI run URL remain deferred
 > to the post-retrospective driver sweep (matches the
 > m3 round-1 retrospective shape).
+>
+> **Round-4 patch summary (pi-review-3 closure):**
+> - B1 (decisions row 44 rationale inverted `provider_id`
+>   vs `session.provider_active`) → row 44 rationale
+>   corrected to match the live code: the active provider
+>   plan is selected by **canonical id**
+>   (`lock.session.provider_active: Option<String>` parsed
+>   via `CanonicalId::parse` and looked up in
+>   `compiled_plugins`); `provider_id` is the separate
+>   public-namespace segment populated from
+>   `entry.bindings.provider_id` into `PluginAcl.provider_id`
+>   by `broker_acl::compile` (commit `63abf51`).
+> - B2 (Stream A §5 banner kept stale provider API claims)
+>   → banner corrected to the live signature
+>   `Broker::register_provider(canonical: CanonicalId, peer:
+>   PeerHandle) -> Result<RegisteredProvider, BrokerError>`,
+>   the `RegisteredProvider` RAII type name, the
+>   `bindings.provider: bool` + `bindings.provider_id:
+>   Option<String>` lock shape (no `class = "provider"`
+>   discriminator), and the c13 mismatch check located in
+>   `Broker::new` ACL revalidation as
+>   `BrokerError::InvalidTopic` (exercised by
+>   `broker_construct_with_provider_publish_id_mismatch_rejected.rs`),
+>   not at `BrokerAcl::compile` (commit `41768a5`).
+> - B3 (§5.5 still incomplete + `m4_lock_fixture.rs`
+>   misdescribed) → §5.5 below adds the c14 production
+>   `#[allow(dead_code)]` on `supervisor.rs:176`
+>   `SpawnRegistration` (held only for RAII drop; same
+>   class as the c09 `bus.rs:101` `ProviderConn` allow),
+>   bumps the production-site count to **4**, and
+>   corrects the `m4_lock_fixture.rs` entry from
+>   "module-level `#![allow(dead_code)]`" to the actual
+>   "two item-level function `#[allow(dead_code)]`"
+>   shape (one on `write_stub_lock` from c24, one on
+>   `write_empty_lock` from c25).
+> - N1 (round labels stale) → status frontmatter bumped
+>   to round 4; `manual-validation.md` round-label
+>   refresh follows in a separate commit.
+> - N2 (retrospective uses stale `ProviderGuard` name) →
+>   §3.2 c09 narrative + §5.5 `bus.rs:101` rationale now
+>   say `RegisteredProvider` (the live public type).
 >
 > **Round-3 patch summary (pi-review-2 closure):**
 > - B1 (`PublisherIdentity::Provider` docs omit live
@@ -87,7 +131,7 @@
 >   tasks.
 >
 > Ratification gates pending at this revision:
-> 1. ⏳ Pi adversarial review of this round-2 document.
+> 1. ⏳ Pi adversarial review of this round-4 document.
 > 2. ⏳ macOS CI green after branch push (hard gate, m3
 >    precedent — `scope.md` §"Acceptance summary").
 > 3. ⏳ `manual-validation.md` records interactive demo-bar
@@ -550,7 +594,7 @@ most coupled phase.
   the `Provider`-publisher arms on existing variants.
   Adds `broker_error_provider_variants_round_trip.rs`.
 - **c09** (`f2c07ad`) — `register_provider` + RAII
-  `ProviderGuard` (B5). Three positives + two negatives
+  `RegisteredProvider` (B5). Three positives + two negatives
   (`broker_register_provider_*`).
 - **c10** (`0272188`) — `handle_provider_publish` +
   `provider_observed_results` / `provider_observed_user_messages`
@@ -937,11 +981,18 @@ All per-commit walks closed clippy clean under the
 pre-commit clippy hook (`cargo clippy -- -D warnings`).
 Round-2 §5.5 mistakenly claimed only one m4
 suppression existed and that none were in production
-crates; pi-review-2 B2 caught the omission. The
-complete m4-introduced inventory is below — `git blame`
-verifies each site lands in an m4 plan-row commit.
+crates (pi-review-2 B2 caught the omission); round-3
+§5.5 expanded the list but still omitted the c14
+`supervisor.rs:176` production allow and misdescribed
+the `m4_lock_fixture.rs` test sites (pi-review-3 B3).
+The complete m4-introduced inventory below was
+re-audited by walking every `allow(` match in
+`crates/rafaello-{core,mockprovider,readfile}` and
+`crates/rafaello/tests/common/` with `git blame` —
+`git blame` verifies each site lands in an m4 plan-row
+commit (m0–m3 carryover sites are not re-listed).
 
-**Production code (3 sites).**
+**Production code (4 sites).**
 
 - `rafaello-core/src/reemit/mod.rs:1` —
   `#![allow(clippy::result_large_err)]`. Introduced by
@@ -972,7 +1023,7 @@ verifies each site lands in an m4 plan-row commit.
   by c09 (`f2c07ad`). Rationale: `ProviderConn` is
   registered into `BrokerState::providers` by
   `register_provider` and held alive for as long as
-  the `ProviderGuard` exists; the `peer` field is
+  the `RegisteredProvider` exists; the `peer` field is
   stored so the broker owns the handle (and the I/O
   task it transitively holds) for the registration
   window, but no m4 code path reads it back out of
@@ -981,8 +1032,25 @@ verifies each site lands in an m4 plan-row commit.
   inert. Field-local `#[allow(dead_code)]` is the
   smallest scope that suppresses the warning without
   hiding future drift.
+- `rafaello-core/src/supervisor.rs:176` —
+  `#[allow(dead_code)]` on `SpawnRegistration`
+  (`enum { Plugin(RegisteredPlugin),
+  Provider(RegisteredProvider) }`). Introduced by c14
+  (`c0cb6e2`) when the supervisor started discriminating
+  plugin vs. provider broker registration so its RAII
+  drop releases the right registry slot. Inline source
+  rationale `Held only for RAII drop; never read.`
+  matches the same class as the c09 `bus.rs:101`
+  `ProviderConn` allow: the enum value is constructed
+  and stored on the spawned-record solely so the
+  `Drop` impl on the wrapped guard fires when the
+  record is dropped; no code path reads the variant
+  back out. m5's confirmation gate is the natural reader
+  (mirrors the `ProviderConn::peer` follow-up); until
+  then the suppression is intentional. **Round-3 §5.5
+  omitted this site** — pi-review-3 B3 caught the gap.
 
-**Test code (1 + N sites).**
+**Test code (2 + N sites).**
 
 - `rafaello/crates/rafaello/tests/common/m4_install.rs:93`
   — `#[allow(clippy::too_many_arguments)]` on the
@@ -993,13 +1061,24 @@ verifies each site lands in an m4 plan-row commit.
   fixture builder; collapsing into a builder struct
   was rejected at c25 review as out of scope for a
   test-only helper. Local to the test common module.
+- `rafaello/crates/rafaello/tests/common/m4_lock_fixture.rs`
+  — **two item-level** `#[allow(dead_code)]` function
+  suppressions (one on `write_stub_lock`, c24
+  `a01f565`; one on `write_empty_lock`, c25 `8dbdfbb`)
+  rather than the module-level `#![allow(dead_code)]`
+  the round-3 entry described. The two helpers are
+  used by different subsets of the orchestration
+  negatives, so each carries a function-local allow
+  to keep clippy quiet for the binaries that don't
+  call it. Round-3 §5.5 misdescribed the site shape
+  (pi-review-3 B3); function-local matches the live
+  file.
 - Test common-module module-level `#![allow(dead_code)]`
   on the following `tests/common/` files —
   `provider_test_kit.rs` (c10), `reemit_test_kit.rs`
   (c18), `agent_test_kit.rs` (c19),
   `mock_provider_handle.rs` (c21),
-  `read_file_tool_handle.rs` (c23),
-  `m4_lock_fixture.rs` (c24 / c25), and
+  `read_file_tool_handle.rs` (c23), and
   `m4_install.rs` (c25). Rationale: files under
   `tests/common/` are compiled as part of **every**
   integration-test binary in the crate, but each
@@ -1121,27 +1200,31 @@ is the build gate's exact form (the explicit
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ re-captured 2026-05-11 on round-2 branch after the bus.rs intra-doc-link fix (`639d7f0`); `/tmp/m4-doc.log` has zero `warning:` lines |
 | `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ companion refreshed in round 2 with Linux test/build/doc transcripts (`844c17d`); §5 owner-acceptance wording softened in round 3 to match retro §5.3 (`adf763f`, pi-r2 N1); interactive recording + macOS CI URL pending the post-retrospective driver sweep |
 | Stream A §10 v1-summary banner patch | ✅ §2.1 — landed as `c222087` |
-| `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — round-2 `9bd24e3` introduced the entry; round-3 `2e87e44` corrected it to the live three-field `{canonical, provider_id, topic_id}` shape per pi-r2 B1 |
+| `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — round-2 `9bd24e3` introduced the entry; round-3 `2e87e44` added the `topic_id` segment per pi-r2 B1; round-4 `41768a5` corrected the banner's live-API claims (`register_provider` signature + `RegisteredProvider` RAII type + `bindings.provider` lock shape + `Broker::new` `InvalidTopic` check location) per pi-r3 B2 |
 | `decisions.md` row for `BusEvent.request_id` rollout | ✅ §2.3 — landed as `d51caba` (row 43) |
-| `decisions.md` row for `Publisher::Provider` variant | ✅ §2.4 — round-2 `d51caba` ratified row 44; round-3 `fdac914` added `topic_id` to the `PublisherIdentity::Provider` shape and softened the rationale per pi-r2 B1 + N2 |
+| `decisions.md` row for `Publisher::Provider` variant | ✅ §2.4 — round-2 `d51caba` ratified row 44; round-3 `fdac914` added `topic_id` to the `PublisherIdentity::Provider` shape and softened the rationale per pi-r2 B1 + N2; round-4 `63abf51` corrected the rationale to match the live `provider_active` vs `provider_id` distinction per pi-r3 B1 |
 | m1 `check_lock_publish_topic` unknown-namespace gap | §2.6 — re-filed for m5+, no commit needed |
 | Provider-side env-var documentation in `overview.md` §4.6 | ✅ §2.5 — landed as `63f6997` |
-| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 3; pi-review-1 closed in round 2, pi-review-2 closed in round 3 — see "Round-3 patch summary") |
+| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 4; pi-review-1 closed in round 2, pi-review-2 closed in round 3, pi-review-3 closed in round 4 — see "Round-4 patch summary") |
 
 ---
 
-**m4 round-3 retrospective complete 2026-05-11.**
+**m4 round-4 retrospective complete 2026-05-11.**
 Pi-review-1 (5/5 blockers + 2/2 nits) closed in round 2;
-**pi-review-2 (2/2 blockers + 2/2 nits) closed in
-round 3**. Round-3 follow-up commits on this branch:
-`fdac914` (decisions row 44 — `topic_id` + softer
-rationale, pi-r2 B1 + N2), `2e87e44` (Stream A §5
-banner — `topic_id`, pi-r2 B1), `adf763f`
-(manual-validation §5 wording, pi-r2 N1), plus
-`<this-commit>` (the round-3 retro patch itself,
-pi-r2 B2 §5.5 inventory). Pi round-3 review next per
-`plans/README.md` §"Patterns from prior milestones";
-the macOS CI run + interactive demo recording land in
+pi-review-2 (2/2 blockers + 2/2 nits) closed in round 3;
+**pi-review-3 (3/3 blockers + 2/2 nits) closed in
+round 4**. Round-4 follow-up commits on this branch:
+`63abf51` (decisions row 44 rationale — `provider_active`
+vs `provider_id`, pi-r3 B1), `41768a5` (Stream A §5
+banner — `register_provider` signature +
+`RegisteredProvider` + `bindings.provider` shape +
+`Broker::new` `InvalidTopic` location, pi-r3 B2), plus
+`<this-commit>` (the round-4 retro patch itself,
+pi-r3 B3 §5.5 inventory + N1 round labels + N2
+`RegisteredProvider` naming). Pi round-4 review next
+per `plans/README.md` §"Patterns from prior milestones"
+(m1 also needed exactly 4 retro rounds); the macOS CI
+run + interactive demo recording land in
 `manual-validation.md` once the branch pushes.
 m5 inherits: the new `Provider` publisher class + envelope
 machinery, the `subscribe_internal` primitive and
