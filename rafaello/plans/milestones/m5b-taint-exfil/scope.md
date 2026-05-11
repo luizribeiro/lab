@@ -1,527 +1,115 @@
 # m5b — taint matching + propagation + verbatim exfil demo — scope
 
-> **Status:** round 5 — folds `scope-pi-review-4.md`
-> (3 blockers / 6 majors / 4 nits). Pi-4 verified
-> all 12 pi-3 findings resolved; no pi-3 item is
-> carried verbatim. The three fresh blockers are
-> consistency / mechanics issues exposed by the
-> round-4 fold (request-id race symmetric to the
-> result-id one, PT1 synthetic payload's
-> non-stored `tool` field, EXFIL1 expecting an
-> `error` field the live agent loop drops). Pi-4
-> reiterated four owner-judgment items on the
-> convergence call; they map to §"Owner-judgment
-> items" **1, 2, 3, 8** (canonical tool_result
-> ancestry, EXFIL2 inclusion, fetch fixture
-> shape, unknown-id fail-open semantics — pi-4
-> M-6 ripple corrected the round-4 banner's
-> "1, 2, 8, 3 / 6" wording).
+> **Status:** round 6 — folds `scope-pi-review-5.md`
+> (2 blockers / 5 majors / 4 nits). Pi-5 verified
+> all pi-4 findings resolved; no pi-4 carry-overs.
+> Round-6 closes the two fresh mechanics blockers
+> (publish-side fault seam, production
+> audit-wiring ordering test) plus the five
+> majors and four nits. Convergence trajectory:
+> 6B → 3B → 3B → 3B → 2B → (pending pi-6).
 >
-> Round-5 fixes by pi-4 finding:
+> History trimmed per pi-5 N-4: detailed
+> round-by-round fix lists live in
+> `scope-pi-review-N.md` (pi review notes are
+> authoritative for trajectory). A one-line
+> changelog pointer sits at the bottom of this
+> file.
 >
-> - **B-1** §TR3 ordering mirrored from §TR1: the
->   provider tool_request's `event.request_id` is
->   captured pre-publish, the canonical taint is
->   computed (steps `value_match_lookup ∪
->   referenced_union ∪ provider-identity`), and
->   `ReferencedTaintIndex.record_request` is
->   called **before** `publish_core_with_taint`.
->   The gate (an internal subscriber of
->   `core.session.tool_request`) therefore finds
->   the request-id arm populated before fan-out.
->   New test
->   `reemit_tool_request_records_request_id_before_fan_out.rs`.
->   TTL-bounded stale entry on publish failure;
->   the §TR1 publish-failure paragraph is also
->   rewritten to distinguish the two arms
->   (pi-4 N-1).
-> - **B-2** §PT1 synthetic `core.session.tool_result`
->   payload drops the `tool` field: shape is now
->   `{"ok": false, "error":
->   "plugin_taint_superset_violation",
->   "content": ""}` — the m5a deny-shaped
->   payload that the live agent loop persists
->   via `ToolResultPayload { call_id, ok,
->   content, details: None }`. `OutstandingDispatch`
->   does not store the originating tool name and
->   m5b does not add it; the synthetic payload
->   is mechanically reachable from the data the
->   broker already has at violation time. Test
->   updated to match.
-> - **B-3** §EXFIL1 `entries`-table golden now
->   asserts the turn-2 `tool_result` row as
->   `kind = tool_result`, `ok = false`,
->   `call_id = <turn-2 tool_request request_id>`,
->   `content = ""` (m5a-shipped persistence
->   shape). The `error` field is **not** asserted
->   on the `entries` row — the live agent loop
->   drops it. The `confirm_denied` audit row is
->   the operator-visible observer of the
->   user-denied state; the raw error string
->   (synthetic-deny payload) is only verifiable
->   via an internal-subscriber test or the
->   audit kind, not via `entries`.
+> Round-6 fixes by pi-5 finding:
 >
-> - **M-1** §TR4a `record_request` / `record_result`
->   doc comments rewritten: both arms now say
->   "Called **before** the canonical
->   `core.session.tool_request` / `tool_result`
->   is published, using the id that will be
->   forwarded on the canonical envelope (the
->   inbound event's `request_id`)."
-> - **M-2** Internal split row 9 reworded: the
->   §TR1 ancestry-union commit records the
->   result id in `by_result_id` **before
->   publish / before fan-out** (matching the
->   §TR1 step ordering and the §TR3 mirror).
-> - **M-3** §A2 architectural-choice text
->   rewritten to describe the
->   `Broker::set_audit_writer(&self,
->   Arc<AuditWriter>)` + `Mutex<Option<...>>`
->   shape (matches §PT1 + internal split row
->   1'). The withdrawn-in-round-4 `with_audit_writer`
->   builder is gone.
-> - **M-4** §EXFIL1 turn 2 explicitly scripts
->   `in_reply_to = [<fetch-result-id>]` so the
->   §TR4b referenced-union arm picks up the
->   `{tool, rafaello-fetch}` entry redundantly
->   with the value-match arm. The audit-row
->   negative (no
->   `tool_request_taint_unioned_from_in_reply_to`
->   row) is therefore the "union is redundant"
->   shape, not the "in_reply_to is empty"
->   shape. §EXFIL3 keeps its explicit
->   `in_reply_to = []` shape distinct.
-> - **M-5** Commit budget arithmetic
->   recomputed: 25 numbered rows + row 1' +
->   row 3's extra commit = **27 commits
->   default**. With §A9 (~2-4 reserve) the
->   max is **29-31**. Internal-split sizing
->   paragraph updated; the "22-27" target
->   from round 2 / "28 max" from round 3 are
->   superseded.
-> - **M-6** Owner-item cross-references swept:
->   §A3 (substring threshold) → owner item
->   **5** (was "2"); §A10
->   (`ReferencedTaintIndex` unknown-id
->   fail-open) → owner item **8** (was "10");
->   status banner mapping → **1, 2, 3, 8**;
->   footer mapping verified. The convergence-
->   call set therefore is items 1 / 2 / 3 / 8.
+> - **B-1** §TR1 + §TR3 publish-failure tests
+>   replace the wrong fault seam. New scope
+>   item §TM4: a test-only
+>   `Broker::install_publish_test_hook(impl
+>   Fn(&BusEvent) -> Option<BrokerError> +
+>   Send + Sync + 'static)` fires **inside**
+>   `publish_core_with_taint` **after** the
+>   handler-side records but **before**
+>   `fan_out`. The two stale-entry tests are
+>   renamed and wired to the new hook (not the
+>   existing re-emit fault injector, which
+>   runs upstream of the handlers).
+> - **B-2** §PT1 production-wiring acceptance
+>   rewritten: assert `broker.set_audit_writer`
+>   is called **before** the first
+>   `PluginSupervisor::spawn` /
+>   `broker.register_plugin` (whichever the
+>   live `rfl chat` startup calls first), via a
+>   `rfl chat`-side startup instrumentation
+>   hook
+>   (`rfl::chat::TestStartupOrderingHook`).
+>   The pre-handshake PT1-violation claim is
+>   dropped. A separate post-spawn end-to-end
+>   PT1 violation test keeps the audit-row
+>   coverage. Two tests, distinct concerns.
 >
-> - **N-1** §TR1 publish-failure rationale
->   distinguishes the result-id arm (provider
->   intake's `provider_observed_results`
->   prevents a fabricated id from referencing
->   an unpublished result — stale entry is
->   harmless) from the match-map arm (a later
->   verbatim quote of the same bytes could
->   inherit the TTL-bounded taint of a failed
->   publish — accepted; the threat model is
->   provenance overreach is harmless,
->   underreach silently drops provenance).
-> - **N-2** §TM1
->   `taint_match_substring_handles_non_ascii_utf8.rs`
->   pins **`str::contains`** as the substring
->   matching primitive on JSON string leaves.
->   Rust's `str::contains` preserves UTF-8
->   character boundaries by construction; the
->   round-4 "byte-internal hit is acceptable"
->   carve-out is dropped. Multi-byte UTF-8
->   substrings match only on character-aligned
->   boundaries.
-> - **N-3** §TUI-MA1 mutual-exclusion error
->   text pinned: `Err(anyhow!("RFL_TUI_TEST_CONFIRM_ANSWER
->   and RFL_TUI_TEST_CONFIRM_ANSWERS are
->   mutually exclusive; set one or the
->   other"))` returned from
->   `rafaello_tui::env::load_from`. Test
->   `tui_env_rejects_both_singular_and_plural_set.rs`
->   snapshots the exact stderr line.
-> - **N-4** Status / history trimming: kept
->   for round 5 (the round-4 / round-3 / round-2
->   trajectory is load-bearing for a future
->   convergence pass); once round 6 reports
->   "zero blockers, one polish fold", the
->   history banner trims to the latest two
->   rounds with links to the review files.
+> - **M-1** Internal split reordered: the
+>   `AuditKind` table-extension commit (was
+>   row 13) moves to **row 1''**, ahead of
+>   every consumer (rows 8, 10, 14). Per-
+>   commit green bar holds without
+>   `#[allow(unused)]` shims.
+> - **M-2** §PT1 lifecycle-rejection ownership
+>   pinned: the **outer**
+>   `emit_publish_rejected_for_plugin` mapper
+>   (live `bus.rs:1113-1154`) is extended with
+>   the `TaintSupersetViolated` arm
+>   (`code = "taint_superset_violated"`); the
+>   **inner** `handle_plugin_publish_inner`
+>   violation path owns only the audit-row
+>   write + the synthetic
+>   `core.session.tool_result` publish. No
+>   duplicate `core.lifecycle.publish_rejected`.
+> - **M-3** §TM3 + §TR4a cleanup model: the
+>   `TaintMatchMap.clear()` /
+>   `ReferencedTaintIndex.clear()` calls move
+>   into the shutdown branch of the spawned
+>   re-emit task (live
+>   `reemit/mod.rs:168-200` `tokio::select!`
+>   loop), where `shutdown_rx.changed()`
+>   already drives orderly teardown. The
+>   round-5 `ReemitRouter::Drop` claim was
+>   stale against `start(self)` ownership;
+>   removed.
+> - **M-4** §TR5 and §A9 reserve-language
+>   updated to the recomputed 27 default /
+>   29-31 max range. No more "27 ceiling"
+>   wording.
+> - **M-5** Scope text does not cite commit
+>   hashes. Pi review files cite the hash they
+>   reviewed; scope.md is hash-stable across
+>   worktrees / cherry-picks.
 >
-> ---
+> - **N-1** §TUI-MA1 wording: the
+>   mutual-exclusion test snapshots the
+>   returned error string (not a "stderr
+>   line"); CLI-level stderr coverage is out
+>   of scope for m5b.
+> - **N-2** Status preamble says "all pi-N
+>   findings" rather than counting them.
+> - **N-3** Internal split row 20 entries-
+>   golden language mirrors §EXFIL1 precise
+>   shape: `ok = false`,
+>   `call_id = <turn-2 send-mail tool_request
+>   request_id>`, `content = ""`,
+>   `details = None`. The "synthetic
+>   user_denied result" phrasing is dropped.
+> - **N-4** Status banner trimmed (this
+>   block); detailed round-by-round fix
+>   lists live in `scope-pi-review-N.md`.
 >
-> **(History — round 4 fix list, kept for trajectory.)**
->
-> Round-4 status: folded `scope-pi-review-3.md`
-> (3 blockers / 5 majors / 4 nits). Pi-3 verified
-> 12 of 13 pi-2 findings as resolved; two pi-2
-> blockers (B-1 / B-2) and one fresh blocker from
-> the pi-2 M-6 fold were closed by round 4.
->
-> Round-4 fixes by pi-3 finding (preserved):
->
-> - **B-1 (carry)** §TR1 ordering pinned:
->   `ReferencedTaintIndex.record_result` and
->   `TaintMatchMap.record` both happen **before**
->   `publish_core_with_taint` is called, using the
->   plugin result's `event.request_id`
->   (m4-guaranteed `Some` on `tool_result`) as the
->   pre-publish id. The ordering test
->   `reemit_tool_result_records_both_indexes_before_fan_out.rs`
->   covers **both** record paths. On publish
->   failure the cached entry is **TTL-bounded
->   stale** — symmetric to the `TaintMatchMap`
->   stale-record trade-off (pi-1 M-3); a stale
->   entry harmlessly times out and is harmless to
->   downstream reasoning. Goal item 3 / §TR1
->   steps / §TR4a wording updated.
-> - **B-2 (carry)** Broker audit plumbing reshaped
->   to interior-mutable to match live `rfl chat`'s
->   clone-before-audit-writer-exists construction
->   order: `BrokerInner.audit:
->   Mutex<Option<Arc<AuditWriter>>>` and
->   `Broker::set_audit_writer(&self, writer:
->   Arc<AuditWriter>)` (called before plugin
->   spawn). The `&self` setter mutates through
->   the existing `Arc<BrokerInner>` so every
->   already-cloned `Broker` handle sees the
->   writer. New test
->   `broker_clones_see_audit_writer_after_set.rs`
->   asserts the clone-visibility invariant.
->   §PT1 audit plumbing + internal split row 1' +
->   acceptance updated.
-> - **B-3 (new)** §TM1 splits **hash
->   canonicalization** from **substring
->   normalization** (pi-3 B-3 ripple from pi-2
->   M-6). Hash canonicalization keeps
->   `serde_json::to_vec(value)` for stable
->   literal-hash bytes across scalar JSON types.
->   Substring matching operates on **raw string
->   contents** for JSON string leaves only
->   (non-strings are not substring-indexed; their
->   `serde_json` canonical encodings are too
->   short or too narrow to substring-match
->   meaningfully). Pinned tests cover quotes,
->   backslash escapes, and non-ASCII (UTF-8
->   byte boundaries). §TM1 + §TM2 updated.
->
-> - **M-1** Goal item 7 names the three actual
->   new audit kinds
->   (`confirm_request_taint_attached`,
->   `plugin_publish_rejected_taint_superset`,
->   `tool_request_taint_unioned_from_in_reply_to`).
->   The withdrawn round-1 kind
->   `tool_request_rejected_taint_superset` is
->   removed from the goal-item bullet.
-> - **M-2** §PT1 atomic order adds an explicit
->   "release `state` lock before publishing
->   lifecycle / synthetic events" step. The
->   `state` lock is held only for inspect →
->   superset check → drain; audit row write,
->   `core.lifecycle.publish_rejected` publish, and
->   synthetic `core.session.tool_result` publish
->   all happen **after** the lock is dropped.
-> - **M-3** Internal split row 20 expanded to
->   include the four EXFIL1 sub-fixtures: lock,
->   stub scripted response, expected
->   `audit_events` golden, expected
->   `entries`-table golden + plugin-log
->   expectations.
-> - **M-4** New acceptance test
->   `rfl_chat_wires_broker_audit_writer_before_plugin_spawn.rs`
->   asserts the production path always wires the
->   writer; the silent-drop fallback is for
->   non-`rfl chat` broker construction only.
-> - **M-5** §"Out of scope" item 3 (provider-
->   extracted user_grants proposals) relabelled
->   "v2 / known v1 limitation" rather than
->   "m6 / v2 as in m5a". m6 has no security
->   primitives per the boundary.
->
-> - **N-1** Footer updated to round 4 / folds
->   pi-3 (`scope-pi-review-3.md`).
-> - **N-2** §TUI-MA1 references the live
->   `rafaello-tui::env::load_from` entry point
->   (and the helper `parse_confirm_answers`)
->   rather than the invented `parse_test_env`.
-> - **N-3** §TR1 ordering acceptance test
->   renamed to
->   `reemit_tool_result_records_both_indexes_before_fan_out.rs`
->   and explicitly covers both the
->   `TaintMatchMap` record and the
->   `ReferencedTaintIndex.record_result`.
-> - **N-4** Status history trimmed: the
->   round-3-banner sentence "round-3 closes the
->   three fresh consistency gaps the fold
->   introduced" is rephrased to "pi-2 found
->   three fresh consistency gaps from the
->   round-2 fold". The artifact does not
->   review itself.
->
-> ---
->
-> **(History — round 3 fix list, kept for trajectory.)**
->
-> Round-3 status: folded `scope-pi-review-2.md`
-> (3 blockers / 6 majors / 4 nits). Pi-2 confirmed
-> every pi-1 finding is materially folded; pi-2
-> found three fresh consistency gaps from the
-> round-2 fold. Pi-2's four convergence-call
-> owner choices map to §"Owner-judgment items"
-> 1, 2, 3, 10 (corrected from round 2's stale
-> 1/2/3/4 banner — pi-2 N-1).
->
-> Round-3 fixes by pi-2 finding (preserved):
->
-> - **B-1** §TR4a cache renamed from
->   `InReplyToTaintIndex` (round 2) to
->   `ReferencedTaintIndex` and now records **both**
->   canonical `core.session.tool_request` ids
->   (populated by `handle_tool_request` after
->   canonical publish) **and** canonical
->   `core.session.tool_result` ids (populated by
->   `handle_tool_result` after canonical publish).
->   §TR1 looks up the cited request-id when
->   canonicalising a plugin result (provider taint
->   inheritance from request → result); §TR4b looks
->   up the cited result-ids when canonicalising a
->   provider tool_request (result-taint inheritance
->   from result → request). Both classes have
->   acceptance tests in §TR4a. Goal item 3 / §TR1 /
->   §TR4a / §TR4b align.
-> - **B-2** Broker audit plumbing default-selected:
->   `Broker::with_audit_writer(Arc<AuditWriter>)`
->   builder wired through `rfl chat` before plugin
->   spawn (mirrors m5a's
->   `with_confirm_state_and_audit` pattern on
->   `ReemitRouter`). The audit writer is
->   `Option<Arc<AuditWriter>>` on `BrokerInner`;
->   `handle_plugin_publish` writes the audit row
->   inline before returning the
->   `TaintSupersetViolated` error. §PT1 + §AL2 +
->   internal split row 1' updated; new test
->   `broker_with_audit_writer_records_plugin_publish_rejected_taint_superset.rs`.
-> - **B-3** §EXFIL1 audit-rows golden table strips
->   the `tool_request` rows (no such audit kind in
->   live `AuditKind` or §AL4). Tool dispatch is
->   asserted via the SQLite `entries` table
->   (m3-shipped session-store path) for the
->   `tool_call` / `tool_result` entries, and via
->   the per-fixture plugin log
->   (`<tempdir>/mailcat.log`,
->   `<tempdir>/fetch.log`) for plugin invocation
->   evidence. The audit golden retains only the
->   m5a-shipped + m5b-added audit kinds.
->
-> - **M-1** §PT1 corrects the caller: the
->   `ConfirmationGate` is the `publish_for_tool_dispatch`
->   caller on passthrough / grant-match / allow /
->   grant-short-circuit paths (live
->   `gate/mod.rs:296-321` + `:558-610`); the
->   re-emit `handle_tool_request` publishes the
->   canonical `core.session.tool_request` but does
->   not dispatch. The data-model extension on
->   `OutstandingDispatch.tool_request_taint` is
->   populated by the **gate**, which reads the
->   canonical inbound event's `taint` and passes
->   it through. Tests at the gate boundary added.
-> - **M-2** "m6 / v2" reworded to "v2 / known v1
->   limitation" wherever it referred to deferred
->   security primitives (§TR5, §A9, owner item 9,
->   m5b → m6 boundary, §"Out of scope" item 2).
->   m6 has no security primitives per the boundary
->   text; the assistant_message / confirm_*
->   superset narrowing is v1 drift and a v2
->   candidate.
-> - **M-3** §TR4b acceptance wording narrowed:
->   the fail-open test is renamed
->   `reemit_tool_request_referenced_result_expired_from_cache_fails_open.rs`
->   and the test setup explicitly produces a TTL-
->   expired-but-observed result id. Fabricated ids
->   are already rejected by live
->   `handle_provider_publish` against
->   `provider_observed_results` and never reach
->   §TR4b; called out in §TR4a.
-> - **M-4** §AL4 drops the `FromStr` / `Display`
->   references; the live shape is enum +
->   `as_str()` only. Acceptance pins the
->   `as_str()` round-trip; if a future commit
->   needs `FromStr` / `Display` it is its own
->   scope and tests.
-> - **M-5** §PT1 empty-taint wording rephrased:
->   "no plugin-supplied claim, so no contradiction
->   check is run; canonical core taint still
->   preserves ancestry via §TR1". The behaviour
->   (skip the check) is unchanged; the wording no
->   longer claims `[]` is mathematically a
->   superset of the referenced ancestry.
-> - **M-6** §TM1 pins scalar-byte canonicalization:
->   the hasher input is `serde_json::to_vec(value)
->   .expect("scalar value always serialises")` —
->   the canonical JSON encoding of the scalar
->   leaf. This pins `"1"` ≠ `1`, integer
->   formatting (`serde_json`'s canonical decimal),
->   `true` / `false` / `null` byte spellings.
->   `substring_min_bytes` measures **UTF-8 byte
->   length of the canonical JSON encoding** (which
->   matches the raw string length for unescaped
->   ASCII strings and is well-defined for
->   non-string scalars).
->
-> - **N-1** Status banner owner-item mapping
->   corrected from 1/2/3/4 to 1/2/3/10 to match
->   the §"Owner-judgment items" footer.
-> - **N-2** §TR1 ordering parenthetical rephrased:
->   "record happens before `publish_core_with_taint`;
->   once publish enters `fan_out`, internal
->   subscribers observe via
->   `notify_internal_subscribers` before external
->   recipients".
-> - **N-3** §TR4a drops "Also used by §PT2"; the
->   sole consumer is §TR1 / `handle_tool_result`
->   (cited-request lookup) and §TR4b /
->   `handle_tool_request` (cited-result lookups).
->   §PT2 is explanatory prose, not a consumer.
-> - **N-4** §EXFIL3 self-correction "Wait:"
->   replaced with directive prose.
->
-> ---
->
-> **(History — round 2 fix list, kept for trajectory.)**
->
-> Round-2 status: folded `scope-pi-review-1.md`
-> (6 blockers / 8 majors / 5 nits). Pi-2 verified
-> all 19 round-1 findings as resolved. Round-3
-> finds three fresh consistency gaps the
-> round-2 fold introduced (B-1/B-2/B-3 above) plus
-> six majors and four nits.
->
-> Round-2 fixes by pi-1 finding (preserved):
->
-> - **B-1** Headline exfil flow is single-valued: turn
->   1 `web-fetch` allowed and invoked; turn 2
->   `send-mail` quotes the fetch result; deny prevents
->   `rafaello-mailcat` dispatch. Goal item 8, §EXFIL1,
->   Demo bar, and Acceptance summary all match.
-> - **B-2** New `RFL_TUI_TEST_CONFIRM_ANSWERS` env
->   var scoped as §TUI-MA (multi-answer hook). The
->   variable + the parser extension + the rfl
->   allowlist update + the exhaustion behaviour are
->   pinned. Two-answer round-trip + exhaustion
->   negative tests added.
-> - **B-3** `confirm_request_taint_attached`
->   emission predicate is **"the canonical taint
->   vector contains at least one entry whose
->   `source` is NOT `\"provider\"`"** — equivalently
->   "value-driven ancestry beyond the bare provider
->   marker". Goal item 6, §AL1, §EXFIL3 align.
-> - **B-4** `OutstandingDispatch` is extended to
->   carry `tool_request_taint: Vec<TaintEntry>`
->   populated at `publish_for_tool_dispatch`. The
->   atomic order at `handle_plugin_publish` is:
->   read-entry → compute referenced union → superset
->   check → drain + synthesise-deny-on-violation.
->   §PT1 pins data model and order; new test
->   `broker_outstanding_dispatch_carries_request_taint.rs`.
-> - **B-5** Owner-judgment item 1: canonical
->   `core.session.tool_result` taint = **tool-source
->   ∪ referenced-tool_request-taint** (preferred /
->   default selected — m5b truly closes Stream A
->   §7.2.6 row 1). §TR1 + §PT2 + goal item 4 +
->   architectural choice §A8 + Risks updated. The
->   alternative (record deliberate RFC drift) is the
->   pi-1-surfaced fallback.
-> - **B-6** §TR4 split into **§TR4a (in-reply-to
->   taint cache + data model)** and **§TR4b
->   (re-emit superset enforcement + synthetic
->   tool_result)**. Failure is a *re-emit failure*,
->   not an intake rejection — the original provider
->   publish returns `Ok` and `handle_provider_publish`'s
->   acceptance is unchanged. The synthetic
->   `core.session.tool_result` shape is pinned:
->   fresh `request_id` (a new `JsonRpcId`),
->   `in_reply_to = [held provider tool_request
->   request_id]`, payload `{ok: false, error:
->   "taint_superset_violation"}`, taint = the
->   computed referenced-union (non-empty by
->   construction), routed through
->   `Broker::publish_core_with_taint` so the agent
->   loop persists the entry. Audit row keyed by the
->   held request_id.
->
-> - **M-1** Surfaces the `assistant_message` /
->   `confirm_answer` / `confirm_reply` re-emit
->   superset paths as **deliberately narrowed** in
->   m5b (owner-judgment item 9 / §A9). §TR5 records
->   the narrowing + Stream A retro-drift candidate.
-> - **M-2** `TaintMatchMap` drops `SessionId`. The
->   map is per-`ReemitRouter` (one per `rfl chat`
->   core process). `clear()` is exposed; `drop`
->   handles in-process cleanup. §TM1 + §TM3 align.
-> - **M-3** §TR1 ordering pinned: `record` is
->   called **before** `publish_core_with_taint` and
->   the broker's `notify_internal_subscribers`
->   fan-out, inside the same re-emit-task tick.
->   Subscriber observation can therefore find the
->   map populated atomically with publish. The
->   record happens-before publish; a publish failure
->   leaves a recorded entry that will eventually
->   TTL out.
-> - **M-4** §CD1 is reframed as a **regression /
->   normalisation** item against live m5a behaviour
->   (`gate/mod.rs:386-397` already emits `details.taint
->   = []` when inbound is `None`). Preserve the live
->   `[]` shape; no `null` arm. Tests assert the
->   empty-array round-trip and the populated
->   round-trip. AL1 + EXFIL3 align.
-> - **M-5** §TF3 pins `env.pass =
->   ["RFL_FETCH_TEST_BODY_PATH"]` on the
->   `rafaello-fetch` lock entry; new test
->   `rafaello_fetch_receives_body_path_env_from_lock.rs`
->   proves the env var reaches the spawned plugin.
-> - **M-6** Manual validation drops the
->   real-network claim. All six bullets exercise
->   the file-backed body path. Real-network
->   `web-fetch` is post-v1 work.
-> - **M-7** §TM acceptance pins **directional
->   substring tests** (recorded string contains the
->   later arg, and recorded string is contained by
->   the later arg) + the canonical literal-hash arm.
->   Hash algorithm pinned: **`siphasher::sip::SipHasher13`
->   keyed by a fixed `(u64, u64)` constant pair
->   `RFL_TAINT_MATCH_HASH_KEY`** declared as `pub
->   const` on the module. No `std::collections::hash_map::DefaultHasher`.
-> - **M-8** Sizing rebudgeted to **22-27 commits**
->   (Appendix A high end, +5 over round 1). The
->   sizing-justification table at §"Internal split"
->   enumerates: TR4 split (4a / 4b), TUI-MA hook
->   separated from CD2 rendering, OutstandingDispatch
->   data-model extension its own commit before PT1,
->   the ReferencedTaintIndex cache its own commit
->   before TR4b.
->
-> - **N-1** Audit topic uses live
->   `core.lifecycle.publish_rejected` with
->   `code = "taint_superset_violated"`. Goal item 4
->   + §PT1 + §AL2 corrected.
-> - **N-2** §TF2 owner-choice cross-ref corrected
->   to §A6 / owner item 3.
-> - **N-3** §TM3 TTL cross-ref corrected to §A4 /
->   owner item 4.
-> - **N-4** §TF1 / §TF3 acceptance commands use
->   `--manifest-path rafaello/Cargo.toml`.
-> - **N-5** §TF1 drops the deterministic-HTTP-client
->   mention; the fetch-semantics choice is §TF2 /
->   §A6.
->
-> ---
->
-> The roadmap row for m5 (`milestones/README.md`) is the
-> pre-ratified definition; m5a Appendix A is the
-> carve-out that survived owner ratification and is the
-> direct input to round 1. m5b inherits the m5a surface
-> unchanged (gate, `ConfirmState`, `UserGrants`, slash
-> commands, TUI overlay, audit log, `core.tools_list`
-> RPC, `rfl-openai`, broker `outstanding_dispatched`,
-> install-time trifecta refusal); see §"Inputs / m5a
+> The roadmap row for m5 (`milestones/README.md`)
+> is the pre-ratified definition; m5a Appendix A
+> is the carve-out that survived owner
+> ratification and is the direct input to
+> round 1. m5b inherits the m5a surface
+> unchanged (gate, `ConfirmState`,
+> `UserGrants`, slash commands, TUI overlay,
+> audit log, `core.tools_list` RPC,
+> `rfl-openai`, broker
+> `outstanding_dispatched`, install-time
+> trifecta refusal); see §"Inputs / m5a
 > inheritance baseline" below.
 
 ---
@@ -1070,9 +658,15 @@ impl TaintMatchMap {
     pub fn lookup(&self,
         args: &serde_json::Value)
         -> Vec<TaintEntry>;
-    /// Drop all entries. Called from
-    /// `ReemitRouter::Drop` symmetric to the
-    /// router's own teardown.
+    /// Drop all entries. Called from the
+    /// shutdown branch of the spawned re-emit
+    /// task (`reemit/mod.rs:168-200`
+    /// `tokio::select!` loop on
+    /// `shutdown_rx.changed()`); pi-5 M-3
+    /// ripple. Not a `Drop` impl on
+    /// `ReemitRouter` because
+    /// `ReemitRouter::start(self)` consumes
+    /// the router into the spawned task.
     pub fn clear(&self);
 }
 ```
@@ -1265,6 +859,69 @@ default substring threshold (16 bytes).
   — `ReemitRouter::new` constructs a map whose
   TTL is `Duration::from_secs(300)`.
 - `taint_match_map_default_substring_threshold_sixteen.rs`.
+- `reemit_router_shutdown_clears_taint_match_map.rs`
+  — pi-5 M-3 ripple: drive the
+  `shutdown_rx.changed()` arm of the
+  spawned task; assert
+  `TaintMatchMap.clear()` runs (e.g. via
+  an injected counter or by re-using the
+  map across two routers).
+
+#### TM4 — test-only publish-side fault seam
+
+New scope item (pi-5 B-1). The two
+"publish-failure leaves TTL-bounded stale
+entry" acceptance tests need a fault seam
+that fires **after** the re-emit handler's
+pre-publish `record_*` calls but **before**
+`fan_out` reaches any subscriber. The
+existing `ReemitRouter::with_test_fault_injector`
+runs upstream of the handlers (live
+`reemit/mod.rs:179-219`) and therefore
+cannot exercise this path.
+
+m5b adds:
+
+```rust
+impl Broker {
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn install_publish_test_hook(
+        &self,
+        hook: Arc<dyn Fn(&BusEvent) ->
+            Option<BrokerError> + Send + Sync>,
+    );
+}
+```
+
+`publish_core_with_taint` consults the
+installed hook (if any) **after** writing the
+event payload + before `fan_out` runs. A
+`Some(err)` return short-circuits the publish
+with that error; `None` proceeds normally.
+The hook is gated by `#[cfg(any(test, feature
+= "test-fixture"))]`; production builds
+neither expose the method nor pay the
+conditional.
+
+The seam is exposed at the `Broker` level
+(not `ReemitRouter`) because the
+record-then-publish invariants the tests
+verify are properties of the
+`publish_core_with_taint` call, not of the
+re-emit handler's outer wrapper.
+
+**Acceptance:**
+- `broker_publish_test_hook_fires_after_handler_records_before_fan_out.rs`
+  — instrument the hook to capture both the
+  `ReferencedTaintIndex` state at hook-fire
+  time (proves the handler recorded) and
+  the absence of any fan-out delivery
+  (proves the hook short-circuits before
+  `fan_out`).
+- `broker_publish_test_hook_absent_in_production_builds.rs`
+  — compile-fence test: `cfg(not(test, not
+  feature = "test-fixture"))` build does
+  not expose `install_publish_test_hook`.
 
 ### TR — Re-emit propagation through the match map
 
@@ -1392,11 +1049,16 @@ The stale entries time out and disappear.
   subscriber can observe the canonical event
   before the indexes are populated.
 - `reemit_tool_result_publish_failure_leaves_ttl_bounded_stale_index_entries.rs`
-  — inject a publish failure via the existing
-  test fault injector; assert both indexes
-  contain the recorded entry afterward, and
-  assert the entries time out after the TTL
-  (paused-tokio).
+  — install a publish-side fault via the new
+  §TM4 `Broker::install_publish_test_hook`
+  (pi-5 B-1; NOT the upstream re-emit fault
+  injector, which runs before the handler).
+  The hook returns `Some(err)` from inside
+  `publish_core_with_taint` after the
+  handler's `record` calls. Assert both
+  indexes contain the recorded entry
+  afterward; advance paused-tokio past the
+  TTL and assert the entries expire.
 
 #### TR2 — `handle_user_message` refreshes the map
 
@@ -1473,10 +1135,12 @@ to retain until TTL).
   shape of §TR1's
   `reemit_tool_result_records_both_indexes_before_fan_out.rs`.
 - `reemit_tool_request_publish_failure_leaves_ttl_bounded_stale_request_entry.rs`
-  — inject a publish failure via the
-  existing test fault injector; assert the
-  `by_request_id` entry persists until TTL
-  and then expires.
+  — install a publish-side fault via the new
+  §TM4 `Broker::install_publish_test_hook`
+  (pi-5 B-1); assert the `by_request_id`
+  entry persists past the failure and
+  expires after the TTL window
+  (paused-tokio).
 
 #### TR4a — `ReferencedTaintIndex` cache + data model
 
@@ -1720,9 +1384,10 @@ narrowing rationale. If owner takes the
 alternative (land the assistant_message +
 confirm_* superset paths in m5b), the surface
 adds ~4 commits + ~6 tests; the budget at
-§"Internal split" reserves slack at the high
-end (27 commits) to absorb this if the owner
-pushes.
+§"Internal split" reserves slack toward the
+29-31-commit max (above the 27-commit
+default) to absorb this if the owner pushes
+(pi-5 M-4).
 
 **Acceptance (if narrowing is taken — default):**
 - No new tests. Recorded in §"Out of scope"
@@ -1856,10 +1521,6 @@ broker (now outside the `state` lock):
   a.record(AuditKind::PluginPublishRejectedTaintSuperset,
   ...))` with payload `{canonical,
   request_id, missing, published_taint}`.
-- Publishes a `core.lifecycle.publish_rejected`
-  event (the live topic — pi-1 N-1) with
-  `code = "taint_superset_violated"` and the
-  matching payload.
 - **Synthesises** a deny-shaped
   `core.session.tool_result` via
   `publish_core_with_taint`:
@@ -1891,6 +1552,48 @@ broker (now outside the `state` lock):
     so the agent loop's existing
     `tool_result` persistence path runs
     unchanged.
+
+**Lifecycle rejection ownership (pi-5 M-2,
+explicit either/or).** `core.lifecycle.publish_rejected`
+is emitted by the **outer**
+`emit_publish_rejected_for_plugin` mapper
+(live `bus.rs:1113-1154`), which receives
+the `BrokerError` returned from
+`handle_plugin_publish_inner` and maps it to
+a `(topic, code)` pair. m5b extends that
+mapper with the new variant arm:
+
+```rust
+BrokerError::TaintSupersetViolated { topic,
+    .. } => (Some(topic.clone()),
+    "taint_superset_violated"),
+```
+
+The **inner** `handle_plugin_publish_inner`
+violation path is responsible for **only**
+the audit-row write + the synthetic
+`core.session.tool_result` publish (both
+listed above); it does **not** publish
+`core.lifecycle.publish_rejected` itself.
+The outer wrapper handles that uniformly
+with the other m5a rejection codes. No
+duplicate lifecycle events; no missed
+emission for the new variant. The order on
+violation is therefore:
+
+1. (inner, under `state` lock) inspect →
+   check → drain.
+2. (inner, lock released) audit row write.
+3. (inner, lock released) synthetic
+   `core.session.tool_result` publish via
+   `publish_core_with_taint`.
+4. (inner) return
+   `Err(TaintSupersetViolated)`.
+5. (outer) `emit_publish_rejected_for_plugin`
+   maps the error to
+   `(topic, "taint_superset_violated")` and
+   publishes
+   `core.lifecycle.publish_rejected`.
 
 The empty-taint case (`msg.taint == None` or
 `Some(vec![])`) skips the superset check
@@ -1927,17 +1630,37 @@ only" which is the §PT2 framing).
   records the audit row. Proves the
   interior-mutable shape preserves the
   clone-visibility invariant.
-- `rfl_chat_wires_broker_audit_writer_before_plugin_spawn.rs`
-  — pi-3 M-4 acceptance: spawn
-  `rfl chat` against the m5b fixture lock;
-  inject a fault that would trigger §PT1
-  before any plugin completes its handshake;
-  assert the violation audits — i.e.
-  `set_audit_writer` ran during
-  `rfl chat` startup ahead of plugin spawn.
-  Locks in the production wiring so the
-  silent-drop fallback cannot accidentally
-  be the production path.
+- `rfl_chat_calls_set_audit_writer_before_first_plugin_spawn.rs`
+  — pi-3 M-4 / pi-5 B-2 acceptance,
+  rewritten. The `rfl chat` startup path
+  exposes a `cfg(any(test, feature =
+  "test-fixture"))` instrumentation hook
+  `rfl::chat::TestStartupOrderingHook` that
+  records the sequence of broker / supervisor
+  calls. Spawn `rfl chat` against the m5b
+  fixture lock and assert
+  `Broker::set_audit_writer` is invoked
+  **before** the first
+  `PluginSupervisor::spawn` (or
+  `Broker::register_plugin`, whichever the
+  live startup calls first). Pre-handshake
+  PT1 violation is not asserted — that
+  state is unreachable in the live process
+  model (pi-5 B-2 ripple). Audit-row
+  coverage moves to the next bullet.
+- `rfl_chat_pt1_violation_after_plugin_spawn_writes_audit_row.rs`
+  — post-spawn end-to-end PT1 violation:
+  spawn `rfl chat` against the m5b fixture
+  lock, complete the normal plugin
+  handshake, then publish a violating
+  `plugin.<id>.tool_result` (taint that is
+  not a superset of the dispatch entry's
+  `tool_request_taint`); assert the
+  `plugin_publish_rejected_taint_superset`
+  row lands. Together with the prior test
+  this covers the "wiring happened before
+  spawn" + "audit actually fires after
+  spawn" pair (pi-5 B-2 distinct concerns).
 - `broker_pt1_releases_state_lock_before_publish.rs`
   — pi-3 M-2 acceptance: inject a publish-
   side hook that re-enters the broker
@@ -2206,9 +1929,13 @@ the row is written by
 writer is unset (`None`) when no caller has
 invoked `set_audit_writer` (test-fixture
 brokers that don't care about audit rows);
-production `rfl chat` always wires it via
-`rfl_chat_wires_broker_audit_writer_before_plugin_spawn.rs`
-acceptance.
+production `rfl chat` always wires it,
+asserted by
+`rfl_chat_calls_set_audit_writer_before_first_plugin_spawn.rs`
+(startup ordering) and exercised end-to-end
+by
+`rfl_chat_pt1_violation_after_plugin_spawn_writes_audit_row.rs`
+(audit-row coverage).
 
 The re-emit-side rejection from round 1 is
 **withdrawn** (§TR4b construct-the-superset
@@ -2726,7 +2453,9 @@ sneak in:
    34.
 8. **Persisted-across-sessions taint
    store** — the match map is in-memory
-   only, cleared on `ReemitRouter::Drop`.
+   only, cleared in the shutdown branch
+   of the re-emit task on `rfl chat`
+   shutdown (pi-5 M-3).
 9. **Real-network fetch in the bundled
    fixture** — §TF2 chooses file-backed
    bodies for determinism; **manual
@@ -2881,8 +2610,9 @@ Alternative: land the four rows
 `confirm_reply`, `plugin.<a>.rpc_reply`)
 in m5b. Adds ~4 commits + ~6 tests; the
 budget at §"Internal split" reserves slack
-at the high end (27 commits) to absorb
-this if owner pushes.
+toward the 29-31-commit max (above the
+27-commit default) to absorb this if owner
+pushes (pi-5 M-4).
 
 ### A10. `ReferencedTaintIndex` unknown-id semantics
 
@@ -3144,6 +2874,7 @@ arm gives the max). Supersedes the round-2
 |---|---------|----------------|----------|
 | 1 | §PT3 | `BrokerError::TaintSupersetViolated` variant landing | 1 |
 | 1' | §PT1 audit plumbing | `Broker::set_audit_writer(&self, Arc<AuditWriter>)` + `BrokerInner.audit: Mutex<Option<Arc<AuditWriter>>>` (interior-mutable; pi-3 B-2) + `rfl chat` wiring + clone-visibility + production-wiring acceptance tests | 1 |
+| 1'' | §AL4 | `AuditKind` enum + `as_str()` table extension (three new variants: `confirm_request_taint_attached`, `plugin_publish_rejected_taint_superset`, `tool_request_taint_unioned_from_in_reply_to`). Lands **before** consumer rows 8 / 10 / 14 so per-commit green bar holds without `#[allow(unused)]` shims (pi-5 M-1) | 1 |
 | 2 | §PT1 data model | `OutstandingDispatch.tool_request_taint` field; gate calls `publish_for_tool_dispatch` with canonical taint (pi-2 M-1) | 1 |
 | 3 | §TM1+§TM2 | `TaintMatchMap` module + literal-hash + substring + walk + TTL + hash-key constant + scalar canonicalization (pi-2 M-6) | 2 |
 | 4 | §TM3 | `ReemitRouter::with_taint_match_map` builder + default TTL test | 1 |
@@ -3155,14 +2886,14 @@ arm gives the max). Supersedes the round-2
 | 10 | §PT1 enforcement | `handle_plugin_publish` superset check + drain order + synthetic-deny path + audit-writer call + new `BrokerError` consumer | 1 |
 | 11 | §CD1 | gate `details.taint` regression tests against live shape | 1 |
 | 12 | §CD2 | TUI overlay provenance render + suppression + clipping | 1 |
-| 13 | §AL4 | `AuditKind` table extension (three new variants) | 1 |
+| 13 | (vacated) | `AuditKind` table extension moved to row 1'' (pi-5 M-1) | — |
 | 14 | §AL1 | `confirm_request_taint_attached` writer + predicate | 1 |
 | 15 | §TUI-MA1 | `RFL_TUI_TEST_CONFIRM_ANSWERS` parser + queue + exhaustion panic + mutual-exclusion error | 1 |
 | 16 | §TUI-MA2 | rfl env allowlist extension + passthrough test | 1 |
 | 17 | §TF1 | `rafaello-fetch` crate scaffold (no HTTP dep) | 1 |
 | 18 | §TF2 | file-backed handler + three TF2 unit tests | 1 |
 | 19 | §TF3 | m5b fixture lock chaining four plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` + env-reaches-plugin test | 1 |
-| 20 | §EXFIL1 | headline integration test + stub scripted two-turn response + four sub-fixtures: lock, stub response, expected `audit_events` golden (turn-2 `confirm_request_taint_attached` row, `confirm_denied` row, no withdrawn `tool_request` kind), expected `entries`-table golden (turn-1 + turn-2 `tool_call` / `tool_result` rows incl. the synthetic user_denied result), plugin-log expectations (`<tempdir>/fetch.log` has 1 entry; `<tempdir>/mailcat.log` empty) (pi-3 M-3) | 1 |
+| 20 | §EXFIL1 | headline integration test + stub scripted two-turn response + four sub-fixtures: lock, stub response, expected `audit_events` golden (turn-2 `confirm_request_taint_attached` row, `confirm_denied` row, no withdrawn `tool_request` kind), expected `entries`-table golden (turn-1 + turn-2 `tool_call` / `tool_result` rows; turn-2 `tool_result` asserts `ok = false`, `call_id = <turn-2 send-mail tool_request request_id>`, `content = ""`, `details = None` per the live `ToolResultPayload` shape — pi-5 N-3), plugin-log expectations (`<tempdir>/fetch.log` has 1 entry; `<tempdir>/mailcat.log` empty) | 1 |
 | 21 | §EXFIL2 | allow-arm audit-trail variant | 1 |
 | 22 | §EXFIL3 | provider-only negative | 1 |
 | 23 | §C38a | five-tree spawn + clean shutdown | 1 |
@@ -3376,9 +3107,33 @@ decision rows for.
 
 ---
 
-*End of m5b scope round 5. Folds pi-4's 3
-blockers / 6 majors / 4 nits. Expects 1-2
-more rounds of pi review per the m5a / m4
-pattern, narrowing on §"Architectural
-choices to ratify" + §"Owner-judgment
-items".*
+## Changelog
+
+Round-by-round trajectory (counts /
+verdict / authoritative pi review file):
+
+- Round 1 → `scope-pi-review-1.md`
+  (6B / 8M / 5N, BLOCKING).
+- Round 2 → `scope-pi-review-2.md`
+  (3B / 6M / 4N, BLOCKING).
+- Round 3 → `scope-pi-review-3.md`
+  (3B / 5M / 4N, BLOCKING).
+- Round 4 → `scope-pi-review-4.md`
+  (3B / 6M / 4N, BLOCKING).
+- Round 5 → `scope-pi-review-5.md`
+  (2B / 5M / 4N, BLOCKING).
+- Round 6 → pending pi-6.
+
+Per pi-5 N-4 the per-round fix lists are
+no longer carried in this file; each pi
+review file preserves the corresponding
+round's fix list verbatim.
+
+---
+
+*End of m5b scope round 6. Folds pi-5's 2
+blockers / 5 majors / 4 nits. Convergence
+trajectory 6B → 3B → 3B → 3B → 2B
+suggests round 7 should report zero or
+near-zero blockers; m5a / m4 took 6
+rounds at comparable surface area.*
