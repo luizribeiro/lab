@@ -619,10 +619,11 @@ impl Broker {
             }
         }
 
-        // Scope §OM2: atomic intake check on plugin `tool_result`. The
-        // entry is drained inside the same critical section as the
-        // presence check so a duplicate publish from the same plugin
-        // citing the same id fails the second call.
+        // Scope §OM2 / §PT1: atomic intake check + superset check on
+        // plugin `tool_result`. The entry is drained inside the same
+        // critical section as the presence + superset check so a
+        // duplicate publish (§OM2) or a violating publish (§PT1) both
+        // remove the entry — neither gets a retry window.
         if last == "tool_result" {
             let id = msg
                 .in_reply_to
@@ -631,17 +632,63 @@ impl Broker {
                 .cloned()
                 .expect("in_reply_to validated above");
             let mut state = self.0.state.lock();
-            let present = state
+            let entry = state
                 .outstanding_dispatched
                 .get_mut(canonical)
-                .and_then(|m| m.remove(&id))
-                .is_some();
+                .and_then(|m| m.remove(&id));
+            // pi-3 M-2: release the `state` lock before any subsequent
+            // publish (the synthetic deny re-enters `fan_out` which
+            // takes the recipient-collection lock).
             drop(state);
-            if !present {
+            let Some(entry) = entry else {
                 return Err(BrokerError::StaleRequestId {
                     canonical: canonical.clone(),
                     id,
                 });
+            };
+            // §PT1 superset check. pi-2 M-5: `None` or `Some(vec![])`
+            // taint is a no-plugin-claim signal — the check is skipped
+            // entirely (m4 behaviour preserved). Otherwise every entry
+            // in the dispatch's canonical `tool_request_taint` must
+            // appear in the plugin-published `taint`.
+            if let Some(pub_taint) = msg.taint.as_ref().filter(|v| !v.is_empty()) {
+                let missing: Vec<TaintEntry> = entry
+                    .tool_request_taint
+                    .iter()
+                    .filter(|e| !pub_taint.contains(e))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    if let Some(writer) = self.audit_writer() {
+                        let _ = writer.record(
+                            crate::audit::AuditKind::PluginPublishRejectedTaintSuperset,
+                            Some(&id),
+                            &serde_json::json!({
+                                "canonical": canonical.to_string(),
+                                "request_id": id.to_string(),
+                                "missing": missing,
+                                "published_taint": pub_taint,
+                            }),
+                        );
+                    }
+                    let _ = self.publish_core_with_taint(
+                        "core.session.tool_result",
+                        serde_json::json!({
+                            "ok": false,
+                            "error": "plugin_taint_superset_violation",
+                            "content": "",
+                        }),
+                        Some(JsonRpcId::String(ulid::Ulid::new().to_string())),
+                        Some(vec![id.clone()]),
+                        Some(entry.tool_request_taint.clone()),
+                        None,
+                    );
+                    return Err(BrokerError::TaintSupersetViolated {
+                        publisher: Publisher::Plugin(canonical.clone()),
+                        topic: msg.topic.clone(),
+                        missing,
+                    });
+                }
             }
         }
 
@@ -1258,6 +1305,9 @@ impl Broker {
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
                 (topic, "invalid_payload")
+            }
+            BrokerError::TaintSupersetViolated { topic, .. } => {
+                (Some(topic.clone()), "taint_superset_violated")
             }
             _ => return,
         };
