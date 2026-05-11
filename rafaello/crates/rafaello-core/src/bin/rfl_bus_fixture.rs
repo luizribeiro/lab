@@ -147,6 +147,7 @@ const REAL_BUS_MODES: &[&str] = &[
     "hold_silent",
     "signal_ready_then_exit_n",
     "frontend_bus_publish",
+    "provider_bus_publish",
 ];
 
 fn main() {
@@ -210,6 +211,35 @@ async fn run_bus_backed(mode: &str) {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(7);
             std::process::exit(n);
+        }
+        "provider_bus_publish" => {
+            let started = Arc::new(Notify::new());
+            let client = client.with_service(StartOnlyService {
+                started: started.clone(),
+            });
+            ack_ready(&client, mode).await;
+            started.notified().await;
+            let provider_id = std::env::var("RFL_PROVIDER_ID")
+                .expect("RFL_PROVIDER_ID not set for provider_bus_publish");
+            let topic = format!("provider.{provider_id}.tool_request");
+            let request_id = ulid::Ulid::new().to_string();
+            client
+                .notify(
+                    "bus.publish",
+                    json!({
+                        "topic": topic,
+                        "payload": {"tool": "noop", "args": {}},
+                        "request_id": request_id,
+                        "in_reply_to": [],
+                    }),
+                )
+                .await
+                .expect("bus.publish notify");
+            client
+                .call("core.fixture.after_publish", json!({}))
+                .await
+                .expect("after_publish ack");
+            std::future::pending::<()>().await;
         }
         "frontend_bus_publish" => {
             client

@@ -84,9 +84,6 @@ fn _spawn_variants() {
         expected: "a".into(),
         got: "b".into(),
     };
-    let _: InvalidPlanReason = InvalidPlanReason::ProviderNotInM2 {
-        provider_id: "p".into(),
-    };
     let _: SpawnError = SpawnError::EntryNotExecutable {
         canonical: cid(),
         path: PathBuf::from("/x"),
@@ -129,7 +126,6 @@ fn _invalid_plan_reason_variants(r: InvalidPlanReason) {
         InvalidPlanReason::ControlCharsInPath { .. } => {}
         InvalidPlanReason::TopicIdMismatch { .. } => {}
         InvalidPlanReason::NetworkAllowHostsInvalid { .. } => {}
-        InvalidPlanReason::ProviderNotInM2 { .. } => {}
         _ => {}
     }
 }

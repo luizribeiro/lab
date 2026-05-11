@@ -33,7 +33,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use crate::bus::{Broker, PeerHandle, RegisteredPlugin};
+use crate::bus::{Broker, PeerHandle, RegisteredPlugin, RegisteredProvider};
 use crate::compile::{CompiledPlugin, NetworkPlan};
 use crate::error::{
     BrokerError, InvalidPlanReason, PathKind, ReaperOutcome, ShutdownFailure, SpawnError,
@@ -162,10 +162,21 @@ impl SpawnHandle {
 #[allow(dead_code)] // c15+ wires teardown through these fields.
 struct ManagedSpawn {
     observation: Arc<SpawnObservation>,
-    registered: Option<RegisteredPlugin>,
+    registered: Option<SpawnRegistration>,
     proxy: Option<ProxyHandle>,
     serve_join: Option<tokio::task::JoinHandle<()>>,
     watcher_join: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Discriminates plugin vs. provider broker registration so the
+/// supervisor's RAII drop releases the right registry slot
+/// (scope §M2.2). Holds the broker registration guard returned
+/// by either `Broker::register_plugin` or
+/// `Broker::register_provider`.
+#[allow(dead_code)] // Held only for RAII drop; never read.
+enum SpawnRegistration {
+    Plugin(RegisteredPlugin),
+    Provider(RegisteredProvider),
 }
 
 /// Test-only counters (scope §SP2).
@@ -412,13 +423,6 @@ impl PluginSupervisor {
             }
         }
 
-        if let Some(provider_id) = acl_provider_id {
-            return Err(SpawnError::InvalidPlan {
-                canonical: plan.canonical.clone(),
-                reason: InvalidPlanReason::ProviderNotInM2 { provider_id },
-            });
-        }
-
         // Per-platform CLOEXEC handling: nix's `SockFlag::SOCK_CLOEXEC`
         // is Linux-only; macOS needs `fcntl(F_SETFD, FD_CLOEXEC)`
         // after socketpair. m2 retrospective §5.7 (CI follow-up).
@@ -570,6 +574,9 @@ impl PluginSupervisor {
         cmd.env("RFL_PROJECT_ROOT", &paths.project_root);
         cmd.env("RFL_PRIVATE_STATE_DIR", &paths.private_state_dir);
         cmd.env("RFL_TOPIC_ID", &plan.topic_id);
+        if let Some(provider_id) = acl_provider_id.as_deref() {
+            cmd.env("RFL_PROVIDER_ID", provider_id);
+        }
         cmd.current_dir(&paths.project_root);
 
         #[cfg(any(test, feature = "test-fixture"))]
@@ -665,32 +672,61 @@ impl PluginSupervisor {
             });
         }
 
-        let registered = match self
-            .broker
-            .register_plugin(plan.canonical.clone(), peer.clone())
-        {
-            Ok(r) => r,
-            Err(BrokerError::NotInAcl(c)) => {
-                self.kill_and_reap(&mut child, cached_pid).await;
-                drop(server);
-                drop(proxy);
-                return Err(SpawnError::NotInAcl(c));
-            }
-            Err(BrokerError::AlreadyRegistered(c)) => {
-                self.kill_and_reap(&mut child, cached_pid).await;
-                drop(server);
-                drop(proxy);
-                return Err(SpawnError::AlreadyRegistered(c));
-            }
-            Err(other) => {
-                self.kill_and_reap(&mut child, cached_pid).await;
-                drop(server);
-                drop(proxy);
-                return Err(SpawnError::SandboxBuild {
-                    canonical: plan.canonical.clone(),
-                    source: anyhow::anyhow!(other),
-                });
-            }
+        let registered = match acl_provider_id.is_some() {
+            true => match self
+                .broker
+                .register_provider(plan.canonical.clone(), peer.clone())
+            {
+                Ok(r) => SpawnRegistration::Provider(r),
+                Err(BrokerError::ProviderNotInAcl(c)) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::NotInAcl(c));
+                }
+                Err(BrokerError::ProviderAlreadyRegistered(c)) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::AlreadyRegistered(c));
+                }
+                Err(other) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::SandboxBuild {
+                        canonical: plan.canonical.clone(),
+                        source: anyhow::anyhow!(other),
+                    });
+                }
+            },
+            false => match self
+                .broker
+                .register_plugin(plan.canonical.clone(), peer.clone())
+            {
+                Ok(r) => SpawnRegistration::Plugin(r),
+                Err(BrokerError::NotInAcl(c)) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::NotInAcl(c));
+                }
+                Err(BrokerError::AlreadyRegistered(c)) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::AlreadyRegistered(c));
+                }
+                Err(other) => {
+                    self.kill_and_reap(&mut child, cached_pid).await;
+                    drop(server);
+                    drop(proxy);
+                    return Err(SpawnError::SandboxBuild {
+                        canonical: plan.canonical.clone(),
+                        source: anyhow::anyhow!(other),
+                    });
+                }
+            },
         };
 
         // Registration is now the source of truth — drop the
@@ -1008,10 +1044,18 @@ impl Service for BusPublishService {
         if req.method == "bus.publish" && req.id.is_none() {
             // Notification: result is swallowed by the server; any
             // BrokerError is already surfaced via the broker's
-            // lifecycle event emission (§B9).
-            let _ = self
-                .broker
-                .handle_plugin_publish(&self.canonical, &req.params);
+            // lifecycle event emission (§B9). Provider-bound peers
+            // route to `handle_provider_publish`; plugin peers route
+            // to `handle_plugin_publish` (scope §M2.3).
+            if self.broker.contains_provider(&self.canonical) {
+                let _ = self
+                    .broker
+                    .handle_provider_publish(&self.canonical, &req.params);
+            } else {
+                let _ = self
+                    .broker
+                    .handle_plugin_publish(&self.canonical, &req.params);
+            }
             return Ok(Response {
                 id: JsonRpcId::Null,
                 result: Value::Null,

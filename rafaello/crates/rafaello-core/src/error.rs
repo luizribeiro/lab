@@ -427,9 +427,6 @@ pub enum InvalidPlanReason {
     NetworkAllowHostsInvalid {
         source: outpost::DomainPatternParseError,
     },
-    ProviderNotInM2 {
-        provider_id: String,
-    },
 }
 
 /// How a previously-spawned plugin process exited (scope §SP3).
