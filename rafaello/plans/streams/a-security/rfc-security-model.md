@@ -241,11 +241,17 @@ binds *content*, not just *name*.
 > The m2 `BusEvent`'s `publisher` enum has `Core` and
 > `Plugin {canonical, topic_id}`. **m3 adds `Frontend
 > { attach_id }`** to the live wire schema (see m3
-> retrospective §2.2). The `Provider` variant remains
-> reserved for m4 and not yet on the wire. The
-> `request_id` field overview §4.5 enumerates is **not**
-> in m2 / m3 events; m4 adds it (overview §4.5
-> v1-status banner).
+> retrospective §2.2). **m4 promotes `Provider {
+> canonical, provider_id }`** onto the live wire
+> schema via the c07 `2bbf3e7` workspace cutover (see
+> m4 retrospective §2.2). The `request_id: Option<JsonRpcId>`
+> field overview §4.5 enumerates is **not** in m2 / m3
+> events; m4 adds it in the same c07 cutover (overview
+> §4.5 v1-status banner). m4 also lands the broker-side
+> RAII surface `Broker::register_provider(canonical,
+> provider_id) -> ProviderGuard` (m4 c09 `f2c07ad`):
+> dropping the `ProviderGuard` removes the registration
+> and rejects subsequent `provider.<id>.*` publishes.
 >
 > **m3 ACL extension** (m3 retrospective §2.5): the
 > `BrokerAcl` struct grows a `frontends:
