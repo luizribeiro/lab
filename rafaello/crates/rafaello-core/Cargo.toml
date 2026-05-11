@@ -39,6 +39,7 @@ serial_test = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 tracing-subscriber = { workspace = true }
 tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 test-fixture = []

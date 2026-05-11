@@ -18,7 +18,11 @@
 //! For confirm_reply events it runs §CG4: `try_resolve` →
 //! dispatch on allow / synthesise a deny tool_result on deny, with
 //! the timeout-race path auditing `confirm_resolved_after_timeout`.
-//! The CG5 timeout body lands in c23.
+//! §CG5: the per-`reserve` timer task calls `handle_timeout`, which
+//! consumes the held entry via `try_take_for_timeout` and publishes
+//! the synthetic deny `tool_result` with `reason = ConfirmTimeout`
+//! (audit `confirm_timeout`); if the entry was already resolved by
+//! an answer the timeout task exits silently.
 
 pub mod confirm_state;
 
@@ -188,19 +192,57 @@ impl ConfirmationGate {
         })
     }
 
-    /// CG5 deadline body — lands in c23. The c21 timer arms a
-    /// `sleep_until(deadline)` task that delegates here once the
-    /// TTL elapses; for now this is a no-op so the timer plumbing
-    /// can be exercised end-to-end before the deadline semantics
-    /// arrive.
-    async fn handle_timeout(_state: Arc<ConfirmState>, _confirm_id: JsonRpcId) {}
+    /// §CG5 deadline body. The per-`reserve` timer task awaits its
+    /// `sleep_until(deadline)` and then calls this method. On
+    /// `Some(held)`: publish the synthetic deny `tool_result` via
+    /// the §CG4a helper with `reason = ConfirmTimeout` and audit
+    /// `confirm_timeout`. On `None`: the answer arm won the race;
+    /// exit silently with no audit and no publish.
+    async fn handle_timeout(
+        broker: Arc<Broker>,
+        audit: Arc<AuditWriter>,
+        state: Arc<ConfirmState>,
+        confirm_id: JsonRpcId,
+    ) {
+        let Some(held) = state.try_take_for_timeout(&confirm_id) else {
+            return;
+        };
+        let args = synthesise_deny_tool_result(&held, DenyReason::ConfirmTimeout);
+        if let Err(err) = broker.publish_core_with_taint(
+            args.topic,
+            args.payload,
+            args.request_id,
+            args.in_reply_to,
+            args.taint,
+            None,
+        ) {
+            tracing::error!(error = %err, "gate: CG5 timeout synthetic tool_result publish failed");
+            return;
+        }
+        let tool = held
+            .tool_request
+            .payload
+            .as_object()
+            .and_then(|o| o.get("tool"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let _ = audit.record(
+            AuditKind::ConfirmTimeout,
+            Some(&confirm_id),
+            &serde_json::json!({
+                "tool": tool,
+                "plugin": held.dispatch_target.to_string(),
+            }),
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn handle_tool_request(
-    broker: &Broker,
+    broker: &Arc<Broker>,
     user_grants: &RwLock<UserGrants>,
-    audit: &AuditWriter,
+    audit: &Arc<AuditWriter>,
     state: &Arc<ConfirmState>,
     timeout_tasks: &TimeoutTasks,
     compiled: &BTreeMap<CanonicalId, CompiledPlugin>,
@@ -307,8 +349,8 @@ fn handle_tool_request(
 
 #[allow(clippy::too_many_arguments)]
 fn hold_for_confirmation(
-    broker: &Broker,
-    audit: &AuditWriter,
+    broker: &Arc<Broker>,
+    audit: &Arc<AuditWriter>,
     state: &Arc<ConfirmState>,
     timeout_tasks: &TimeoutTasks,
     event: &BusEvent,
@@ -377,13 +419,26 @@ fn hold_for_confirmation(
         }),
     );
 
+    let broker_for_timer = Arc::clone(broker);
+    let audit_for_timer = Arc::clone(audit);
     let state_for_timer = Arc::clone(state);
     let timeout_tasks_for_cleanup = Arc::clone(timeout_tasks);
     let confirm_id_for_timer = confirm_id.clone();
     let confirm_id_for_cleanup = confirm_id.clone();
+    // Anchor the sleep on tokio's clock (not the std `deadline`
+    // stored in `HeldConfirmation`) so `tokio::time::pause` +
+    // `advance` drives it in CG5 tests; semantically equivalent
+    // because `reserve` and the timer spawn run back-to-back.
+    let timer_deadline = tokio::time::Instant::now() + CONFIRM_TTL;
     let join = tokio::spawn(async move {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-        ConfirmationGate::handle_timeout(state_for_timer, confirm_id_for_timer).await;
+        tokio::time::sleep_until(timer_deadline).await;
+        ConfirmationGate::handle_timeout(
+            broker_for_timer,
+            audit_for_timer,
+            state_for_timer,
+            confirm_id_for_timer,
+        )
+        .await;
         timeout_tasks_for_cleanup
             .lock()
             .remove(&confirm_id_for_cleanup);
