@@ -1,7 +1,52 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — retrospective
 
-> **Status: round 3 draft.** Folds `retrospective-pi-review-2.md`
-> (2 B / 3 M / 3 N) at hash TBD-round-3.
+> **Status: round 4 draft.** Folds `retrospective-pi-review-3.md`
+> (1 B / 3 M / 2 N) at hash TBD-round-4.
+>
+> Round-4 fixes by pi-3 finding (one line each):
+> - **B-1** §6.1 + §8 bullet 5 `confirm_resolved` claim corrected:
+>   live `gate/mod.rs` publishes `core.session.confirm_resolved`
+>   **only** for grant-short-circuit queue pruning (the
+>   `short_circuit_pending_after_grant` path, reason
+>   `grant_short_circuit`). Normal allow/deny answers flow as
+>   `frontend.tui.confirm_answer` → `core.session.confirm_reply`
+>   → gate dispatch + audit kind (`confirm_allowed` /
+>   `confirm_denied`). Timeout audits `confirm_timeout` and
+>   synthesises a deny-shaped tool_result without publishing
+>   `confirm_resolved`.
+> - **M-1** §3 c38 deviation table + §8 §CHAT caveat reworded:
+>   "one substitute landed as a functional equivalent" → "one
+>   substitute landed as a partial substitute". §8 §CHAT
+>   missing-anchors list now includes §5 item 15 (the positive
+>   gate-through-orchestration anchor) alongside items 12-14.
+> - **M-2** §6.4 `Audit log` glossary patch reworded as
+>   "key audit-kind families" rather than implying completeness;
+>   the round-3 list omitted `gate_passthrough`,
+>   `gate_grant_match`, `gate_grant_match_short_circuit`,
+>   `confirm_malformed`, `confirm_resolved_after_timeout`,
+>   `grant_revoked`, `grant_list`. The patch now reads as
+>   examples + a pointer to `audit/mod.rs::AuditKind::as_str()`
+>   as the authoritative enumeration.
+> - **M-3** §7.1 unused-`allow_secrets` warning description
+>   reworded: the install-time stderr line is plain
+>   `warning: unused allow_secrets entry '<name>' (no matching
+>   env.pass entry)` — **not** yellow. The yellow marker is a
+>   separate `rfl status` TTY suffix for *accepted*
+>   `allow_secrets` entries.
+> - **N-1** The `TBD-round-3` placeholder banner replaced
+>   with the round-3 hash `3334a5e`.
+> - **N-2** §2.3 `first_spawn_instant_nanos()` description
+>   names the actual `supervisor::monotonic_nanos()` helper
+>   (an `OnceLock<Instant>` epoch + `saturating_duration_since`
+>   per `supervisor.rs:301-308`) rather than generic
+>   `Instant::now().elapsed().as_nanos()` prose.
+>
+> ---
+>
+> **(History — round 3 draft, kept for trajectory.)**
+>
+> Round 3 folded `retrospective-pi-review-2.md`
+> (2 B / 3 M / 3 N) at hash 3334a5e.
 >
 > Round-3 fixes by pi-2 finding (one line each):
 > - **B-1** §7.1 + §7.4 `Refines/Reverses` anchors rewritten:
@@ -289,10 +334,15 @@ The c38 test
 `rfl_chat_constructs_gate_before_provider_spawn.rs` needs to assert
 a strict ordering ("gate constructed before any plugin spawn")
 without coupling to wall-clock or `tokio::time::Instant`
-constructor flakiness. The chosen seam exposes a monotonic
-`Instant::now().elapsed().as_nanos()` captured **inside** the
-supervisor on the first spawn call, gated behind a
-`#[cfg(any(test, feature = "test-fixture"))]` `TestHooks` impl
+constructor flakiness. The chosen seam exposes
+`PluginSupervisor::first_spawn_instant_nanos() -> Option<u64>`
+backed by the supervisor-internal
+`supervisor::monotonic_nanos()` helper — an `OnceLock<Instant>`
+epoch + `Instant::now().saturating_duration_since(*epoch)`
+(`supervisor.rs:301-308`) — captured **inside** the supervisor
+via an `AtomicU64::compare_exchange` on the first spawn call,
+gated behind a `#[cfg(any(test, feature = "test-fixture"))]`
+`TestHooks` impl
 (the `test-fixture` half of the cfg is required because integration
 binaries — `rafaello/tests/*.rs` — exercise the seam outside the
 `cfg(test)` half). Rationale: the seam is supervisor-internal
@@ -397,7 +447,7 @@ deviated, all as in-flight carveouts described in §2:
 |-----|-----------|-----------|-------------------|
 | c18 + c38 | `SlashHandler` shipped at c18 with `Arc<Mutex<UserGrants>>`; c38 cutover migrates it to `Arc<RwLock<UserGrants>>` plus call-site / test-kit updates (§2.1) | Lock-type chosen at c18 collides with gate hot-path requirement at c20+; cannot split the cutover without an intermediate non-compiling state | none (cutover lands self-contained) |
 | c37 + c39 | `ENV_PASS_ALLOWLIST` extension for the three new `RFL_TUI_TEST_*` vars folded into c39 (the demo-bar headline) rather than c37 or c38 (§2.2) | The need surfaced at c39 when the demo-bar test could not drive the modal; c37 added the vars in the child crate but c38's parent-side wiring missed the allowlist extension | §6 (driver-process gotcha) + §4 (process notes) |
-| c38 | Acceptance test set diverged from `commits.md` (§3.1 below) | Three of c38's four ratified acceptance tests did not land; one substitute landed as a functional equivalent; the other three deferred to m5b/m6 | §5 items 12-14 |
+| c38 | Acceptance test set diverged from `commits.md` (§3.1 below) | Three of c38's four ratified acceptance tests did not land; one substitute landed as a **partial** substitute (negative half only); the other three deferred to m5b/m6 | §5 items 12-15 |
 
 ### 3.1 c38 acceptance-test substitution (in-flight carveout, pi-1 B-1)
 
@@ -536,9 +586,13 @@ adds:
   `frontend.tui.confirm_answer` (TUI publish, c12 + c25),
   `core.session.confirm_reply` (re-emit's canonicalised reply
   after answer-enum validation, c14), and
-  `core.session.confirm_resolved` (the **gate's** publish on
-  short-circuit + resolution paths for observability, not a
-  re-emit canonicalisation).
+  `core.session.confirm_resolved` (the **gate's** publish —
+  used only for **grant-short-circuit queue pruning** via
+  `short_circuit_pending_after_grant` with reason
+  `grant_short_circuit`; normal allow/deny answers do not
+  publish `confirm_resolved`, and timeout audits
+  `confirm_timeout` and synthesises a deny-shaped tool_result
+  without a `confirm_resolved` publish).
 - `UserGrants` + `GrantMatcher` + `jsonschema`-template-as-shape-contract
   (c15-c16).
 - The broker `outstanding_dispatched` map atomic intake check
@@ -558,17 +612,18 @@ Concrete patches:
   m4 banner content; add an m5a section beneath it.
 - Stream A **§5.6 confirmation-payload / correlation
   clarification**: pin the wire shape of the topic family —
-  `core.session.confirm_request` (gate publish),
-  `frontend.tui.confirm_answer` (TUI publish),
+  `core.session.confirm_request` (gate publish on hold),
+  `frontend.tui.confirm_answer` (TUI publish on key press),
   `core.session.confirm_reply` (re-emit's canonicalised reply
   after answer-enum validation), and
-  `core.session.confirm_resolved` (gate's resolution-visibility
-  publish on allow / deny / short-circuit / timeout) — together
-  with the `confirm_id` correlation contract (envelope
-  `request_id` ↔ payload `request_id` ↔ `in_reply_to`) and the
-  `try_resolve` / `mark_session_grant_requested` shape (scope
-  §CT0 / §CT5). The round-2 scope.md surfaced this as a needed
-  Stream A clarification; pi-1 B-3 flagged its absence here.
+  `core.session.confirm_resolved` (gate publish, **only** on
+  grant-short-circuit queue pruning, reason
+  `grant_short_circuit`) — together with the `confirm_id`
+  correlation contract (envelope `request_id` ↔ payload
+  `request_id` ↔ `in_reply_to`) and the `try_resolve` /
+  `mark_session_grant_requested` shape (scope §CT0 / §CT5).
+  The round-2 scope.md surfaced this as a needed Stream A
+  clarification; pi-1 B-3 flagged its absence here.
 
 ### 6.2 Stream F (manifest) — `env.allow_secrets`
 
@@ -612,13 +667,22 @@ Two glossary entries to land:
 
 - **`Audit log`** — the `audit_events` SQLite table introduced
   at c08, co-resident in `.rafaello/state/session.sqlite` with
-  `entries`. Names the audit kinds produced in m5a:
-  `confirm_request`, `confirm_allowed`, `confirm_denied`,
+  `entries`. Names the key audit-kind **families** produced in
+  m5a (gate dispatch outcomes: `gate_passthrough`,
+  `gate_grant_match`, `gate_grant_match_short_circuit`;
+  confirmation lifecycle: `confirm_request`, `confirm_allowed`,
+  `confirm_denied`, `confirm_allowed_with_session_grant`,
   `confirm_timeout`, `confirm_late`, `confirm_duplicate`,
-  `confirm_unknown`, `confirm_allowed_with_session_grant`,
-  `grant_added`, `slash_unknown`, `install_accepted`,
+  `confirm_unknown`, `confirm_malformed`,
+  `confirm_resolved_after_timeout`; grants:
+  `grant_added`, `grant_revoked`, `grant_list`; slash:
+  `slash_unknown`; install: `install_accepted`,
   `install_refused`, `trifecta_overridden`,
-  `credential_paths_overridden` (per `audit/mod.rs:73-76`).
+  `credential_paths_overridden`). The authoritative
+  enumeration lives at
+  `rafaello-core/src/audit/mod.rs::AuditKind::as_str()`; the
+  glossary entry should cite that as the source of truth
+  rather than freeze a snapshot list.
 - **Confirmation protocol** — update or add an entry covering
   the topic family (`core.session.confirm_request`,
   `core.session.confirm_reply`, `core.session.confirm_resolved`,
@@ -658,8 +722,13 @@ Vec<String>` lists env var names that the scrubber honours
 without the operator passing `flags.i_know_what_im_doing` at
 install. Pairs with `env.pass`: only names that also appear in a
 matching `env.pass` entry are forwarded; unused
-`allow_secrets` entries emit a yellow stderr warning at
-install + an `install_accepted` audit-payload entry (c27).
+`allow_secrets` entries emit a plain stderr warning line at
+install — `warning: unused allow_secrets entry '<name>' (no
+matching env.pass entry)` per `install.rs` — and surface in the
+`install_accepted` audit payload (c27). The yellow marker is
+the *separate* `rfl status` TTY suffix for *accepted*
+`allow_secrets` entries (§10.3); install-time and status-time
+copy are distinct.
 
 **Rationale.** The round-2 fallback (force every bundled provider
 to use `i_know_what_im_doing`) made the demo-bar walkthrough hostile
@@ -764,11 +833,14 @@ turn at all.
   `tests/*.rs` files across the workspace (207 added, 1 deleted
   at c38).
 - **Caveat for §CHAT.** Three of c38's four ratified acceptance
-  test names did not land; one substitute landed (§3.1). The
-  cutover's *behaviour* is asserted by the substitute test plus
+  test names did not land; one **partial** substitute landed
+  covering the negative half only (§3.1). The cutover's
+  *behaviour* is asserted by the partial substitute test plus
   `rfl_chat_no_double_dispatch_when_gate_constructed.rs` and
   `rfl_chat_constructs_gate_before_provider_spawn.rs`. The
-  missing regression-anchors are §5 items 12-14.
+  missing regression-anchors are §5 items 12-15 (item 15 is
+  the positive gate-through-orchestration anchor — the
+  partial-substitute's missing half).
 - All §I negative matrix rows m5a-scoped: timeout, restart,
   one-hop trifecta, transitive-not-chased, bonus negatives
   (`always_confirm_true_holds_non_sink_tool`,
@@ -831,12 +903,16 @@ merge:
    - `s` → publish
      `frontend.tui.confirm_answer { answer: "always_allow_session" }`.
 
-   The re-emit canonicalises to `core.session.confirm_reply`;
-   the gate publishes `core.session.confirm_resolved` plus the
-   matching `audit_events` row (`confirm_allowed` for the allow
-   keys, `confirm_denied` for the deny keys,
+   The re-emit canonicalises each answer to
+   `core.session.confirm_reply`; the gate dispatches the held
+   tool_request (or synthesises a deny) and writes the matching
+   `audit_events` row: `confirm_allowed` for the allow keys,
+   `confirm_denied` for the deny keys,
    `confirm_allowed_with_session_grant` + `grant_added` for
-   `s`). The skeleton's invented `core.session.confirm_answered`
+   `s`. The gate does **not** publish
+   `core.session.confirm_resolved` for normal answers — that
+   topic is reserved for grant-short-circuit queue pruning
+   (reason `grant_short_circuit`) per pi-3 B-1. The skeleton's invented `core.session.confirm_answered`
    name (round-1 draft) is replaced with these live topics. The
    round-2 draft mis-mapped `a` to session-grant and named a
    `s` "show details" key that the live TUI does not implement;
@@ -963,5 +1039,5 @@ exclusive at install time.
 
 ---
 
-*End of m5a retrospective round 3 draft. Submitted for pi
+*End of m5a retrospective round 4 draft. Submitted for pi
 adversarial review.*
