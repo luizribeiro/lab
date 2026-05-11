@@ -3,9 +3,11 @@
 > Companion to `retrospective.md`. Records the exact
 > acceptance-gate transcripts and out-of-band evidence
 > that `scope.md` §"Acceptance summary" requires before
-> ratification. Status: round 2, refreshed 2026-05-11
+> ratification. Status: round 3, refreshed 2026-05-11
 > alongside the round-2 retrospective with the post-
-> `0a0e824` Linux test/build/doc transcripts inlined.
+> `0a0e824` Linux test/build/doc transcripts inlined,
+> then §5 owner-acceptance wording aligned to the
+> round-3 retrospective in commit `adf763f` (pi-r2 N1).
 > CI URLs + interactive recording remain placeholders
 > pending the post-retrospective branch push.
 
