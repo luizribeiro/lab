@@ -9,6 +9,16 @@ pub const RFL_PROJECT_ROOT: &str = "RFL_PROJECT_ROOT";
 pub const RFL_TUI_TEST_MODE: &str = "RFL_TUI_TEST_MODE";
 pub const RFL_TUI_READY_DELAY_MS: &str = "RFL_TUI_READY_DELAY_MS";
 pub const RFL_TUI_MAX_LIFETIME: &str = "RFL_TUI_MAX_LIFETIME";
+pub const RFL_TUI_TEST_MESSAGE: &str = "RFL_TUI_TEST_MESSAGE";
+
+pub const ENV_PASS_ALLOWLIST: &[&str] = &[
+    RFL_BUS_FD,
+    RFL_PROJECT_ROOT,
+    RFL_TUI_TEST_MODE,
+    RFL_TUI_READY_DELAY_MS,
+    RFL_TUI_MAX_LIFETIME,
+    RFL_TUI_TEST_MESSAGE,
+];
 
 #[derive(Debug, Clone)]
 pub struct TuiEnv {
@@ -17,6 +27,7 @@ pub struct TuiEnv {
     pub test_mode: bool,
     pub ready_delay_ms: Option<u64>,
     pub max_lifetime_secs: Option<u64>,
+    pub test_message: Option<String>,
 }
 
 pub fn load() -> Result<TuiEnv> {
@@ -32,6 +43,7 @@ where
     let test_mode = get(RFL_TUI_TEST_MODE).as_deref() == Some("1");
     let ready_delay_ms = parse_optional_u64(RFL_TUI_READY_DELAY_MS, get(RFL_TUI_READY_DELAY_MS))?;
     let max_lifetime_secs = parse_optional_u64(RFL_TUI_MAX_LIFETIME, get(RFL_TUI_MAX_LIFETIME))?;
+    let test_message = get(RFL_TUI_TEST_MESSAGE).filter(|s| !s.is_empty());
 
     Ok(TuiEnv {
         bus_fd,
@@ -39,6 +51,7 @@ where
         test_mode,
         ready_delay_ms,
         max_lifetime_secs,
+        test_message,
     })
 }
 

@@ -18,6 +18,7 @@ async fn bus_event_to_child_appears_on_stderr() {
             test_mode: true,
             max_lifetime: Some(3),
             ready_delay_ms: None,
+            test_message: None,
         },
         svc,
     );

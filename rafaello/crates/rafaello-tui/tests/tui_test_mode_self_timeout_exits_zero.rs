@@ -15,6 +15,7 @@ async fn self_timeout_exits_zero() {
             test_mode: true,
             max_lifetime: Some(1),
             ready_delay_ms: None,
+            test_message: None,
         },
         svc,
     );

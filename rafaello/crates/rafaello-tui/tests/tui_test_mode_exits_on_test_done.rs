@@ -18,6 +18,7 @@ async fn test_done_event_triggers_immediate_clean_exit() {
             test_mode: true,
             max_lifetime: Some(60),
             ready_delay_ms: None,
+            test_message: None,
         },
         svc,
     );

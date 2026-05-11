@@ -26,6 +26,7 @@ async fn child_logs_event_published_during_frontend_ready_callback() {
             test_mode: true,
             max_lifetime: Some(3),
             ready_delay_ms: None,
+            test_message: None,
         },
         svc,
     );

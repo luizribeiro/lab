@@ -17,6 +17,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use fittings_client::{Client, InboundNotification};
+use fittings_core::message::JsonRpcId;
 use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_transport::stdio::StdioTransport;
 use futures::stream::StreamExt;
@@ -29,6 +30,7 @@ use serde_json::{json, Value};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex;
+use ulid::Ulid;
 
 const MAX_FRAME_BYTES: usize = 1 << 20;
 const DEFAULT_MAX_LIFETIME_SECS: u64 = 60;
@@ -70,6 +72,21 @@ async fn main() -> Result<()> {
         .call("frontend.ready", json!({}))
         .await
         .context("rfl-tui: frontend.ready RPC")?;
+
+    if let Some(text) = cfg.test_message.as_deref() {
+        let request_id = JsonRpcId::String(Ulid::new().to_string());
+        client
+            .peer()
+            .notify(
+                "bus.publish",
+                json!({
+                    "topic": "frontend.tui.user_message",
+                    "payload": {"text": text},
+                    "request_id": request_id,
+                }),
+            )
+            .context("rfl-tui: bus.publish frontend.tui.user_message")?;
+    }
 
     if cfg.test_mode {
         std::future::pending::<Result<()>>().await

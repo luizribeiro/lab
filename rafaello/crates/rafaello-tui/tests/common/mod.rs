@@ -121,6 +121,7 @@ pub struct SpawnOpts {
     pub test_mode: bool,
     pub max_lifetime: Option<u64>,
     pub ready_delay_ms: Option<u64>,
+    pub test_message: Option<String>,
 }
 
 impl Default for SpawnOpts {
@@ -129,6 +130,7 @@ impl Default for SpawnOpts {
             test_mode: true,
             max_lifetime: Some(2),
             ready_delay_ms: None,
+            test_message: None,
         }
     }
 }
@@ -157,6 +159,9 @@ pub fn spawn_tui<S: Service + Send + Sync + 'static>(opts: SpawnOpts, service: S
     }
     if let Some(ms) = opts.ready_delay_ms {
         cmd.env("RFL_TUI_READY_DELAY_MS", ms.to_string());
+    }
+    if let Some(msg) = opts.test_message.as_deref() {
+        cmd.env("RFL_TUI_TEST_MESSAGE", msg);
     }
 
     let mut child = cmd.spawn().expect("spawn rfl-tui");

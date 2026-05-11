@@ -53,6 +53,7 @@ async fn tui_handler_calls_frontend_ready_then_self_exits() {
             test_mode: true,
             max_lifetime: Some(2),
             ready_delay_ms: None,
+            test_message: None,
         },
         svc,
     );
