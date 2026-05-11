@@ -213,7 +213,19 @@ struct BrokerInner {
     /// `&self` and every already-cloned handle observes the write
     /// atomically (pi-3 B-2).
     audit: Mutex<Option<Arc<AuditWriter>>>,
+    /// Fault-injection seam for tests (scope §TM4 / pi-6 M-1). The
+    /// hook fires after a `BusEvent` has been constructed and any
+    /// record-side state has been written, but before `fan_out`
+    /// reaches subscribers. `Some(err)` short-circuits the publish
+    /// with that error; `None` proceeds normally. Last-writer-wins
+    /// (pi-6 N-5): a second `install_publish_test_hook` replaces
+    /// the slot; no explicit clear method.
+    #[cfg(any(test, feature = "test-fixture"))]
+    publish_test_hook: Mutex<Option<PublishTestHook>>,
 }
+
+#[cfg(any(test, feature = "test-fixture"))]
+pub type PublishTestHook = Arc<dyn Fn(&BusEvent) -> Option<BrokerError> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct Broker(Arc<BrokerInner>);
@@ -295,6 +307,8 @@ impl Broker {
             internal_subscribers: Mutex::new(Vec::new()),
             next_slot_id: AtomicU64::new(0),
             audit: Mutex::new(None),
+            #[cfg(any(test, feature = "test-fixture"))]
+            publish_test_hook: Mutex::new(None),
         })))
     }
 
@@ -457,6 +471,28 @@ impl Broker {
     ) -> Option<Result<i64, crate::audit::AuditError>> {
         let writer = self.audit_writer()?;
         Some(writer.record(kind, request_id, payload))
+    }
+
+    /// Install a fault-injection hook consulted by publish paths just
+    /// before `fan_out` (scope §TM4 / pi-6 M-1). Last-writer-wins per
+    /// pi-6 N-5; no explicit clear method — install a no-op hook if
+    /// removal is needed. The hook's `&BusEvent` argument is the
+    /// post-record event so tests may inspect index state at hook-fire
+    /// time.
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn install_publish_test_hook(&self, hook: PublishTestHook) {
+        *self.0.publish_test_hook.lock() = Some(hook);
+    }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    fn check_publish_test_hook(&self, event: &BusEvent) -> Option<BrokerError> {
+        let hook = self.0.publish_test_hook.lock().clone();
+        hook.and_then(|h| h(event))
+    }
+
+    #[cfg(not(any(test, feature = "test-fixture")))]
+    fn check_publish_test_hook(&self, _event: &BusEvent) -> Option<BrokerError> {
+        None
     }
 
     pub fn shutdown(&self) {
@@ -1042,6 +1078,9 @@ impl Broker {
             taint,
             request_id,
         };
+        if let Some(err) = self.check_publish_test_hook(&event) {
+            return Err(err);
+        }
         self.fan_out(&event, None, None, origin_provider.as_ref());
         Ok(())
     }
@@ -1107,6 +1146,9 @@ impl Broker {
                     tool_request_taint,
                 },
             );
+        if let Some(err) = self.check_publish_test_hook(&event) {
+            return Err(err);
+        }
         self.fan_out(&event, None, None, None);
         Ok(())
     }
@@ -1142,6 +1184,9 @@ impl Broker {
             taint: None,
             request_id: None,
         };
+        if let Some(err) = self.check_publish_test_hook(&event) {
+            return Err(err);
+        }
         self.fan_out(&event, None, None, None);
         Ok(())
     }
