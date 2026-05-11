@@ -174,8 +174,12 @@ it spawns `rfl chat` end-to-end against a real temp-dir
 fixture lock, drives it with `RFL_TUI_TEST_MESSAGE`, and
 asserts the exact SQLite row shape (seq / kind / author /
 text payload) plus the four `core.session.entry.finalized`
-sentinels on TUI stderr. Owner accepts mechanical
-coverage in lieu of a screen-recording (m3-precedent).
+sentinels on TUI stderr. Owner *may* accept this c27
+headline test as substitute coverage (m3-precedent),
+but the default expectation is a recorded interactive
+run; the acceptance table in `retrospective.md` §5.3
+correctly leaves "interactive demo + macOS CI URL"
+pending until that decision is made.
 
 ### Post-fix demo-bar status
 
