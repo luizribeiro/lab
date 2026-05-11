@@ -1,9 +1,10 @@
-//! Confirmation gate (scope §CG1, §CG2 steps 1-5, §CG3, §CG8
-//! partial).
+//! Confirmation gate (scope §CG1, §CG2 steps 1-5, §CG3, §CG4,
+//! §CG4a, §CG8 partial).
 //!
 //! `ConfirmationGate` subscribes internally to
-//! `core.session.tool_request`; for each event it resolves the
-//! `dispatch_target` to its `CompiledPlugin`, computes
+//! `core.session.tool_request` and `core.session.confirm_reply`.
+//! For tool_request events it resolves the `dispatch_target` to its
+//! `CompiledPlugin`, computes
 //! `gate_required = !sinks.is_empty() || always_confirm`, and
 //! either passes the call through (`publish_for_tool_dispatch` +
 //! `gate_passthrough` audit) or — when gating is required —
@@ -14,7 +15,10 @@
 //! publishes `core.session.confirm_request` with the §CG3 payload,
 //! and arms a `tokio::time::sleep_until(deadline)` task whose
 //! `JoinHandle` it parks in an internal map for abort-on-resolve.
-//! The CG4 answer path and the CG5 timeout body land in c22 / c23.
+//! For confirm_reply events it runs §CG4: `try_resolve` →
+//! dispatch on allow / synthesise a deny tool_result on deny, with
+//! the timeout-race path auditing `confirm_resolved_after_timeout`.
+//! The CG5 timeout body lands in c23.
 
 pub mod confirm_state;
 
@@ -23,6 +27,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use tokio::task::JoinHandle;
@@ -32,13 +37,75 @@ use crate::audit::{AuditKind, AuditWriter};
 use crate::bus::{Broker, BusEvent, JsonRpcId, TaintEntry};
 use crate::compile::CompiledPlugin;
 use crate::lock::canonical_id::CanonicalId;
-use crate::user_grants::UserGrants;
+use crate::user_grants::{GrantMatcher, GrantSource, UserGrant, UserGrants};
 
 pub use confirm_state::{ConfirmState, HeldConfirmation, MarkError, PriorOutcome};
 
 const GATE_CHANNEL_CAPACITY: usize = 256;
 const TOOL_REQUEST_TOPIC: &str = "core.session.tool_request";
+const CONFIRM_REPLY_TOPIC: &str = "core.session.confirm_reply";
+const TOOL_RESULT_TOPIC: &str = "core.session.tool_result";
 const CONFIRM_TTL: Duration = Duration::from_secs(60);
+
+/// Arguments for `Broker::publish_core_with_taint` packaged as a
+/// value (scope §CG4a). The deny-synthesis helper returns this so
+/// the caller can publish without re-deriving the envelope.
+#[derive(Debug, Clone)]
+pub struct PublishCoreArgs {
+    pub topic: &'static str,
+    pub payload: Value,
+    pub request_id: Option<JsonRpcId>,
+    pub in_reply_to: Option<Vec<JsonRpcId>>,
+    pub taint: Option<Vec<TaintEntry>>,
+}
+
+/// Reason carried in the §CG4a synthetic `tool_result.error` field
+/// (and mirrored as the `taint.detail`). `UserDenied` is published
+/// by CG4's deny path; `ConfirmTimeout` is published by the CG5
+/// timeout body in c23.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenyReason {
+    UserDenied,
+    ConfirmTimeout,
+}
+
+impl DenyReason {
+    fn error_str(self) -> &'static str {
+        match self {
+            DenyReason::UserDenied => "user_denied",
+            DenyReason::ConfirmTimeout => "confirm_timeout",
+        }
+    }
+}
+
+/// Build the §CG4a synthetic `core.session.tool_result` for a held
+/// confirmation that was denied (either explicitly by the user via
+/// CG4, or implicitly by CG5's timeout). The returned envelope
+/// satisfies m4's §B0 / §B8 rules (`request_id Some`, `taint
+/// non-empty`) and the agent loop's `handle_tool_result` reader
+/// (`ok: false`, `content: ""`, `in_reply_to[0]` = held
+/// tool_request id).
+pub fn synthesise_deny_tool_result(held: &HeldConfirmation, reason: DenyReason) -> PublishCoreArgs {
+    let held_request_id = held
+        .tool_request
+        .request_id
+        .clone()
+        .expect("held tool_request always carries request_id (gate hold path enforces this)");
+    PublishCoreArgs {
+        topic: TOOL_RESULT_TOPIC,
+        payload: serde_json::json!({
+            "ok": false,
+            "error": reason.error_str(),
+            "content": "",
+        }),
+        request_id: Some(JsonRpcId::from(Ulid::new().to_string())),
+        in_reply_to: Some(vec![held_request_id]),
+        taint: Some(vec![TaintEntry {
+            source: "system".to_string(),
+            detail: Some(reason.error_str().to_string()),
+        }]),
+    }
+}
 
 type TimeoutTasks = Arc<Mutex<HashMap<JsonRpcId, JoinHandle<()>>>>;
 
@@ -79,9 +146,13 @@ impl ConfirmationGate {
     }
 
     pub fn spawn(self) -> JoinHandle<()> {
-        let (rx, subscription) = self
-            .broker
-            .subscribe_internal(vec![TOOL_REQUEST_TOPIC.to_string()], GATE_CHANNEL_CAPACITY);
+        let (rx, subscription) = self.broker.subscribe_internal(
+            vec![
+                TOOL_REQUEST_TOPIC.to_string(),
+                CONFIRM_REPLY_TOPIC.to_string(),
+            ],
+            GATE_CHANNEL_CAPACITY,
+        );
 
         let broker = Arc::clone(&self.broker);
         let user_grants = Arc::clone(&self.user_grants);
@@ -96,15 +167,23 @@ impl ConfirmationGate {
             let mut rx = rx;
             while let Some(event) = rx.recv().await {
                 events_seen.fetch_add(1, Ordering::SeqCst);
-                handle_event(
-                    &broker,
-                    &user_grants,
-                    &audit,
-                    &state,
-                    &timeout_tasks,
-                    &compiled,
-                    &event,
-                );
+                match event.topic.as_str() {
+                    TOOL_REQUEST_TOPIC => handle_tool_request(
+                        &broker,
+                        &user_grants,
+                        &audit,
+                        &state,
+                        &timeout_tasks,
+                        &compiled,
+                        &event,
+                    ),
+                    CONFIRM_REPLY_TOPIC => {
+                        handle_confirm_reply(&broker, &user_grants, &audit, &state, &event)
+                    }
+                    other => {
+                        tracing::error!(topic = %other, "gate: unexpected topic in subscription");
+                    }
+                }
             }
         })
     }
@@ -118,7 +197,7 @@ impl ConfirmationGate {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_event(
+fn handle_tool_request(
     broker: &Broker,
     user_grants: &RwLock<UserGrants>,
     audit: &AuditWriter,
@@ -310,4 +389,166 @@ fn hold_for_confirmation(
             .remove(&confirm_id_for_cleanup);
     });
     timeout_tasks.lock().insert(confirm_id, join);
+}
+
+/// §CG4: handle a re-emitted `core.session.confirm_reply`. The
+/// reply's envelope `in_reply_to[0]` is the confirm correlation id
+/// (= payload `request_id`). `try_resolve` atomically consumes the
+/// held entry; `None` means CG5's timeout won the race.
+fn handle_confirm_reply(
+    broker: &Broker,
+    user_grants: &RwLock<UserGrants>,
+    audit: &AuditWriter,
+    state: &Arc<ConfirmState>,
+    event: &BusEvent,
+) {
+    let Some(correlation_id) = event.in_reply_to.as_ref().and_then(|v| v.first()).cloned() else {
+        tracing::error!("gate: confirm_reply missing in_reply_to[0]");
+        return;
+    };
+
+    let Some((held, session_grant_requested)) = state.try_resolve(&correlation_id) else {
+        let _ = audit.record(
+            AuditKind::ConfirmResolvedAfterTimeout,
+            Some(&correlation_id),
+            &serde_json::json!({}),
+        );
+        return;
+    };
+
+    let answer = event
+        .payload
+        .as_object()
+        .and_then(|o| o.get("answer"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    match answer {
+        "allow" => dispatch_allow(
+            broker,
+            user_grants,
+            audit,
+            &correlation_id,
+            held,
+            session_grant_requested,
+        ),
+        "deny" => dispatch_deny(broker, audit, &correlation_id, &held),
+        other => {
+            tracing::error!(
+                answer = %other,
+                "gate: confirm_reply has unexpected answer (re-emit must restrict to allow|deny)"
+            );
+        }
+    }
+}
+
+fn dispatch_allow(
+    broker: &Broker,
+    user_grants: &RwLock<UserGrants>,
+    audit: &AuditWriter,
+    correlation_id: &JsonRpcId,
+    held: HeldConfirmation,
+    session_grant_requested: bool,
+) {
+    let obj = held
+        .tool_request
+        .payload
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let tool = obj
+        .get("tool")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let args = obj.get("args").cloned().unwrap_or(Value::Null);
+
+    if session_grant_requested {
+        let grant = UserGrant {
+            plugin: held.dispatch_target.clone(),
+            tool: tool.clone(),
+            matcher: GrantMatcher::Structural {
+                template: args.clone(),
+            },
+            added_at: Utc::now(),
+            source: GrantSource::AlwaysAllowSession,
+        };
+        let grant_id = user_grants.write().add(grant);
+        let _ = audit.record(
+            AuditKind::GrantAdded,
+            Some(correlation_id),
+            &serde_json::json!({
+                "grant_id": grant_id.0.to_string(),
+                "plugin": held.dispatch_target.to_string(),
+                "tool": tool,
+                "source": "AlwaysAllowSession",
+            }),
+        );
+    }
+
+    let tool_request_id = held
+        .tool_request
+        .request_id
+        .clone()
+        .expect("held tool_request always carries request_id");
+    if let Err(err) = broker.publish_for_tool_dispatch(
+        &held.dispatch_target,
+        serde_json::json!({"tool": tool, "args": args}),
+        tool_request_id,
+        held.tool_request.in_reply_to.clone(),
+        held.tool_request.taint.clone(),
+    ) {
+        tracing::error!(error = %err, "gate: CG4 allow dispatch publish failed");
+        return;
+    }
+
+    let kind = if session_grant_requested {
+        AuditKind::ConfirmAllowedWithSessionGrant
+    } else {
+        AuditKind::ConfirmAllowed
+    };
+    let _ = audit.record(
+        kind,
+        Some(correlation_id),
+        &serde_json::json!({
+            "tool": tool,
+            "plugin": held.dispatch_target.to_string(),
+        }),
+    );
+}
+
+fn dispatch_deny(
+    broker: &Broker,
+    audit: &AuditWriter,
+    correlation_id: &JsonRpcId,
+    held: &HeldConfirmation,
+) {
+    let args = synthesise_deny_tool_result(held, DenyReason::UserDenied);
+    if let Err(err) = broker.publish_core_with_taint(
+        args.topic,
+        args.payload,
+        args.request_id,
+        args.in_reply_to,
+        args.taint,
+        None,
+    ) {
+        tracing::error!(error = %err, "gate: CG4 deny synthetic tool_result publish failed");
+        return;
+    }
+    let tool = held
+        .tool_request
+        .payload
+        .as_object()
+        .and_then(|o| o.get("tool"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let _ = audit.record(
+        AuditKind::ConfirmDenied,
+        Some(correlation_id),
+        &serde_json::json!({
+            "tool": tool,
+            "plugin": held.dispatch_target.to_string(),
+        }),
+    );
 }

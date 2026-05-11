@@ -4,6 +4,7 @@
 pub mod agent_test_kit;
 pub mod confirm_state_kit;
 pub mod frontend_test_kit;
+pub mod gate_test_kit;
 pub mod peer_test_kit;
 pub mod provider_test_kit;
 pub mod reemit_test_kit;
