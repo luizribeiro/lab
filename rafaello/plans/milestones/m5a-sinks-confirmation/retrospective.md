@@ -1,7 +1,64 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — retrospective
 
-> **Status: round 2 draft.** Folds `retrospective-pi-review-1.md`
-> (3 B / 4 M / 3 N) at hash TBD-round-2.
+> **Status: round 3 draft.** Folds `retrospective-pi-review-2.md`
+> (2 B / 3 M / 3 N) at hash TBD-round-3.
+>
+> Round-3 fixes by pi-2 finding (one line each):
+> - **B-1** §7.1 + §7.4 `Refines/Reverses` anchors rewritten:
+>   neither `env.allow_secrets` nor `core.tools_list` /
+>   `CorePluginService` refines a prior `decisions.md` row (both
+>   are additive in m5a). Each row now explicitly states "no
+>   prior decision-row anchor" and instead cites
+>   `scope.md` / `overview.md` / Stream RFC anchors.
+> - **B-2** §8 manual-validation TUI keyboard walkthrough rewired
+>   to live mapping: `y` / `a` / `Enter` → Allow; `n` / `d` /
+>   `Esc` → Deny; `s` → AlwaysAllowSession (per
+>   `tui_y_key_publishes_allow_answer.rs`,
+>   `tui_s_key_publishes_always_allow_session.rs`, etc.). The
+>   "four-arm answer enum" framing dropped — the live answer
+>   set is three-armed (`allow` / `deny` / `always_allow_session`);
+>   `timeout` is a gate-side deadline outcome, not a TUI answer.
+>   §6.4 glossary entry updated to match.
+> - **M-1** §3.1 c38 first-row disposition reworded: the
+>   `agent_loop_does_not_dispatch_tool_request_directly.rs`
+>   landing is a **partial substitute** — proves the negative
+>   ("no direct dispatch from the agent loop") but not the
+>   positive ("a tool request reaches the plugin through the
+>   gate"). The positive half is partially covered by
+>   `rfl_chat_no_double_dispatch_when_gate_constructed.rs` but
+>   no test asserts a clean positive end-to-end. Routed to §5
+>   item 15.
+> - **M-2** Invented `install_override` audit kind replaced
+>   throughout (§6.4 glossary entry + §8 bullet 6) with the
+>   live `trifecta_overridden` / `credential_paths_overridden`
+>   kinds (`audit/mod.rs:73-76`).
+> - **M-3** §6.1 Stream A patch sketch corrected: live
+>   `CompiledPlugin` sink accessors are `tool_sinks` /
+>   `tool_sink_classes` / `tool_always_confirm` (not the
+>   invented `sinks()`); `core.session.confirm_resolved` is the
+>   **gate's** publish (short-circuit / resolution visibility),
+>   not the re-emit's canonicalised reply — re-emit produces
+>   `core.session.confirm_reply`.
+> - **N-1** Round-3 header status line + footer trailer
+>   updated.
+> - **N-2** §6.3 reworded: `overview.md` §4.6 reserved-env
+>   table currently lists the m4-introduced
+>   `RFL_PROVIDER_ID` entry; the round-2 retro inaccurately
+>   said the table lists `RFL_FIXTURE_*`. The drift patch
+>   sketch now reads as additive (introduce the
+>   `RFL_OPENAI_*` plugin-config-env class) rather than as
+>   refining a non-existent listing.
+> - **N-3** §1 shortstat now pins the c41 hash
+>   (`rafaello-v0.1..5e36890`) explicitly to avoid the
+>   "shortstat-against-HEAD-includes-retro-commits"
+>   reproducibility trap.
+>
+> ---
+>
+> **(History — round 2 draft, kept for trajectory.)**
+>
+> Round 2 folded `retrospective-pi-review-1.md` (3 B / 4 M / 3 N)
+> at hash `6bbc921`.
 >
 > Round-2 fixes by pi-1 finding (one line each):
 > - **B-1** §3 records a third in-flight carveout: c38's
@@ -101,10 +158,11 @@ pi-review files; commits rounds 1–6 + 5 pi-review files; the two
 ratification commits — 28 commits total, `aaa7ccc..3759d5e`) land
 before c01 and are not counted in the plan-row total.
 
-**LoC.** `git diff rafaello-v0.1..HEAD --shortstat` reports
-**338 files changed, 28,246 insertions, 254 deletions** at the
-c41 tip (`5e36890`) across the 41 plan-row commits + 28 docs
-commits. The plan-row half nets **206 new `tests/*.rs` files**
+**LoC.** `git diff rafaello-v0.1..5e36890 --shortstat` (the c41
+tip — pinned explicitly to avoid the
+shortstat-against-`HEAD`-includes-retro-commits reproducibility
+trap) reports **338 files changed, 28,246 insertions, 254
+deletions** across the 41 plan-row commits + 28 docs commits. The plan-row half nets **206 new `tests/*.rs` files**
 (207 added, one deleted as part of c38's agent-loop pivot —
 `agent_loop_dispatches_tool_request_to_target_plugin.rs`,
 replaced by `agent_loop_does_not_dispatch_tool_request_directly.rs`).
@@ -349,7 +407,7 @@ disposition:
 
 | Ratified c38 test | Landed file | Disposition |
 |-------------------|-------------|-------------|
-| `rfl_chat_tool_dispatch_goes_through_gate.rs` | `rafaello-core/tests/agent_loop_does_not_dispatch_tool_request_directly.rs` | **Functional equivalent.** The ratified file name asserts the positive ("dispatch goes through gate"); the landed file asserts the negative half of the same invariant ("agent loop does not dispatch directly"). Both pin the same observable: only the gate's publish path reaches the plugin. The landed shape is the cleaner regression-anchor because the c38 cutover is precisely a *removal* (`broker.publish_for_tool_dispatch` deleted from `agent/mod.rs::handle_tool_request`). Accepted as substitute. |
+| `rfl_chat_tool_dispatch_goes_through_gate.rs` | `rafaello-core/tests/agent_loop_does_not_dispatch_tool_request_directly.rs` | **Partial substitute.** The landed file proves the *negative* half ("agent loop does not dispatch directly") — the natural assertion shape for a cutover whose body is a *removal* (`broker.publish_for_tool_dispatch` deleted from `agent/mod.rs::handle_tool_request`). It does **not** prove the *positive* half ("a tool request reaches the plugin through the gate"). `rfl_chat_no_double_dispatch_when_gate_constructed.rs` partially covers the positive ("when the gate is constructed, no double dispatch occurs") but is not a clean positive end-to-end assertion of gate-through-orchestration. The missing positive anchor is routed to §5 item 15. |
 | `rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs` | — | **Not landed.** Routed to m5b (§5 item 12). The five-tree spawn order is partially asserted by `rfl_chat_constructs_gate_before_provider_spawn.rs` (gate-before-spawn) plus the c34 `m5a_fixture_lock_session_pins_provider_active.rs` (active-canonical pin), but the full eager-five + clean-shutdown end-to-end remains unwritten. |
 | `rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs` | — | **Not landed.** Routed to m5b (§5 item 13). The inactive-provider re-emit-ignore semantics ride on `ReemitRouter`'s `provider.<active.provider_id>.**` topic scope (c14 + c38 wiring); m5a has no test asserting that an *inactive* provider's publishes never reach the agent loop. m5b's taint-aware re-emit work is the natural place to land it. |
 | `core_tools_list_registered_before_provider_spawn.rs` | — | **Not landed.** Routed to m6 (§5 item 14). The `CorePluginService` shape (c31) registers the `core.tools_list` handler before *any* plugin spawn by construction (the supervisor's `CorePluginService::new` runs at `run_chat` line ~280 in `lib.rs`, ahead of the spawn loop). The supervisor-internal ordering is structurally guaranteed; the missing test is a defence-in-depth regression-anchor for that guarantee. |
@@ -436,6 +494,7 @@ driver brief reserved for an unsplittable cutover.
 | 12 | `rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs` — c38 ratified-but-not-landed acceptance test (§3.1) | end-to-end spawn-shutdown asserting all five supervised processes (active provider + N inactive providers + N tool plugins) come up and tear down cleanly | → m5b |
 | 13 | `rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs` — c38 ratified-but-not-landed acceptance test (§3.1) | inactive-provider publishes should not reach the agent loop because `ReemitRouter`'s topic scope is keyed off the active provider's `provider_id` | → m5b (lands with the taint-aware re-emit work) |
 | 14 | `core_tools_list_registered_before_provider_spawn.rs` — c38 ratified-but-not-landed acceptance test (§3.1) | defence-in-depth regression-anchor for the structural guarantee that `CorePluginService` registers `core.tools_list` before the spawn loop | → m6 |
+| 15 | Positive gate-through-orchestration assertion — `rfl_chat_tool_dispatch_goes_through_gate.rs` ratified-but-not-landed (§3.1 first row). The landed `agent_loop_does_not_dispatch_tool_request_directly.rs` covers the negative half; the positive half (a real tool request flows from `core.session.tool_request` → gate → `plugin.<id>.tool_request`) lacks a clean end-to-end anchor | end-to-end positive assertion of the cutover's intended behaviour | → m5b |
 
 There are no **load-bearing decisions** routed forward; §5 item
 5 is a verification-only follow-up (the audit-DB path is pinned
@@ -469,9 +528,17 @@ not the §10 sink-confirmation summary, which already carries the
 m5a-shaped narrative prose) records the live broker surface. m5a
 adds:
 
-- `SinkClass` enum + `CompiledPlugin::sinks()` accessor (c09).
-- `ConfirmationGate` (c20-c24, c38) + the `core.session.confirm_*`
-  + `core.session.confirm_resolved` topic family (c11).
+- `SinkClass` enum + `CompiledPlugin` accessors
+  `tool_sinks` / `tool_sink_classes` / `tool_always_confirm`
+  (c09 + c30 wiring; live signatures at `compile.rs:99-117`).
+- `ConfirmationGate` (c20-c24, c38) + the confirm topic family
+  — `core.session.confirm_request` (gate publish, c11),
+  `frontend.tui.confirm_answer` (TUI publish, c12 + c25),
+  `core.session.confirm_reply` (re-emit's canonicalised reply
+  after answer-enum validation, c14), and
+  `core.session.confirm_resolved` (the **gate's** publish on
+  short-circuit + resolution paths for observability, not a
+  re-emit canonicalisation).
 - `UserGrants` + `GrantMatcher` + `jsonschema`-template-as-shape-contract
   (c15-c16).
 - The broker `outstanding_dispatched` map atomic intake check
@@ -490,11 +557,15 @@ Concrete patches:
   bullet above, citing the implementing commit hash. Keep the
   m4 banner content; add an m5a section beneath it.
 - Stream A **§5.6 confirmation-payload / correlation
-  clarification**: pin the wire shape of
-  `core.session.confirm_request` (the gate's publish) and
-  `core.session.confirm_resolved` (the re-emit's canonicalised
-  reply), the `confirm_id` correlation contract (envelope
-  `request_id` ↔ payload `request_id` ↔ `in_reply_to`), and the
+  clarification**: pin the wire shape of the topic family —
+  `core.session.confirm_request` (gate publish),
+  `frontend.tui.confirm_answer` (TUI publish),
+  `core.session.confirm_reply` (re-emit's canonicalised reply
+  after answer-enum validation), and
+  `core.session.confirm_resolved` (gate's resolution-visibility
+  publish on allow / deny / short-circuit / timeout) — together
+  with the `confirm_id` correlation contract (envelope
+  `request_id` ↔ payload `request_id` ↔ `in_reply_to`) and the
   `try_resolve` / `mark_session_grant_requested` shape (scope
   §CT0 / §CT5). The round-2 scope.md surfaced this as a needed
   Stream A clarification; pi-1 B-3 flagged its absence here.
@@ -514,15 +585,19 @@ row candidate (§7 below).
 Two `overview.md` patches surface from the scope convergence
 checklist:
 
-- **§4.6 reserved-env table** — currently lists *core-injected*
-  reserved env vars (`RFL_PROVIDER_ID`, the `RFL_FIXTURE_*`
-  family). m5a introduces a second class — *well-known
-  plugin-config* env vars (`RFL_OPENAI_API_KEY_ENV`,
-  `RFL_OPENAI_ENDPOINT_URL`, `RFL_OPENAI_MODEL` — c34) — which
-  are not core-injected but are documented in the bundled
-  manifest as the canonical names. The patch adds a paragraph
-  distinguishing the two classes and lists the three
-  `RFL_OPENAI_*` names with the bundled-provider citation.
+- **§4.6 reserved-env table** — currently lists the m4-introduced
+  *core-injected* reserved env var (`RFL_PROVIDER_ID`). m5a
+  introduces a second, additive class — *well-known plugin-config*
+  env vars (`RFL_OPENAI_API_KEY_ENV`, `RFL_OPENAI_ENDPOINT_URL`,
+  `RFL_OPENAI_MODEL` — c34) — which are **not** core-injected
+  but are documented in the bundled manifest as the canonical
+  names a plugin author uses. The patch adds a paragraph
+  distinguishing the two classes (core-injected vs. well-known
+  plugin-config) and lists the three `RFL_OPENAI_*` names with
+  the bundled-provider citation. (The round-2 retro inaccurately
+  said §4.6 already lists the `RFL_FIXTURE_*` family — it does
+  not; those vars live in fixture-test plumbing, not the
+  overview's reserved table.)
 - **§15.1 manifest shape** — currently documents the m1 manifest
   surface. m5a extends with `[capabilities.<bundle>.env]`
   carrying `allow_secrets: Vec<String>` alongside `pass` /
@@ -542,13 +617,17 @@ Two glossary entries to land:
   `confirm_timeout`, `confirm_late`, `confirm_duplicate`,
   `confirm_unknown`, `confirm_allowed_with_session_grant`,
   `grant_added`, `slash_unknown`, `install_accepted`,
-  `install_refused`, `install_override`.
+  `install_refused`, `trifecta_overridden`,
+  `credential_paths_overridden` (per `audit/mod.rs:73-76`).
 - **Confirmation protocol** — update or add an entry covering
   the topic family (`core.session.confirm_request`,
   `core.session.confirm_reply`, `core.session.confirm_resolved`,
   `frontend.tui.confirm_answer`), the `ConfirmState` atomic
-  state machine, and the four-arm answer enum (`allow` / `deny`
-  / `always_allow_session` / `timeout`).
+  state machine, and the **three-arm** TUI answer enum
+  (`allow` / `deny` / `always_allow_session`). `timeout` is
+  not a TUI answer — it is a gate-side deadline outcome (the
+  gate's 60s `try_take_for_timeout` synthesises a deny-shaped
+  `tool_result` when no answer arrives).
 
 ### 6.5 Other streams
 
@@ -568,12 +647,11 @@ commits after the retro).
 
 ### 7.1 Row candidate: `env.allow_secrets` manifest extension
 
-**Refines/Reverses.** Refines `decisions.md` row 17 (the
-manifest env-scrubbing / `i_know_what_im_doing` line) — adds a
-second, narrower opt-in path for plugin-declared secret names
-that does not require the nuclear `i_know_what_im_doing` flag.
-Does not reverse row 17; the `i_know_what_im_doing` path remains
-for any env name not declared by the manifest.
+**Refines/Reverses.** No prior `decisions.md` row anchor — the
+choice is net-new (additive). Anchored instead in `scope.md`
+§OP6 + §A11 (the round-3 introduction of the field), the c06
+implementation, and the Stream F manifest patch enumerated in
+§6.2 above. Reverses nothing.
 
 **Choice.** Manifest `[capabilities.<bundle>.env].allow_secrets:
 Vec<String>` lists env var names that the scrubber honours
@@ -644,12 +722,11 @@ the split as the right line.
 
 ### 7.4 Row candidate: `core.tools_list` fittings RPC + `CorePluginService`
 
-**Refines/Reverses.** Refines `decisions.md` row 27 (the
-supervisor's `PluginSupervisor::new` signature / catalog
-ownership) — extends the supervisor with a `CorePluginService`
-that hosts the `core.tools_list` fittings handler and owns the
-`ToolSchemaCatalog`. Does not reverse row 27; the per-plugin
-spawn surface is unchanged.
+**Refines/Reverses.** No prior `decisions.md` row anchor — the
+`CorePluginService` shape is net-new in m5a. Anchored instead
+in `scope.md` §OP2 (the round-3 introduction of `core.tools_list`
+as the fittings RPC that replaces per-plugin lock re-reading)
+and the c31 + c36 implementations. Reverses nothing.
 
 **Choice.** The supervisor builds a `ToolSchemaCatalog` from
 every installed plugin's OpenRPC `methods` × `provides.tools`
@@ -742,23 +819,38 @@ merge:
    `[SECRET: <names>]` marker for an `env.allow_secrets` plugin.
 4. **§4 macOS CI URL** — the run URL after branch push.
 5. **§5 TUI keyboard walkthrough** — observed wire-topic
-   payloads for each of `y` / `a` / `Enter` / `n` / `d` / `Esc`
-   / `s`: the TUI publishes `frontend.tui.confirm_answer`, the
-   re-emit canonicalises it to `core.session.confirm_reply`, the
-   gate publishes `core.session.confirm_resolved` plus the
-   matching `audit_events` row (`confirm_allowed` for `y`/`a`,
-   `confirm_denied` for `n`/`d`/`Esc`, `confirm_allowed_with_session_grant`
-   for `a` per §UG, no answer event for `s` which only expands
-   the detail view). The skeleton's invented
-   `core.session.confirm_answered` name (round-1 draft) is
-   replaced with these live topics.
+   payloads for each documented key. The live mapping (per
+   `tui_y_key_publishes_allow_answer.rs`,
+   `tui_n_key_publishes_deny_answer.rs`,
+   `tui_esc_key_publishes_deny_answer.rs`,
+   `tui_s_key_publishes_always_allow_session.rs`):
+   - `y` / `a` / `Enter` → publish
+     `frontend.tui.confirm_answer { answer: "allow" }`.
+   - `n` / `d` / `Esc` → publish
+     `frontend.tui.confirm_answer { answer: "deny" }`.
+   - `s` → publish
+     `frontend.tui.confirm_answer { answer: "always_allow_session" }`.
+
+   The re-emit canonicalises to `core.session.confirm_reply`;
+   the gate publishes `core.session.confirm_resolved` plus the
+   matching `audit_events` row (`confirm_allowed` for the allow
+   keys, `confirm_denied` for the deny keys,
+   `confirm_allowed_with_session_grant` + `grant_added` for
+   `s`). The skeleton's invented `core.session.confirm_answered`
+   name (round-1 draft) is replaced with these live topics. The
+   round-2 draft mis-mapped `a` to session-grant and named a
+   `s` "show details" key that the live TUI does not implement;
+   pi-2 B-2 caught it.
 6. **§6 Audit-log inspection** — dump `audit_events` from
    `<project_root>/.rafaello/state/session.sqlite` (§2.4 pins
    the path; no decision deferred); assert ordering against
    operator actions for `confirm_request` →
    `confirm_allowed`/`confirm_denied`, `grant_added` /
    `slash_unknown` for `/grant` flows, and
-   `install_accepted` / `install_refused` / `install_override`
+   `install_accepted` / `install_refused` /
+   `trifecta_overridden` / `credential_paths_overridden`
+   (live `AuditKind` per `audit/mod.rs:73-76`; the round-2
+   retro's `install_override` was invented — pi-2 M-2)
    for the §3 trifecta demo.
 
 Acceptable substitute coverage (m4 retro §5.3 precedent): the
@@ -871,5 +963,5 @@ exclusive at install time.
 
 ---
 
-*End of m5a retrospective round 1 draft. Submitted for pi
+*End of m5a retrospective round 3 draft. Submitted for pi
 adversarial review.*
