@@ -1,0 +1,14 @@
+schema = 1
+name = "mailcat"
+version = "0.0.0"
+entry = "bin/rfl-mailcat"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+tools = ["send-mail"]
+
+[provides.tool.send-mail]
+sinks = ["mail"]
+always_confirm = false
+grant_match = "schemas/send-mail-grant.json"
