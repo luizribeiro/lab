@@ -579,7 +579,7 @@ compatibility requirement:
 | `provides.tool.<n>.grant_match`          | User-grants matcher schema (§6.4)        | NEW — gap, see §15 |
 | `bus.subscribes` / `bus.publishes`       | Topic ACL                                 | already in F §4 |
 | `[capabilities.*]`                        | Compiles to lockin policy                 | already in F §5 |
-| `[load]`                                  | Lazy-load triggers                        | already in F §7 |
+| `load = "eager"` / `"lazy"` (string shorthand) | Eager-vs-lazy choice; `[load]` table form reserved for event-triggered lazy (decisions.md row 45) | already in F §7 |
 | `[[renderers]]`                           | Renderer registry (§8)                    | already in F §6 |
 | `helper_for` (lock-side `bindings`)       | Helper-plugin parent declaration (§9)     | NEW — gap, see §15 |
 | `always_confirm` (per-tool, enforced)     | Force confirmation even when `sinks = []` (UX gate; see §15.1 row 3 below) | NEW — gap, see §15 |
