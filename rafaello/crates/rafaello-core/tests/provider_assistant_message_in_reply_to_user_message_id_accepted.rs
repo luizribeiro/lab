@@ -1,7 +1,7 @@
 //! `provider.mock.assistant_message` accepts an `in_reply_to` id that
 //! lives in `provider_observed_user_messages` — security RFC §7.2.6
 //! row 3 (union of results + user_messages). The inbound event is
-//! observed via the drain-Vec seam (scope §B6 step 9, c10).
+//! observed via the c11 internal-subscriber channel (pi-2 M-1).
 
 #![cfg(feature = "test-fixture")]
 
@@ -16,6 +16,8 @@ fn assistant_message_user_message_id_accepted() {
     let user_msg_id = JsonRpcId::from("user-msg-1");
     broker.seed_provider_observed_user_message_for_test(&canonical, user_msg_id.clone());
 
+    let (mut rx, _guard) = broker.subscribe_internal(vec!["provider.**".to_string()], 8);
+
     let topic = "provider.mock.assistant_message";
     let params = serde_json::json!({
         "topic": topic,
@@ -27,9 +29,7 @@ fn assistant_message_user_message_id_accepted() {
         .handle_provider_publish(&canonical, &params)
         .expect("publish accepted");
 
-    let events = broker.drain_inbound_provider_events_for_test();
-    assert_eq!(events.len(), 1, "exactly one inbound event drained");
-    let event = &events[0];
+    let event = rx.try_recv().expect("internal subscriber received event");
     assert_eq!(event.topic, topic);
     assert_eq!(
         event.in_reply_to.as_deref(),
@@ -48,4 +48,8 @@ fn assistant_message_user_message_id_accepted() {
         }
         other => panic!("expected Provider publisher identity, got {other:?}"),
     }
+    assert!(
+        rx.try_recv().is_err(),
+        "exactly one event delivered to the internal subscriber"
+    );
 }

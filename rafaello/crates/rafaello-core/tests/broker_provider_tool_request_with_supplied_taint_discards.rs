@@ -1,6 +1,7 @@
 //! Per scope §B6 step 8 (pi-3 B-1 discard+replace), any `taint` field
 //! supplied on a provider publish is stripped: the emitted inbound
-//! `BusEvent.taint` is `None` (c10).
+//! `BusEvent.taint` is `None`. Observed via the c11 internal-subscriber
+//! channel (pi-2 M-1).
 
 #![cfg(feature = "test-fixture")]
 
@@ -15,6 +16,8 @@ fn supplied_taint_discarded() {
     let observed = JsonRpcId::from("tr-1");
     broker.seed_provider_observed_result_for_test(&canonical, observed.clone());
 
+    let (mut rx, _guard) = broker.subscribe_internal(vec!["provider.**".to_string()], 8);
+
     let topic = "provider.mock.tool_request";
     let params = serde_json::json!({
         "topic": topic,
@@ -27,11 +30,14 @@ fn supplied_taint_discarded() {
         .handle_provider_publish(&canonical, &params)
         .expect("publish accepted");
 
-    let events = broker.drain_inbound_provider_events_for_test();
-    assert_eq!(events.len(), 1);
+    let event = rx.try_recv().expect("internal subscriber received event");
     assert!(
-        events[0].taint.is_none(),
+        event.taint.is_none(),
         "provider-supplied taint must be discarded; got {:?}",
-        events[0].taint
+        event.taint
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "exactly one event delivered to the internal subscriber"
     );
 }

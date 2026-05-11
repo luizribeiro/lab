@@ -1,10 +1,12 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
@@ -106,12 +108,19 @@ struct BrokerState {
     providers: BTreeMap<CanonicalId, ProviderConn>,
 }
 
+struct InternalSlot {
+    id: u64,
+    patterns: Vec<String>,
+    sender: mpsc::Sender<BusEvent>,
+}
+
 struct BrokerInner {
     acl: BrokerAcl,
     state: Mutex<BrokerState>,
     provider_observed_results: Mutex<BTreeMap<CanonicalId, HashSet<JsonRpcId>>>,
     provider_observed_user_messages: Mutex<BTreeMap<CanonicalId, HashSet<JsonRpcId>>>,
-    inbound_provider_events: Mutex<Vec<BusEvent>>,
+    internal_subscribers: Mutex<Vec<InternalSlot>>,
+    next_slot_id: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -173,7 +182,8 @@ impl Broker {
             }),
             provider_observed_results: Mutex::new(BTreeMap::new()),
             provider_observed_user_messages: Mutex::new(BTreeMap::new()),
-            inbound_provider_events: Mutex::new(Vec::new()),
+            internal_subscribers: Mutex::new(Vec::new()),
+            next_slot_id: AtomicU64::new(0),
         })))
     }
 
@@ -416,7 +426,7 @@ impl Broker {
                 publisher = %canonical,
                 "result-routing protection: skipping per-subscriber fan-out"
             );
-            let _ = event;
+            self.notify_internal_subscribers(&event);
             return Ok(());
         }
 
@@ -551,8 +561,69 @@ impl Broker {
             taint: None,
             request_id: msg.request_id.clone(),
         };
-        self.0.inbound_provider_events.lock().push(event);
+        self.notify_internal_subscribers(&event);
         Ok(())
+    }
+
+    /// Register an in-process subscriber on the bus. Returns the receiver
+    /// half of a bounded channel and an [`InternalSubscription`] RAII
+    /// guard. Dropping the guard removes the slot. The notify path
+    /// is internal-only — internal subscribers see events at or before
+    /// any external subscriber (see [`Self::notify_internal_subscribers`]
+    /// and the ordering note in `fan_out`).
+    pub fn subscribe_internal(
+        &self,
+        patterns: Vec<String>,
+        capacity: usize,
+    ) -> (mpsc::Receiver<BusEvent>, InternalSubscription) {
+        let (tx, rx) = mpsc::channel(capacity);
+        let slot_id = self.0.next_slot_id.fetch_add(1, Ordering::SeqCst);
+        self.0.internal_subscribers.lock().push(InternalSlot {
+            id: slot_id,
+            patterns,
+            sender: tx,
+        });
+        (
+            rx,
+            InternalSubscription {
+                broker: Arc::clone(&self.0),
+                slot_id,
+            },
+        )
+    }
+
+    /// Fan an event out to every matching internal subscriber. On
+    /// channel-full, log `tracing::warn!` and continue; on
+    /// receiver-closed, log `tracing::debug!`. Called inside `fan_out`
+    /// **before** external recipient loops (pi-2 M-1 ordering rule).
+    fn notify_internal_subscribers(&self, event: &BusEvent) {
+        let slots = self.0.internal_subscribers.lock();
+        for slot in slots.iter() {
+            let matches = slot
+                .patterns
+                .iter()
+                .any(|p| pattern_matches_topic(p, &event.topic));
+            if !matches {
+                continue;
+            }
+            match slot.sender.try_send(event.clone()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        slot_id = slot.id,
+                        topic = %event.topic,
+                        "internal subscriber dropped event — channel full"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::debug!(
+                        slot_id = slot.id,
+                        topic = %event.topic,
+                        "internal subscriber dropped event — receiver closed"
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(any(test, feature = "test-fixture"))]
@@ -577,11 +648,6 @@ impl Broker {
             .entry(canonical.clone())
             .or_default()
             .insert(id);
-    }
-
-    #[cfg(any(test, feature = "test-fixture"))]
-    pub fn drain_inbound_provider_events_for_test(&self) -> Vec<BusEvent> {
-        std::mem::take(&mut *self.0.inbound_provider_events.lock())
     }
 
     pub fn handle_frontend_publish(
@@ -820,6 +886,12 @@ impl Broker {
         exclude_plugin: Option<&CanonicalId>,
         exclude_frontend: Option<&AttachId>,
     ) {
+        // Ordering rule (pi-2 M-1): internal subscribers (e.g. the
+        // `ReemitRouter`) observe the event before any external
+        // recipient. Trusted core composition must see canonical
+        // events at or before any external consumer can react.
+        self.notify_internal_subscribers(event);
+
         let value =
             serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
         let plugin_recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)>;
@@ -968,9 +1040,35 @@ impl Drop for RegisteredProvider {
     }
 }
 
+/// RAII guard for an internal-subscriber slot. Dropping the guard
+/// removes the matching slot from `BrokerInner.internal_subscribers`.
+/// If the slot is already gone (broker shutdown cleared it), Drop is
+/// a no-op (pi-2 M-1).
+pub struct InternalSubscription {
+    broker: Arc<BrokerInner>,
+    slot_id: u64,
+}
+
+impl std::fmt::Debug for InternalSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InternalSubscription")
+            .field("slot_id", &self.slot_id)
+            .finish()
+    }
+}
+
+impl Drop for InternalSubscription {
+    fn drop(&mut self) {
+        let mut slots = self.broker.internal_subscribers.lock();
+        if let Some(pos) = slots.iter().position(|s| s.id == self.slot_id) {
+            slots.swap_remove(pos);
+        }
+    }
+}
+
 #[cfg(test)]
 mod static_assertions {
-    use super::{RegisteredFrontend, RegisteredPlugin, RegisteredProvider};
+    use super::{InternalSubscription, RegisteredFrontend, RegisteredPlugin, RegisteredProvider};
 
     #[allow(dead_code)]
     fn assert_send_sync<T: Send + Sync>() {}
@@ -980,5 +1078,6 @@ mod static_assertions {
         assert_send_sync::<RegisteredPlugin>();
         assert_send_sync::<RegisteredFrontend>();
         assert_send_sync::<RegisteredProvider>();
+        assert_send_sync::<InternalSubscription>();
     }
 }
