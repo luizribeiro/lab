@@ -2,6 +2,7 @@ mod common;
 
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 
 #[test]
@@ -10,6 +11,7 @@ fn resolves_tui_via_env_override() {
     let _ = workspace_bin("rfl-tui");
 
     let tmp = tempfile::tempdir().unwrap();
+    write_stub_lock(tmp.path());
 
     let output = Command::new(workspace_bin("rfl"))
         .arg("chat")
@@ -23,9 +25,12 @@ fn resolves_tui_via_env_override() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "expected exit 0; status={:?} stderr={stderr}",
-        output.status
+        !output.status.success(),
+        "expected non-zero exit (NoActiveProvider); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("NoActiveProvider"),
+        "stderr missing NoActiveProvider: {stderr}"
     );
     assert!(
         stderr.contains("rfl-chat: frontend-ready-observed"),

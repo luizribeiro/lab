@@ -15,14 +15,23 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use rafaello_core::broker_acl::{AttachId, BrokerAcl, FrontendAcl};
 use rafaello_core::bus::Broker;
-use rafaello_core::compile::EnvPlan;
+use rafaello_core::compile::{compile_plugin, EnvPlan};
+use rafaello_core::digest::{self, RecomputedDigests};
 use rafaello_core::entry::{Entry, EntryFallback, RenderNode, ToolCallStatus};
-use rafaello_core::error::{BrokerError, FrontendSpawnError, ReaperOutcome};
+use rafaello_core::error::{
+    BrokerError, CompileError, DigestError, FrontendSpawnError, LockError, ManifestError,
+    ReaperOutcome, ValidationError,
+};
 use rafaello_core::frontend::{
     CompiledFrontend, FrontendConfig, FrontendHandle, FrontendPaths, FrontendSupervisor,
 };
+use rafaello_core::lock::{CanonicalId, Lock};
+use rafaello_core::manifest::Manifest;
+use rafaello_core::paths::PathContext;
 use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
+use rafaello_core::topic_id;
+use rafaello_core::validate::{self, LockValidationContext};
 
 #[derive(Debug, Parser)]
 #[command(name = "rfl", version, about = "rafaello — minimal coding agent")]
@@ -65,6 +74,56 @@ pub enum RflChatError {
     Broker(#[from] Box<BrokerError>),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("LockNotFound: rafaello.lock missing at {path:?}")]
+    LockNotFound { path: PathBuf },
+    #[error("LockIo: reading {path:?}: {source}")]
+    LockIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("LockParse: {source}")]
+    LockParse {
+        #[source]
+        source: Box<LockError>,
+    },
+    #[error("LockValidation: {source}")]
+    LockValidation {
+        #[source]
+        source: Box<ValidationError>,
+    },
+    #[error("NoHomeDir")]
+    NoHomeDir,
+    #[error("ManifestIo for {canonical}: {source}")]
+    ManifestIo {
+        canonical: CanonicalId,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("ManifestParse for {canonical}: {source}")]
+    ManifestParse {
+        canonical: CanonicalId,
+        #[source]
+        source: Box<ManifestError>,
+    },
+    #[error("Digest for {canonical}: {source}")]
+    Digest {
+        canonical: CanonicalId,
+        #[source]
+        source: DigestError,
+    },
+    #[error("CompilePlugin for {canonical}: {source}")]
+    CompilePlugin {
+        canonical: CanonicalId,
+        #[source]
+        source: Box<CompileError>,
+    },
+    #[error("NoActiveProvider")]
+    NoActiveProvider,
+    #[error("ProviderSpawnFailed for {canonical}")]
+    ProviderSpawnFailed { canonical: CanonicalId },
+    #[error("ToolSpawnFailed for {canonical}")]
+    ToolSpawnFailed { canonical: CanonicalId },
 }
 
 /// Resolve the path to the `rfl-tui` binary.
@@ -120,6 +179,95 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             path: raw.clone(),
             source,
         })?;
+
+    // Step 1b: lock load (scope §C1).
+    let lock_path = project_root.join("rafaello.lock");
+    let raw_lock = match std::fs::read_to_string(&lock_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RflChatError::LockNotFound { path: lock_path });
+        }
+        Err(source) => {
+            return Err(RflChatError::LockIo {
+                path: lock_path,
+                source,
+            });
+        }
+    };
+    let lock = Lock::from_toml(&raw_lock).map_err(|source| RflChatError::LockParse {
+        source: Box::new(source),
+    })?;
+
+    // Step 1c: V3 validation (scope §C2).
+    let install_root = project_root.join(".rafaello").join("plugins");
+    let plugin_dirs: BTreeMap<CanonicalId, PathBuf> = lock
+        .plugins
+        .keys()
+        .map(|c| {
+            (
+                c.clone(),
+                install_root.join(topic_id::derive(&c.to_string())),
+            )
+        })
+        .collect();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(RflChatError::NoHomeDir)?;
+    let cache_root = project_root.join(".rafaello").join("cache");
+    let state_root = project_root.join(".rafaello").join("state");
+    let val_ctx = LockValidationContext {
+        project_root: project_root.clone(),
+        home: home.clone(),
+        plugin_dirs: plugin_dirs.clone(),
+        cache_root: cache_root.clone(),
+        state_root: state_root.clone(),
+    };
+    validate::lock(&lock, &val_ctx).map_err(|source| RflChatError::LockValidation {
+        source: Box::new(source),
+    })?;
+
+    // Step 1d: per-plugin compile (scope §C3).
+    for canonical in lock.plugins.keys() {
+        let package_dir = plugin_dirs
+            .get(canonical)
+            .expect("validate::lock would have errored");
+        let manifest_path = package_dir.join("rafaello.toml");
+        let manifest_raw =
+            std::fs::read_to_string(&manifest_path).map_err(|source| RflChatError::ManifestIo {
+                canonical: canonical.clone(),
+                source,
+            })?;
+        let manifest =
+            Manifest::parse(&manifest_raw).map_err(|source| RflChatError::ManifestParse {
+                canonical: canonical.clone(),
+                source: Box::new(source),
+            })?;
+        let canonical_bytes: Vec<u8> = manifest.canonical_bytes();
+        let recomputed_digests = RecomputedDigests {
+            content: digest::content_digest(package_dir).map_err(|source| {
+                RflChatError::Digest {
+                    canonical: canonical.clone(),
+                    source,
+                }
+            })?,
+            manifest: digest::manifest_digest(&canonical_bytes),
+        };
+        let topic = topic_id::derive(&canonical.to_string());
+        let path_ctx = PathContext {
+            project_root: project_root.clone(),
+            home: home.clone(),
+            plugin_dir: package_dir.clone(),
+            cache_dir: cache_root.join(&topic),
+            state_dir: state_root.join(&topic),
+        };
+        let _plan =
+            compile_plugin(&lock, canonical, &path_ctx, &recomputed_digests).map_err(|source| {
+                RflChatError::CompilePlugin {
+                    canonical: canonical.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+    }
 
     // Step 2: rfl-tui path.
     let current_exe = std::env::current_exe()?;
@@ -203,7 +351,11 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     match outcome {
         Ok(Ok(())) => {
             write_parent_sentinel(&stderr_writer_lock, "rfl-chat: frontend-ready-observed").await;
-            run_post_ready(handle, forwarder, &controller, &broker, &caps).await
+            run_post_ready(handle, forwarder, &controller, &broker, &caps).await?;
+            if lock.session.provider_active.is_none() {
+                return Err(RflChatError::NoActiveProvider);
+            }
+            Ok(())
         }
         Ok(Err(_ready_err)) => {
             let _ = handle.shutdown().await;

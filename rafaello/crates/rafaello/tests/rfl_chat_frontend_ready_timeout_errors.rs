@@ -2,6 +2,7 @@ mod common;
 
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 
 #[test]
@@ -10,6 +11,7 @@ fn frontend_ready_timeout_errors() {
     let _ = workspace_bin("rfl-bus-fixture");
 
     let tmp = tempfile::tempdir().unwrap();
+    write_stub_lock(tmp.path());
 
     let output = Command::new(workspace_bin("rfl"))
         .arg("chat")

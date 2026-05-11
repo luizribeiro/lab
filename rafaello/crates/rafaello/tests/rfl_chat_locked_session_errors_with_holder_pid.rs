@@ -2,6 +2,7 @@ mod common;
 
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 use rafaello_core::session::SessionStore;
 
@@ -11,6 +12,7 @@ fn locked_session_errors_with_holder_pid() {
     let _ = workspace_bin("rfl-tui");
 
     let tmp = tempfile::tempdir().unwrap();
+    write_stub_lock(tmp.path());
     let state_dir = tmp.path().join(".rafaello").join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     let _holder = SessionStore::open(&state_dir).expect("holder open");

@@ -2,6 +2,7 @@ mod common;
 
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 use rafaello_core::entry::Entry;
 use rafaello_core::session::SessionStore;
@@ -13,6 +14,7 @@ fn replay_withheld_until_frontend_ready() {
 
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path();
+    write_stub_lock(project_root);
 
     let state_dir = project_root.join(".rafaello").join("state");
     {

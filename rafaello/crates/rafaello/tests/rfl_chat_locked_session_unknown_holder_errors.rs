@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 use nix::fcntl::{Flock, FlockArg};
 
@@ -13,6 +14,7 @@ fn locked_session_unknown_holder_errors() {
     let _ = workspace_bin("rfl-tui");
 
     let tmp = tempfile::tempdir().unwrap();
+    write_stub_lock(tmp.path());
     let state_dir = tmp.path().join(".rafaello").join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     let lock_path = state_dir.join("session.lock");

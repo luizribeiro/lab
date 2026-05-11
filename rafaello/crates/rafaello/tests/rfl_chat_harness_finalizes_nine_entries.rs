@@ -2,6 +2,7 @@ mod common;
 
 use std::process::Command;
 
+use common::m4_lock_fixture::write_stub_lock;
 use common::workspace_bin_path::workspace_bin;
 use rusqlite::Connection;
 
@@ -12,6 +13,7 @@ fn harness_finalizes_nine_entries() {
 
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path();
+    write_stub_lock(project_root);
 
     let output = Command::new(workspace_bin("rfl"))
         .arg("chat")
@@ -20,13 +22,18 @@ fn harness_finalizes_nine_entries() {
         .env("RFL_HARNESS_FIXTURES", "1")
         .env("RFL_TUI_TEST_MODE", "1")
         .env("RFL_TUI_PATH", workspace_bin("rfl-tui"))
+        .env("RFL_TUI_MAX_LIFETIME", "2")
         .output()
         .expect("spawn rfl chat");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "expected clean exit; stderr={stderr}"
+        !output.status.success(),
+        "expected non-zero exit (NoActiveProvider); stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("NoActiveProvider"),
+        "stderr missing NoActiveProvider: {stderr}"
     );
 
     let db_path = project_root
