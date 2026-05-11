@@ -1,8 +1,10 @@
-//! Small in-process tokio HTTP stub used by c32 wire tests.
+//! Test support for the OpenAI provider crate.
 //!
-//! Accepts a single connection, drains the request, and writes
-//! back a fixed `(status, body)` pair. The full `rafaello-openai-stub`
-//! bin lands in c35; this in-process variant is here only for speed.
+//! - `wire_stub`: minimal one-shot HTTP stub used by the c32 wire
+//!   tests (`start`, `sample_request`).
+//! - `openai_provider_handle`: c33 bus-side test fixture that
+//!   spawns `rfl-openai` against an in-test broker and a multi-
+//!   response HTTP stub.
 
 #![allow(dead_code)]
 
@@ -10,6 +12,8 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+pub mod openai_provider_handle;
 
 pub struct Stub {
     pub endpoint: String,

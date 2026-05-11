@@ -1625,6 +1625,7 @@ dependencies = [
  "fittings-core",
  "fittings-server",
  "fittings-transport",
+ "nix",
  "rafaello-core",
  "reqwest",
  "serde",
