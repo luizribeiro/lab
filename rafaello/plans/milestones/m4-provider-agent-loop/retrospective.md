@@ -1,36 +1,66 @@
 # m4 — provider fixture + secure agent loop + one read-only tool — retrospective
 
-> **Status: round-1 draft, 2026-05-11.** Awaiting adversarial pi
-> review per `plans/README.md` §"Patterns from prior milestones"
-> ("Retrospective drafts deserve the same adversarial review as
-> scope and commits"). m0 needed 2 retro rounds, m1 needed 4,
-> m2 needed 2, m3 needed 4 — budget at least 2 rounds for m4.
+> **Status: round-2, 2026-05-11.** Round-1 pi review
+> (`retrospective-pi-review-1.md`) flagged 5 blockers + 2
+> nits; all 5/5 blockers + 2/2 nits are addressed in this
+> revision (see "Round-2 patch summary" immediately below).
+> m0 needed 2 retro rounds, m1 needed 4, m2 needed 2, m3
+> needed 4.
 >
-> Worktree `/home/luiz/lab-wt/m4-retro-claude` on branch
-> `agents/m4/retro`, forked off `agents/m4/driver` at
-> `0a0e824` (Phase-3 complete + the carveout-decomposition
-> fix). 28 plan-row commits (`8c4a1f1..462f8e7`) land in 1:1
-> correspondence with `commits.md` round 3 ratification, plus
-> the one Phase-3 follow-up fix commit (`0a0e824`) that
-> restored the c27 demo-bar headline test under the real
-> sandbox (see §3.9). `scope.md` round 6 converged after 6 pi
-> review rounds; `commits.md` round 3 ratified after 3 pi
-> review rounds (m3's brackets were 22 / 9; m2's 8 / 4).
+> Worktree `/home/luiz/lab-wt/m4-retro-r2` on branch
+> `agents/m4/retro-r2`, forked off `agents/m4/driver` at
+> `928df3e` (the round-1 pi review commit). 28 plan-row
+> commits (`8c4a1f1..462f8e7`) land in 1:1 correspondence
+> with `commits.md` round 3 ratification, plus the
+> Phase-3 follow-up fix commit (`0a0e824`) that restored
+> the c27 demo-bar headline test under the real sandbox
+> (see §3.9), plus the round-2 follow-up commits (drift,
+> bus-rs rustdoc fix, manual-validation refresh) listed
+> below.
 >
-> Companion: `manual-validation.md` (c28). Owner-facing
-> interactive `rfl chat` recording, macOS CI run URL, and
-> branch push are deferred to the post-retrospective driver
-> sweep (matches the m3 round-1 retrospective shape).
+> `scope.md` round 6 converged after 6 pi review rounds;
+> `commits.md` round 3 ratified after 3 pi review rounds
+> (m3's brackets were 22 / 9; m2's 8 / 4).
 >
-> Ratification gates pending at this draft:
-> 1. ⏳ Pi adversarial review of this document.
-> 2. ⏳ Anticipated drift follow-up commits (§4) — Stream A
->    `Provider` banner, decisions rows for `request_id` /
->    `Publisher::Provider` / carveout-decomposition rule,
->    `overview.md` §4.6 reserved-env table.
-> 3. ⏳ macOS CI green after branch push (hard gate, m3
+> Companion: `manual-validation.md` — refreshed in this
+> round to inline the post-`0a0e824` Linux test/build/doc
+> transcripts and drop the stale "Known local environment
+> issue" section (commit `844c17d`). Owner-facing
+> interactive `rfl chat` recording and macOS CI run URL
+> remain deferred to the post-retrospective driver sweep
+> (matches the m3 round-1 retrospective shape).
+>
+> **Round-2 patch summary (pi-review-1 closure):**
+> - B1 (cargo doc warning) → bus.rs intra-doc-link fix
+>   (`639d7f0`); doc gate re-run warning-free
+>   (`/tmp/m4-doc.log`).
+> - B2 (stale `manual-validation.md`) → refreshed with
+>   round-2 transcripts and demo-bar status (`844c17d`).
+> - B3 (false "no `#[allow]`" claim) → §5.5 reworded to
+>   acknowledge the c25 `clippy::too_many_arguments`
+>   test-helper suppression.
+> - B4 (drift ratification over-marked) → drift follow-up
+>   commits landed: `c222087`, `9bd24e3`, `d51caba`,
+>   `3a3a917`, `63f6997`, `152813a`; acceptance row now
+>   ✅ with hashes; §2 verdict arithmetic corrected to
+>   "remaining five".
+> - B5 (§2.7 "recorded-only" inconsistency) → §2.7 now
+>   cites `decisions.md` row 45 (`3a3a917`) as the
+>   authoritative on-disk record, and `overview.md` §5.3
+>   was patched to the string shorthand (`152813a`).
+> - N1 ("382 test binaries") → reworded to "382 top-level
+>   `tests/*.rs` files (Cargo runs ~398 test targets
+>   including unit + doc tests)".
+> - N2 (c27 "passed in CI") → reworded to "passed in the
+>   local Phase-3 agent run" — CI has not been touched
+>   yet; macOS / Linux CI captures are post-merge driver
+>   tasks.
+>
+> Ratification gates pending at this revision:
+> 1. ⏳ Pi adversarial review of this round-2 document.
+> 2. ⏳ macOS CI green after branch push (hard gate, m3
 >    precedent — `scope.md` §"Acceptance summary").
-> 4. ⏳ `manual-validation.md` records interactive demo-bar
+> 3. ⏳ `manual-validation.md` records interactive demo-bar
 >    recording.
 
 This is the milestone-level review against `scope.md` round 6
@@ -69,10 +99,13 @@ The `nix develop --impure --command cargo test
 --manifest-path rafaello/Cargo.toml --workspace --features
 test-fixture` acceptance gate (verbatim from `scope.md`
 §"Acceptance summary") aggregates **608 tests passed; 0
-failed; 0 ignored** across **382 test binaries** on Linux
-inside the devshell (`/tmp/m4-acceptance.log`, captured
-2026-05-11; transcript pending archival in
-`manual-validation.md` §1 during the post-retrospective sweep).
+failed; 0 ignored** on Linux inside the devshell across
+**382 top-level `tests/*.rs` files** (the Cargo run
+exercises ~398 test targets including unit + doc tests
+per the per-target `Running ...` lines in the log)
+(`/tmp/m4-acceptance.log`, captured 2026-05-11 and
+re-run 2026-05-11 on the round-2 branch; transcript
+inlined in `manual-validation.md` §1).
 
 The on-disk test inventory at retro time:
 
@@ -360,24 +393,25 @@ at retro time. The driver pre-corrected the c22 prompt to
 the live syntax and c20 / c22 landed the shorthand cleanly.
 
 Per `plans/README.md` §"Authoring conventions" stream RFCs
-and `scope.md` are not retroactively rewritten; the drift
-is recorded here. **Recommended follow-up:** the
-post-retrospective sweep should grep `overview.md` and
-the Stream F manifest RFC for the same `[load]`-table
-syntax and, if found, either patch `overview.md` (per
-authoring conventions: `overview.md` is editable) or add
-a `decisions.md` row pinning the live `load = "eager"`
-string shorthand as canonical. Stream F drift gets
-recorded in m5's retro per the standard rule.
+and `scope.md` are not retroactively rewritten; the
+authoritative on-disk record is `decisions.md` row 45
+(landed on this branch as commit `3a3a917`), and
+`overview.md` §5.3's `[load]` table-form entry was
+patched to the live string shorthand in commit `152813a`.
+Stream F's RFC retains the obsolete examples and m5's
+retro records the residual drift per the standard rule.
 
 ### 2.8 Pi-as-diagnostic-tool extension to environment/sandbox failures
 
 The c27 carveout episode (§3.9 below) was an
 environment/sandbox failure the per-commit agent had
-already produced a clean test for — the test passed in CI
-because the kernel/syd combination there did not enforce
-the dir-only access-rights rule, but failed locally
-under kernel 6.12 / Landlock ABI 6 / syd 3.49.1. The
+already produced a clean test for — the test passed in
+the local Phase-3 agent run (whose ephemeral sandbox
+state did not exercise the dir-only access-rights rule
+the orchestrator-side green-bar pass tripped on under
+kernel 6.12 / Landlock ABI 6 / syd 3.49.1). CI has not
+been touched yet — capture is a post-merge driver
+task. The
 per-commit agent finished and committed; the **driver**
 discovered the local failure during the orchestrator-side
 green-bar pass. Pi-as-diagnostic-tool (m2 retro §4.2)
@@ -397,20 +431,23 @@ landed as `0a0e824`.
 
 ### 2.9 Verdict
 
-Two of the eight drift items already landed as Phase-3
-code commits (§2.6 — m3 §2.7 carryover, no commit needed
-because no failure surfaced; §2.7 — manifest fixtures
-landed with the live syntax). Two are recorded-only with
-no immediate action needed (§2.6 m5+ refile; §2.8 README
-recommendation). **The remaining four (§2.1 / §2.2 /
-§2.3 / §2.4 / §2.5) are pending follow-up commits** on
-this branch before ratification. The carveout-decomposition
-fix (§3.9) is also a follow-up candidate for a
-`decisions.md` row pinning the rule that
-`carveout::decompose_dir` must classify children by
-their resource type (dir vs non-dir) and route non-dirs
-into `read_paths`, since the rule is load-bearing for
-every future plugin that gets a directory grant.
+Of the eight drift items above, §2.6 (m3 §2.7 carryover)
+needed no commit because no failure surfaced, and §2.8
+(pi-as-diagnostic-tool extension) is a recorded-only
+README recommendation. **The remaining five (§2.1 / §2.2
+/ §2.3 / §2.4 / §2.5) landed on this branch as round-2
+follow-up commits** (`c222087`, `9bd24e3`, `d51caba`,
+`3a3a917`, `63f6997`); §2.7 (manifest-syntax drift) also
+landed as `3a3a917` (decisions.md row 45) + `152813a`
+(overview §5.3 patch). The carveout-decomposition fix
+(§3.9) remains a candidate for a `decisions.md` row
+pinning the rule that `carveout::decompose_dir` must
+classify children by their resource type (dir vs
+non-dir) and route non-dirs into `read_paths`, since the
+rule is load-bearing for every future plugin that gets a
+directory grant — deferred to a separate post-merge
+sweep so this round-2 patch stays scoped to the
+pi-review-1 closure.
 
 No additional unprompted drift surfaced during the Phase 3
 review beyond the five anticipated items + the two new
@@ -845,26 +882,42 @@ the default expectation is a recorded run.
 ### 5.4 No flakes observed in the recorded run
 
 The 608-test run captured 2026-05-11 inside the devshell
-on Linux returned 0 failures across 382 test binaries.
+on Linux returned 0 failures across 382 top-level
+`tests/*.rs` files (Cargo runs ~398 test targets
+including unit + doc tests).
 No retries needed. The fixture-self-timeout patch from
 m3 §2.9 (`RFL_FIXTURE_MAX_LIFETIME`) extended into
 `rfl-mockprovider` and `rfl-readfile` per `scope.md`
 §Risks 7; no orphan-fixture-process tax was billed
 during the m4 walk.
 
-### 5.5 No clippy warnings suppressed by agents
+### 5.5 Clippy suppressions introduced during Phase 3
 
-All per-commit walks closed clippy clean; no
-`#[allow(...)]` was introduced by an agent during
-Phase 3. The pre-commit clippy hook (`cargo clippy --
--D warnings`) gated every commit.
+All per-commit walks closed clippy clean under the
+pre-commit clippy hook (`cargo clippy -- -D warnings`).
+**One `#[allow(...)]` was introduced** during Phase 3:
+c25 (`8dbdfbb`) added `#[allow(clippy::too_many_arguments)]`
+on the `m4_install` test-helper constructor in
+`rafaello/crates/rafaello/tests/common/m4_install.rs:93`.
+The helper threads ~9 install-shape parameters through a
+single function so the orchestration negatives
+(C14, c25's spawn-failure tests) can share one fixture
+builder; splitting the parameters into a builder struct
+was rejected at c25 review as out of scope for a
+test-only helper. Suppression is local to the test
+common module; no `#[allow]` was introduced in
+production crates.
 
 ### 5.6 No `cargo doc` warnings (regression check)
 
-`cargo doc --workspace --no-deps` returns clean (the m2
-fix from m2 retro §5.2 + m3's confirmation continue to
-hold under m4's surface expansion).
-`/tmp/m4-doc.log` captured 2026-05-11.
+`cargo doc --workspace --no-deps` returns warning-free
+on the round-2 branch after the bus.rs intra-doc-link
+fix (`639d7f0` — replaced a public-doc link to the
+private `notify_internal_subscribers` method with prose).
+`/tmp/m4-doc.log` re-captured 2026-05-11 contains zero
+`warning:` lines. The round-1 draft mistakenly claimed
+the gate was clean before the fix; pi-review-1 B1
+caught it.
 
 ### 5.7 m1 `check_lock_publish_topic` unknown-namespace gap re-filed (m3 retro §2.7 closure)
 
@@ -890,44 +943,46 @@ Same v2 nice-to-have. No m4 work; deferred to v2.
 
 Per the m1 / m2 / m3 precedent, the drift items in §2
 land as **separate commits on this branch before
-milestone close**. The list below pre-names them; items
-1–5 are docs-only/banner-only patches addressing §2
-drift; item 6 is a recommended `plans/README.md`
-extension; item 7 is a candidate `decisions.md` row for
-the carveout-decomposition rule (the code already landed
-at `0a0e824`).
+milestone close**. Round-2 status (all hashes on
+`agents/m4/retro-r2`):
 
-1. `docs(rafaello-streams-a): v1-status banner — point at
-   overview §6.2 + decisions row 9` — addresses §2.1.
-2. `docs(rafaello-streams-a): banner expand — include
-   PublisherIdentity::Provider { canonical, provider_id }`
-   — addresses §2.2.
-3. `docs(rafaello-decisions): request_id mandatory on
-   tool_request / tool_result / assistant_message /
-   user_message broker handlers` — addresses §2.3.
-4. `docs(rafaello-decisions): Publisher::Provider variant
-   — refines row 42` — addresses §2.4.
-5. `docs(rafaello-overview): §4.6 — RFL_PROVIDER_ID
-   addition to reserved env-vars table; drop
-   RFL_PROVIDER_ACTIVE from proposed list` — addresses
-   §2.5.
-6. `docs(rafaello-plans-README): per-commit target/ dir
-   cleanup + pi-as-diagnostic for env/sandbox failures`
-   — addresses §4.1 + §2.8.
-7. (optional) `docs(rafaello-decisions): carveout
-   decomposition routes non-directory children into
-   read_paths, not read_dirs` — pins the rule from the
-   `0a0e824` fix so future plugins with directory grants
-   inherit the invariant.
+1. ✅ `c222087` — `docs(rafaello-streams-a): §10 banner
+   — m4 BrokerAcl provider extensions + auto-publish
+   grant for tool plugins` — addresses §2.1.
+2. ✅ `9bd24e3` — `docs(rafaello-streams-a): §10 banner
+   — PublisherIdentity::Provider + register_provider
+   RAII surface` — addresses §2.2.
+3. ✅ `d51caba` — `docs(rafaello-decisions): rows 43-44
+   — BusEvent.request_id + Publisher::Provider +
+   PublisherIdentity::Provider land in m4` — addresses
+   §2.3 + §2.4.
+4. ✅ `3a3a917` — `docs(rafaello-decisions): row 45 —
+   load = "eager" is the live m1 manifest syntax (table
+   form reserved for event-triggered lazy)` —
+   addresses §2.7.
+5. ✅ `63f6997` — `docs(rafaello-overview): §4.6
+   reserved-env table — add RFL_PROVIDER_ID` —
+   addresses §2.5.
+6. ✅ `152813a` — `docs(rafaello-overview): manifest
+   field — load string shorthand (live m1 schema)` —
+   addresses §2.7's overview reference.
+
+Round-2 also landed three companion commits outside §2:
+`639d7f0` (bus.rs rustdoc intra-doc-link fix closing
+pi-review-1 B1), and `844c17d`
+(`manual-validation.md` refresh closing pi-review-1 B2),
+plus `<this-commit>` (the round-2 retro patch itself).
 
 Items §2.6 (m1 lock-side gap, no failure surfaced) and
-§2.7 (manifest-syntax drift, fixtures landed correctly)
-are recorded-only — no follow-up commit needed in m4.
+§2.8 (pi-as-diagnostic-tool README recommendation) are
+recorded-only — no follow-up commit needed in m4.
 
-§2.7's `recommended-follow-up` to grep `overview.md` /
-Stream F for the same `[load]`-table syntax is a
-pre-merge action item for the driver, not a separate
-commit.
+Two remaining post-merge driver tasks (intentionally
+out of scope for the round-2 retro patch):
+`docs(rafaello-plans-README): per-commit target/ dir
+cleanup + pi-as-diagnostic for env/sandbox failures`
+(§4.1 + §2.8), and an optional `docs(rafaello-decisions)`
+row for the carveout-decomposition rule (`0a0e824`).
 
 ---
 
@@ -948,28 +1003,32 @@ is the build gate's exact form (the explicit
 | `scope.md` §"Acceptance summary" bullet | Status |
 |-----------------------------------------|--------|
 | Every named test in §"Positive" / §"Negative" matrices implemented and passing | ✅ §1 (with 2 ratification-time relocations recorded) |
-| `cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture` green on Linux inside devshell | ✅ **608 passed / 0 failed / 0 ignored** across 382 test binaries, captured 2026-05-11 (`/tmp/m4-acceptance.log`) |
+| `cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture` green on Linux inside devshell | ✅ **608 passed / 0 failed / 0 ignored** across 382 top-level `tests/*.rs` files (Cargo runs ~398 test targets including unit + doc tests), captured 2026-05-11 and re-confirmed on the round-2 branch (`/tmp/m4-acceptance.log`) |
 | Demo-bar headline `rfl_chat_demo_bar_read_file.rs` green | ✅ `test rfl_chat_demo_bar_read_file ... ok` (`/tmp/m4-acceptance.log`); restored under the real Landlock sandbox by `0a0e824` (carveout decomposition fix) |
 | **macOS CI green** (hard gate) | ⏳ pending post-retrospective branch push |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-11 (`/tmp/m4-build.log` — `Finished dev profile`) |
-| `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ captured 2026-05-11 (`/tmp/m4-doc.log` — `Finished dev profile`, no warnings) |
-| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ skeleton landed at c28 (`462f8e7`); recording + CI URL pending the post-retrospective driver sweep |
-| Stream A §10 v1-summary banner patch | ⏳ §2.1 — follow-up commit |
-| `PublisherIdentity::Provider` Stream A schema additions | ⏳ §2.2 — follow-up commit |
-| `decisions.md` row for `BusEvent.request_id` rollout | ⏳ §2.3 — follow-up commit |
-| `decisions.md` row for `Publisher::Provider` variant | ⏳ §2.4 — follow-up commit |
+| `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ re-captured 2026-05-11 on round-2 branch after the bus.rs intra-doc-link fix (`639d7f0`); `/tmp/m4-doc.log` has zero `warning:` lines |
+| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ companion refreshed in round 2 with Linux test/build/doc transcripts (`844c17d`); interactive recording + macOS CI URL pending the post-retrospective driver sweep |
+| Stream A §10 v1-summary banner patch | ✅ §2.1 — landed as `c222087` |
+| `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — landed as `9bd24e3` |
+| `decisions.md` row for `BusEvent.request_id` rollout | ✅ §2.3 — landed as `d51caba` (row 43) |
+| `decisions.md` row for `Publisher::Provider` variant | ✅ §2.4 — landed as `d51caba` (row 44) |
 | m1 `check_lock_publish_topic` unknown-namespace gap | §2.6 — re-filed for m5+, no commit needed |
-| Provider-side env-var documentation in `overview.md` §4.6 | ⏳ §2.5 — follow-up commit |
-| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 1, awaiting pi adversarial review) |
+| Provider-side env-var documentation in `overview.md` §4.6 | ✅ §2.5 — landed as `63f6997` |
+| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 2, anticipated drift commits landed; pi-review-1 closed) |
 
 ---
 
-**m4 round-1 retrospective complete 2026-05-11.** Pi
-adversarial review next per `plans/README.md` §"Patterns
-from prior milestones". Six follow-up commits pre-named in
-the list above land on this branch after the pi review
-converges; the macOS CI run + interactive demo recording
-land in `manual-validation.md` once the branch pushes.
+**m4 round-2 retrospective complete 2026-05-11.**
+Pi-review-1 (5/5 blockers + 2/2 nits) closed; the
+anticipated drift commits landed on this branch
+(`c222087`, `9bd24e3`, `d51caba`, `3a3a917`, `63f6997`,
+`152813a`), the bus.rs intra-doc-link fix landed as
+`639d7f0`, and `manual-validation.md` was refreshed as
+`844c17d`. Pi round-2 review next per `plans/README.md`
+§"Patterns from prior milestones"; the macOS CI run +
+interactive demo recording land in `manual-validation.md`
+once the branch pushes.
 m5 inherits: the new `Provider` publisher class + envelope
 machinery, the `subscribe_internal` primitive and
 `ReemitRouter`, the `AgentLoop` + tool-dispatch wiring,
