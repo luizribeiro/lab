@@ -242,9 +242,13 @@ binds *content*, not just *name*.
 > `Plugin {canonical, topic_id}`. **m3 adds `Frontend
 > { attach_id }`** to the live wire schema (see m3
 > retrospective §2.2). **m4 promotes `Provider {
-> canonical, provider_id }`** onto the live wire
-> schema via the c07 `2bbf3e7` workspace cutover (see
-> m4 retrospective §2.2). The `request_id: Option<JsonRpcId>`
+> canonical, provider_id, topic_id }`** onto the live
+> wire schema via the c07 `2bbf3e7` workspace cutover
+> (the third `topic_id` segment is symmetric to the m2
+> `Plugin {canonical, topic_id}` identity shape and is
+> asserted by the c07 schema test
+> `rafaello-core/tests/bus_event_serializes_provider_publisher_identity.rs`;
+> see m4 retrospective §2.2 and `decisions.md` row 44). The `request_id: Option<JsonRpcId>`
 > field overview §4.5 enumerates is **not** in m2 / m3
 > events; m4 adds it in the same c07 cutover (overview
 > §4.5 v1-status banner). m4 also lands the broker-side
