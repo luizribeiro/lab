@@ -15,12 +15,70 @@ pub use fittings_core::message::JsonRpcId;
 use crate::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use crate::error::{BrokerError, InReplyToReason, Publisher, TaintReason};
 
+/// `core.session.confirm_request` — gate-emitted prompt requesting an
+/// operator decision on a tool call (scope §CT0 / §CT1).
+pub const CORE_SESSION_CONFIRM_REQUEST: &str = "core.session.confirm_request";
+/// `core.session.confirm_reply` — canonical reply form re-emitted from
+/// `frontend.tui.confirm_answer` after re-emit validation (scope §CT0 / §CT1).
+pub const CORE_SESSION_CONFIRM_REPLY: &str = "core.session.confirm_reply";
+/// `frontend.tui.confirm_answer` — raw inbound answer published by the
+/// TUI overlay (scope §CT0 / §CT1).
+pub const FRONTEND_TUI_CONFIRM_ANSWER: &str = "frontend.tui.confirm_answer";
+/// `frontend.tui.slash_command` — root slash-command event published by
+/// the TUI overlay (scope §SL0).
+pub const FRONTEND_TUI_SLASH_COMMAND: &str = "frontend.tui.slash_command";
+/// `core.session.command_result` — canonical result of a slash-command
+/// dispatch (scope §SL0).
+pub const CORE_SESSION_COMMAND_RESULT: &str = "core.session.command_result";
+/// `core.session.confirm_resolved` — bus-visible resolution signal
+/// published by the gate when a confirm is short-circuited; distinct
+/// from `confirm_reply` so the gate's CG4 handler does not observe its
+/// own signal (pi-1 M-1).
+pub const CORE_SESSION_CONFIRM_RESOLVED: &str = "core.session.confirm_resolved";
+
 const REQUEST_ID_REQUIRED_SUFFIXES: &[&str] = &[
     "tool_request",
     "tool_result",
     "assistant_message",
     "user_message",
+    "confirm_request",
+    "confirm_reply",
+    "confirm_answer",
+    "slash_command",
+    "command_result",
+    "confirm_resolved",
 ];
+
+const IN_REPLY_TO_MANDATORY_TOPICS: &[&str] = &[
+    FRONTEND_TUI_CONFIRM_ANSWER,
+    CORE_SESSION_CONFIRM_REPLY,
+    CORE_SESSION_COMMAND_RESULT,
+    CORE_SESSION_CONFIRM_RESOLVED,
+];
+
+fn enforce_exactly_one_in_reply_to(
+    make_publisher: impl FnOnce() -> Publisher,
+    topic: &str,
+    in_reply_to: Option<&Vec<JsonRpcId>>,
+) -> Result<(), BrokerError> {
+    if !IN_REPLY_TO_MANDATORY_TOPICS.contains(&topic) {
+        return Ok(());
+    }
+    let reason = match in_reply_to {
+        None => Some(InReplyToReason::Missing),
+        Some(ids) if ids.is_empty() => Some(InReplyToReason::EmptyArray),
+        Some(ids) if ids.len() > 1 => Some(InReplyToReason::UnexpectedMultiple),
+        Some(_) => None,
+    };
+    if let Some(reason) = reason {
+        return Err(BrokerError::InvalidInReplyTo {
+            publisher: make_publisher(),
+            topic: topic.to_string(),
+            reason,
+        });
+    }
+    Ok(())
+}
 
 fn enforce_b0_request_id(
     make_publisher: impl FnOnce() -> Publisher,
@@ -794,6 +852,11 @@ impl Broker {
                 topic: msg.topic.clone(),
             });
         }
+        enforce_exactly_one_in_reply_to(
+            || Publisher::Frontend(attach_id.clone()),
+            &msg.topic,
+            msg.in_reply_to.as_ref(),
+        )?;
 
         let event = BusEvent {
             topic: msg.topic.clone(),
@@ -901,6 +964,7 @@ impl Broker {
             }
         }
         enforce_b0_request_id(|| Publisher::Core, topic, request_id.as_ref())?;
+        enforce_exactly_one_in_reply_to(|| Publisher::Core, topic, in_reply_to.as_ref())?;
         let event = BusEvent {
             topic: topic.to_string(),
             payload,

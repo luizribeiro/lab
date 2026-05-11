@@ -38,7 +38,9 @@ fn frontend_namespace_rejected() {
         .register_plugin(canonical.clone(), peer)
         .expect("registration succeeds");
 
-    let bad = "frontend.tui.confirm_answer";
+    // Suffix must not be in `REQUEST_ID_REQUIRED_SUFFIXES` so the
+    // §B3 namespace check fires before §B0's request_id enforcement.
+    let bad = "frontend.tui.evil_topic";
     let params = serde_json::json!({"topic": bad, "payload": {}});
     let err = broker
         .handle_plugin_publish(&canonical, &params)
