@@ -37,12 +37,9 @@ fn project_root_decomposes_to_non_hidden_children() {
     let id = CanonicalId::parse("github.com/acme:tool@1.0.0").unwrap();
     let out = compile_against(&bundle, &id, &ctx(project.clone()), false).unwrap();
 
-    let mut expected = vec![
-        project.join("README.md"),
-        project.join("docs"),
-        project.join("src"),
-    ];
-    expected.sort();
-    assert_eq!(out.read_dirs, expected);
+    let mut expected_dirs = vec![project.join("docs"), project.join("src")];
+    expected_dirs.sort();
+    assert_eq!(out.read_dirs, expected_dirs);
+    assert_eq!(out.read_paths, vec![project.join("README.md")]);
     assert!(!out.flags.allow_credential_paths_active);
 }

@@ -134,7 +134,7 @@ pub fn compile_against(
             }
         }
         if decompose {
-            decompose_dir(&entry, &resolved, &mut out.read_dirs)?;
+            decompose_dir(&entry, &resolved, &mut out.read_dirs, &mut out.read_paths)?;
         } else {
             out.read_dirs.push(entry);
         }
@@ -215,9 +215,12 @@ fn touches_any(entry: &Path, carveouts: &[ResolvedCarveOut]) -> bool {
 fn decompose_dir(
     entry: &Path,
     carveouts: &[ResolvedCarveOut],
-    out: &mut Vec<PathBuf>,
+    read_dirs: &mut Vec<PathBuf>,
+    read_paths: &mut Vec<PathBuf>,
 ) -> Result<(), CompileError> {
-    let mut children: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut child_count = 0usize;
     for item in std::fs::read_dir(entry)? {
         let item = item?;
         let name = item.file_name();
@@ -234,12 +237,20 @@ fn decompose_dir(
         {
             continue;
         }
-        children.push(child);
+        child_count += 1;
+        let file_type = item.file_type()?;
+        if file_type.is_dir() {
+            dirs.push(child);
+        } else {
+            paths.push(child);
+        }
     }
-    if children.len() > DECOMPOSE_CAP {
+    if child_count > DECOMPOSE_CAP {
         return Err(CompileError::CarveOutTooLarge);
     }
-    children.sort();
-    out.extend(children);
+    dirs.sort();
+    paths.sort();
+    read_dirs.extend(dirs);
+    read_paths.extend(paths);
     Ok(())
 }
