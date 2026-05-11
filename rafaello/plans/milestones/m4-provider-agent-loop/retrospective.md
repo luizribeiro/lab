@@ -1,34 +1,64 @@
 # m4 — provider fixture + secure agent loop + one read-only tool — retrospective
 
-> **Status: round-2, 2026-05-11.** Round-1 pi review
-> (`retrospective-pi-review-1.md`) flagged 5 blockers + 2
-> nits; all 5/5 blockers + 2/2 nits are addressed in this
-> revision (see "Round-2 patch summary" immediately below).
-> m0 needed 2 retro rounds, m1 needed 4, m2 needed 2, m3
-> needed 4.
+> **Status: round-3, 2026-05-11.** Round-2 pi review
+> (`retrospective-pi-review-2.md`) flagged 2 blockers + 2
+> nits; **pi-review-2 addressed: 2/2 blockers + 2/2 nits
+> closed** in this revision (see "Round-3 patch summary"
+> immediately below). Round 1 (5b + 2n) was closed by
+> the round-2 patch summary further down. m0 needed 2
+> retro rounds, m1 needed 4, m2 needed 2, m3 needed 4.
 >
-> Worktree `/home/luiz/lab-wt/m4-retro-r2` on branch
-> `agents/m4/retro-r2`, forked off `agents/m4/driver` at
-> `928df3e` (the round-1 pi review commit). 28 plan-row
-> commits (`8c4a1f1..462f8e7`) land in 1:1 correspondence
-> with `commits.md` round 3 ratification, plus the
-> Phase-3 follow-up fix commit (`0a0e824`) that restored
-> the c27 demo-bar headline test under the real sandbox
-> (see §3.9), plus the round-2 follow-up commits (drift,
-> bus-rs rustdoc fix, manual-validation refresh) listed
-> below.
+> Worktree `/home/luiz/lab-wt/m4-retro-r3` on branch
+> `agents/m4/retro-r3`, forked off `agents/m4/driver` at
+> `70e0114` (the round-2 retrospective commit). 28
+> plan-row commits (`8c4a1f1..462f8e7`) land in 1:1
+> correspondence with `commits.md` round 3 ratification,
+> plus the Phase-3 follow-up fix commit (`0a0e824`) that
+> restored the c27 demo-bar headline test under the real
+> sandbox (see §3.9), plus the round-2 follow-up commits
+> (drift, bus-rs rustdoc fix, manual-validation refresh)
+> and the round-3 follow-up commits (Stream A banner +
+> decisions row 44 topic_id fixes, manual-validation §5
+> wording alignment) listed below.
 >
 > `scope.md` round 6 converged after 6 pi review rounds;
 > `commits.md` round 3 ratified after 3 pi review rounds
 > (m3's brackets were 22 / 9; m2's 8 / 4).
 >
-> Companion: `manual-validation.md` — refreshed in this
-> round to inline the post-`0a0e824` Linux test/build/doc
-> transcripts and drop the stale "Known local environment
-> issue" section (commit `844c17d`). Owner-facing
-> interactive `rfl chat` recording and macOS CI run URL
-> remain deferred to the post-retrospective driver sweep
-> (matches the m3 round-1 retrospective shape).
+> Companion: `manual-validation.md` — refreshed in
+> round 2 to inline the post-`0a0e824` Linux
+> test/build/doc transcripts and drop the stale
+> "Known local environment issue" section (commit
+> `844c17d`); round 3 also softens §5 owner-acceptance
+> wording to match this retrospective's §5.3 (commit
+> `adf763f`, pi-r2 N1). Owner-facing interactive `rfl
+> chat` recording and macOS CI run URL remain deferred
+> to the post-retrospective driver sweep (matches the
+> m3 round-1 retrospective shape).
+>
+> **Round-3 patch summary (pi-review-2 closure):**
+> - B1 (`PublisherIdentity::Provider` docs omit live
+>   `topic_id` field) → decisions row 44 patched to
+>   `{ canonical, provider_id, topic_id }` with softer
+>   rationale (commit `fdac914`); Stream A §5 banner
+>   extended to record the three-field shape and cite
+>   the c07 schema test (commit `2e87e44`); §2.2 below
+>   updated inline.
+> - B2 (§5.5 under-reports m4 `#[allow]` suppressions) →
+>   §5.5 expanded below to a complete production + test
+>   inventory (3 production sites + 1 test-helper site +
+>   the standard `tests/common/` `#![allow(dead_code)]`
+>   pattern), with per-site rationale and the c18 / c19
+>   `clippy::result_large_err` choice declared as a
+>   deferred follow-up rather than a fix in this round.
+> - N1 (`manual-validation.md` §5 overstates owner
+>   acceptance) → §5 reworded to "owner *may* accept"
+>   matching retro §5.3 (commit `adf763f`).
+> - N2 (decisions row 44 rationale shaky on "same
+>   canonical installed twice") → softened in commit
+>   `fdac914` to the concrete m4 need (provider topics
+>   live in the public provider-id namespace; canonical
+>   ids identify installed packages).
 >
 > **Round-2 patch summary (pi-review-1 closure):**
 > - B1 (cargo doc warning) → bus.rs intra-doc-link fix
@@ -316,9 +346,19 @@ precedent — `plans/README.md` §"Authoring conventions").
 Symmetric to m3's banner addition for `Frontend`. Stream
 A's wire-schema banner expands from "m3 wire schemas" to
 include `PublisherIdentity::Provider { canonical,
-provider_id }` once m4 promotes it via the c07 cutover
-(`2bbf3e7`). Follow-up commit on this branch updates the
-`streams/a-security/rfc-security-model.md` banner.
+provider_id, topic_id }` once m4 promotes it via the c07
+cutover (`2bbf3e7`). The third `topic_id` segment is
+parallel to the m2 `Plugin {canonical, topic_id}` identity
+shape and is asserted by the c07 schema test
+`rafaello-core/tests/bus_event_serializes_provider_publisher_identity.rs`.
+Follow-up commits on this branch update the
+`streams/a-security/rfc-security-model.md` §5 banner
+(round-2 `9bd24e3` introduced the entry as `{canonical,
+provider_id}`; round-3 `2e87e44` corrected it to the live
+three-field shape) and `decisions.md` row 44 (round-2
+`d51caba` ratified row 44; round-3 `fdac914` corrected
+`PublisherIdentity::Provider` to include `topic_id` and
+softened the rationale per pi-r2 N2).
 
 ### 2.3 `decisions.md` row for the `BusEvent.request_id` rollout (anticipated)
 
@@ -891,22 +931,93 @@ m3 §2.9 (`RFL_FIXTURE_MAX_LIFETIME`) extended into
 §Risks 7; no orphan-fixture-process tax was billed
 during the m4 walk.
 
-### 5.5 Clippy suppressions introduced during Phase 3
+### 5.5 `#[allow(...)]` suppressions introduced in m4
 
 All per-commit walks closed clippy clean under the
 pre-commit clippy hook (`cargo clippy -- -D warnings`).
-**One `#[allow(...)]` was introduced** during Phase 3:
-c25 (`8dbdfbb`) added `#[allow(clippy::too_many_arguments)]`
-on the `m4_install` test-helper constructor in
-`rafaello/crates/rafaello/tests/common/m4_install.rs:93`.
-The helper threads ~9 install-shape parameters through a
-single function so the orchestration negatives
-(C14, c25's spawn-failure tests) can share one fixture
-builder; splitting the parameters into a builder struct
-was rejected at c25 review as out of scope for a
-test-only helper. Suppression is local to the test
-common module; no `#[allow]` was introduced in
-production crates.
+Round-2 §5.5 mistakenly claimed only one m4
+suppression existed and that none were in production
+crates; pi-review-2 B2 caught the omission. The
+complete m4-introduced inventory is below — `git blame`
+verifies each site lands in an m4 plan-row commit.
+
+**Production code (3 sites).**
+
+- `rafaello-core/src/reemit/mod.rs:1` —
+  `#![allow(clippy::result_large_err)]`. Introduced by
+  c18 (`61209e7`). Rationale: the re-emit pipeline's
+  `ReemitError` aggregates several variant payloads
+  (taint envelopes, publisher identities,
+  `BrokerError` arms) that callers match exhaustively,
+  so boxing the error would force every call site into
+  a `Box<ReemitError>` indirection for no behavioural
+  win. This suppression is **deferred to a future
+  cleanup pass** rather than addressed in m4: the
+  honest choice is to keep `Result<_, ReemitError>` by
+  value while m5 explores whether the broker-side
+  error hierarchy wants a workspace-wide boxing
+  convention. Filed as a §4 follow-up for whoever
+  picks up the broker error-shape sweep.
+- `rafaello-core/src/agent/mod.rs:1` —
+  `#![allow(clippy::result_large_err)]`. Introduced by
+  c19 (`9036e22`). Same rationale as the reemit
+  module: `AgentLoopError` aggregates dispatch /
+  persistence / lifecycle variants that callers match
+  on; boxing buys nothing the current shape needs. Same
+  deferred-cleanup disposition as the reemit module —
+  the two should land together when the workspace
+  decides on a boxing convention.
+- `rafaello-core/src/bus.rs:101` — `#[allow(dead_code)]`
+  on `ProviderConn { peer: PeerHandle }`. Introduced
+  by c09 (`f2c07ad`). Rationale: `ProviderConn` is
+  registered into `BrokerState::providers` by
+  `register_provider` and held alive for as long as
+  the `ProviderGuard` exists; the `peer` field is
+  stored so the broker owns the handle (and the I/O
+  task it transitively holds) for the registration
+  window, but no m4 code path reads it back out of
+  the struct yet. m5's confirmation gate is expected
+  to read it; until then the field is intentionally
+  inert. Field-local `#[allow(dead_code)]` is the
+  smallest scope that suppresses the warning without
+  hiding future drift.
+
+**Test code (1 + N sites).**
+
+- `rafaello/crates/rafaello/tests/common/m4_install.rs:93`
+  — `#[allow(clippy::too_many_arguments)]` on the
+  `m4_install` helper constructor. Introduced by c25
+  (`8dbdfbb`). Rationale: threads ~9 install-shape
+  parameters through one function so the orchestration
+  negatives (C14, c25's spawn-failure tests) share one
+  fixture builder; collapsing into a builder struct
+  was rejected at c25 review as out of scope for a
+  test-only helper. Local to the test common module.
+- Test common-module module-level `#![allow(dead_code)]`
+  on the following `tests/common/` files —
+  `provider_test_kit.rs` (c10), `reemit_test_kit.rs`
+  (c18), `agent_test_kit.rs` (c19),
+  `mock_provider_handle.rs` (c21),
+  `read_file_tool_handle.rs` (c23),
+  `m4_lock_fixture.rs` (c24 / c25), and
+  `m4_install.rs` (c25). Rationale: files under
+  `tests/common/` are compiled as part of **every**
+  integration-test binary in the crate, but each
+  binary uses only a subset of the helpers it exports.
+  Without the module-level allow, every test target
+  that does not exercise a particular helper would fail
+  the `-D warnings` clippy gate. This is the standard
+  Rust `tests/common/` pattern; round-2 §5.5 omitted it
+  as "not interesting", which is a defensible call but
+  not what pi-review-2 wanted recorded, so the full
+  list lives here for future-milestone reference.
+
+**Follow-up (deferred).** The two production
+`result_large_err` allows in `reemit/mod.rs` and
+`agent/mod.rs` are filed against a future broker
+error-shape sweep; m5 is the natural owner because its
+sink-confirmation gate touches both modules' error
+types. Until then, suppression is the honest record.
 
 ### 5.6 No `cargo doc` warnings (regression check)
 
@@ -1008,27 +1119,30 @@ is the build gate's exact form (the explicit
 | **macOS CI green** (hard gate) | ⏳ pending post-retrospective branch push |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-11 (`/tmp/m4-build.log` — `Finished dev profile`) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ re-captured 2026-05-11 on round-2 branch after the bus.rs intra-doc-link fix (`639d7f0`); `/tmp/m4-doc.log` has zero `warning:` lines |
-| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ companion refreshed in round 2 with Linux test/build/doc transcripts (`844c17d`); interactive recording + macOS CI URL pending the post-retrospective driver sweep |
+| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ companion refreshed in round 2 with Linux test/build/doc transcripts (`844c17d`); §5 owner-acceptance wording softened in round 3 to match retro §5.3 (`adf763f`, pi-r2 N1); interactive recording + macOS CI URL pending the post-retrospective driver sweep |
 | Stream A §10 v1-summary banner patch | ✅ §2.1 — landed as `c222087` |
-| `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — landed as `9bd24e3` |
+| `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — round-2 `9bd24e3` introduced the entry; round-3 `2e87e44` corrected it to the live three-field `{canonical, provider_id, topic_id}` shape per pi-r2 B1 |
 | `decisions.md` row for `BusEvent.request_id` rollout | ✅ §2.3 — landed as `d51caba` (row 43) |
-| `decisions.md` row for `Publisher::Provider` variant | ✅ §2.4 — landed as `d51caba` (row 44) |
+| `decisions.md` row for `Publisher::Provider` variant | ✅ §2.4 — round-2 `d51caba` ratified row 44; round-3 `fdac914` added `topic_id` to the `PublisherIdentity::Provider` shape and softened the rationale per pi-r2 B1 + N2 |
 | m1 `check_lock_publish_topic` unknown-namespace gap | §2.6 — re-filed for m5+, no commit needed |
 | Provider-side env-var documentation in `overview.md` §4.6 | ✅ §2.5 — landed as `63f6997` |
-| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 2, anticipated drift commits landed; pi-review-1 closed) |
+| `retrospective.md` written with anticipated drift addressed | ✅ this document (round 3; pi-review-1 closed in round 2, pi-review-2 closed in round 3 — see "Round-3 patch summary") |
 
 ---
 
-**m4 round-2 retrospective complete 2026-05-11.**
-Pi-review-1 (5/5 blockers + 2/2 nits) closed; the
-anticipated drift commits landed on this branch
-(`c222087`, `9bd24e3`, `d51caba`, `3a3a917`, `63f6997`,
-`152813a`), the bus.rs intra-doc-link fix landed as
-`639d7f0`, and `manual-validation.md` was refreshed as
-`844c17d`. Pi round-2 review next per `plans/README.md`
-§"Patterns from prior milestones"; the macOS CI run +
-interactive demo recording land in `manual-validation.md`
-once the branch pushes.
+**m4 round-3 retrospective complete 2026-05-11.**
+Pi-review-1 (5/5 blockers + 2/2 nits) closed in round 2;
+**pi-review-2 (2/2 blockers + 2/2 nits) closed in
+round 3**. Round-3 follow-up commits on this branch:
+`fdac914` (decisions row 44 — `topic_id` + softer
+rationale, pi-r2 B1 + N2), `2e87e44` (Stream A §5
+banner — `topic_id`, pi-r2 B1), `adf763f`
+(manual-validation §5 wording, pi-r2 N1), plus
+`<this-commit>` (the round-3 retro patch itself,
+pi-r2 B2 §5.5 inventory). Pi round-3 review next per
+`plans/README.md` §"Patterns from prior milestones";
+the macOS CI run + interactive demo recording land in
+`manual-validation.md` once the branch pushes.
 m5 inherits: the new `Provider` publisher class + envelope
 machinery, the `subscribe_internal` primitive and
 `ReemitRouter`, the `AgentLoop` + tool-dispatch wiring,
