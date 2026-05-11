@@ -44,13 +44,14 @@ const MAX_FRAME_BYTES: usize = 1 << 20;
 const EVENT_CAPACITY: usize = 64;
 const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 
-struct BusPublishService {
+struct ConnectionService {
     broker: Broker,
     canonical: CanonicalId,
+    tools: Option<Value>,
 }
 
 #[async_trait]
-impl Service for BusPublishService {
+impl Service for ConnectionService {
     async fn call(&self, req: Request, _ctx: ServiceContext) -> Result<Response, FittingsError> {
         let id = req.id.clone().unwrap_or(JsonRpcId::Null);
         if req.method == "bus.publish" {
@@ -63,6 +64,16 @@ impl Service for BusPublishService {
                 metadata: Default::default(),
             });
         }
+        if req.method == "core.tools_list" {
+            if let Some(tools) = &self.tools {
+                return Ok(Response {
+                    id,
+                    result: serde_json::json!({"tools": tools.clone()}),
+                    metadata: Default::default(),
+                });
+            }
+            return Err(FittingsError::method_not_found(req.method));
+        }
         Err(FittingsError::method_not_found(req.method))
     }
 }
@@ -70,12 +81,16 @@ impl Service for BusPublishService {
 pub struct HttpStubHandle {
     pub endpoint: String,
     queue: Arc<Mutex<VecDeque<(u16, String)>>>,
+    captured: Arc<Mutex<Vec<String>>>,
     _accept_task: JoinHandle<()>,
 }
 
 impl HttpStubHandle {
     pub async fn push(&self, status: u16, body: impl Into<String>) {
         self.queue.lock().await.push_back((status, body.into()));
+    }
+    pub async fn captured_bodies(&self) -> Vec<String> {
+        self.captured.lock().await.clone()
     }
 }
 
@@ -84,7 +99,9 @@ pub async fn start_http_stub(initial: Vec<(u16, String)>) -> HttpStubHandle {
     let port = listener.local_addr().unwrap().port();
     let queue: Arc<Mutex<VecDeque<(u16, String)>>> =
         Arc::new(Mutex::new(initial.into_iter().collect()));
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let q = queue.clone();
+    let cap = captured.clone();
     let task = tokio::spawn(async move {
         loop {
             let (mut sock, _) = match listener.accept().await {
@@ -92,6 +109,7 @@ pub async fn start_http_stub(initial: Vec<(u16, String)>) -> HttpStubHandle {
                 Err(_) => return,
             };
             let q = q.clone();
+            let cap = cap.clone();
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 16 * 1024];
                 let mut total = 0usize;
@@ -131,6 +149,12 @@ pub async fn start_http_stub(initial: Vec<(u16, String)>) -> HttpStubHandle {
                         break;
                     }
                 }
+                if let Some(end) = headers_end {
+                    let body_slice = &buf[end..total.min(end + content_length)];
+                    if let Ok(s) = std::str::from_utf8(body_slice) {
+                        cap.lock().await.push(s.to_string());
+                    }
+                }
                 let (status, body) = q
                     .lock()
                     .await
@@ -153,6 +177,7 @@ pub async fn start_http_stub(initial: Vec<(u16, String)>) -> HttpStubHandle {
     HttpStubHandle {
         endpoint: format!("http://127.0.0.1:{port}"),
         queue,
+        captured,
         _accept_task: task,
     }
 }
@@ -175,6 +200,10 @@ pub struct OpenAiProviderHandle {
 
 impl OpenAiProviderHandle {
     pub async fn launch(http: HttpStubHandle) -> Self {
+        Self::launch_with_tools(http, Some(Value::Array(Vec::new()))).await
+    }
+
+    pub async fn launch_with_tools(http: HttpStubHandle, tools: Option<Value>) -> Self {
         let canonical = CanonicalId::parse(CANONICAL).expect("canonical id");
         let acl = build_acl(&canonical);
         let broker = Broker::new(acl).expect("broker");
@@ -197,9 +226,10 @@ impl OpenAiProviderHandle {
         let (reader, writer) = tokio_core.into_split();
         let transport = StdioTransport::new(reader, writer, MAX_FRAME_BYTES);
 
-        let service = BusPublishService {
+        let service = ConnectionService {
             broker: broker.clone(),
             canonical: canonical.clone(),
+            tools,
         };
         let server = Server::new(service, transport);
         let peer = server.peer();
@@ -285,6 +315,13 @@ impl OpenAiProviderHandle {
             )
             .expect("publish core.session.tool_result");
         id
+    }
+
+    pub async fn wait_exit(&mut self) -> std::process::ExitStatus {
+        tokio::time::timeout(RECV_TIMEOUT, self.child.wait())
+            .await
+            .expect("child wait timed out")
+            .expect("child wait")
     }
 
     pub async fn recv_event(&mut self) -> BusEvent {

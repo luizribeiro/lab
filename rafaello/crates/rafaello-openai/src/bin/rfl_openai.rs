@@ -27,6 +27,7 @@ use fittings_core::error::FittingsError;
 use fittings_core::message::JsonRpcId;
 use fittings_core::transport::Connector;
 use fittings_transport::stdio::StdioTransport;
+use rafaello_core::supervisor::ToolSchema;
 use rafaello_openai::{
     map_to_assistant, read_required_api_key, read_required_endpoint_url, read_required_model,
     ChatCompletionRequest, Msg, OpenaiError, ToolCall, ToolCallFn, WireClient,
@@ -69,12 +70,13 @@ struct Config {
     model: String,
     api_key: String,
     endpoint: String,
+    tools: Vec<Value>,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let fd = parse_bus_fd()?;
-    let cfg = read_config()?;
+    let mut cfg = read_config()?;
 
     let transport = adopt_bus_fd(fd).context("rfl-openai: adopt bus fd")?;
     let client = Client::connect(OneShotConnector::new(transport))
@@ -82,11 +84,36 @@ async fn main() -> Result<()> {
         .context("rfl-openai: client connect")?;
     let notifications = client.subscribe_notifications();
 
+    cfg.tools = match client.call("core.tools_list", json!({})).await {
+        Ok(v) => openai_tools_from_response(&v),
+        Err(e) => {
+            eprintln!("openai: core.tools_list failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
     let state = Arc::new(Mutex::new(State::new()));
     let wire = Arc::new(WireClient::new(cfg.endpoint.clone(), cfg.api_key.clone()));
     let peer = client.peer();
 
     run_loop(notifications, state, wire, peer, Arc::new(cfg)).await
+}
+
+fn openai_tools_from_response(resp: &Value) -> Vec<Value> {
+    let tools_json = resp.get("tools").cloned().unwrap_or(Value::Null);
+    let parsed: Vec<ToolSchema> = serde_json::from_value(tools_json).unwrap_or_default();
+    parsed
+        .into_iter()
+        .map(|t| {
+            let mut func = serde_json::Map::new();
+            func.insert("name".into(), Value::String(t.name));
+            if let Some(d) = t.description {
+                func.insert("description".into(), Value::String(d));
+            }
+            func.insert("parameters".into(), t.parameters_schema);
+            json!({"type": "function", "function": Value::Object(func)})
+        })
+        .collect()
 }
 
 async fn run_loop(
@@ -167,7 +194,11 @@ async fn handle_user_message(
     let req = ChatCompletionRequest {
         model: cfg.model.clone(),
         messages,
-        tools: None,
+        tools: if cfg.tools.is_empty() {
+            None
+        } else {
+            Some(cfg.tools.clone())
+        },
         tool_choice: None,
         stream: false,
     };
@@ -367,6 +398,7 @@ fn read_config() -> Result<Config> {
         model,
         api_key,
         endpoint,
+        tools: Vec::new(),
     })
 }
 
