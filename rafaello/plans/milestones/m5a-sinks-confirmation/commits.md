@@ -1,18 +1,17 @@
 # m5a-sinks-confirmation — commits
 
-> **Status:** round 2 draft — folds `commits-pi-review-1.md`
-> (9 B / 5 M / 3 N).
+> **Status:** round 3 draft — folds `commits-pi-review-2.md`
+> (4 B / 5 M / 3 N). Pi-2 expects one more round after.
 >
 > Drafted against scope.md round 6 (ratified `95d6f12`). Pi-6's
 > sole nit (OP6 vs Tr1 wording mismatch on the unused-`allow_secrets`
-> stderr line) is folded silently here: c26 pins the canonical
+> stderr line) was folded in round 2: c27 pins the canonical
 > stderr string `warning: unused allow_secrets entry '<name>' (no
-> matching env.pass entry)` from §Tr1 step 10; §OP6's older
-> `unused allow_secrets entry: <name>` form is not used anywhere.
+> matching env.pass entry)` from §Tr1 step 10.
 >
 > Total: **41 commits** (round 1 had 42; old c25 agent-loop pivot
 > bundled into c38 per pi-1 B-3). Sizing: 30 small, 8 medium,
-> 1 large, 3 unsplittable cutovers (c06 + c10 + c37).
+> 1 large, 3 unsplittable cutovers (c06 + c10 + c38).
 >
 > Per-commit agent prompts MUST inline the full row text below
 > verbatim (m1 §4.2): cite-by-row delegates granularity to the
@@ -20,70 +19,66 @@
 >
 > ---
 >
-> Round-2 fixes by pi-1 finding (one line each):
+> Round-3 fixes by pi-2 finding (one line each):
 >
-> - **B-1** c04 commits to the hand-rolled
->   `tokio::net::TcpListener` parser; the `hyper`
->   workspace-dep fallback is removed.
-> - **B-2** c14 uses a backward-compatible
->   `ReemitRouter::with_confirm_state_and_audit(...)`
->   builder; existing reemit tests + run_chat call sites
->   stay untouched at c14. c37 calls the builder during
->   orchestration extension.
-> - **B-3** Old c25 agent-loop pivot **bundled into c38**
->   as one unsplittable cutover (m0 c08 precedent). Two
->   coordinated edits in the same commit avoid the
->   double-dispatch window. Total commit count drops to 41.
-> - **B-4** c29 (mailcat) and c33 (openai) ship package
->   `bin/rfl-*` POSIX shell shims so
->   `manifest::validate_with_package`'s `entry`-resolution
->   passes. c33 also ships an empty-methods
->   `openrpc.json` for the provider (live m1 requires
->   sibling presence regardless of content).
-> - **B-5** c30 updates **every** live
->   `PluginSupervisor::new` call site in the same commit
->   (run_chat builds the catalog; tests use
->   `ToolSchemaCatalog::empty_for_tests()`).
-> - **B-6** c33 ships the **complete** combined m5a
->   fixture lock at `rafaello/fixtures/m5a-locks/rafaello.lock`
->   (both openai + mailcat entries). c38 depends on c33.
-> - **B-7** c22's CG4 always_allow_session path constructs
->   exactly `GrantMatcher::Structural { template:
->   args.clone() }` (no `compile_template` call, no Any
->   fallback). c22's c16 dep dropped.
-> - **B-8** c06 adds
->   `scrubber_reject_reserved_unchanged_for_seven_core_names.rs`;
->   c33 adds (renamed)
->   `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`.
-> - **B-9** c29 ships the two openrpc fixture variants
->   but tests **only** `manifest::validate_with_package`
->   happy-path. The method-vs-tool consistency tests
->   (positive + negative) move fully into c30.
-> - **M-1** New bus-visible signal
->   `core.session.confirm_resolved` for short-circuited
->   confirms. c11 adds the topic constant + suffix rules;
->   c24 publishes it on short-circuit; c25 subscribes
->   in the TUI for queue pruning. The gate does NOT
->   subscribe — distinct topic from `confirm_reply` to
->   keep CG4's contract narrow.
-> - **M-2** c11 adds the missing too-many-`in_reply_to`
->   tests for `confirm_reply` and `command_result`.
-> - **M-3** c26's audit-database opening path specified:
->   new `AuditWriter::open_for_install(project_root)`
->   constructor opens the m3 SQLite store directly,
->   runs the idempotent c08 migration, no
->   `SessionController` required.
-> - **M-4** c30 deps list adds c29.
-> - **M-5** `rfl_install_status_shows_red_for_override.rs`
->   test moved from c39 (demo negatives) to c27 (rfl
->   status surface) — the surface lands there.
-> - **N-1** Header + sizing tallies recounted against
->   round-2 numbering (41 commits, 30/8/1/3 split).
-> - **N-2** Stale `c19` references (CG4 audit-hand-off
->   prose), `Phase G c25` reference (slash handler →
->   c18), and `Phase G` vs `Phase H` overlaps fixed.
-> - **N-3** §W4 explicitly assigned to c03 (appends
->   one-line crate-list entry to `rafaello/README.md`).
+> - **B-1** c04 feature stanza simplified to
+>   `test-fixture = []` + `required-features =
+>   ["test-fixture"]` on the bin; the feature
+>   dependency list is dropped.
+> - **B-2** c31 backfills
+>   `rafaello/fixtures/rafaello-readfile/openrpc.json`
+>   to declare the `read-file` method (currently
+>   empty `methods: []` would fail
+>   `ToolSchemaCatalog::build`'s method-vs-tool
+>   consistency check). Mockprovider stays
+>   `methods: []` (no `provides.tools`). Adds an m4
+>   readfile-demo-still-starts regression test.
+> - **B-3** c34's combined fixture lock now includes
+>   **all four plugins** (openai + mailcat + readfile
+>   + mockprovider). c34 deps add c31; c34 acceptance
+>   gains a four-plugin validate-and-compile test plus
+>   a session-pin assertion.
+> - **B-4** c24's stale-answer-after-short-circuit
+>   test renamed and re-anchored:
+>   `gate_duplicate_answer_after_grant_short_circuit_audit_logged.rs`
+>   audits `confirm_duplicate` (NOT `confirm_late`).
+>   Rationale: short-circuit transitions
+>   `Active → ResolvedByAnswer`; `prior_outcome` then
+>   classifies as `Duplicate`. `Late` only applies to
+>   `TimedOut`.
+> - **M-1** c11 gains a `confirm_resolved` wire-contract
+>   table (envelope `request_id`, payload
+>   `request_id`, `in_reply_to`, stale meaning) plus
+>   a positive `broker_publish_*_wire_shape_positive.rs`
+>   test asserting the relationship.
+> - **M-2** c27's `AuditWriter::open_for_install`
+>   now calls `std::fs::create_dir_all(project_root.join(".rafaello/state"))`
+>   before opening the SQLite file. New fresh-tempdir
+>   test verifies the directory + table appear.
+> - **M-3** c38 deps add c16 and c18 (the slash
+>   handler and its jsonschema transitive dep — the
+>   handler is registered as an internal subscriber
+>   at run_chat in this commit).
+> - **M-4** c34's lock fixture text pins
+>   `bindings.tool_meta.send-mail.grant_match =
+>   "schemas/send-mail-grant.json"` explicitly
+>   (NOT openrpc.json; openrpc carries the tool's
+>   param schema for the model-facing catalog, while
+>   grant_match validates the user's `/grant`
+>   template).
+> - **M-5** c14 acceptance gains
+>   `reemit_confirm_answer_without_confirm_state_warns_and_drops.rs`
+>   asserting the transitional drop contract (no
+>   `confirm_reply` emitted when `confirm_state` is
+>   `None`; tracing warn captured; other re-emit
+>   arms unaffected).
+> - **N-1/N-2/N-3** Renumber-and-cross-check pass:
+>   round-2 preamble used stale numbers (c26/c33/c37
+>   etc. that did not match the post-renumber file
+>   after the round-2 sed pass). Round-3 preamble +
+>   cross-check + sizing summary all use round-3
+>   final numbers verified against the
+>   `### cNN — ...` headings.
 
 ## Reading order for per-commit agents
 
@@ -212,16 +207,17 @@ unsplittable workspace cutover.
   `rafaello/crates/rafaello-openai-stub/Cargo.toml`:
   - Add `[[bin]] name = "rfl-openai-stub"; path =
     "src/bin/rfl_openai_stub.rs"`.
-  - `[features]`: `default = []`; the stub bin is **only
-    built when the workspace `test-fixture` feature is on**
-    (mirrors m4's `rafaello-bus-fixture` pattern). The crate
-    itself declares `required-features = ["test-fixture"]`
-    on the `[[bin]]` entry and adds a `test-fixture` feature
-    that depends on `tokio/macros`, `tokio/rt-multi-thread`,
-    `serde_json`. No `hyper` workspace dep (pi-1 B-1 — the
-    workspace has no `hyper` alias today and `reqwest`'s
-    transitive copy cannot be referenced as `workspace =
-    true`).
+  - `[features]`: `default = []`; `test-fixture = []`
+    (no feature dependencies — pi-2 B-1 smallest fix;
+    the deps tokio/serde_json are unconditional in the
+    `[dependencies]` table). The `[[bin]]` entry
+    declares `required-features = ["test-fixture"]` so
+    the stub is only built when the workspace
+    `test-fixture` feature is on (mirrors m4's
+    `rafaello-bus-fixture` pattern). No `hyper`
+    workspace dep (pi-1 B-1 — the workspace has no
+    `hyper` alias today and `reqwest`'s transitive
+    copy cannot be referenced as `workspace = true`).
   - `[dependencies]`: `tokio` (with `workspace = true` and
     feature subset `net`, `macros`, `rt-multi-thread`, `io-util`),
     `serde`, `serde_json`, `anyhow`, `tracing`. **The HTTP
@@ -701,6 +697,27 @@ Four commits.
     (pi-1 M-1 — new short-circuit signal topic).
   - `broker_publish_core_session_confirm_resolved_missing_in_reply_to_rejected.rs`
   - `broker_publish_core_session_confirm_resolved_in_reply_to_too_many_rejected.rs`
+  - `broker_publish_core_session_confirm_resolved_wire_shape_positive.rs`
+    (pi-2 M-1 positive wire-shape check) — gate
+    publishes a well-formed `confirm_resolved` event;
+    the broker's internal subscriber observes
+    envelope `request_id` = fresh ULID,
+    payload `request_id` = the resolved confirm
+    correlation id, envelope `in_reply_to` =
+    `[payload.request_id]`, and payload
+    `reason: "grant_short_circuit"`. Asserts the
+    relationship in one positive test.
+
+  **`core.session.confirm_resolved` wire contract**
+  (pi-2 M-1, mirrors §CT0):
+
+  | Topic                            | Envelope `request_id`                                  | Payload `request_id`                          | Envelope `in_reply_to`                              | Stale / duplicate / late                                                                       |
+  |----------------------------------|--------------------------------------------------------|-----------------------------------------------|-----------------------------------------------------|-----------------------------------------------------------------------------------------------|
+  | `core.session.confirm_resolved`  | fresh ULID = the resolution event's id (gate-allocated) | the confirmation correlation id of the resolved confirm | exactly `[payload.request_id]` (the resolved confirm id) | n/a — gate publishes once per short-circuit resolution; the TUI tracks correlation by `payload.request_id` and drops the matching queue entry; receiving a `confirm_resolved` for an unknown confirm id is silently ignored by the TUI (operator-visible cost: nil) |
+
+  The gate does NOT subscribe internally to
+  `confirm_resolved` (only the TUI consumes it), so
+  there is no self-handling race with CG4.
 - **Size.** small.
 
 ### c12 — feat(rafaello): extend `tui` frontend ACL with `confirm_answer` + `slash_command` publishes
@@ -946,7 +963,21 @@ Four commits.
     — after `mark_session_grant_requested` returns Ok,
     a subsequent `try_resolve` returns
     `Some((held, true))`.
-- **Size.** medium. ~180 LoC arm + ~250 LoC tests.
+  - `reemit_confirm_answer_without_confirm_state_warns_and_drops.rs`
+    (pi-2 M-5) — construct a `ReemitRouter` via
+    `ReemitRouter::new(...)` only (no
+    `.with_confirm_state_and_audit(...)` call). Publish
+    a well-formed `frontend.tui.confirm_answer`; assert
+    no `core.session.confirm_reply` is emitted, a
+    `tracing::warn!` is captured with the
+    "confirm_state-not-wired" message, and m4-shaped
+    callers see no behaviour change on the other
+    re-emit arms (user_message / tool_request /
+    assistant_message / tool_result still re-emit
+    normally). This is the transitional-drop contract
+    that keeps c14 backward-compatible with the
+    live reemit tests + run_chat call sites until
+    c38 wires `confirm_state`.
 
 ---
 
@@ -1536,13 +1567,16 @@ pivot) is bundled into c38 per pi-1 B-3 — see Phase M.
     "grant_short_circuit"`, payload
     `request_id == <confirm_id>`, envelope
     `in_reply_to == [<confirm_id>]`.
-  - `gate_late_answer_after_grant_short_circuit_audit_logged.rs`
-    — extend the above: after the short-circuit
-    fires, a late `confirm_answer` for A arrives;
-    re-emit / gate audit `confirm_late` (via the
-    c14 pipeline + a `prior_outcome` read returning
-    `Late` because the short-circuit set
-    `ResolvedByAnswer`).
+  - `gate_duplicate_answer_after_grant_short_circuit_audit_logged.rs`
+    (pi-2 B-4 — short-circuit calls `try_resolve`
+    which transitions `Active → ResolvedByAnswer`;
+    `prior_outcome` then classifies a subsequent
+    answer as `Duplicate`, NOT `Late`. `Late` is the
+    `TimedOut` arm only — see c13's `PriorOutcome`
+    classifier). After the short-circuit fires, a
+    stale `confirm_answer` for A arrives; re-emit
+    reads `prior_outcome == Duplicate` and audits
+    `confirm_duplicate` via the c14 pipeline.
 - **Size.** small-to-medium.
 
 > **(Round-1 c25 — agent-loop pivot — bundled into c38
@@ -1723,7 +1757,13 @@ Scope §Tr. Three commits.
   `rfl install` runs without a `SessionController`).
   c27 adds a new `AuditWriter::open_for_install(project_root:
   &Path) -> Result<Arc<AuditWriter>, AuditError>`
-  constructor. It opens
+  constructor. It first calls
+  `std::fs::create_dir_all(project_root.join(".rafaello/state"))`
+  (pi-2 M-2 — `rfl install` may run before any
+  `rfl chat` has materialised the state dir, so the
+  parent must be created defensively; m3 creates this
+  directory inside `SessionController::open`, but
+  install bypasses that path). Then opens
   `${PROJECT_ROOT}/.rafaello/state/session.sqlite`
   directly via `rusqlite::Connection::open(...)`,
   runs the `audit_events` migration from c08 (the
@@ -1774,6 +1814,13 @@ Scope §Tr. Three commits.
   - `audit_records_trifecta_override_at_install.rs`
   - `audit_records_install_refused_with_three_booleans.rs`
   - `audit_records_install_accepted_for_happy_path.rs`
+  - `audit_writer_open_for_install_creates_state_dir.rs`
+    (pi-2 M-2) — fresh tempdir with no
+    `.rafaello/state/` subtree; call
+    `AuditWriter::open_for_install(&tempdir)`;
+    assert the directory exists, the SQLite file
+    exists, the `audit_events` table is queryable,
+    and a subsequent `record` call succeeds.
 - **Size.** medium. ~250 LoC subcommand + ~250 LoC
   tests.
 
@@ -2069,6 +2116,39 @@ fixtures → stub bin → tools_list call → negative matrix.
       deferred call-site updates, but additive
       construction on top of this commit's catalog
       wiring.
+  - **m4 fixture OpenRPC backfill** (pi-2 B-2). Live
+    `rafaello/fixtures/rafaello-readfile/openrpc.json`
+    currently declares `methods: []` while
+    `rafaello/fixtures/rafaello-readfile/rafaello.toml`
+    declares `provides.tools = ["read-file"]`. After
+    `ToolSchemaCatalog::build` lands here with the
+    method-vs-tool consistency check, the readfile
+    fixture would fail catalog construction with
+    `ToolMissingOpenRpcMethod { tool: "read-file"
+    }`. **c31 backfills the readfile openrpc.json in
+    the same commit:**
+    ```json
+    {
+      "openrpc": "1.2.6",
+      "info": { "title": "readfile", "version": "0.0.0" },
+      "methods": [
+        {
+          "name": "read-file",
+          "params": [
+            { "name": "path", "required": true,
+              "schema": { "type": "string" } }
+          ],
+          "result": { "name": "ok",
+            "schema": { "type": "object" } }
+        }
+      ]
+    }
+    ```
+    `rafaello-mockprovider`'s manifest declares
+    `[provides] provider = "mock"` with no
+    `tools = [...]` array, so its empty
+    `methods: []` openrpc stays valid (no
+    consistency mismatch).
 - **Why.** Scope §OP2 (round-4 form). Closes
   pi-3 M-1's data-source ambiguity and pi-4 M-2's
   consistency-check ownership.
@@ -2108,7 +2188,27 @@ fixtures → stub bin → tools_list call → negative matrix.
     (pi-1 B-9 — owned by c31). Build against c30's
     `rafaello-mailcat-method-typo` variant; assert
     `ToolCatalogError::ToolMissingOpenRpcMethod`.
-- **Size.** medium. ~250 LoC + ~250 LoC tests.
+  - `readfile_fixture_catalog_builds_with_backfilled_openrpc.rs`
+    (pi-2 B-2) — build `ToolSchemaCatalog` from
+    `rafaello/fixtures/rafaello-readfile/` after this
+    commit's openrpc backfill; assert success and
+    that the synthesised `parameters_schema` for
+    `read-file` carries the `path` param.
+  - `mockprovider_fixture_catalog_builds_without_tools.rs`
+    (pi-2 B-2) — build against
+    `rafaello/fixtures/rafaello-mockprovider/`;
+    assert `catalog.list()` is empty (no tools
+    advertised) and no error.
+  - `rfl_chat_existing_m4_readfile_demo_still_starts.rs`
+    in `rafaello/tests/` (pi-2 B-2 regression) — load
+    an m4-shaped readfile lock; assert
+    `ToolSchemaCatalog::build` succeeds at run_chat
+    startup; assert `PluginSupervisor::new` accepts
+    the catalog and the existing m4
+    `rfl_chat_demo_bar_read_file.rs` flow still
+    drives a `read-file` tool call end-to-end (the
+    full m4 demo bar continues passing under the
+    catalog cutover).
 
 ### c32 — feat(rafaello-openai::wire): Chat Completions client + error mapping
 
@@ -2263,17 +2363,32 @@ fixtures → stub bin → tools_list call → negative matrix.
     and silently produces no entries for this plugin —
     correct, because the openai plugin owns no tools
     (its `provides.tools` is absent / empty).
-  - **Complete m5a fixture lock** at
-    `rafaello/fixtures/m5a-locks/rafaello.lock` (pi-1 B-6 —
-    no "merged at c40" handwave). This is the single
-    canonical fixture lock c39's demo-bar test consumes;
-    contains entries for **both** `builtin:openai@0.0.0`
-    AND `local:mailcat@0.0.0` (the mailcat entry's
-    bindings + grant + tool_meta are pre-computed at
-    drafting time; this is a fixture lock, hand-written,
-    digests recorded from `rfl install --fixture` against
-    the c30 fixture tree). The openai entry is exactly
-    as below:
+  - **Complete m5a fixture lock — all four plugins**
+    (pi-2 B-3 — round-2's two-plugin lock was
+    insufficient; the five-tree orchestration in c38
+    spawns openai + mailcat + readfile + mockprovider,
+    all four must be installed) at
+    `rafaello/fixtures/m5a-locks/rafaello.lock`. The
+    single canonical fixture lock c39's demo-bar test
+    consumes; contains entries for:
+    - `builtin:openai@0.0.0` — active provider.
+      Bindings and grant as below.
+    - `local:mailcat@0.0.0` — active mail-sink tool.
+      Bindings + grant + tool_meta projected from
+      c30's mailcat manifest (sinks = ["mail"],
+      always_confirm = false, grant_match path
+      pointing at `schemas/send-mail-grant.json` —
+      see M4 correction below).
+    - `local:readfile@0.0.0` — non-sink tool, retained
+      from m4. Reuse the existing m4 readfile lock
+      entry shape unchanged.
+    - `local:mockprovider@0.0.0` — installed-but-not-active
+      alternative provider, retained from m4 for the
+      bonus-negatives matrix. Reuse the m4 lock entry
+      shape unchanged.
+    The lock is hand-written; digests recorded from
+    `rfl install --fixture` against each fixture tree.
+    The openai entry is exactly as below:
     `[plugin."builtin:openai@0.0.0".bindings]
     provider = true; provider_id = "openai"`.
     `[plugin."builtin:openai@0.0.0".grant.bundles.default.network]
@@ -2289,19 +2404,28 @@ fixtures → stub bin → tools_list call → negative matrix.
     RFL_OPENAI_ENDPOINT_URL =
     "https://litellm.thepromisedlan.club/v1";
     RFL_OPENAI_MODEL = "vllm/qwen3.6-27b"`.
-    The mailcat entry uses the m1 tool_meta projection
-    of c30's manifest (sinks = ["mail"],
-    always_confirm = false, grant_match schema path
-    pointing at the openrpc-sibling location). The lock
-    also sets `session.active_provider =
-    "builtin:openai@0.0.0"` and
-    `session.tool_owner.send-mail = "local:mailcat@0.0.0"`.
+    Mailcat's lock entry pins
+    `bindings.tool_meta.send-mail.grant_match =
+    "schemas/send-mail-grant.json"` (pi-2 M-4 — the
+    grant_match value is the **JSON-Schema sibling
+    path**, NOT openrpc.json; openrpc.json carries
+    only the tool param schema for the model-facing
+    catalog, while grant_match validates the user's
+    `/grant` template).
+    The lock also sets `session.active_provider =
+    "builtin:openai@0.0.0"`,
+    `session.tool_owner.send-mail = "local:mailcat@0.0.0"`,
+    and `session.tool_owner.read-file =
+    "local:readfile@0.0.0"`.
 - **Why.** Scope §OP4 + §OP5 + pi-1 B-5
   (env-pass-by-name); the lock-side TOML uses live
   `GrantEnv` shape.
-- **Depends on.** c03, c06, c30 (c30 ships
-  the mailcat manifest + fixture tree the combined
-  lock projects from).
+- **Depends on.** c03, c06, c30, c31 (c30 ships the
+  mailcat manifest + fixture tree; c31 backfills the
+  readfile openrpc.json and lands the
+  `ToolSchemaCatalog::build` consistency check that
+  the combined lock's readfile + mockprovider entries
+  rely on — pi-2 B-3).
 - **Acceptance.** Tests in
   `rafaello-openai/tests/`:
   - `openai_manifest_compiles.rs` — `manifest::parse`
@@ -2329,9 +2453,14 @@ fixtures → stub bin → tools_list call → negative matrix.
   - `m5a_fixture_lock_validates_and_compiles.rs` —
     the combined lock from
     `rafaello/fixtures/m5a-locks/rafaello.lock` passes
-    `validate::lock` and `compile_plugin` for both
-    entries (asserts the lock is real before c39
-    consumes it).
+    `validate::lock` and `compile_plugin` for **all
+    four** entries (openai + mailcat + readfile +
+    mockprovider — pi-2 B-3) before c39 consumes it.
+  - `m5a_fixture_lock_session_pins_active_provider_and_tool_owners.rs`
+    — assert `session.active_provider`,
+    `session.tool_owner.send-mail`, and
+    `session.tool_owner.read-file` are pinned to the
+    canonical ids above.
 - **Size.** medium (TOML + combined fixture lock +
   ~7 small tests).
 
@@ -2494,10 +2623,13 @@ agent-loop pivot (old c25) per pi-1 B-3.
 - **Why.** Scope §CHAT1 + §CHAT2 + §CG6 + the risks
   inventory §"Risks" #1 leak-mitigation calls + pi-1
   B-3 (cutover discipline).
-- **Depends on.** c08, c13, c14, c15, c20, c21, c22,
-  c23, c24, c31, c36. The agent-loop pivot (round-1
-  c25) is bundled here per pi-1 B-3 — no separate
-  pivot commit.
+- **Depends on.** c08, c13, c14, c15, c16, c18, c20,
+  c21, c22, c23, c24, c31, c36 (pi-2 M-3 — c18 is the
+  core-side slash handler registered as an internal
+  subscriber here; c16 is c18's transitive dep for
+  jsonschema template validation at `/grant` time).
+  The agent-loop pivot (round-1 c25) is bundled here
+  per pi-1 B-3 — no separate pivot commit.
 - **Acceptance.** Tests in `rafaello/tests/`:
   - `rfl_chat_constructs_gate_before_provider_spawn.rs`
     — assert ordering via a test seam on
@@ -2668,49 +2800,58 @@ Scope §"Demo bar" + §"Manual validation".
 
 ---
 
-## Cross-checks (round 2 self-audit)
+## Cross-checks (round 3 self-audit)
 
-> Numbers below reflect the **post-renumber** scheme
-> (old c25 pivot folded into c37; old c25-c41 shifted
-> down by 1 to c25-c40). Total: 41 commits.
+> Numbers below verified against the actual
+> `### cNN — ...` headings post-round-2 sed. Total: 41
+> commits. The bundled rfl-chat-orchestration +
+> agent-loop pivot is c38 (not c37 as the round-2
+> cross-checks accidentally claimed).
 
 - **Every §"In scope" bullet maps to ≥1 row.** W1-W4
-  → c01-c05. Si1-Si3 → c09. Tr1-Tr4 → c26-c28. CT0-CT5
-  → c11-c14. CG1-CG8 → c13 + c20-c24 + c37 (CG6
-  bundled into c38's unsplittable cutover per
-  pi-1 B-3). OM1-OM3 → c10. UG1-UG5 → c15-c16.
-  SL0-SL5 → c17-c19. TUI1-TUI5 → c25-c25. OP1-OP7 →
-  c30-c35. TP1-TP4 → c29. AL1-AL4 → c08 + folded
-  into c14/c18/c20/c22/c23/c24/c26. M1.1 → c06 +
-  c33 (c33 owns the
-  `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`
-  test; c06 owns the
+  → c01-c05. Si1-Si3 → c09. Tr1-Tr4 → c27-c29 (install
+  c27, status c28, transitive-not-chased tests c29).
+  CT0-CT5 → c11-c14. CG1-CG8 → c13 + c20-c24 + c38
+  (CG6 agent-loop pivot bundled into c38's
+  unsplittable cutover per pi-1 B-3). OM1-OM3 → c10.
+  UG1-UG5 → c15-c16. SL0-SL5 → c17-c19. TUI1-TUI5 →
+  c25-c26. OP1-OP7 → c31-c36 (ToolSchemaCatalog c31,
+  openai wire c32, bus adapter c33, manifest+lock
+  c34, stub c35, tools_list c36). TP1-TP4 → c30
+  (mailcat fixture). AL1-AL4 → c08 + folded into
+  c14/c18/c20/c22/c23/c24/c27. M1.1 → c06 + c34
+  (c34 owns
+  `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`;
+  c06 owns
   `scrubber_reject_reserved_unchanged_for_seven_core_names.rs`
-  test — pi-1 B-8). M1.2 → c07. CHAT1-CHAT3 → c36 +
-  c37. I → c38-c39.
+  — pi-1 B-8). M1.2 → c07. CHAT1-CHAT3 → c37 + c38.
+  I → c39-c40.
 - **Every §"Demo bar" demo covered.** Positive →
-  c38. Negative 1 → c39. Negative 2 → c39. Negative
-  3 (one-hop, no transitive) → c28. Negative 4
-  (verbatim) → m5b. Bonus → c39 (with the
-  status-red bonus moved to c27 per pi-1 M-5).
+  c39 (demo-bar headline allow/deny arms). Negative
+  1 (timeout) → c40. Negative 2
+  (always_allow_session restart) → c40. Negative 3
+  (one-hop trifecta, no transitive) → c29. Negative
+  4 (verbatim) → m5b. Bonus negatives → c40 (with
+  the status-red bonus moved to c28 per pi-1 M-5).
 - **No row exceeds size budget without
   unsplittable-cutover justification.** Three
-  unsplittable cutovers: c06 (allow_secrets schema
-  + scrubber signature), c10 (broker
+  unsplittable cutovers: c06 (allow_secrets schema +
+  scrubber signature), c10 (broker
   outstanding-dispatched map populator+consumer),
-  c37 (rfl chat orchestration + agent-loop pivot
-  per pi-1 B-3). All three bodies cite m0 c08 /
-  m4 c07 precedent.
+  c38 (rfl chat orchestration + agent-loop pivot —
+  pi-1 B-3). All three bodies cite m0 c08 / m4 c07
+  precedent.
 - **Phase preambles match scope's internal-split
   sections.** Scope item 1 → Phase A. Item 2 → B.
-  Item 3 → C+D (audit infra threaded early so
-  later commits wire it inline). Item 4 → E. Item
-  6 → H. Item 7 → F. Item 8 → G. Item 9 → I.
-  Item 10 → C (audit). Item 11 → J. Item 12 → K.
-  Item 13 → L. Item 14 → M. Item 15 → N.
+  Item 3 → C+D (audit infra threaded early so later
+  commits wire it inline). Item 4 → E. Item 6 → H.
+  Item 7 → F. Item 8 → G. Item 9 → I. Item 10 → C
+  (audit). Item 11 → J. Item 12 → K. Item 13 → L.
+  Item 14 → M. Item 15 → N.
 - **Topic-id / env-var / manifest / lock paths
   match scope verbatim.** `core.session.confirm_*`,
-  `core.session.confirm_resolved` (pi-1 M-1 — new),
+  `core.session.confirm_resolved` (pi-1 M-1 +
+  pi-2 M-1 wire-contract table — new),
   `frontend.tui.confirm_answer`,
   `frontend.tui.slash_command`,
   `core.session.command_result`,
@@ -2721,69 +2862,99 @@ Scope §"Demo bar" + §"Manual validation".
   `RFL_OPENAI_ENDPOINT_URL`, `RFL_OPENAI_MODEL`,
   `builtin:openai@0.0.0`. All spellings checked
   against scope.md round 6.
-- **OP6 vs Tr1 wording nit (pi-6 N-1) folded.**
-  c26 step 10 pins the canonical stderr string
-  `warning: unused allow_secrets entry '<name>'
-  (no matching env.pass entry)`. §OP6 is not
-  re-cited anywhere with an alternate wording.
+- **OP6 vs Tr1 wording nit (pi-6 N-1) folded.** c27
+  step 10 pins the canonical stderr string
+  `warning: unused allow_secrets entry '<name>' (no
+  matching env.pass entry)`. §OP6 is not re-cited
+  anywhere with an alternate wording.
 - **Tests-with-code rule.** Every named test in
   scope sits in the commit row that introduces its
-  surface. Exceptions: c29 (mailcat) ships fixture
-  variants; the openrpc method-vs-tool consistency
-  tests live in c30 (which owns
-  `ToolSchemaCatalog::build`) — explicit per pi-1
-  B-9 (not a stub-against-wrong-behaviour ladder).
+  surface. Exceptions: c30 (mailcat) ships fixture
+  variants but tests only the m1 happy-path; the
+  openrpc method-vs-tool consistency tests live in
+  c31 (which owns `ToolSchemaCatalog::build`) —
+  explicit per pi-1 B-9 (not a
+  stub-against-wrong-behaviour ladder).
 - **Signature-cutover discipline** (pi-1 B-2 / B-5).
   c14's `ReemitRouter` change uses a
   backward-compatible `with_confirm_state_and_audit`
-  builder — no live reemit-test or run_chat call
-  site breaks at c14. c30's `PluginSupervisor::new`
+  builder; no live reemit-test or run_chat call
+  site breaks at c14. c31's `PluginSupervisor::new`
   signature change updates every live call site in
   the same commit (run_chat builds the catalog;
   tests use `ToolSchemaCatalog::empty_for_tests()`).
 - **Fixture-validator discipline** (pi-1 B-4 / B-6).
-  c29 and c33 both ship package `bin/` shim files
+  c30 and c34 both ship package `bin/` shim files
   so `manifest::validate_with_package`'s entry-path
-  canonicalisation passes. c33 ships a minimal
+  canonicalisation passes. c34 ships a minimal
   empty-methods `openrpc.json` for the openai
   provider, and the complete combined m5a fixture
-  lock (both openai + mailcat entries) so c38
+  lock — **all four plugins** (openai + mailcat +
+  readfile + mockprovider) per pi-2 B-3 — so c39
   consumes a real lock at the canonical path.
+- **m4 readfile fixture OpenRPC backfill** (pi-2
+  B-2). c31 also updates
+  `rafaello/fixtures/rafaello-readfile/openrpc.json`
+  to declare the `read-file` method matching
+  `provides.tools = ["read-file"]`. Without this
+  backfill, the round-3 `ToolSchemaCatalog::build`
+  would reject every existing m4 readfile lock at
+  rfl-chat startup. Mockprovider is unaffected (no
+  `provides.tools`).
+- **Short-circuit late-vs-duplicate audit kind**
+  (pi-2 B-4). c24's stale-answer-after-short-circuit
+  test audits `confirm_duplicate` (because
+  `try_resolve` transitions to `ResolvedByAnswer`,
+  which `prior_outcome` classifies as `Duplicate`),
+  not `confirm_late`.
 
 ---
 
 ## Sizing summary
 
-- **small**: 30 commits (c01-c05, c07, c08, c09,
-  c11-c13, c15-c17, c19, c21, c23, c24, c25, c27,
-  c28, c31, c34, c35, c36, c40).
-- **medium**: 8 commits (c10, c14, c18, c20, c22,
-  c25, c26, c29, c30, c32, c33, c38, c39).
-- **large**: 1 (c06 — `allow_secrets` cutover; ~300 LoC).
-- **unsplittable cutover**: 3 (c06, c10, c37 — all
-  body-justified per m0 c08 / m4 c07 precedent).
+Round 3 sizing — each commit is in exactly one
+category:
 
-Total: 41 commits. Scope §"Sizing & split
-recommendation" estimated 30-38; round-2 lands
-slightly above the upper bound for these reasons:
+- **small** (≲50 LoC including tests): 20 commits —
+  c01, c02, c03, c04, c05, c07, c08, c09, c11, c12,
+  c16, c17, c19, c23, c28, c29, c35, c36, c37, c41.
+- **small-to-medium**: 4 commits — c15, c21, c24, c30.
+- **medium** (50-200 LoC): 13 commits — c10, c13,
+  c14, c18, c20, c25, c26, c27, c31, c32, c33, c34,
+  c39.
+- **medium-to-large** (200-500 LoC): 2 commits —
+  c22, c40.
+- **large** (~300 LoC, body-justified): 1 commit —
+  c06 (`allow_secrets` cutover).
+- **unsplittable cutover** (LoC across multiple
+  call sites; body cites m0 c08 / m4 c07): 1 row
+  not already counted — c38. (c06 and c10 are both
+  also unsplittable cutovers; counted in their
+  size bucket above.)
+
+Total: 20 + 4 + 13 + 2 + 1 + 1 = **41 commits**.
+Scope §"Sizing & split recommendation" estimated
+30-38; round-3 lands at 41 for these reasons:
 
 - Audit log infrastructure (c08) is unbundled from
   gate/slash/install per the tests-with-code rule.
 - The gate's five commits (c20-c24) match scope
-  §"Internal split" item 6's "~4-5 commits" with
-  the CG6 pivot now bundled into c38 (per pi-1
-  B-3) rather than a separate isolated commit.
+  §"Internal split" item 6's "~4-5 commits" upper
+  bound; the CG6 pivot is bundled into c38 (per
+  pi-1 B-3) rather than a separate isolated commit.
 - The slash-command flow splits across three
-  commits (TUI parser / core handler / TUI
-  renderer) honouring pi-1 B-1's bus-mediated
+  commits (TUI parser c17 / core handler c18 / TUI
+  renderer c19) honouring pi-1 B-1's bus-mediated
   rewrite.
-- One commit (was c25, agent-loop pivot) removed
-  by bundling into c37; the total dropped from
-  round-1's 42 to round-2's 41.
+- The `rfl-openai` provider is six commits
+  (c31-c36) covering catalog cutover, wire client,
+  bus adapter, manifest+lock fixture, stub bin,
+  and tools_list call — at scope §"Internal split"
+  item 13's "~5-6 commits" upper bound.
 
-Pi may still flag candidates for further bundling
-on round 2 review.
+Pi-2 expects one more round after round 3 before
+ratification.
 
 ---
 
-*End of m5a commits.md round 2 draft.*
+*End of m5a commits.md round 3 draft.*
