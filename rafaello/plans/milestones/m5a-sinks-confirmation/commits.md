@@ -1,36 +1,53 @@
 # m5a-sinks-confirmation — commits
 
-> **Status:** round 4 draft — folds `commits-pi-review-3.md`
-> (1 B / 3 M / 1 N). Pi-3 expects zero-blocker convergence
+> **Status:** round 5 draft — folds `commits-pi-review-4.md`
+> (2 B / 1 M / 1 N). Pi-4 expects zero-blocker convergence
 > next round.
 >
-> Round-4 fixes by pi-3 finding:
-> - **B-1** c34 lock fixture renamed `session.active_provider`
->   → `session.provider_active` (live field per
->   `rafaello-core/src/lock/session.rs:11`). Test renamed
->   `m5a_fixture_lock_session_pins_provider_active_and_tool_owners.rs`.
-> - **M-1** c11's `broker_publish_*_wire_shape_positive.rs`
->   reworded to a direct broker / internal-subscriber
->   wire-shape check (no "gate publishes"); the
->   gate-publisher positive remains in c24 where the
->   short-circuit logic actually fires.
-> - **M-2** c38 spawn-loop spelled out: after the gate
->   spawns and the active provider spawns, iterate the
->   compiled-plugin map and spawn every other
->   `provider = true` plugin (installed-but-not-active —
->   mockprovider in the m5a fixture lock) through
->   `PluginSupervisor`; `ReemitRouter` stays subscribed
->   only to `provider.<session.provider_active>.**`. Tool
->   plugins spawn after.
-> - **M-3** c34's `m5a_fixture_lock_validates_and_compiles.rs`
->   extended to call `ToolSchemaCatalog::build` against
->   the combined lock and assert the catalog contains
->   exactly two tools: `send-mail` (mailcat) and
->   `read-file` (readfile).
-> - **N-1** Stale `c37` references in c14, c31, c34 row
->   bodies updated to `c38` (rfl chat orchestration is
->   c38; the surviving `c37` references are TUI test
->   hooks).
+> Round-5 fixes by pi-4 finding:
+> - **B-1** c34's m5a fixture lock drops the
+>   `session.tool_owner.send-mail` and
+>   `session.tool_owner.read-file` entries — live
+>   `validate::lock` rejects them as
+>   `ToolOwnerRedundant` when only one claimant
+>   exists. `session.tool_owner` is conflict-resolution
+>   state, not an active-pin table. Acceptance test
+>   renamed `m5a_fixture_lock_session_pins_provider_active.rs`
+>   and now asserts `session.tool_owner.is_empty()`.
+> - **B-2** c18's `/grant` default-plugin resolution
+>   reworded to use `BrokerAcl::tool_route(tool)` (a
+>   small wrapper over the live `tool_routes`
+>   BTreeMap m4 populates as the dispatch-target
+>   source of truth), NOT `session.tool_owner[tool]`
+>   (which is empty in the no-conflict case).
+>   `SlashHandler` gains an `Arc<BrokerAcl>` field.
+>   New tests for `/grant send-mail` with default
+>   plugin resolution and `/grant nonexistent` with
+>   unknown tool.
+> - **M-1** c38's inactive-provider spawn bullet
+>   reworded: the loop excludes the active provider
+>   by **canonical id** comparison (the
+>   unique-per-install identifier), while the
+>   `ReemitRouter` topic scope is
+>   `provider.<active.provider_id>.**` (resolved
+>   from the active canonical's `PluginAcl.provider_id`
+>   — `provider.openai.**` in the fixture). The
+>   round-3 wording conflated the two.
+> - **N-1** Cross-checks / sizing / convergence-note
+>   tail updated to round-5 wording.
+>
+> ---
+>
+> Round-4 fixes by pi-3 finding (kept for trajectory):
+> - **B-1 (r3)** c34 lock fixture renamed
+>   `session.active_provider` → `session.provider_active`
+>   (live field per `lock/session.rs:11`).
+> - **M-1 (r3)** c11's wire-shape positive reworded to
+>   a direct broker check; gate-publisher positive
+>   stays in c24.
+> - **M-2 (r3)** c38 spawn-loop spelled out.
+> - **M-3 (r3)** c34 catalog-build assertion extended.
+> - **N-1 (r3)** Stale `c37` → `c38` references fixed.
 >
 > Drafted against scope.md round 6 (ratified `95d6f12`). Pi-6's
 > sole nit (OP6 vs Tr1 wording mismatch on the unused-`allow_secrets`
@@ -1196,9 +1213,9 @@ core handler → TUI rendering of command_result.
 
 - **What.** Scope §SL3 + §SL0.
   - New module `crates/rafaello-core/src/slash.rs`.
-    `pub struct SlashHandler { broker, user_grants,
-    audit, tool_grant_match_schemas: BTreeMap<String,
-    serde_json::Value> }`.
+    `pub struct SlashHandler { broker, acl: Arc<BrokerAcl>,
+    user_grants, audit, tool_grant_match_schemas:
+    BTreeMap<String, serde_json::Value> }`.
   - Subscribe via `Broker::subscribe_internal` to
     `frontend.tui.slash_command`. For each event:
     1. Validate the payload shape; malformed →
@@ -1207,11 +1224,24 @@ core handler → TUI rendering of command_result.
        ...}`; audit `slash_unknown`; envelope
        `in_reply_to = [slash_request_id]`.
     2. `command == "grant"`: extract tool, plugin
-       (optional — defaults to the lock's
-       `session.tool_owner[tool]` canonical), template
-       map. Call `UserGrants::compile_template(tool,
-       template, lock_schema)` (c16); on success insert
-       via `UserGrants::add`; audit `grant_added` with
+       (optional), template map. **Default plugin
+       resolution** (pi-4 B-2 — round-3 wrongly used
+       `session.tool_owner[tool]` which is empty in the
+       no-conflict case): when the user omits the
+       `plugin` field, look up the canonical via
+       `BrokerAcl::tool_route(tool) -> Option<&CanonicalId>`
+       (a small lookup wrapper over the existing live
+       `BrokerAcl.tool_routes: BTreeMap<String,
+       CanonicalId>` field — m4 already populates this
+       at compile time as the dispatch-target source of
+       truth, regardless of `tool_owner` state). If the
+       lookup returns `None`, publish `command_result
+       {ok: false, kind: "grant", message: "no plugin
+       provides tool '<tool>'"}` and audit
+       `grant_failed`. On success, call
+       `UserGrants::compile_template(tool, template,
+       lock_schema)` (c16); on success insert via
+       `UserGrants::add`; audit `grant_added` with
        `payload.source: "SlashCommand"`; publish
        `command_result {ok: true, kind: "grant",
        details: {grant_id}}`.
@@ -1249,7 +1279,22 @@ core handler → TUI rendering of command_result.
   - `audit_log_records_grant_added_with_plugin_pin.rs`
     — `payload.plugin == <canonical>`, distinct from
     just-tool-name authorisation (§UG1).
-- **Size.** medium. ~200 LoC handler + ~200 LoC tests.
+  - `core_slash_command_grant_resolves_default_plugin_via_tool_route.rs`
+    (pi-4 B-2) — fixture lock has empty
+    `session.tool_owner` and one mailcat plugin
+    providing `send-mail`; submit `/grant send-mail
+    to=alice@example.com` with no `plugin` field;
+    assert the inserted `UserGrant.plugin ==
+    "local:mailcat@0.0.0"` (resolved via
+    `BrokerAcl::tool_route("send-mail")`); assert
+    `command_result {ok: true}` is published.
+  - `core_slash_command_grant_unknown_tool_publishes_ok_false.rs`
+    (pi-4 B-2) — submit `/grant nonexistent` against
+    a lock where no plugin claims the tool; assert
+    `command_result {ok: false, message: "no plugin
+    provides tool 'nonexistent'"}` and `grant_failed`
+    audit row.
+- **Size.** medium. ~200 LoC handler + ~250 LoC tests.
 
 ### c19 — feat(rafaello-tui): render `core.session.command_result` inline as transient text
 
@@ -2445,11 +2490,16 @@ fixtures → stub bin → tools_list call → negative matrix.
     `/grant` template).
     The lock also sets `session.provider_active =
     "builtin:openai@0.0.0"` (pi-3 B-1 — live field name
-    per `rafaello-core/src/lock/session.rs:11`;
-    round-2/3 wrongly named it `active_provider`),
-    `session.tool_owner.send-mail = "local:mailcat@0.0.0"`,
-    and `session.tool_owner.read-file =
-    "local:readfile@0.0.0"`.
+    per `rafaello-core/src/lock/session.rs:11`).
+    **No `session.tool_owner` entries** (pi-4 B-1):
+    `session.tool_owner` is conflict-resolution state
+    populated only when two installed plugins claim the
+    same tool name; live `validate::lock` rejects
+    redundant entries with `ToolOwnerRedundant` when
+    only one claimant exists. The m5a fixture has
+    exactly one `send-mail` claimant (mailcat) and one
+    `read-file` claimant (readfile), so the table stays
+    empty.
 - **Why.** Scope §OP4 + §OP5 + pi-1 B-5
   (env-pass-by-name); the lock-side TOML uses live
   `GrantEnv` shape.
@@ -2497,12 +2547,12 @@ fixtures → stub bin → tools_list call → negative matrix.
     (from mailcat) and `name = "read-file"` (from
     readfile). The openai + mockprovider providers
     contribute no entries (no `provides.tools`).
-  - `m5a_fixture_lock_session_pins_provider_active_and_tool_owners.rs`
-    (pi-3 B-1 — renamed from `active_provider`) —
-    assert `session.provider_active`,
-    `session.tool_owner.send-mail`, and
-    `session.tool_owner.read-file` are pinned to the
-    canonical ids above.
+  - `m5a_fixture_lock_session_pins_provider_active.rs`
+    (pi-3 B-1 + pi-4 B-1 — only `provider_active`
+    asserted; `session.tool_owner` is intentionally
+    empty per the no-conflict invariant) — assert
+    `session.provider_active == "builtin:openai@0.0.0"`
+    and `session.tool_owner.is_empty()`.
 - **Size.** medium (TOML + combined fixture lock +
   ~7 small tests).
 
@@ -2655,23 +2705,31 @@ agent-loop pivot (old c25) per pi-1 B-3.
     `rfl-mockprovider` retained as installed-but-not-active
     alternatives in the fixture lock for the
     bonus negatives).
-  - **Spawn order at run_chat** (pi-3 M-2). After the
-    gate spawns and after the active provider is
-    spawned via `session.provider_active`, **iterate
-    the compiled-plugin map and spawn every other
-    plugin with `bindings.provider = true` AND a
-    `provider_id` distinct from
-    `session.provider_active`** through the same
-    `PluginSupervisor` — these are
-    *installed-but-not-active* provider entries (e.g.
-    mockprovider in the m5a fixture lock). They
-    spawn so the supervisor can manage their
+  - **Spawn order at run_chat** (pi-3 M-2 + pi-4 M-1).
+    After the gate spawns and after the active
+    provider is spawned (the entry whose canonical id
+    matches `session.provider_active`), **iterate the
+    compiled-plugin map and spawn every other plugin
+    with `bindings.provider = true` whose canonical
+    id differs from `session.provider_active`**
+    (canonical-id comparison, NOT provider_id —
+    pi-4 M-1 corrected the round-3 wording; canonical
+    is the unique-per-install identifier while
+    `provider_id` is the public protocol string used
+    only in topic routing) through the same
+    `PluginSupervisor`. These are
+    *installed-but-not-active* provider entries
+    (e.g. mockprovider in the m5a fixture lock).
+    They spawn so the supervisor can manage their
     lifecycle and so `rfl provider use` (post-v1)
     has live children to switch between, but
     `ReemitRouter` stays subscribed only to
-    `provider.<session.provider_active>.**` —
-    inactive providers can publish but their events
-    are dropped at re-emit. Then iterate
+    `provider.<active.provider_id>.**` (resolved
+    from the active canonical's `PluginAcl.provider_id`
+    field — `provider.openai.**` in the fixture) —
+    inactive providers can publish but their
+    `provider.mock.**` events fall outside the
+    re-emit scope and are dropped. Then iterate
     `bindings.tools` and spawn every tool plugin
     (mailcat, readfile). The five-tree orchestration
     matches scope §CHAT2: active provider + tools
@@ -2873,7 +2931,7 @@ Scope §"Demo bar" + §"Manual validation".
 
 ---
 
-## Cross-checks (round 3 self-audit)
+## Cross-checks (round 5 self-audit)
 
 > Numbers below verified against the actual
 > `### cNN — ...` headings post-round-2 sed. Total: 41
@@ -3025,9 +3083,9 @@ Scope §"Sizing & split recommendation" estimated
   and tools_list call — at scope §"Internal split"
   item 13's "~5-6 commits" upper bound.
 
-Pi-2 expects one more round after round 3 before
-ratification.
+Pi-4 expects zero-blocker convergence on round 5;
+ratification follows pending pi-5 verification.
 
 ---
 
-*End of m5a commits.md round 4 draft.*
+*End of m5a commits.md round 5 draft.*
