@@ -1,21 +1,89 @@
 # m5a-sinks-confirmation — commits
 
-> **Status:** round 1 draft.
+> **Status:** round 2 draft — folds `commits-pi-review-1.md`
+> (9 B / 5 M / 3 N).
 >
 > Drafted against scope.md round 6 (ratified `95d6f12`). Pi-6's
 > sole nit (OP6 vs Tr1 wording mismatch on the unused-`allow_secrets`
-> stderr line) is folded silently here: c28 / c31 pin the canonical
+> stderr line) is folded silently here: c26 pins the canonical
 > stderr string `warning: unused allow_secrets entry '<name>' (no
 > matching env.pass entry)` from §Tr1 step 10; §OP6's older
 > `unused allow_secrets entry: <name>` form is not used anywhere.
 >
-> Total: 41 commits across 15 phases mirroring scope §"Internal
-> split". Sizing: 32 small, 7 medium, 1 large, 1 unsplittable
-> cutover (c06).
+> Total: **41 commits** (round 1 had 42; old c25 agent-loop pivot
+> bundled into c38 per pi-1 B-3). Sizing: 30 small, 8 medium,
+> 1 large, 3 unsplittable cutovers (c06 + c10 + c37).
 >
 > Per-commit agent prompts MUST inline the full row text below
 > verbatim (m1 §4.2): cite-by-row delegates granularity to the
 > per-commit agent and risks bundling.
+>
+> ---
+>
+> Round-2 fixes by pi-1 finding (one line each):
+>
+> - **B-1** c04 commits to the hand-rolled
+>   `tokio::net::TcpListener` parser; the `hyper`
+>   workspace-dep fallback is removed.
+> - **B-2** c14 uses a backward-compatible
+>   `ReemitRouter::with_confirm_state_and_audit(...)`
+>   builder; existing reemit tests + run_chat call sites
+>   stay untouched at c14. c37 calls the builder during
+>   orchestration extension.
+> - **B-3** Old c25 agent-loop pivot **bundled into c38**
+>   as one unsplittable cutover (m0 c08 precedent). Two
+>   coordinated edits in the same commit avoid the
+>   double-dispatch window. Total commit count drops to 41.
+> - **B-4** c29 (mailcat) and c33 (openai) ship package
+>   `bin/rfl-*` POSIX shell shims so
+>   `manifest::validate_with_package`'s `entry`-resolution
+>   passes. c33 also ships an empty-methods
+>   `openrpc.json` for the provider (live m1 requires
+>   sibling presence regardless of content).
+> - **B-5** c30 updates **every** live
+>   `PluginSupervisor::new` call site in the same commit
+>   (run_chat builds the catalog; tests use
+>   `ToolSchemaCatalog::empty_for_tests()`).
+> - **B-6** c33 ships the **complete** combined m5a
+>   fixture lock at `rafaello/fixtures/m5a-locks/rafaello.lock`
+>   (both openai + mailcat entries). c38 depends on c33.
+> - **B-7** c22's CG4 always_allow_session path constructs
+>   exactly `GrantMatcher::Structural { template:
+>   args.clone() }` (no `compile_template` call, no Any
+>   fallback). c22's c16 dep dropped.
+> - **B-8** c06 adds
+>   `scrubber_reject_reserved_unchanged_for_seven_core_names.rs`;
+>   c33 adds (renamed)
+>   `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`.
+> - **B-9** c29 ships the two openrpc fixture variants
+>   but tests **only** `manifest::validate_with_package`
+>   happy-path. The method-vs-tool consistency tests
+>   (positive + negative) move fully into c30.
+> - **M-1** New bus-visible signal
+>   `core.session.confirm_resolved` for short-circuited
+>   confirms. c11 adds the topic constant + suffix rules;
+>   c24 publishes it on short-circuit; c25 subscribes
+>   in the TUI for queue pruning. The gate does NOT
+>   subscribe — distinct topic from `confirm_reply` to
+>   keep CG4's contract narrow.
+> - **M-2** c11 adds the missing too-many-`in_reply_to`
+>   tests for `confirm_reply` and `command_result`.
+> - **M-3** c26's audit-database opening path specified:
+>   new `AuditWriter::open_for_install(project_root)`
+>   constructor opens the m3 SQLite store directly,
+>   runs the idempotent c08 migration, no
+>   `SessionController` required.
+> - **M-4** c30 deps list adds c29.
+> - **M-5** `rfl_install_status_shows_red_for_override.rs`
+>   test moved from c39 (demo negatives) to c27 (rfl
+>   status surface) — the surface lands there.
+> - **N-1** Header + sizing tallies recounted against
+>   round-2 numbering (41 commits, 30/8/1/3 split).
+> - **N-2** Stale `c19` references (CG4 audit-hand-off
+>   prose), `Phase G c25` reference (slash handler →
+>   c18), and `Phase G` vs `Phase H` overlaps fixed.
+> - **N-3** §W4 explicitly assigned to c03 (appends
+>   one-line crate-list entry to `rafaello/README.md`).
 
 ## Reading order for per-commit agents
 
@@ -122,9 +190,16 @@ unsplittable workspace cutover.
   - `src/bin/rfl_openai.rs`: minimal `fn main() {
     eprintln!("rfl-openai: scaffolding only.");
     std::process::exit(0); }`.
-- **Why.** Scope §W1 + §OP. Lay the build tracks so c33-c39
+- **Why.** Scope §W1 + §OP. Lay the build tracks so c31-c35
   fill in the wire client, bus adapter, and tests without
   fighting the build system.
+
+  **§W4 disposition** (pi-1 N3): c03 also appends a one-line
+  "m5a adds rfl-openai (OpenAI-compatible provider plugin)"
+  entry to `rafaello/README.md`'s crate list (the workspace
+  README exists; verified at round-2 drafting). This
+  satisfies scope §W4 inside the openai scaffold commit
+  rather than dangling as an unassigned bullet.
 - **Depends on.** c01, c02.
 - **Acceptance.** `cargo build -p rafaello-openai` green.
   `cargo build -p rafaello-openai --bin rfl-openai` green.
@@ -143,24 +218,27 @@ unsplittable workspace cutover.
     itself declares `required-features = ["test-fixture"]`
     on the `[[bin]]` entry and adds a `test-fixture` feature
     that depends on `tokio/macros`, `tokio/rt-multi-thread`,
-    `hyper`, `serde_json`. Workspace feature surface
-    documented inline.
-  - `[dependencies]`: `tokio`, `serde`, `serde_json`,
-    `anyhow`, `tracing`, `hyper = { workspace = true,
-    features = ["server", "http1"] }` (or `httpmock` if
-    `hyper` workspace alias not present — pick `hyper`
-    since `reqwest` already pulls it in transitively; no
-    new workspace dep). Confirm at commit time whether
-    `hyper` is already a workspace dep; if not, fall back
-    to a small hand-rolled `tokio::net::TcpListener`
-    server with manual HTTP parsing (~80 LoC).
+    `serde_json`. No `hyper` workspace dep (pi-1 B-1 — the
+    workspace has no `hyper` alias today and `reqwest`'s
+    transitive copy cannot be referenced as `workspace =
+    true`).
+  - `[dependencies]`: `tokio` (with `workspace = true` and
+    feature subset `net`, `macros`, `rt-multi-thread`, `io-util`),
+    `serde`, `serde_json`, `anyhow`, `tracing`. **The HTTP
+    server is hand-rolled** on top of `tokio::net::TcpListener`
+    with manual request-line + header parsing and a single
+    fixed `Content-Length`-based body read (~80 LoC; pi-1
+    B-1 — no new workspace dep, no per-commit-agent design
+    choice). The bin lives at `src/bin/rfl_openai_stub.rs`
+    and the parser sits in `src/server.rs` for ease of unit
+    testing.
   - `src/lib.rs`: `//! rafaello-openai-stub scaffolding.`
     placeholder.
   - `src/bin/rfl_openai_stub.rs`: minimal `fn main() {
     eprintln!("rfl-openai-stub: scaffolding only.");
     std::process::exit(0); }`.
 - **Why.** Scope §W2 + §A8. Defer the real `/v1/chat/completions`
-  stub to c36 once we know what wire shape the openai
+  stub to c35 once we know what wire shape the openai
   client expects.
 - **Depends on.** c01, c02.
 - **Acceptance.** `cargo build -p rafaello-openai-stub
@@ -191,7 +269,7 @@ unsplittable workspace cutover.
     eprintln!("rfl-mailcat: scaffolding only.");
     std::process::exit(0); }`.
 - **Why.** Scope §W3 + §TP. Sink-declaring fixture-tool
-  scaffolding; c31 fills in the manifest, openrpc.json,
+  scaffolding; c30 fills in the manifest, openrpc.json,
   and bin.
 - **Depends on.** c01.
 - **Acceptance.** `cargo build -p rafaello-mailcat` green.
@@ -257,8 +335,8 @@ unsplittable workspace cutover.
   name) without forcing operators into
   `flags.i_know_what_im_doing`'s scary red marker. The
   `allow_secrets` opt-in is the narrow, per-name path.
-  Lands in c06 — before openai (c33+) — so the openai
-  manifest and lock fixtures in c35 reference live
+  Lands in c06 — before openai (c32+) — so the openai
+  manifest and lock fixtures in c34 reference live
   schema fields.
 - **Depends on.** c01.
 - **Acceptance.** Tests (all in
@@ -291,6 +369,15 @@ unsplittable workspace cutover.
   - `validate_lock_rejects_reserved_name_in_allow_secrets.rs`
     — `allow_secrets = ["RFL_BUS_FD"]` →
     `AllowSecretsReservesCoreName`.
+  - `scrubber_reject_reserved_unchanged_for_seven_core_names.rs`
+    (pi-1 B-8 / scope §M1.1) — assert `scrubber::reject_reserved`
+    still rejects each of the live seven reserved names
+    (`RFL_BUS_FD`, `RFL_PLUGIN`, `RFL_HELPER_FD`,
+    `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`,
+    `RFL_PRIVATE_STATE_DIR`, `RFL_PROVIDER_ID`) in both
+    `env.pass` and `env.set`; assert m5a adds **no new
+    names** to `RESERVED_ENV_VARS` (the list size remains
+    7).
   - Existing m4 tests that touch `scrubber::strip`
     indirectly continue passing (no semantic change for
     callers that pass an empty `allow_secrets` slice).
@@ -565,18 +652,28 @@ Four commits.
     "frontend.tui.slash_command";`
     `pub const CORE_SESSION_COMMAND_RESULT: &str =
     "core.session.command_result";`
+    `pub const CORE_SESSION_CONFIRM_RESOLVED: &str =
+    "core.session.confirm_resolved";` (pi-1 M-1 — new
+    bus-visible resolution signal for short-circuited
+    confirms; gate publishes one per short-circuit
+    resolution so the TUI's overlay queue can drop the
+    pending entry. Distinct from `confirm_reply` so the
+    gate's CG4 doesn't observe its own signal.)
   - Extend `REQUEST_ID_REQUIRED_SUFFIXES` (live `bus.rs:17-22`,
-    stores last-segment-without-dot) to append the five
+    stores last-segment-without-dot) to append the six
     literal strings `"confirm_request"`, `"confirm_reply"`,
     `"confirm_answer"`, `"slash_command"`,
-    `"command_result"`. **No leading dot** (pi-3 M-5 — the
-    list compares against `topic.rsplit('.').next()`).
+    `"command_result"`, `"confirm_resolved"`. **No
+    leading dot** (pi-3 M-5 — the list compares against
+    `topic.rsplit('.').next()`).
   - Extend the `in_reply_to`-mandatory enforcement
     (security RFC §7.2.6 row 5) to
-    `frontend.tui.confirm_answer`, `core.session.confirm_reply`,
-    and `core.session.command_result`. **Not**
+    `frontend.tui.confirm_answer`,
+    `core.session.confirm_reply`,
+    `core.session.command_result`, and
+    `core.session.confirm_resolved`. **Not**
     `frontend.tui.slash_command` (root event). Cardinality
-    is exactly one on the three mandatory-`in_reply_to`
+    is exactly one on the four mandatory-`in_reply_to`
     suffixes; the broker rejects missing or
     multi-element arrays with the existing
     `InvalidInReplyTo` variant.
@@ -595,6 +692,15 @@ Four commits.
     (cardinality exactly one)
   - `broker_publish_core_session_confirm_reply_missing_in_reply_to_rejected.rs`
   - `broker_publish_core_session_command_result_missing_in_reply_to_rejected.rs`
+  - `broker_publish_core_session_confirm_reply_in_reply_to_too_many_rejected.rs`
+    (pi-1 M-2 — exact-one cardinality, parallel to the
+    `confirm_answer` test).
+  - `broker_publish_core_session_command_result_in_reply_to_too_many_rejected.rs`
+    (pi-1 M-2 — same).
+  - `broker_publish_core_session_confirm_resolved_missing_request_id_rejected.rs`
+    (pi-1 M-1 — new short-circuit signal topic).
+  - `broker_publish_core_session_confirm_resolved_missing_in_reply_to_rejected.rs`
+  - `broker_publish_core_session_confirm_resolved_in_reply_to_too_many_rejected.rs`
 - **Size.** small.
 
 ### c12 — feat(rafaello): extend `tui` frontend ACL with `confirm_answer` + `slash_command` publishes
@@ -712,13 +818,53 @@ Four commits.
 
 - **What.** Scope §CT5. Extend
   `crates/rafaello-core/src/reemit/mod.rs::ReemitRouter`
-  with an `Arc<ConfirmState>` field (new third constructor
-  arg alongside `Arc<Broker>` / `Arc<BrokerAcl>`). Add a
-  fourth `confirm_answer` arm to the per-direction dispatch
-  (m4 already has `user_message`, `tool_request`,
-  `assistant_message`/`tool_result` arms — see
-  `reemit/mod.rs`). Algorithm exactly matches scope §CT5
-  steps 1-7:
+  with **two new optional fields** (pi-1 B-2 — keep
+  `ReemitRouter::new` backward-compatible so no live
+  reemit test or `run_chat` call site breaks; the
+  catalog of existing call sites is documented at
+  `crates/rafaello/src/lib.rs::run_chat` and across
+  `rafaello-core/tests/reemit_*`):
+  ```rust
+  pub struct ReemitRouter {
+      // existing m4 fields...
+      confirm_state: Option<Arc<ConfirmState>>,
+      audit:         Option<Arc<AuditWriter>>,
+  }
+  impl ReemitRouter {
+      // unchanged from m4
+      pub fn new(broker: Broker, acl: BrokerAcl,
+                 active_provider: CanonicalId,
+                 shutdown_rx: watch::Receiver<bool>) -> Self { ... }
+      // NEW (c14): builder for m5a confirm_answer arm
+      pub fn with_confirm_state_and_audit(
+          mut self,
+          confirm_state: Arc<ConfirmState>,
+          audit: Arc<AuditWriter>,
+      ) -> Self {
+          self.confirm_state = Some(confirm_state);
+          self.audit = Some(audit);
+          self
+      }
+  }
+  ```
+  The `confirm_answer` arm checks
+  `self.confirm_state.as_ref()` and `self.audit.as_ref()`
+  at dispatch time; if either is `None`, the arm
+  **drops the event silently with a tracing warning**
+  (m5a's m4-shaped paths continue to work without
+  confirm wiring during the gradual rollout between
+  c14 and c37). When `Some`, the algorithm runs in
+  full.
+  c37 (`rfl chat` orchestration) calls
+  `.with_confirm_state_and_audit(...)` on the
+  `ReemitRouter` instance during run_chat construction
+  — no other live call site changes in c14.
+
+  Add a fourth `confirm_answer` arm to the per-direction
+  dispatch (m4 already has `user_message`,
+  `tool_request`, `assistant_message`/`tool_result`
+  arms — see `reemit/mod.rs`). Algorithm exactly
+  matches scope §CT5 steps 1-7:
   1. Envelope `request_id` present (broker already
      checked); payload `request_id` is a valid ULID.
   2. `in_reply_to` is exactly one entry **and equals
@@ -758,20 +904,16 @@ Four commits.
      two-value enum; pi-3 B-2) and envelope
      `in_reply_to = [<correlation_id>]`.
   The grant-creation + `grant_added` audit happen in
-  CG4 (c19); re-emit deliberately does NOT gain
-  `UserGrants` or `AuditWriter` handles beyond its
-  existing audit hooks. (The existing m4 audit-via-bus
-  hook in the re-emit pipeline is reused for
+  CG4 (c22); re-emit's audit handle (added in this
+  commit via the builder above) is used **only** for
+  the four classification kinds
   `confirm_malformed` / `confirm_duplicate` /
-  `confirm_late` / `confirm_unknown` — the
-  `AuditWriter` is wired in via the existing m4
-  `ReemitRouter` audit-writer field; if no such field
-  exists today, c14 adds it.) Use the c08 `AuditWriter`
-  for the four classification kinds.
+  `confirm_late` / `confirm_unknown`. Re-emit does
+  NOT gain `UserGrants` handles.
 - **Why.** Scope §CT5 + pi-3 B-1 + pi-3 B-2 + pi-4 B-1 +
   pi-5 M-1. Re-emit's role is canonicalisation +
   validation; the gate consumes the held entry on
-  observation of the canonical `confirm_reply` (c19).
+  observation of the canonical `confirm_reply` (c22).
 - **Depends on.** c08, c11, c13.
 - **Acceptance.** Tests in `rafaello-core/tests/`:
   - `reemit_frontend_confirm_answer_to_core_session_confirm_reply.rs`
@@ -810,7 +952,7 @@ Four commits.
 
 ## Phase F — `user_grants`
 
-Scope §UG. Two commits. Lands before the gate (Phase G)
+Scope §UG. Two commits. Lands before the gate (Phase H)
 because CG2 step 4 (grant-match passthrough) and CG4's
 always_allow_session grant creation both need
 `UserGrants`.
@@ -862,10 +1004,10 @@ always_allow_session grant creation both need
     grant for plugin A does NOT authorise plugin B even
     if the tool name matches (scope §UG1 second
     paragraph).
-- **Why.** Scope §UG. The gate (Phase G) consumes
+- **Why.** Scope §UG. The gate (Phase H) consumes
   `matches` for the grant-bypass passthrough; the slash
-  handler (Phase G c25) and the gate's CG4
-  always_allow_session path (c19) consume `add` /
+  handler (Phase G c18) and the gate's CG4
+  always_allow_session path (c22) consume `add` /
   `revoke` / `list`.
 - **Depends on.** c01.
 - **Acceptance.** Tests in `rafaello-core/tests/`:
@@ -1082,11 +1224,11 @@ core handler → TUI rendering of command_result.
 
 ## Phase H — Confirmation gate (the largest single module)
 
-Scope §CG1-§CG8. Six commits: gate skeleton + decision
+Scope §CG1-§CG8. Five commits: gate skeleton + decision
 logic (passthrough/grant-match) → hold path → CG4
 (allow + deny + grant creation) → CG5 timeout →
-CG7 multi-pending + short-circuit → CG6 agent-loop
-pivot (the m0-c08-class API change isolated last).
+CG7 multi-pending + short-circuit. CG6 (agent-loop
+pivot) is bundled into c38 per pi-1 B-3 — see Phase M.
 
 ### c20 — feat(rafaello-core::gate): `ConfirmationGate` skeleton + CG2 passthrough / grant-match
 
@@ -1120,8 +1262,8 @@ pivot (the m0-c08-class API change isolated last).
     Hold path (CG2 step 5) lands in c21; CG4 / CG5 in
     c22 / c23.
 - **Why.** Scope §CG1 + §CG2. Skeleton + the two
-  pass-through arms first so the agent-loop pivot in c25
-  has a target.
+  pass-through arms first so the agent-loop pivot
+  bundled in c38 has a target.
 - **Depends on.** c08, c09, c13, c15.
 - **Acceptance.** Tests in `rafaello-core/tests/`:
   - `gate_passes_through_non_sink_tool_request.rs` —
@@ -1221,28 +1363,20 @@ pivot (the m0-c08-class API change isolated last).
          - if `session_grant_requested == true`:
            extract `(tool, args)` from
            `held.tool_request.payload`; insert
-           `UserGrant { plugin: held.dispatch_target,
-           tool, matcher:
-           UserGrants::compile_template(&tool, args,
-           tool_grant_match_schemas.get(&tool))?,
-           added_at: Utc::now(), source:
-           AlwaysAllowSession }`; audit `grant_added`
-           with `payload.source: "AlwaysAllowSession"`.
-           **Note**: the matcher here uses the *args*
-           verbatim (subset of the args the user
-           saw) — see scope §CG1a's
-           "always_allow_session" row. If
-           `compile_template` errors, fall back to
-           `GrantMatcher::Any` and audit a warning;
-           the grant still authorises future
-           identical calls. (Concrete fallback: in
-           practice the gate's pre-published
-           `confirm_request.details.args` is what
-           the user authorised; the matcher template
-           = the args; the JSON-Schema validation is
-           skipped at gate time because the user
-           already saw the args in the modal — this
-           is the always_allow_session quirk.)
+           **exactly** `UserGrant { plugin:
+           held.dispatch_target, tool, matcher:
+           GrantMatcher::Structural { template:
+           args.clone() }, added_at: Utc::now(),
+           source: AlwaysAllowSession }` (pi-1 B-7 —
+           scope §CG4 mandates the verbatim
+           `Structural::from_args(args)` shape; no
+           `compile_template` call, no schema
+           validation, no `Any` fallback. The user
+           already saw the args in the modal, so the
+           grant covers exactly those args via
+           structural-subset matching). Audit
+           `grant_added` with `payload.source:
+           "AlwaysAllowSession"`.
          - publish the held tool_request via
            `Broker::publish_for_tool_dispatch(canonical:
            held.dispatch_target, payload:
@@ -1282,7 +1416,8 @@ pivot (the m0-c08-class API change isolated last).
   inversion: gate consumes the held entry) + pi-4 B-1
   (gate creates the grant when re-emit flagged
   `session_grant_requested`).
-- **Depends on.** c13, c14, c15, c16, c20, c21.
+- **Depends on.** c13, c14, c15, c20, c21 (pi-1 B-7 —
+  c16 dep dropped; CG4 no longer calls `compile_template`).
 - **Acceptance.** Tests in `rafaello-core/tests/`:
   - `gate_dispatches_on_allow.rs` — the held
     `tool_request` is dispatched via
@@ -1359,11 +1494,17 @@ pivot (the m0-c08-class API change isolated last).
     - `state.try_resolve(entry_id)`; on `Some((held,
       _))`: dispatch via
       `publish_for_tool_dispatch`; audit
-      `gate_grant_match_short_circuit`. The TUI's
-      overlay queue notices the entry resolved
-      server-side (it observes the `confirm_reply`
-      stream) and drops the queued prompt without
-      ever showing it (TUI side lands in Phase I).
+      `gate_grant_match_short_circuit`; **publish
+      `core.session.confirm_resolved`** (pi-1 M-1)
+      with payload `{request_id: <confirm_id>,
+      reason: "grant_short_circuit"}` and envelope
+      `in_reply_to = [<confirm_id>]`. This is the
+      bus-visible signal the TUI subscribes to in c25
+      for queue pruning; the gate does NOT subscribe
+      internally to `confirm_resolved` (only the TUI
+      consumes it), so there's no self-handling
+      race. Distinct topic from `confirm_reply` to
+      keep the CG4 subscriber's contract narrow.
   - **Per-held-entry timeout** is independent: each
     `Active` entry has its own
     `sleep_until(deadline)` task and they don't
@@ -1388,6 +1529,13 @@ pivot (the m0-c08-class API change isolated last).
     (via the audit row
     `gate_grant_match_short_circuit`) and
     dispatched.
+  - `gate_grant_short_circuit_publishes_confirm_resolved.rs`
+    (pi-1 M-1) — subscribe an internal observer to
+    `core.session.confirm_resolved`; assert one
+    event is published with `reason:
+    "grant_short_circuit"`, payload
+    `request_id == <confirm_id>`, envelope
+    `in_reply_to == [<confirm_id>]`.
   - `gate_late_answer_after_grant_short_circuit_audit_logged.rs`
     — extend the above: after the short-circuit
     fires, a late `confirm_answer` for A arrives;
@@ -1397,50 +1545,13 @@ pivot (the m0-c08-class API change isolated last).
     `ResolvedByAnswer`).
 - **Size.** small-to-medium.
 
-### c25 — refactor(rafaello-core::agent): remove direct `publish_for_tool_dispatch` from agent loop
-
-- **What.** Scope §CG6 — the m0-c08-class API change
-  isolated in its own commit. The current
-  `crates/rafaello-core/src/agent/mod.rs:143-217`
-  `handle_tool_request` method calls
-  `broker.publish_for_tool_dispatch(...)` directly
-  after persisting the `tool_call` entry. m5a removes
-  that call: the agent loop only persists the entry
-  and observes the canonical
-  `core.session.tool_request`. The
-  `ConfirmationGate` (constructed at `rfl chat`
-  startup — Phase L c39) is the sole driver of the
-  `plugin.<topic-id>.tool_request` publish.
-  Concrete change:
-  - Delete the
-    `broker.publish_for_tool_dispatch(...)` call;
-  - Keep the entry-persistence path unchanged.
-- **Why.** Scope §CG6. The gate is now between the
-  agent loop and the dispatch publish; this single
-  call removal is the architectural shift. **Isolated
-  per pi-1 H-3 / m0 c08 precedent so the reviewer
-  can audit one removed line in one commit.**
-- **Depends on.** c22.
-- **Acceptance.** Tests:
-  - `agent_loop_does_not_dispatch_tool_request_directly.rs`
-    in `rafaello-core/tests/` — with **no gate
-    constructed**, observe a
-    `core.session.tool_request` event; assert no
-    `plugin.<id>.tool_request` is published (the
-    handler only persists).
-  - All m4 tests that exercise tool dispatch through
-    the agent loop continue passing **only if** the
-    gate is also constructed (some m4 tests do
-    construct a `Broker` directly with no gate —
-    these tests migrate to a small
-    `gate_or_synthetic_dispatch` test helper that
-    either constructs a permissive gate or directly
-    invokes `publish_for_tool_dispatch`; the
-    migration is in-commit).
-  - `cargo test --workspace` green.
-- **Size.** small (in terms of LoC moved) but
-  **architectural cutover** — body cites scope §CG6
-  + m0 c08.
+> **(Round-1 c25 — agent-loop pivot — bundled into c38
+> per pi-1 B-3.)** Splitting the agent-loop's direct
+> dispatch removal from the `rfl chat` gate construction
+> creates a per-commit double-dispatch window
+> (constructing the gate without removing direct dispatch
+> means each `tool_request` reaches the plugin twice).
+> The pivot now lands inside c38's unsplittable cutover.
 
 ---
 
@@ -1448,7 +1559,7 @@ pivot (the m0-c08-class API change isolated last).
 
 Scope §TUI. Two commits.
 
-### c26 — feat(rafaello-tui): `InputMode::ConfirmOverlay` + key handling + publish answer
+### c25 — feat(rafaello-tui): `InputMode::ConfirmOverlay` + key handling + publish answer
 
 - **What.** Scope §TUI1.
   - Extend the TUI's input mode enum in
@@ -1493,7 +1604,7 @@ Scope §TUI. Two commits.
 - **Size.** medium. ~150 LoC mode handling + ~200 LoC
   tests.
 
-### c27 — feat(rafaello-tui): overlay rendering + multi-pending queue + ttl countdown
+### c26 — feat(rafaello-tui): overlay rendering + multi-pending queue + ttl countdown
 
 - **What.** Scope §TUI2 + §TUI3 + §TUI4 + §TUI5
   remainder.
@@ -1512,21 +1623,28 @@ Scope §TUI. Two commits.
     overlay corresponds to the queue head; on
     exit (allow/deny/timeout/short-circuit), pop
     the next.
-  - Short-circuited entries (server-side
-    `core.session.confirm_reply` arriving for a
-    not-yet-shown queued confirm) are silently
-    dropped from the queue. The TUI matches by
-    `confirm_reply.payload.request_id` against the
-    queue's confirm ids.
+  - Short-circuited entries: the TUI subscribes to
+    **`core.session.confirm_resolved`** (pi-1 M-1 —
+    the new bus-visible short-circuit signal added in
+    c11/c24); on arrival, drop the queue entry whose
+    `confirm_id == payload.request_id`. Entries
+    resolved by their own answer arm (TUI published
+    the answer itself) are dropped on the matching
+    `core.session.confirm_reply` (also subscribed).
+    The TUI tracks both topics in parallel for queue
+    pruning.
   - The `+N more pending` badge surfaces in the
     overlay frame when `queued_count > 0`.
 - **Why.** Scope §TUI2-§TUI4 + §CG7 TUI side.
-- **Depends on.** c26.
+- **Depends on.** c25.
 - **Acceptance.** Tests in `rafaello-tui/tests/`:
   - `tui_two_concurrent_confirm_requests_serialise.rs`
     — assert head shown, `+1 more pending`
     rendered.
-  - `tui_short_circuited_pending_overlay_silently_dropped.rs`
+  - `tui_short_circuited_pending_overlay_silently_dropped_on_confirm_resolved.rs`
+    (pi-1 M-1) — drive a `core.session.confirm_resolved`
+    event matching a queued pending; assert the queue
+    drops it without rendering the overlay.
   - `tui_overlay_ttl_countdown_renders_seconds.rs` —
     capture the render buffer; assert "60s" then
     `tokio::time::advance` 10s; assert "50s".
@@ -1543,7 +1661,7 @@ Scope §TUI. Two commits.
 
 Scope §Tr. Three commits.
 
-### c28 — feat(rafaello): `rfl install --fixture` subcommand + validate-via-trifecta + `allow_secrets` warnings
+### c27 — feat(rafaello): `rfl install --fixture` subcommand + validate-via-trifecta + `allow_secrets` warnings
 
 - **What.** Scope §Tr1 + §Tr2 + §Tr4 (subset of tests).
   New `rfl install` subcommand on the existing `rfl`
@@ -1600,6 +1718,26 @@ Scope §Tr. Three commits.
       non-empty and `details.unused_allow_secrets:
       [...]` from step 10 (empty when every name is
       also in `env.pass`).
+
+  **Audit-database opening at install time** (pi-1 M-3 —
+  `rfl install` runs without a `SessionController`).
+  c27 adds a new `AuditWriter::open_for_install(project_root:
+  &Path) -> Result<Arc<AuditWriter>, AuditError>`
+  constructor. It opens
+  `${PROJECT_ROOT}/.rafaello/state/session.sqlite`
+  directly via `rusqlite::Connection::open(...)`,
+  runs the `audit_events` migration from c08 (the
+  migration is idempotent — `CREATE TABLE IF NOT
+  EXISTS`), and wraps the connection in
+  `Arc<Mutex<...>>` matching the c08 `AuditWriter`
+  shape. **No chat-session lock** is acquired; SQLite
+  WAL handles concurrent writers if a `rfl chat`
+  session happens to be running. c08's
+  `SessionController::audit_writer` path is
+  unchanged; the new `open_for_install` constructor
+  is the install-side path. `rfl install` calls it
+  once at startup and shares the `Arc` across the
+  install run.
 - **Why.** Scope §Tr1. m1 ships `trifecta::evaluate`;
   m5a turns it on at the install path. Network fetch /
   update / review-UI explicitly out of scope (m6).
@@ -1639,7 +1777,7 @@ Scope §Tr. Three commits.
 - **Size.** medium. ~250 LoC subcommand + ~250 LoC
   tests.
 
-### c29 — feat(rafaello): `rfl status` subcommand + override marker + `allow_secrets` yellow marker
+### c28 — feat(rafaello): `rfl status` subcommand + override marker + `allow_secrets` yellow marker
 
 - **What.** Scope §Tr3 + §OP6 `rfl status` surface.
   - New `rfl status` subcommand: reads
@@ -1660,7 +1798,7 @@ Scope §Tr. Three commits.
   "loud surfacing" requirement for overrides; §A11's
   distinct-marker UX for the bundled `rfl-openai`'s
   `allow_secrets`.
-- **Depends on.** c06, c28.
+- **Depends on.** c06, c27.
 - **Acceptance.** Tests in `rafaello/tests/`:
   - `rfl_status_prints_red_for_override_flag.rs` —
     TTY capture; assert ANSI red escape sequence
@@ -1674,9 +1812,16 @@ Scope §Tr. Three commits.
     `explicit secret: ...` suffix.
   - `rfl_status_non_tty_secret_suffix_for_allow_secrets.rs`
     — non-TTY shows `[SECRET: ...]`.
+  - `rfl_install_status_shows_red_for_override.rs`
+    (pi-1 M-5 — moved from c40 demo-negatives where
+    c28 wasn't a dep). Install a trifecta plugin with
+    `--i-know-what-im-doing`; run `rfl status`; assert
+    the entry is rendered with the red ANSI marker.
+    Lives here because the `rfl status` surface lands
+    in this commit.
 - **Size.** small.
 
-### c30 — test(rafaello): one-hop trifecta refusal + transitive-not-chased integration tests
+### c29 — test(rafaello): one-hop trifecta refusal + transitive-not-chased integration tests
 
 - **What.** Scope §Tr4 tests + §"Demo bar" negative 3.
   - `rafaello/tests/rfl_install_refuses_one_hop_outbound_via_other_plugin.rs`
@@ -1695,7 +1840,7 @@ Scope §Tr. Three commits.
 - **Why.** Scope §Tr4 + §"Demo bar" negative 3.
   Asserts a deliberate non-feature; pi will want
   this isolated.
-- **Depends on.** c28.
+- **Depends on.** c27.
 - **Acceptance.** Both tests pass. `cargo test
   --workspace` green.
 - **Size.** small.
@@ -1707,7 +1852,7 @@ Scope §Tr. Three commits.
 Scope §TP. One commit; the surface is small enough not
 to split (manifest + openrpc.json + bin + tests).
 
-### c31 — feat(rafaello-mailcat): manifest + `openrpc.json` + `grant_match` schema + bin implementation
+### c30 — feat(rafaello-mailcat): manifest + `openrpc.json` + `grant_match` schema + bin implementation
 
 - **What.** Scope §TP1 + §TP2 + §TP3 + §TP4.
   - **Manifest** at
@@ -1771,6 +1916,20 @@ to split (manifest + openrpc.json + bin + tests).
     No actual SMTP. Returns
     `{ok: false, error: "missing 'to' field"}` if
     the request omits `to`.
+  - **Package `bin/rfl-mailcat` shim file** (pi-1 B-4 /
+    m4 c20 precedent). Live `manifest::validate_with_package`
+    canonicalises the `entry` path and requires it to
+    exist on disk. The shim is a POSIX shell stub
+    committed at
+    `rafaello/crates/rafaello-mailcat/bin/rfl-mailcat`
+    (and the fixture copy under
+    `rafaello/fixtures/m5a-locks/rafaello-mailcat/bin/rfl-mailcat`)
+    with `chmod +x` and body `#!/bin/sh\nexec "$@"`.
+    Never executed at runtime (the real bin path used
+    by `rfl chat` points at the cargo-built bin under
+    the workspace target dir); exists only to satisfy
+    the validator. Same shim ships under both fixture
+    variant directories from B9 above.
 - **Why.** Scope §TP. The sink-declaring fixture used
   by every gate integration test and the demo-bar
   positive.
@@ -1782,17 +1941,23 @@ to split (manifest + openrpc.json + bin + tests).
   - `mailcat_manifest_declares_mail_sink.rs` —
     `manifest::parse` succeeds; `provides.tool.send-mail.sinks
     == ["mail"]`.
-  - `mailcat_openrpc_method_matches_provides_tools.rs`
-    — `ToolSchemaCatalog::build` succeeds against
-    this fixture (lands at c32 once
-    `ToolSchemaCatalog` exists; this row's test
-    file stages an assertion against
-    `manifest::validate_with_package` for now and
-    is **extended** at c32 — m0 retro §4.3 two-stage
-    test pattern).
-  - `mailcat_openrpc_missing_method_for_provides_tools_errors.rs`
-    — a fixture variant (committed alongside) with
-    a typo'd method name; assertion staged at c32.
+  - `mailcat_manifest_validate_with_package_succeeds.rs`
+    (pi-1 B-9) — assert `manifest::validate_with_package`
+    against the openrpc-sibling-present + valid
+    `grant_match` path. This is the only openrpc-related
+    surface c30 owns; method-vs-tool consistency tests
+    move fully to c31 (the row that introduces
+    `ToolSchemaCatalog::build`). c30 ships the two
+    fixture variants (canonical + typo'd-method) so c31
+    can extend them.
+  - **Fixture variants shipped here, consumed at c31:**
+    `rafaello/fixtures/rafaello-mailcat-good/openrpc.json`
+    (the canonical one above) and
+    `rafaello/fixtures/rafaello-mailcat-method-typo/openrpc.json`
+    (same shape but `methods[0].name = "send-male"` —
+    typo). Plus matching manifests under each fixture
+    directory. c30 commits both directory trees; no
+    consistency assertion runs against them in c30.
 - **Size.** small-to-medium. ~150 LoC bin + manifest
   files + ~150 LoC tests.
 
@@ -1804,7 +1969,7 @@ Scope §OP. Seven commits: catalog + service supervision
 extension → wire client → bus adapter → manifest+lock
 fixtures → stub bin → tools_list call → negative matrix.
 
-### c32 — feat(rafaello-core::supervisor): `ToolSchemaCatalog` + `CorePluginService` + `PluginSupervisor` signature extension
+### c31 — feat(rafaello-core::supervisor): `ToolSchemaCatalog` + `CorePluginService` + `PluginSupervisor` signature extension
 
 - **What.** Scope §OP2 items 1-5.
   - New type
@@ -1878,11 +2043,38 @@ fixtures → stub bin → tools_list call → negative matrix.
     Option<CorePluginService>`. Method-not-found
     fall-through is the natural fittings behaviour
     for non-providers (scope §OP2 item 5).
-  - `rfl chat` orchestration call site lands in c39.
+  - **All live `PluginSupervisor::new` call sites
+    updated in this commit** (pi-1 B-5 — signature
+    cutover discipline, m0 §4.1). Concretely:
+    - `crates/rafaello/src/lib.rs::run_chat`: build
+      the real catalog via
+      `ToolSchemaCatalog::build(&acl, &compiled_plugins,
+      &package_dirs)` (the function already has all
+      three inputs as locals after lock compilation)
+      and pass `Arc::new(catalog)` as the third arg
+      to `PluginSupervisor::new`. This wires the
+      catalog at `rfl chat` startup; the rest of the
+      orchestration plumbing (gate, UserGrants, etc.)
+      lands at c37.
+    - All `rafaello-core/tests/supervisor_*` and any
+      other `PluginSupervisor::new` test call sites:
+      use a new `ToolSchemaCatalog::empty_for_tests()
+      -> Arc<Self>` constructor (cfg-gated `any(test,
+      feature = "test-fixture")`) that returns an
+      empty-schemas catalog. The existing
+      `ExtraServiceFactory` test seam is unchanged.
+    - The remaining rfl-chat orchestration plumbing
+      (gate, UserGrants, slash handler, AuditWriter
+      wired into ReemitRouter) lands at c37 — not
+      deferred call-site updates, but additive
+      construction on top of this commit's catalog
+      wiring.
 - **Why.** Scope §OP2 (round-4 form). Closes
   pi-3 M-1's data-source ambiguity and pi-4 M-2's
   consistency-check ownership.
-- **Depends on.** c01.
+- **Depends on.** c01, c30 (pi-1 M-4 — c31 builds the
+  catalog from c30's mailcat fixture variants and
+  extends c30's openrpc-consistency tests).
 - **Acceptance.** Tests in `rafaello-core/tests/`:
   - `tool_schema_catalog_build_from_openrpc_synthesises_parameters_schema.rs`
     — build against a fixture with one tool and one
@@ -1906,15 +2098,19 @@ fixtures → stub bin → tools_list call → negative matrix.
     — `core: None`; assert `MethodNotFound`.
   - `supervisor_new_accepts_tool_catalog_arg.rs` —
     signature compile check.
-  - **Extends c31 two-stage tests:**
-    `mailcat_openrpc_method_matches_provides_tools.rs`
-    and
-    `mailcat_openrpc_missing_method_for_provides_tools_errors.rs`
-    move from stub form to full
-    `ToolSchemaCatalog::build` assertions.
+  - `mailcat_openrpc_method_matches_provides_tools.rs`
+    (pi-1 B-9 — owned by c31, not staged in c30). Build
+    `ToolSchemaCatalog` from c30's
+    `rafaello/fixtures/rafaello-mailcat-good/`; assert
+    success and that the synthesised
+    `parameters_schema` covers `to/subject/body`.
+  - `mailcat_openrpc_missing_method_for_provides_tools_errors.rs`
+    (pi-1 B-9 — owned by c31). Build against c30's
+    `rafaello-mailcat-method-typo` variant; assert
+    `ToolCatalogError::ToolMissingOpenRpcMethod`.
 - **Size.** medium. ~250 LoC + ~250 LoC tests.
 
-### c33 — feat(rafaello-openai::wire): Chat Completions client + error mapping
+### c32 — feat(rafaello-openai::wire): Chat Completions client + error mapping
 
 - **What.** Scope §OP1 + §OP1a.
   - `crates/rafaello-openai/src/wire.rs` — request /
@@ -1952,7 +2148,7 @@ fixtures → stub bin → tools_list call → negative matrix.
 - **Why.** Scope §OP1. The wire client + error
   mapping is a self-contained module exercisable
   against a `httpmock`-style stub at unit-test
-  level; the bus integration lands in c34.
+  level; the bus integration lands in c33.
 - **Depends on.** c03.
 - **Acceptance.** Tests in `rafaello-openai/tests/`:
   - `openai_http_401_emits_auth_failed_assistant_message.rs`
@@ -1967,12 +2163,12 @@ fixtures → stub bin → tools_list call → negative matrix.
     before the HTTP path runs).
   Tests use a small in-process `tokio` HTTP server
   (~80 LoC; the `rafaello-openai-stub` bin lands in
-  c36, but unit tests use an in-process variant for
+  c35, but unit tests use an in-process variant for
   speed).
 - **Size.** medium. ~200 LoC wire + error + ~250
   LoC tests.
 
-### c34 — feat(rafaello-openai): bus-side adapter (subscribe user_message/tool_result, publish tool_request/assistant_message)
+### c33 — feat(rafaello-openai): bus-side adapter (subscribe user_message/tool_result, publish tool_request/assistant_message)
 
 - **What.** Scope §OP3 + §OP1 conversation history.
   - Subscribe to `core.session.user_message` and
@@ -1984,7 +2180,7 @@ fixtures → stub bin → tools_list call → negative matrix.
     `role: "tool"` with `tool_call_id` taken from
     `in_reply_to[0]`.
   - On user_message arrival: send a ChatCompletion
-    request via the c33 wire client.
+    request via the c32 wire client.
   - Response handling per §OP1 table:
     - `finish_reason == "stop" | "length"` → publish
       one `provider.openai.assistant_message`.
@@ -2005,7 +2201,7 @@ fixtures → stub bin → tools_list call → negative matrix.
 - **Why.** Scope §OP3. The provider's
   publish/subscribe shape mirrors `rafaello-mockprovider`'s
   m4 footprint.
-- **Depends on.** c03, c33.
+- **Depends on.** c03, c32.
 - **Acceptance.** Tests in `rafaello-openai/tests/`:
   - `openai_emits_assistant_message_for_user_message.rs`
     — against an in-process stub HTTP server.
@@ -2018,7 +2214,7 @@ fixtures → stub bin → tools_list call → negative matrix.
   - `openai_mixed_content_and_tool_calls_emits_assistant_then_tool_requests.rs`
 - **Size.** medium.
 
-### c35 — feat(rafaello-openai): manifest + lock fixture with `allow_secrets` + `env.set` keys
+### c34 — feat(rafaello-openai): manifest + lock fixture with `allow_secrets` + `env.set` keys
 
 - **What.** Scope §OP4 + §OP5.
   - Manifest at
@@ -2040,9 +2236,44 @@ fixtures → stub bin → tools_list call → negative matrix.
     `[capabilities.default.env] pass = []
     allow_secrets = ["LITELLM_API_KEY",
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]`.
-  - **Lock fixture** under
-    `rafaello/fixtures/m5a-locks/rafaello-openai/lock-fragment.toml`
-    (merged into the demo-bar lock at c41):
+  - **Package `bin/rfl-openai` shim file** (pi-1 B-4 /
+    m4 c20 precedent). POSIX shell stub at
+    `rafaello/crates/rafaello-openai/bin/rfl-openai` and
+    fixture copy under
+    `rafaello/fixtures/m5a-locks/rafaello-openai/bin/rfl-openai`
+    with `chmod +x` and body `#!/bin/sh\nexec "$@"`. Exists
+    only to satisfy `manifest::validate_with_package`'s
+    `entry`-resolution check; runtime spawn (c37) points
+    at the cargo-built `target/.../rfl-openai`.
+  - **`openrpc.json` sibling** (pi-1 B-4 + scope row 31
+    requirement). The openai plugin is a *provider*,
+    not a tool provider, so it declares **zero** methods —
+    but m1's `validate_with_package` requires the sibling
+    file's presence regardless of content. Ship at both
+    `rafaello/crates/rafaello-openai/openrpc.json` and the
+    fixture-tree copy:
+    ```json
+    {
+      "openrpc": "1.2.6",
+      "info": { "title": "openai", "version": "0.0.0" },
+      "methods": []
+    }
+    ```
+    `ToolSchemaCatalog::build` (c31) iterates `methods`
+    and silently produces no entries for this plugin —
+    correct, because the openai plugin owns no tools
+    (its `provides.tools` is absent / empty).
+  - **Complete m5a fixture lock** at
+    `rafaello/fixtures/m5a-locks/rafaello.lock` (pi-1 B-6 —
+    no "merged at c40" handwave). This is the single
+    canonical fixture lock c39's demo-bar test consumes;
+    contains entries for **both** `builtin:openai@0.0.0`
+    AND `local:mailcat@0.0.0` (the mailcat entry's
+    bindings + grant + tool_meta are pre-computed at
+    drafting time; this is a fixture lock, hand-written,
+    digests recorded from `rfl install --fixture` against
+    the c30 fixture tree). The openai entry is exactly
+    as below:
     `[plugin."builtin:openai@0.0.0".bindings]
     provider = true; provider_id = "openai"`.
     `[plugin."builtin:openai@0.0.0".grant.bundles.default.network]
@@ -2058,14 +2289,30 @@ fixtures → stub bin → tools_list call → negative matrix.
     RFL_OPENAI_ENDPOINT_URL =
     "https://litellm.thepromisedlan.club/v1";
     RFL_OPENAI_MODEL = "vllm/qwen3.6-27b"`.
+    The mailcat entry uses the m1 tool_meta projection
+    of c30's manifest (sinks = ["mail"],
+    always_confirm = false, grant_match schema path
+    pointing at the openrpc-sibling location). The lock
+    also sets `session.active_provider =
+    "builtin:openai@0.0.0"` and
+    `session.tool_owner.send-mail = "local:mailcat@0.0.0"`.
 - **Why.** Scope §OP4 + §OP5 + pi-1 B-5
   (env-pass-by-name); the lock-side TOML uses live
   `GrantEnv` shape.
-- **Depends on.** c03, c06.
+- **Depends on.** c03, c06, c30 (c30 ships
+  the mailcat manifest + fixture tree the combined
+  lock projects from).
 - **Acceptance.** Tests in
   `rafaello-openai/tests/`:
   - `openai_manifest_compiles.rs` — `manifest::parse`
     + `manifest::validate_with_package` succeed.
+  - `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`
+    (pi-1 B-8 — scope §M1.1 explicit test). Build a
+    lock with `RFL_OPENAI_ENDPOINT_URL` /
+    `RFL_OPENAI_MODEL` / `RFL_OPENAI_API_KEY_ENV` in
+    `env.set`; `compile_plugin` succeeds; live
+    `scrubber::reject_reserved` accepts the names
+    because they are NOT in `RESERVED_ENV_VARS`.
   - `openai_lock_with_litellm_api_key_pass_honoured_via_manifest_allow_secrets.rs`
     — `compile_plugin` retains the `LITELLM_API_KEY`
     pass entry (`EnvPlan.pass` includes it) because
@@ -2079,9 +2326,16 @@ fixtures → stub bin → tools_list call → negative matrix.
   - `openai_endpoint_url_taken_from_env_var.rs`
   - `openai_model_taken_from_env_var.rs`
   - `openai_api_key_resolved_via_indirection_env_var.rs`
-- **Size.** small (TOML + ~5 small tests).
+  - `m5a_fixture_lock_validates_and_compiles.rs` —
+    the combined lock from
+    `rafaello/fixtures/m5a-locks/rafaello.lock` passes
+    `validate::lock` and `compile_plugin` for both
+    entries (asserts the lock is real before c39
+    consumes it).
+- **Size.** medium (TOML + combined fixture lock +
+  ~7 small tests).
 
-### c36 — feat(rafaello-openai-stub): deterministic `/v1/chat/completions` HTTP stub bin
+### c35 — feat(rafaello-openai-stub): deterministic `/v1/chat/completions` HTTP stub bin
 
 - **What.** Scope §W2 + §A8. Fill the c04
   placeholder. `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`:
@@ -2112,7 +2366,7 @@ fixtures → stub bin → tools_list call → negative matrix.
   - `stub_self_timeout_exits_within_lifetime.rs`.
 - **Size.** small. ~150 LoC stub + ~100 LoC tests.
 
-### c37 — feat(rafaello-openai): `core.tools_list` call after handshake + cache + fatal exit on failure
+### c36 — feat(rafaello-openai): `core.tools_list` call after handshake + cache + fatal exit on failure
 
 - **What.** Scope §OP2 item 6 + §OP7.
   - After the fittings handshake completes (and
@@ -2128,14 +2382,14 @@ fixtures → stub bin → tools_list call → negative matrix.
     normal plugin-startup failure.
   - The cached schemas are forwarded as the
     `tools` field of every ChatCompletion request
-    in c34's adapter (extend c34's
+    in c33's adapter (extend c33's
     `ChatCompletionRequest::tools` population).
 - **Why.** Scope §OP2 item 6 + pi-3 N-4 rename.
-- **Depends on.** c32, c34, c36.
+- **Depends on.** c31, c33, c35.
 - **Acceptance.** Tests in `rafaello-openai/tests/`:
   - `openai_calls_tools_list_after_handshake.rs` —
     against the in-tree `CorePluginService` (built
-    in c32); assert the call happens before any
+    in c31); assert the call happens before any
     `chat_completions` POST.
   - `openai_request_carries_tool_schemas.rs` —
     after the cache populates, the next request
@@ -2156,9 +2410,10 @@ fixtures → stub bin → tools_list call → negative matrix.
 
 ## Phase M — `rfl chat` orchestration extension
 
-Scope §CHAT. Two commits.
+Scope §CHAT + §CG6. Two commits; c38 bundles the
+agent-loop pivot (old c25) per pi-1 B-3.
 
-### c38 — feat(rafaello-tui): RFL_TUI_TEST_* env hooks for confirm-answer + grant-before-message
+### c37 — feat(rafaello-tui): RFL_TUI_TEST_* env hooks for confirm-answer + grant-before-message
 
 - **What.** Scope §CHAT3.
   - `RFL_TUI_TEST_CONFIRM_ANSWER` — `"allow"` /
@@ -2177,52 +2432,72 @@ Scope §CHAT. Two commits.
 - **Why.** Scope §CHAT3. Lets integration tests
   drive the TUI deterministically (extends m4's
   `RFL_TUI_TEST_MESSAGE`).
-- **Depends on.** c17, c26.
+- **Depends on.** c17, c25.
 - **Acceptance.** Tests in `rafaello-tui/tests/`:
   - `tui_test_confirm_answer_publishes_allow_after_delay.rs`
   - `tui_test_grant_before_message_publishes_slash_grant_first.rs`
   - `tui_test_confirm_answer_timeout_does_not_publish.rs`
 - **Size.** small.
 
-### c39 — feat(rafaello): rfl chat constructs UserGrants + AuditWriter + ToolSchemaCatalog + ConfirmationGate
+### c38 — feat(rafaello): rfl chat orchestration extension + agent-loop pivot — UNSPLITTABLE CUTOVER
 
-- **What.** Scope §CHAT1 + §CHAT2.
+- **What.** Scope §CHAT1 + §CHAT2 + §CG6 (agent-loop
+  pivot bundled per pi-1 B-3). **Unsplittable cutover**:
+  the gate must drive dispatch *and* the agent loop must
+  stop driving dispatch in the same commit, otherwise
+  every `tool_request` reaches the plugin twice and the
+  per-commit green-bar fails. m0 c08 / m4 c07 precedent.
+  Two coordinated edits:
   - `crates/rafaello/src/lib.rs::run_chat` extended:
     - Construct an empty
       `Arc<RwLock<UserGrants>>`.
-    - Construct an
-      `Arc<AuditWriter>` from
+    - Construct an `Arc<AuditWriter>` from
       `session_controller.audit_writer()` (c08).
-    - Build the catalog via
-      `ToolSchemaCatalog::build(&acl,
-      &compiled_plugins, &package_dirs)`.
-    - Pass `Arc<ToolSchemaCatalog>` as the third arg
-      to `PluginSupervisor::new(broker, config,
-      tool_catalog)`.
+    - The `Arc<ToolSchemaCatalog>` is already wired in
+      from c31's run_chat update; reuse it here.
     - Register the core-side slash handler (c18) as
       an internal subscriber on
       `frontend.tui.slash_command`.
+    - Construct an `Arc<ConfirmState>`; pass it into
+      both the `ConfirmationGate` constructor and the
+      `ReemitRouter` via
+      `.with_confirm_state_and_audit(state.clone(),
+      audit.clone())` (the c14 builder).
     - Construct the `ConfirmationGate` wired to the
       broker, `UserGrants`, `AuditWriter`,
       `ConfirmState`, compiled-plugin map; spawn its
       task **before** the supervisor spawns any
       provider so the gate is ready to subscribe
       internally to `core.session.tool_request`.
-    - Construct the `ReemitRouter` with the shared
-      `Arc<ConfirmState>` (c14).
-    - The agent loop's direct dispatch path was
-      removed in c25; the gate is now the sole
-      driver of `plugin.<topic-id>.tool_request`.
+  - `crates/rafaello-core/src/agent/mod.rs:143-217` —
+    **remove the direct
+    `broker.publish_for_tool_dispatch(...)` call** in
+    `handle_tool_request`. The agent loop now only
+    persists the `tool_call` entry and observes the
+    canonical `core.session.tool_request`; the gate
+    drives the `plugin.<topic-id>.tool_request`
+    publish for every event (passthrough,
+    grant-match, or post-confirm allow).
   - The orchestration tree becomes a five-tree:
     `rfl chat` → `rfl-tui` + `rfl-openai` +
     `rfl-mailcat` (+ `rfl-readfile` and
     `rfl-mockprovider` retained as installed-but-not-active
     alternatives in the fixture lock for the
     bonus negatives).
-- **Why.** Scope §CHAT1 + §CHAT2 + the risks
-  inventory §"Risks" #1 leak-mitigation calls.
+  - **m4-test migration**: m4 tests that exercise tool
+    dispatch through the agent loop must now construct
+    a permissive gate or use a small
+    `gate_or_synthetic_dispatch` test helper (added in
+    this commit) that wraps the gate's passthrough
+    arm. The migration is in-commit; no m4 test is
+    left behind.
+- **Why.** Scope §CHAT1 + §CHAT2 + §CG6 + the risks
+  inventory §"Risks" #1 leak-mitigation calls + pi-1
+  B-3 (cutover discipline).
 - **Depends on.** c08, c13, c14, c15, c20, c21, c22,
-  c23, c24, c25, c32, c37.
+  c23, c24, c31, c36. The agent-loop pivot (round-1
+  c25) is bundled here per pi-1 B-3 — no separate
+  pivot commit.
 - **Acceptance.** Tests in `rafaello/tests/`:
   - `rfl_chat_constructs_gate_before_provider_spawn.rs`
     — assert ordering via a test seam on
@@ -2236,14 +2511,34 @@ Scope §CHAT. Two commits.
     `plugin.<id>.tool_request` until the gate's
     passthrough fires.
   - `rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`
-    — extend m4's c26 smoke test to assert all
+    — extend m4's c25 smoke test to assert all
     five children reap on shutdown.
   - `core_tools_list_registered_before_provider_spawn.rs`
     (scope §"Risks" #6) — the supervisor's
     per-connection `CorePluginService` is composed
     at handshake time; assert the provider's
     first `core.tools_list` call succeeds.
-- **Size.** medium.
+  - `agent_loop_does_not_dispatch_tool_request_directly.rs`
+    in `rafaello-core/tests/` (pi-1 B-3 — pivot
+    bundled). With **no gate constructed**, observe
+    a `core.session.tool_request` event; assert no
+    `plugin.<id>.tool_request` is published (the
+    handler only persists). Asserts the dispatch
+    code path is gone from the agent loop.
+  - `rfl_chat_no_double_dispatch_when_gate_constructed.rs`
+    (pi-1 B-3) — five-tree harness; subscribe an
+    internal observer to
+    `plugin.<topic-id>.tool_request`; drive one
+    `tool_request`; assert exactly one publish (not
+    two).
+  - All migrated m4 tests under the in-commit
+    `gate_or_synthetic_dispatch` helper continue
+    passing; `cargo test --workspace --features
+    test-fixture` green on Linux + macOS CI.
+- **Size.** **unsplittable cutover** (m0 c08 / m4 c07
+  class). ~250 LoC orchestration changes + ~5 LoC
+  agent-loop removal + ~150 LoC m4 test migrations +
+  ~250 LoC new tests. Body cites pi-1 B-3 + scope §CG6.
 
 ---
 
@@ -2251,14 +2546,14 @@ Scope §CHAT. Two commits.
 
 Scope §"Demo bar" + §"Manual validation".
 
-### c40 — test(rafaello): demo-bar headline `rfl_chat_demo_bar_send_mail.rs` (allow + deny arms)
+### c39 — test(rafaello): demo-bar headline `rfl_chat_demo_bar_send_mail.rs` (allow + deny arms)
 
 - **What.** Scope §"Demo bar" §Positive.
   - New `rafaello/tests/rfl_chat_demo_bar_send_mail.rs`.
     Spawn `rfl chat` against the m5a fixture lock
     (`fixtures/m5a-locks/...`) with `rfl-openai`
     active + `rfl-mailcat` installed. CI points the
-    openai plugin at the c36 `rfl-openai-stub`'s
+    openai plugin at the c35 `rfl-openai-stub`'s
     recorded response that proposes a `send-mail`
     tool call with `args.to = "alice@example.com"`.
     Drive the user_message via
@@ -2281,19 +2576,21 @@ Scope §"Demo bar" + §"Manual validation".
       `confirm_denied`.
 - **Why.** Scope §"Demo bar" §Positive. This is the
   headline test for the milestone.
-- **Depends on.** c31, c36, c38, c39.
+- **Depends on.** c30, c34, c35, c37, c38 (pi-1 B-6 —
+  c34 ships the complete fixture lock this test
+  loads from `rafaello/fixtures/m5a-locks/rafaello.lock`).
 - **Acceptance.** Both arms pass on Linux + macOS
   CI; `cargo test --workspace --features
   test-fixture` green.
 - **Size.** medium. ~250 LoC test harness + fixture
   responses.
 
-### c41 — test(rafaello): demo-bar negatives — timeout + always_allow_session restart + bonus negatives
+### c40 — test(rafaello): demo-bar negatives — timeout + always_allow_session restart + bonus negatives
 
 - **What.** Scope §"Demo bar" §Negative 1, §Negative
   2, §"Bonus negatives implied by the security RFC".
   - `rafaello/tests/rfl_chat_demo_bar_send_mail_timeout.rs`
-    — Negative 1. Same setup as c40 but
+    — Negative 1. Same setup as c39 but
     `RFL_TUI_TEST_CONFIRM_ANSWER=timeout`; uses
     `tokio::time::pause` + advance past 60s. Assert
     synthetic `tool_result` shape (§CG4a, `taint =
@@ -2319,10 +2616,9 @@ Scope §"Demo bar" + §"Manual validation".
     — bonus. A fixture tool with `sinks = []` and
     `always_confirm = true`. Assert the gate fires
     the prompt even though no sinks are declared.
-  - `rafaello/tests/rfl_install_status_shows_red_for_override.rs`
-    — bonus. Install a trifecta plugin with
-    `--i-know-what-im-doing`; assert `rfl status`
-    prints the entry with the red ANSI marker.
+  - (`rfl_install_status_shows_red_for_override.rs`
+    moved to c28's acceptance per pi-1 M-5; the
+    `rfl status` surface lands in c28, not here.)
   - `rafaello/tests/rfl_chat_grant_revoked_blocks_next_call_but_not_in_flight.rs`
     — pi-1 M-7 bonus. Grant `send-mail
     to=alice@…`; observe one allowed call; revoke;
@@ -2334,13 +2630,14 @@ Scope §"Demo bar" + §"Manual validation".
     **explicitly skipped** — deferred to m5b per
     scope §"In scope" item §m5a → m5b boundary.
 - **Why.** Scope §"Demo bar". m5a's contract.
-- **Depends on.** c30, c31, c39, c40.
-- **Acceptance.** All five test files pass on
+- **Depends on.** c29, c30, c38, c39 (the
+  status-red bonus moved to c28; no extra dep here).
+- **Acceptance.** All four remaining test files pass on
   Linux + macOS CI.
 - **Size.** medium-to-large. ~400 LoC across
   fixtures + harnesses.
 
-### c42 — docs(rafaello-m5a): manual-validation.md skeleton
+### c41 — docs(rafaello-m5a): manual-validation.md skeleton
 
 - **What.** Scope §"Manual validation". New file
   `rafaello/plans/milestones/m5a-sinks-confirmation/manual-validation.md`
@@ -2363,7 +2660,7 @@ Scope §"Demo bar" + §"Manual validation".
   (`LITELLM_API_KEY` not present); the headline
   test uses the stub; manual validation runs the
   same test shape against the real proxy.
-- **Depends on.** c40.
+- **Depends on.** c39.
 - **Acceptance.** File exists with all six section
   headers + step scaffolds. `cargo test
   --workspace` still green. No code changes.
@@ -2371,30 +2668,39 @@ Scope §"Demo bar" + §"Manual validation".
 
 ---
 
-## Cross-checks (round 1 self-audit)
+## Cross-checks (round 2 self-audit)
+
+> Numbers below reflect the **post-renumber** scheme
+> (old c25 pivot folded into c37; old c25-c41 shifted
+> down by 1 to c25-c40). Total: 41 commits.
 
 - **Every §"In scope" bullet maps to ≥1 row.** W1-W4
-  → c01-c05. Si1-Si3 → c09. Tr1-Tr4 → c28-c30. CT0-CT5
-  → c11-c14. CG1-CG8 → c13 + c20-c25 (CG6 isolated as
-  c25). OM1-OM3 → c10. UG1-UG5 → c15-c16. SL0-SL5 →
-  c17-c19. TUI1-TUI5 → c26-c27. OP1-OP7 → c32-c37.
-  TP1-TP4 → c31. AL1-AL4 → c08 + folded into
-  c14/c18/c20/c22/c23/c24/c28. M1.1 → c06 (allow_secrets
-  cutover is "no new reserved names" in disguise —
-  the round-3 redux). M1.2 → c07. CHAT1-CHAT3 → c38 +
-  c39. I → c40-c41.
+  → c01-c05. Si1-Si3 → c09. Tr1-Tr4 → c26-c28. CT0-CT5
+  → c11-c14. CG1-CG8 → c13 + c20-c24 + c37 (CG6
+  bundled into c38's unsplittable cutover per
+  pi-1 B-3). OM1-OM3 → c10. UG1-UG5 → c15-c16.
+  SL0-SL5 → c17-c19. TUI1-TUI5 → c25-c25. OP1-OP7 →
+  c30-c35. TP1-TP4 → c29. AL1-AL4 → c08 + folded
+  into c14/c18/c20/c22/c23/c24/c26. M1.1 → c06 +
+  c33 (c33 owns the
+  `compile_openai_lock_with_rfl_openai_envset_keys_succeeds.rs`
+  test; c06 owns the
+  `scrubber_reject_reserved_unchanged_for_seven_core_names.rs`
+  test — pi-1 B-8). M1.2 → c07. CHAT1-CHAT3 → c36 +
+  c37. I → c38-c39.
 - **Every §"Demo bar" demo covered.** Positive →
-  c40. Negative 1 → c41. Negative 2 → c41. Negative
-  3 (one-hop, no transitive) → c30. Negative 4
-  (verbatim) → m5b. Bonus → c41.
+  c38. Negative 1 → c39. Negative 2 → c39. Negative
+  3 (one-hop, no transitive) → c28. Negative 4
+  (verbatim) → m5b. Bonus → c39 (with the
+  status-red bonus moved to c27 per pi-1 M-5).
 - **No row exceeds size budget without
-  unsplittable-cutover justification.** c06
-  (allow_secrets cutover) and c10 (broker
-  outstanding-dispatched map) are the two
-  unsplittable cutovers; both bodies cite m0 c08
-  precedent. c25 (agent-loop pivot) is small in LoC
-  but architectural and isolated per pi-1 H-3 / m0
-  c08.
+  unsplittable-cutover justification.** Three
+  unsplittable cutovers: c06 (allow_secrets schema
+  + scrubber signature), c10 (broker
+  outstanding-dispatched map populator+consumer),
+  c37 (rfl chat orchestration + agent-loop pivot
+  per pi-1 B-3). All three bodies cite m0 c08 /
+  m4 c07 precedent.
 - **Phase preambles match scope's internal-split
   sections.** Scope item 1 → Phase A. Item 2 → B.
   Item 3 → C+D (audit infra threaded early so
@@ -2404,6 +2710,7 @@ Scope §"Demo bar" + §"Manual validation".
   Item 13 → L. Item 14 → M. Item 15 → N.
 - **Topic-id / env-var / manifest / lock paths
   match scope verbatim.** `core.session.confirm_*`,
+  `core.session.confirm_resolved` (pi-1 M-1 — new),
   `frontend.tui.confirm_answer`,
   `frontend.tui.slash_command`,
   `core.session.command_result`,
@@ -2415,58 +2722,68 @@ Scope §"Demo bar" + §"Manual validation".
   `builtin:openai@0.0.0`. All spellings checked
   against scope.md round 6.
 - **OP6 vs Tr1 wording nit (pi-6 N-1) folded.**
-  c28 step 10 pins the canonical stderr string
+  c26 step 10 pins the canonical stderr string
   `warning: unused allow_secrets entry '<name>'
   (no matching env.pass entry)`. §OP6 is not
   re-cited anywhere with an alternate wording.
 - **Tests-with-code rule.** Every named test in
   scope sits in the commit row that introduces its
-  surface. Exceptions: c31 stages two openrpc
-  catalog tests against `validate_with_package`
-  and **extends** them at c32 once
-  `ToolSchemaCatalog` exists — explicit two-stage
-  ladder per m0 retro §4.3.
-- **Synthetic-stub successor.** c36's
-  `rafaello-openai-stub` is **not** removed in m5a
-  (it ships as a permanent CI fixture, behind
-  `test-fixture`); no m2-retro §3.3 deletion
-  trap. Pi-1's `core.tools_list` switch already
-  eliminated the round-1 synthetic-stub trap.
+  surface. Exceptions: c29 (mailcat) ships fixture
+  variants; the openrpc method-vs-tool consistency
+  tests live in c30 (which owns
+  `ToolSchemaCatalog::build`) — explicit per pi-1
+  B-9 (not a stub-against-wrong-behaviour ladder).
+- **Signature-cutover discipline** (pi-1 B-2 / B-5).
+  c14's `ReemitRouter` change uses a
+  backward-compatible `with_confirm_state_and_audit`
+  builder — no live reemit-test or run_chat call
+  site breaks at c14. c30's `PluginSupervisor::new`
+  signature change updates every live call site in
+  the same commit (run_chat builds the catalog;
+  tests use `ToolSchemaCatalog::empty_for_tests()`).
+- **Fixture-validator discipline** (pi-1 B-4 / B-6).
+  c29 and c33 both ship package `bin/` shim files
+  so `manifest::validate_with_package`'s entry-path
+  canonicalisation passes. c33 ships a minimal
+  empty-methods `openrpc.json` for the openai
+  provider, and the complete combined m5a fixture
+  lock (both openai + mailcat entries) so c38
+  consumes a real lock at the canonical path.
 
 ---
 
 ## Sizing summary
 
-- **small**: 32 commits (c01-c05, c07, c08, c09,
-  c11-c13, c15-c17, c19, c21, c23, c24, c25, c26,
-  c29, c30, c33-c37, c38, c42).
-- **medium**: 7 commits (c10, c14, c18, c20, c22,
-  c27, c28, c32, c39, c40, c41 — recount: rough
-  classification, may shift in round 2).
-- **large**: 1 (c06 unsplittable cutover; ~300 LoC).
-- **unsplittable cutover (>500)**: 0 in m5a as
-  drafted. c06 lands close to the threshold; c10
-  may grow with race tests; both classified
-  "unsplittable" in their bodies regardless of
-  exact LoC.
+- **small**: 30 commits (c01-c05, c07, c08, c09,
+  c11-c13, c15-c17, c19, c21, c23, c24, c25, c27,
+  c28, c31, c34, c35, c36, c40).
+- **medium**: 8 commits (c10, c14, c18, c20, c22,
+  c25, c26, c29, c30, c32, c33, c38, c39).
+- **large**: 1 (c06 — `allow_secrets` cutover; ~300 LoC).
+- **unsplittable cutover**: 3 (c06, c10, c37 — all
+  body-justified per m0 c08 / m4 c07 precedent).
 
-Total: 42 commits. Scope §"Sizing & split
-recommendation" estimated 30-38; round-1 lands
-slightly higher because:
+Total: 41 commits. Scope §"Sizing & split
+recommendation" estimated 30-38; round-2 lands
+slightly above the upper bound for these reasons:
 
-- Audit log infrastructure (c08) was unbundled from
+- Audit log infrastructure (c08) is unbundled from
   gate/slash/install per the tests-with-code rule.
-- The gate's six commits (c20-c25) match scope
-  §"Internal split" item 6's "~4-5 commits" upper
-  bound + the isolated CG6 pivot.
-- The slash-command flow split across three
+- The gate's five commits (c20-c24) match scope
+  §"Internal split" item 6's "~4-5 commits" with
+  the CG6 pivot now bundled into c38 (per pi-1
+  B-3) rather than a separate isolated commit.
+- The slash-command flow splits across three
   commits (TUI parser / core handler / TUI
-  renderer) honours pi-1 B-1's bus-mediated
+  renderer) honouring pi-1 B-1's bus-mediated
   rewrite.
+- One commit (was c25, agent-loop pivot) removed
+  by bundling into c37; the total dropped from
+  round-1's 42 to round-2's 41.
 
-Pi will likely flag candidates for bundling or
-splitting on round 1 review.
+Pi may still flag candidates for further bundling
+on round 2 review.
 
 ---
 
-*End of m5a commits.md round 1 draft.*
+*End of m5a commits.md round 2 draft.*
