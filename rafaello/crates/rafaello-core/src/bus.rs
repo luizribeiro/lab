@@ -586,8 +586,7 @@ impl Broker {
     /// half of a bounded channel and an [`InternalSubscription`] RAII
     /// guard. Dropping the guard removes the slot. The notify path
     /// is internal-only — internal subscribers see events at or before
-    /// any external subscriber (see [`Self::notify_internal_subscribers`]
-    /// and the ordering note in `fan_out`).
+    /// any external subscriber (see the ordering note in `fan_out`).
     pub fn subscribe_internal(
         &self,
         patterns: Vec<String>,
