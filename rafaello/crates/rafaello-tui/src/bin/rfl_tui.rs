@@ -74,18 +74,7 @@ async fn main() -> Result<()> {
         .context("rfl-tui: frontend.ready RPC")?;
 
     if let Some(text) = cfg.test_message.as_deref() {
-        let request_id = JsonRpcId::String(Ulid::new().to_string());
-        client
-            .peer()
-            .notify(
-                "bus.publish",
-                json!({
-                    "topic": "frontend.tui.user_message",
-                    "payload": {"text": text},
-                    "request_id": request_id,
-                }),
-            )
-            .context("rfl-tui: bus.publish frontend.tui.user_message")?;
+        publish_submitted_line(&client, text)?;
     }
 
     if cfg.test_mode {
@@ -93,6 +82,31 @@ async fn main() -> Result<()> {
     } else {
         run_production_mode(notifications).await
     }
+}
+
+fn publish_submitted_line(client: &Client<OneShotConnector>, text: &str) -> Result<()> {
+    let request_id = JsonRpcId::String(Ulid::new().to_string());
+    let (topic, payload) = if text.starts_with('/') {
+        let cmd = rafaello_tui::slash::parse(text);
+        (
+            "frontend.tui.slash_command",
+            serde_json::to_value(&cmd).expect("SlashCommand serialises"),
+        )
+    } else {
+        ("frontend.tui.user_message", json!({ "text": text }))
+    };
+    client
+        .peer()
+        .notify(
+            "bus.publish",
+            json!({
+                "topic": topic,
+                "payload": payload,
+                "request_id": request_id,
+            }),
+        )
+        .with_context(|| format!("rfl-tui: bus.publish {topic}"))?;
+    Ok(())
 }
 
 fn emit_sentinel(line: &str) {

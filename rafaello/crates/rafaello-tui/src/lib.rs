@@ -2,3 +2,4 @@
 
 pub mod env;
 pub mod paint;
+pub mod slash;
