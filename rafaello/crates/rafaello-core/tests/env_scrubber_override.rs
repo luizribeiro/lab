@@ -10,5 +10,5 @@ fn override_flag_preserves_input() {
         "MY_PASSWORD".to_owned(),
         "AWS_PROFILE".to_owned(),
     ];
-    assert_eq!(strip(&env_pass, true), env_pass);
+    assert_eq!(strip(&env_pass, &[], true), env_pass);
 }

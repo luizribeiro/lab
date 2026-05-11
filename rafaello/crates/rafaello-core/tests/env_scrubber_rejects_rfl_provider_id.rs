@@ -57,6 +57,7 @@ fn rfl_provider_id_in_env_pass_is_rejected() {
     let err = compile_with_env(GrantEnv {
         pass: vec!["RFL_PROVIDER_ID".to_owned()],
         set: BTreeMap::new(),
+        allow_secrets: Vec::new(),
     });
     assert!(
         matches!(err, CompileError::ReservedEnvVarRequested),
@@ -69,6 +70,7 @@ fn rfl_provider_id_in_env_set_is_rejected() {
     let err = compile_with_env(GrantEnv {
         pass: Vec::new(),
         set: BTreeMap::from([("RFL_PROVIDER_ID".to_owned(), "x".to_owned())]),
+        allow_secrets: Vec::new(),
     });
     assert!(
         matches!(err, CompileError::ReservedEnvVarRequested),

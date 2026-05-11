@@ -38,6 +38,7 @@ fn m2_reserved_names_in_env_set_are_rejected() {
                 env: Some(GrantEnv {
                     pass: Vec::new(),
                     set: BTreeMap::from([((*name).to_owned(), "x".to_owned())]),
+                    allow_secrets: Vec::new(),
                 }),
                 ..GrantBundle::default()
             },

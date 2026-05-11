@@ -11,5 +11,5 @@ fn strips_known_secrets_keeps_path() {
         "AWS_REGION".to_owned(),
         "PATH".to_owned(),
     ];
-    assert_eq!(strip(&env_pass, false), vec!["PATH".to_owned()]);
+    assert_eq!(strip(&env_pass, &[], false), vec!["PATH".to_owned()]);
 }

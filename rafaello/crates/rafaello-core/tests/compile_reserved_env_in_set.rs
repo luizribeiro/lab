@@ -30,6 +30,7 @@ fn rfl_plugin_in_env_set_is_rejected() {
             env: Some(GrantEnv {
                 pass: Vec::new(),
                 set: BTreeMap::from([("RFL_PLUGIN".to_owned(), "x".to_owned())]),
+                allow_secrets: Vec::new(),
             }),
             ..GrantBundle::default()
         },

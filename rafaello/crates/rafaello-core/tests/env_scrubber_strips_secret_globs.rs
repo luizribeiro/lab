@@ -11,7 +11,7 @@ fn every_glob_class_strips() {
         "MY_PASSWORD".to_owned(),
         "AWS_PROFILE".to_owned(),
     ];
-    let out = strip(&env_pass, false);
+    let out = strip(&env_pass, &[], false);
     assert!(
         out.is_empty(),
         "all four entries should be stripped; got {out:?}"

@@ -1,9 +1,5 @@
-//! c32 — §C7.1 negative: a lock that requests `RFL_BUS_FD` /
-//! `RFL_PLUGIN` in `env.pass` is rejected at compile time with
-//! `CompileError::ReservedEnvVarRequested`. Per pi review-2 finding
-//! 2 / pi review-3 finding 8 the compiler invokes
-//! `scrubber::reject_reserved` *before* secret-pattern stripping
-//! so reserved-var requests are loud rather than silently dropped.
+//! c06 — scope §OP6 / §C2: `effective_grant` unions and dedups
+//! `allow_secrets` across bundles, just like `env.pass`.
 
 mod common;
 
@@ -12,28 +8,38 @@ use std::path::PathBuf;
 
 use rafaello_core::compile::compile_plugin;
 use rafaello_core::digest::RecomputedDigests;
-use rafaello_core::error::CompileError;
 use rafaello_core::lock::{Grant, GrantBundle, GrantEnv, SessionTable};
 use rafaello_core::paths::PathContext;
 
 use common::{canonical, entry, lock_with};
 
 #[test]
-fn rfl_bus_fd_in_env_pass_is_rejected() {
+fn effective_grant_unions_allow_secrets_across_bundles() {
     let tmp = tempfile::tempdir().unwrap();
     let project = std::fs::canonicalize(tmp.path()).unwrap();
 
-    let id = canonical("github.com/acme:writer@1.0.0");
-    let mut e = entry(&["writer"], false, None);
+    let id = canonical("github.com/acme:mailer@1.0.0");
+    let mut e = entry(&["send-mail"], false, None);
 
     let mut bundles = BTreeMap::new();
     bundles.insert(
         "default".to_owned(),
         GrantBundle {
             env: Some(GrantEnv {
-                pass: vec!["RFL_BUS_FD".to_owned()],
+                pass: vec!["LITELLM_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()],
                 set: BTreeMap::new(),
-                allow_secrets: Vec::new(),
+                allow_secrets: vec!["LITELLM_API_KEY".to_owned()],
+            }),
+            ..GrantBundle::default()
+        },
+    );
+    bundles.insert(
+        "send-mail".to_owned(),
+        GrantBundle {
+            env: Some(GrantEnv {
+                pass: Vec::new(),
+                set: BTreeMap::new(),
+                allow_secrets: vec!["OPENAI_API_KEY".to_owned(), "LITELLM_API_KEY".to_owned()],
             }),
             ..GrantBundle::default()
         },
@@ -47,7 +53,7 @@ fn rfl_bus_fd_in_env_pass_is_rejected() {
     let ctx = PathContext {
         project_root: project.clone(),
         home: PathBuf::from("/tmp/home"),
-        plugin_dir: project.join(".rafaello/plugins/writer"),
+        plugin_dir: project.join(".rafaello/plugins/mailer"),
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
@@ -57,9 +63,9 @@ fn rfl_bus_fd_in_env_pass_is_rejected() {
         manifest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
     };
 
-    let err = compile_plugin(&lock, &id, &ctx, &digests).expect_err("must reject");
-    assert!(
-        matches!(err, CompileError::ReservedEnvVarRequested),
-        "expected ReservedEnvVarRequested, got {err:?}"
+    let plan = compile_plugin(&lock, &id, &ctx, &digests).expect("compile");
+    assert_eq!(
+        plan.env.pass,
+        vec!["LITELLM_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()]
     );
 }

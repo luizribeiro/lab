@@ -22,9 +22,19 @@ use crate::manifest::{
     Bus, Capabilities, CapabilityPathTemplate, Load, Manifest, NetworkMode, Provides, Renderer,
 };
 use crate::paths::{self, PathContext, RootKind};
+use crate::scrubber;
 use crate::sinks;
 use crate::topic_id;
 use crate::trifecta;
+
+fn is_env_var_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let first_ok = first.is_ascii_alphabetic() || first == '_';
+    first_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 
 #[derive(Debug, Clone)]
 pub struct LockValidationContext {
@@ -216,6 +226,20 @@ pub fn lock(lock: &Lock, ctx: &LockValidationContext) -> Result<(), ValidationEr
                 for tpl in fs.exec_paths.iter().chain(fs.exec_dirs.iter()) {
                     if paths::resolve_under_root(tpl, &per_plugin_ctx, RootKind::Project).is_ok() {
                         return Err(ValidationError::ExecPathInsideProject);
+                    }
+                }
+            }
+            if let Some(env) = &bundle.env {
+                for name in &env.allow_secrets {
+                    if !is_env_var_name(name) {
+                        return Err(ValidationError::AllowSecretsInvalidName {
+                            name: name.clone(),
+                        });
+                    }
+                    if scrubber::RESERVED_ENV_VARS.contains(&name.as_str()) {
+                        return Err(ValidationError::AllowSecretsReservesCoreName {
+                            name: name.clone(),
+                        });
                     }
                 }
             }

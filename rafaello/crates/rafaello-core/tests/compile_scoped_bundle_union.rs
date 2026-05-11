@@ -50,6 +50,7 @@ fn default_and_named_bundle_union() {
             env: Some(GrantEnv {
                 pass: vec!["HOME".to_owned()],
                 set: BTreeMap::from([("DEFAULT_KEY".to_owned(), "default".to_owned())]),
+                allow_secrets: Vec::new(),
             }),
             limits: Some(GrantLimits {
                 max_cpu_time: Some(60),
@@ -74,6 +75,7 @@ fn default_and_named_bundle_union() {
             env: Some(GrantEnv {
                 pass: vec!["PATH".to_owned()],
                 set: BTreeMap::from([("FORMAT_KEY".to_owned(), "fmt".to_owned())]),
+                allow_secrets: Vec::new(),
             }),
             limits: Some(GrantLimits {
                 max_cpu_time: Some(180),

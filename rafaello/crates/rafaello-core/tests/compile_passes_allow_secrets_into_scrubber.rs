@@ -1,9 +1,7 @@
-//! c32 — §C7.1 negative: a lock that requests `RFL_BUS_FD` /
-//! `RFL_PLUGIN` in `env.pass` is rejected at compile time with
-//! `CompileError::ReservedEnvVarRequested`. Per pi review-2 finding
-//! 2 / pi review-3 finding 8 the compiler invokes
-//! `scrubber::reject_reserved` *before* secret-pattern stripping
-//! so reserved-var requests are loud rather than silently dropped.
+//! c06 — scope §OP6: end-to-end via `compile_plugin` against a
+//! fixture lock; the compiled `EnvPlan.pass` matches the scrubber's
+//! expected output when `allow_secrets` opts a `*_KEY`-pattern
+//! name out of the default strip.
 
 mod common;
 
@@ -12,28 +10,28 @@ use std::path::PathBuf;
 
 use rafaello_core::compile::compile_plugin;
 use rafaello_core::digest::RecomputedDigests;
-use rafaello_core::error::CompileError;
 use rafaello_core::lock::{Grant, GrantBundle, GrantEnv, SessionTable};
 use rafaello_core::paths::PathContext;
+use rafaello_core::scrubber::strip;
 
 use common::{canonical, entry, lock_with};
 
 #[test]
-fn rfl_bus_fd_in_env_pass_is_rejected() {
+fn env_plan_pass_matches_scrubber_with_allow_secrets() {
     let tmp = tempfile::tempdir().unwrap();
     let project = std::fs::canonicalize(tmp.path()).unwrap();
 
-    let id = canonical("github.com/acme:writer@1.0.0");
-    let mut e = entry(&["writer"], false, None);
+    let id = canonical("github.com/acme:openai@1.0.0");
+    let mut e = entry(&["chat"], false, None);
 
     let mut bundles = BTreeMap::new();
     bundles.insert(
         "default".to_owned(),
         GrantBundle {
             env: Some(GrantEnv {
-                pass: vec!["RFL_BUS_FD".to_owned()],
+                pass: vec!["LITELLM_API_KEY".to_owned(), "RANDOM_API_KEY".to_owned()],
                 set: BTreeMap::new(),
-                allow_secrets: Vec::new(),
+                allow_secrets: vec!["LITELLM_API_KEY".to_owned()],
             }),
             ..GrantBundle::default()
         },
@@ -47,7 +45,7 @@ fn rfl_bus_fd_in_env_pass_is_rejected() {
     let ctx = PathContext {
         project_root: project.clone(),
         home: PathBuf::from("/tmp/home"),
-        plugin_dir: project.join(".rafaello/plugins/writer"),
+        plugin_dir: project.join(".rafaello/plugins/openai"),
         cache_dir: PathBuf::from("/tmp/cache"),
         state_dir: PathBuf::from("/tmp/state"),
     };
@@ -57,9 +55,10 @@ fn rfl_bus_fd_in_env_pass_is_rejected() {
         manifest: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
     };
 
-    let err = compile_plugin(&lock, &id, &ctx, &digests).expect_err("must reject");
-    assert!(
-        matches!(err, CompileError::ReservedEnvVarRequested),
-        "expected ReservedEnvVarRequested, got {err:?}"
-    );
+    let plan = compile_plugin(&lock, &id, &ctx, &digests).expect("compile");
+    let mut sorted_pass = vec!["LITELLM_API_KEY".to_owned(), "RANDOM_API_KEY".to_owned()];
+    sorted_pass.sort();
+    let expected = strip(&sorted_pass, &["LITELLM_API_KEY".to_owned()], false);
+    assert_eq!(plan.env.pass, expected);
+    assert_eq!(plan.env.pass, vec!["LITELLM_API_KEY".to_owned()]);
 }

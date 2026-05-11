@@ -20,7 +20,7 @@ pub const SECRET_PATTERNS: &[&str] = &[
     "ANTHROPIC_*",
 ];
 
-const RESERVED_ENV_VARS: &[&str] = &[
+pub const RESERVED_ENV_VARS: &[&str] = &[
     "RFL_BUS_FD",
     "RFL_PLUGIN",
     "RFL_HELPER_FD",
@@ -30,15 +30,22 @@ const RESERVED_ENV_VARS: &[&str] = &[
     "RFL_PROVIDER_ID",
 ];
 
-/// Scope §Sc2: scrub an `env.pass` list against `SECRET_PATTERNS`.
-/// With `i_know_what_im_doing == true`, returns `env_pass` verbatim.
-pub fn strip(env_pass: &[String], i_know_what_im_doing: bool) -> Vec<String> {
+/// Scope §Sc2 / §OP6: scrub an `env.pass` list against
+/// `SECRET_PATTERNS`. A name is retained iff (a)
+/// `i_know_what_im_doing == true`, OR (b) it does not match any
+/// `SECRET_PATTERNS` glob, OR (c) it appears in `allow_secrets`
+/// (case-sensitive exact match).
+pub fn strip(
+    env_pass: &[String],
+    allow_secrets: &[String],
+    i_know_what_im_doing: bool,
+) -> Vec<String> {
     if i_know_what_im_doing {
         return env_pass.to_vec();
     }
     env_pass
         .iter()
-        .filter(|name| !is_secret(name))
+        .filter(|name| !is_secret(name) || allow_secrets.iter().any(|a| a == *name))
         .cloned()
         .collect()
 }

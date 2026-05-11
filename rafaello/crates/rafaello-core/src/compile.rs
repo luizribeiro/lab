@@ -190,7 +190,11 @@ pub fn compile_plugin(
 
     scrubber::reject_reserved(&eff.env.pass, &eff.env.set)?;
     let env = EnvPlan {
-        pass: scrubber::strip(&eff.env.pass, entry.flags.i_know_what_im_doing),
+        pass: scrubber::strip(
+            &eff.env.pass,
+            &eff.env.allow_secrets,
+            entry.flags.i_know_what_im_doing,
+        ),
         set: eff.env.set,
     };
 
@@ -259,6 +263,7 @@ pub(crate) fn effective_grant(grant: &Grant) -> EffectiveGrant {
     let mut allow_hosts: Vec<String> = Vec::new();
     let mut env_pass: Vec<String> = Vec::new();
     let mut env_set: BTreeMap<String, String> = BTreeMap::new();
+    let mut env_allow_secrets: Vec<String> = Vec::new();
     let mut limits = GrantLimits::default();
 
     for bundle in grant.bundles.values() {
@@ -279,6 +284,7 @@ pub(crate) fn effective_grant(grant: &Grant) -> EffectiveGrant {
             for (k, v) in &e.set {
                 env_set.insert(k.clone(), v.clone());
             }
+            env_allow_secrets.extend(e.allow_secrets.iter().cloned());
         }
         if let Some(l) = &bundle.limits {
             limits.max_cpu_time = max_opt(limits.max_cpu_time, l.max_cpu_time);
@@ -296,6 +302,7 @@ pub(crate) fn effective_grant(grant: &Grant) -> EffectiveGrant {
     sort_dedup(&mut fs.exec_dirs);
     sort_dedup(&mut allow_hosts);
     sort_dedup(&mut env_pass);
+    sort_dedup(&mut env_allow_secrets);
 
     EffectiveGrant {
         filesystem: fs,
@@ -306,6 +313,7 @@ pub(crate) fn effective_grant(grant: &Grant) -> EffectiveGrant {
         env: GrantEnv {
             pass: env_pass,
             set: env_set,
+            allow_secrets: env_allow_secrets,
         },
         limits,
     }

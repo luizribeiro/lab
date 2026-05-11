@@ -199,6 +199,10 @@ pub enum ValidationError {
     OrphanToolMeta,
     #[error("provider id inconsistent with bindings.provider")]
     ProviderIdInconsistent,
+    #[error("allow_secrets entry has invalid env-var name shape: `{name}`")]
+    AllowSecretsInvalidName { name: String },
+    #[error("allow_secrets entry reserves a core-owned env var: `{name}`")]
+    AllowSecretsReservesCoreName { name: String },
 }
 
 #[derive(Debug, Error)]

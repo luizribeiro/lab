@@ -34,6 +34,7 @@ fn env_set_and_pass_pass_through_without_reserved_or_secret_hits() {
                     ("RUST_LOG".to_owned(), "info".to_owned()),
                     ("LANG".to_owned(), "en_US.UTF-8".to_owned()),
                 ]),
+                allow_secrets: Vec::new(),
             }),
             ..GrantBundle::default()
         },

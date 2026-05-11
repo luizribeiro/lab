@@ -53,6 +53,7 @@ fn default_bundle_flattens_into_compiled_plugin() {
             env: Some(GrantEnv {
                 pass: vec!["HOME".to_owned(), "PATH".to_owned(), "HOME".to_owned()],
                 set: BTreeMap::from([("RUST_LOG".to_owned(), "info".to_owned())]),
+                allow_secrets: Vec::new(),
             }),
             limits: Some(GrantLimits {
                 max_cpu_time: Some(120),
