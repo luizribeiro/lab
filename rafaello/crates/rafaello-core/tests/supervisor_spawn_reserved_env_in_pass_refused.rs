@@ -14,7 +14,9 @@ use rafaello_core::compile::{
     CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan, NetworkPlan,
 };
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::{topic_id, SpawnError};
 
 const RESERVED: &[&str] = &[
@@ -49,7 +51,11 @@ async fn spawn_with_reserved_env_in_pass_returns_reserved_env_in_plan() {
             frontends: BTreeMap::new(),
         })
         .unwrap();
-        let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+        let sup = PluginSupervisor::new(
+            broker,
+            SupervisorConfig::default(),
+            ToolSchemaCatalog::empty_for_tests(),
+        );
         let hooks = sup.test_hooks();
 
         let plan = CompiledPlugin {

@@ -42,6 +42,12 @@ use crate::lock::CanonicalId;
 
 use outpost_proxy::ProxyHandle;
 
+pub mod core_service;
+pub mod tool_catalog;
+
+pub use core_service::CorePluginService;
+pub use tool_catalog::{ToolCatalogError, ToolSchema, ToolSchemaCatalog};
+
 /// File descriptor number the lockin sandbox maps the
 /// inherited bus socket to inside the child (scope §SP7).
 pub const RFL_BUS_FD_NUMBER: i32 = 3;
@@ -275,6 +281,7 @@ pub struct PluginSupervisor {
     in_flight: Arc<Mutex<HashSet<CanonicalId>>>,
     #[allow(dead_code)]
     managed: Mutex<BTreeMap<CanonicalId, ManagedSpawn>>,
+    tool_catalog: Arc<ToolSchemaCatalog>,
     #[cfg(any(test, feature = "test-fixture"))]
     test_hooks: Arc<TestHooks>,
     #[cfg(any(test, feature = "test-fixture"))]
@@ -283,12 +290,17 @@ pub struct PluginSupervisor {
 }
 
 impl PluginSupervisor {
-    pub fn new(broker: Broker, config: SupervisorConfig) -> Self {
+    pub fn new(
+        broker: Broker,
+        config: SupervisorConfig,
+        tool_catalog: Arc<ToolSchemaCatalog>,
+    ) -> Self {
         Self {
             broker,
             config,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             managed: Mutex::new(BTreeMap::new()),
+            tool_catalog,
             #[cfg(any(test, feature = "test-fixture"))]
             test_hooks: Arc::new(TestHooks::default()),
             #[cfg(any(test, feature = "test-fixture"))]
@@ -302,9 +314,28 @@ impl PluginSupervisor {
         config: SupervisorConfig,
         factory: ExtraServiceFactory,
     ) -> Self {
-        let mut s = Self::new(broker, config);
+        let mut s = Self::new(broker, config, ToolSchemaCatalog::empty_for_tests());
         s.extra_service_factory = Some(factory);
         s
+    }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub async fn dispatch_for_tests(
+        &self,
+        canonical: CanonicalId,
+        req: Request,
+        ctx: ServiceContext,
+    ) -> Result<Response, FittingsError> {
+        self.build_connection_service(canonical)
+            .call(req, ctx)
+            .await
+    }
+
+    fn is_provider(&self, canonical: &CanonicalId) -> bool {
+        self.broker
+            .plugin_acl(canonical)
+            .and_then(|a| a.provider_id)
+            .is_some()
     }
 
     #[cfg(any(test, feature = "test-fixture"))]
@@ -815,15 +846,22 @@ impl PluginSupervisor {
             broker: self.broker.clone(),
             canonical: canonical.clone(),
         };
+        let core = if self.is_provider(&canonical) {
+            Some(CorePluginService {
+                catalog: self.tool_catalog.clone(),
+            })
+        } else {
+            None
+        };
         #[cfg(any(test, feature = "test-fixture"))]
         let extra = self
             .extra_service_factory
             .as_ref()
             .map(|factory| factory(canonical));
         #[cfg(any(test, feature = "test-fixture"))]
-        return SupervisorConnectionService { bus, extra };
+        return SupervisorConnectionService { bus, core, extra };
         #[cfg(not(any(test, feature = "test-fixture")))]
-        SupervisorConnectionService { bus }
+        SupervisorConnectionService { bus, core }
     }
 
     async fn kill_and_reap(
@@ -1073,6 +1111,7 @@ impl Service for BusPublishService {
 /// `bus.publish`.
 struct SupervisorConnectionService {
     bus: BusPublishService,
+    core: Option<CorePluginService>,
     #[cfg(any(test, feature = "test-fixture"))]
     extra: Option<Box<dyn Service + Send + Sync>>,
 }
@@ -1082,6 +1121,12 @@ impl Service for SupervisorConnectionService {
     async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError> {
         if req.method == "bus.publish" {
             return self.bus.call(req, ctx).await;
+        }
+        if req.method == "core.tools_list" {
+            if let Some(core) = &self.core {
+                return core.call(req, ctx).await;
+            }
+            return Err(FittingsError::method_not_found(req.method));
         }
         #[cfg(any(test, feature = "test-fixture"))]
         if let Some(extra) = &self.extra {

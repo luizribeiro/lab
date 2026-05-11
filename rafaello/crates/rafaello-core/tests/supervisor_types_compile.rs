@@ -38,7 +38,11 @@ fn test_hooks_counters_start_at_zero() {
         frontends: std::collections::BTreeMap::new(),
     };
     let broker = rafaello_core::bus::Broker::new(acl).expect("empty ACL is valid");
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        rafaello_core::supervisor::ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
     assert_eq!(hooks.outpost_starts.load(Ordering::SeqCst), 0);
     assert_eq!(hooks.socketpair_creates.load(Ordering::SeqCst), 0);

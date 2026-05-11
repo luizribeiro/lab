@@ -16,7 +16,9 @@ use common::m2_harness::{FixtureLockBuilder, FixtureSpec};
 use rafaello_core::bus::Broker;
 use rafaello_core::compile::NetworkPlan;
 use rafaello_core::error::SpawnError;
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 
 #[tokio::test]
 async fn spawn_unwinds_after_post_register_fault() {
@@ -28,7 +30,11 @@ async fn spawn_unwinds_after_post_register_fault() {
     plan.network = NetworkPlan::Deny;
 
     let broker = Broker::new(built.broker_acl).expect("Broker::new");
-    let sup = PluginSupervisor::new(broker.clone(), SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker.clone(),
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
     hooks
         .inject_post_register_fault

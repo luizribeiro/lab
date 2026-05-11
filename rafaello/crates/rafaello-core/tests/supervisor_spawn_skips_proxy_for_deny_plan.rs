@@ -14,7 +14,9 @@ use rafaello_core::compile::{
     CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan, NetworkPlan,
 };
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::topic_id;
 
 #[tokio::test]
@@ -40,7 +42,11 @@ async fn spawn_with_deny_plan_does_not_start_proxy() {
         frontends: BTreeMap::new(),
     })
     .unwrap();
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
 
     let proj = tempfile::tempdir().unwrap();

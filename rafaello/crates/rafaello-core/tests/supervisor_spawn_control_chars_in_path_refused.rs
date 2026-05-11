@@ -16,7 +16,9 @@ use rafaello_core::compile::{
 };
 use rafaello_core::error::{InvalidPlanReason, PathKind};
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::{topic_id, SpawnError};
 
 #[tokio::test]
@@ -41,7 +43,11 @@ async fn spawn_with_control_chars_in_entry_returns_control_chars_in_path() {
         frontends: BTreeMap::new(),
     })
     .unwrap();
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
 
     let bad_entry = PathBuf::from("/usr/bin/with\nnewline");

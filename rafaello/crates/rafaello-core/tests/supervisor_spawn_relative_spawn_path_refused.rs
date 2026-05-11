@@ -16,7 +16,9 @@ use rafaello_core::compile::{
 };
 use rafaello_core::error::{InvalidPlanReason, PathKind};
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::{topic_id, SpawnError};
 
 fn make_supervisor(canonical: &CanonicalId) -> PluginSupervisor {
@@ -38,7 +40,11 @@ fn make_supervisor(canonical: &CanonicalId) -> PluginSupervisor {
         frontends: BTreeMap::new(),
     })
     .unwrap();
-    PluginSupervisor::new(broker, SupervisorConfig::default())
+    PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    )
 }
 
 fn make_plan(canonical: &CanonicalId) -> CompiledPlugin {

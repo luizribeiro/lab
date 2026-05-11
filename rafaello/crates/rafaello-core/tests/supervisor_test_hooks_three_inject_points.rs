@@ -13,7 +13,9 @@ use std::sync::atomic::Ordering;
 use common::m2_harness::{FixtureLockBuilder, FixtureSpec};
 use rafaello_core::bus::Broker;
 use rafaello_core::error::SpawnError;
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig, TestHooks};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, TestHooks, ToolSchemaCatalog,
+};
 
 struct Case {
     label: &'static str,
@@ -59,7 +61,11 @@ async fn three_inject_points_each_yield_sandbox_build() {
     for (i, case) in CASES.iter().enumerate() {
         let plan = built.plans[i].clone();
         let broker = Broker::new(built.broker_acl.clone()).expect("Broker::new");
-        let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+        let sup = PluginSupervisor::new(
+            broker,
+            SupervisorConfig::default(),
+            ToolSchemaCatalog::empty_for_tests(),
+        );
         let hooks = sup.test_hooks();
 
         assert!(

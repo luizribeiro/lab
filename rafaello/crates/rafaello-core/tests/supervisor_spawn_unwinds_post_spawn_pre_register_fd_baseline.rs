@@ -15,7 +15,9 @@ use common::m2_harness::{FixtureLockBuilder, FixtureSpec};
 use rafaello_core::bus::Broker;
 use rafaello_core::compile::NetworkPlan;
 use rafaello_core::error::SpawnError;
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 
 fn open_fd_count() -> usize {
     std::fs::read_dir("/proc/self/fd")
@@ -33,7 +35,11 @@ async fn post_spawn_pre_register_fault_returns_fd_count_to_baseline() {
     plan.network = NetworkPlan::Deny;
 
     let broker = Broker::new(built.broker_acl).expect("Broker::new");
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
     hooks
         .inject_post_spawn_pre_register_fault

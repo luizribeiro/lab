@@ -35,7 +35,10 @@ use rafaello_core::paths::PathContext;
 use rafaello_core::reemit::ReemitRouter;
 use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnHandle, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnHandle, SpawnPaths, SupervisorConfig, ToolCatalogError,
+    ToolSchemaCatalog,
+};
 use rafaello_core::topic_id;
 use rafaello_core::validate::{self, LockValidationContext};
 
@@ -128,6 +131,8 @@ pub enum RflChatError {
         #[source]
         source: Box<CompileError>,
     },
+    #[error("ToolCatalog: {0}")]
+    ToolCatalog(#[from] Box<ToolCatalogError>),
     #[error("NoActiveProvider")]
     NoActiveProvider,
     #[error("ProviderSpawnFailed for {canonical}")]
@@ -325,10 +330,20 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         },
     );
 
+    // Step C4b: tool-schema catalog (scope §OP2 items 1, 7) — built
+    // from each plugin's `openrpc.json` before any spawn so the
+    // provider's `core.tools_list` call resolves against a fully
+    // populated catalog.
+    let tool_catalog = Arc::new(
+        ToolSchemaCatalog::build(&acl, &compiled_plugins, &plugin_dirs)
+            .map_err(|e| RflChatError::ToolCatalog(Box::new(e)))?,
+    );
+
     // Step C5: broker → plugin supervisor → frontend supervisor → registry → pipeline → controller.
     let acl_for_routing = acl.clone();
     let broker = Broker::new(acl).map_err(|e| RflChatError::Broker(Box::new(e)))?;
-    let plugin_supervisor = PluginSupervisor::new(broker.clone(), SupervisorConfig::default());
+    let plugin_supervisor =
+        PluginSupervisor::new(broker.clone(), SupervisorConfig::default(), tool_catalog);
 
     // Steps C6–C8: eager-spawn the active provider and every installed tool plugin.
     let mut spawn_handles: Vec<SpawnHandle> = Vec::new();

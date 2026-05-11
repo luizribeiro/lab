@@ -15,7 +15,9 @@ use rafaello_core::compile::{
 };
 use rafaello_core::error::InvalidPlanReason;
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::{topic_id, SpawnError};
 
 #[tokio::test]
@@ -40,7 +42,11 @@ async fn spawn_with_invalid_proxy_allow_hosts_returns_invalid_plan() {
         frontends: BTreeMap::new(),
     })
     .unwrap();
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
 
     let plan = CompiledPlugin {

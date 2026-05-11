@@ -15,7 +15,9 @@ use rafaello_core::compile::{
     CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan, NetworkPlan,
 };
 use rafaello_core::lock::{CanonicalId, LoadPolicy};
-use rafaello_core::supervisor::{PluginSupervisor, SpawnPaths, SupervisorConfig};
+use rafaello_core::supervisor::{
+    PluginSupervisor, SpawnPaths, SupervisorConfig, ToolSchemaCatalog,
+};
 use rafaello_core::{topic_id, SpawnError};
 
 #[tokio::test]
@@ -45,7 +47,11 @@ async fn spawn_with_non_executable_entry_returns_entry_not_executable() {
         frontends: BTreeMap::new(),
     })
     .unwrap();
-    let sup = PluginSupervisor::new(broker, SupervisorConfig::default());
+    let sup = PluginSupervisor::new(
+        broker,
+        SupervisorConfig::default(),
+        ToolSchemaCatalog::empty_for_tests(),
+    );
     let hooks = sup.test_hooks();
 
     let plan = CompiledPlugin {
