@@ -322,7 +322,8 @@ fn dispatch_event(
             handle_assistant_message(broker, provider_id, event).map_err(|e| e.to_string())
         }
         seg if seg.len() == 3 && seg[0] == "plugin" && seg[2] == "tool_result" => {
-            handle_tool_result(broker, acl, taint_match, event).map_err(|e| e.to_string())
+            handle_tool_result(broker, acl, taint_match, referenced_taint_index, event)
+                .map_err(|e| e.to_string())
         }
         _ => {
             tracing::debug!(
@@ -532,16 +533,25 @@ fn handle_assistant_message(
 
 /// §CR3: `plugin.<topic-id>.tool_result` → `core.session.tool_result`.
 ///
-/// §TR1 (refresh-map half): the tool-source-only canonical taint is
-/// recorded into the router-owned `TaintMatchMap` before the canonical
-/// publish so any subscriber that observes the canonical event finds the
-/// map already populated. c13 extends the recorded vector to the full
-/// ancestry union; this commit records the tool-source-only shape. On
-/// publish failure the recorded entry is TTL-bounded stale.
+/// §TR1 ancestry-union + §PT2 closure (c13): the canonical taint is
+/// constructed as `[{source: "tool", detail: "<canonical>"}] ∪
+/// referenced_request_taint`, deduplicated and deterministically sorted,
+/// where `referenced_request_taint` is the entry the cited
+/// `event.in_reply_to[0]` request id maps to in
+/// `ReferencedTaintIndex.by_request_id` (m4 guarantees exactly one
+/// `in_reply_to` id on `tool_result`; misses contribute empty per §A10
+/// fail-open).
+///
+/// §TR1 step 5 + step 6 ordering pin: both `TaintMatchMap::record` and
+/// `ReferencedTaintIndex::record_result` run with the **full** canonical
+/// vector and **before** `publish_core_with_taint`, so any subscriber
+/// that observes the canonical event finds both indexes populated. On
+/// publish failure the entries are TTL-bounded stale (pi-4 N-1).
 fn handle_tool_result(
     broker: &Broker,
     acl: &BrokerAcl,
     taint_match: &TaintMatchMap,
+    referenced_taint_index: &ReferencedTaintIndex,
     event: &BusEvent,
 ) -> Result<(), BrokerError> {
     let canonical_str = match &event.publisher {
@@ -560,17 +570,39 @@ fn handle_tool_result(
             detail: format!("reemit: tool_result publisher canonical `{canonical}` not in ACL"),
         });
     }
-    let taint = vec![TaintEntry {
+
+    let tool_entry = TaintEntry {
         source: "tool".to_string(),
         detail: Some(canonical.to_string()),
-    }];
-    taint_match.record(&event.payload, &taint);
+    };
+    let referenced_request_taint = event
+        .in_reply_to
+        .as_ref()
+        .and_then(|ids| ids.first())
+        .and_then(|id| referenced_taint_index.lookup_request(id))
+        .unwrap_or_default();
+
+    let mut canonical_taint: Vec<TaintEntry> = vec![tool_entry];
+    for entry in referenced_request_taint {
+        if !canonical_taint.contains(&entry) {
+            canonical_taint.push(entry);
+        }
+    }
+    canonical_taint.sort_by(|a, b| {
+        (a.source.as_str(), a.detail.as_deref()).cmp(&(b.source.as_str(), b.detail.as_deref()))
+    });
+    canonical_taint.dedup();
+
+    taint_match.record(&event.payload, &canonical_taint);
+    let request_id = event.request_id.as_ref().expect("m4 row 43");
+    referenced_taint_index.record_result(request_id, &canonical_taint);
+
     broker.publish_core_with_taint(
         "core.session.tool_result",
         event.payload.clone(),
         event.request_id.clone(),
         event.in_reply_to.clone(),
-        Some(taint),
+        Some(canonical_taint),
         None,
     )
 }
