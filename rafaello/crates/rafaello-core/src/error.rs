@@ -12,6 +12,7 @@ use fittings_core::message::JsonRpcId;
 use thiserror::Error;
 
 use crate::broker_acl::AttachId;
+use crate::bus::TaintEntry;
 use crate::lock::CanonicalId;
 
 #[derive(Debug, Error)]
@@ -396,6 +397,15 @@ pub enum BrokerError {
         publisher: Publisher,
         topic: String,
         reason: TaintReason,
+    },
+    #[error(
+        "publisher {publisher:?} published taint on `{topic}` that is not a superset of \
+         in_reply_to ancestry; missing entries: {missing:?}"
+    )]
+    TaintSupersetViolated {
+        publisher: Publisher,
+        topic: String,
+        missing: Vec<TaintEntry>,
     },
     #[error("internal broker error: {detail}")]
     Internal { detail: String },
