@@ -1,8 +1,81 @@
 # m5b-taint-exfil — commits
 
-> **Status:** round 1 — initial draft from `scope.md` round 7
-> (CONVERGED at `947b784`). Translates the 28-row Internal Split
-> into per-commit rows with inline acceptance bullets.
+> **Status:** round 2 — folds `commits-pi-review-1.md`
+> (5B / 4M / 2N, BLOCKING). Pi-1's verification table is
+> resolved row-by-row below; per-commit green-bar mechanics
+> are now consistent with live source under
+> `crates/rafaello-core/`, `crates/rafaello-tui/`,
+> `crates/rafaello/` and the live `bus.rs` /
+> `publish_core_with_taint` / `rfl_tui.rs` / `confirm.rs`
+> surfaces.
+>
+> Round-2 fixes by pi-1 finding:
+>
+> - **B-1** c08's row-local acceptance narrowed to hook
+>   ordering vs `fan_out` only (last-writer-wins + `Some(err)`
+>   suppression + `None` permits delivery). Handler-recorded
+>   state assertions move to c10 / c11 / c13 where the
+>   handlers and indexes exist.
+> - **B-2** c15 splits into a reachable-input integration
+>   test set (provider-only non-empty taint + value-driven
+>   union + referenced-union) AND an in-module
+>   gate-local unit test for the `event.taint = None`
+>   empty-array regression. c15 now edits
+>   `crates/rafaello-core/src/gate/mod.rs` to add a
+>   `#[cfg(test)] mod tests` block exercising
+>   `build_confirm_request_payload` directly.
+> - **B-3** c18 expands to edit
+>   `crates/rafaello-tui/src/bin/rfl_tui.rs` (the live runtime
+>   consumer of `spawn_auto_confirm_answer`) plus a new
+>   shared `crates/rafaello-tui/src/test_confirm_queue.rs`
+>   helper. Adds queue-consumption tests against the actual
+>   modal path; parser-only unit tests stay.
+> - **B-4** c22 ships the **FINAL five-plugin lock**
+>   (openai active + mockprovider inactive + mailcat + fetch
+>   + readfile). c22's `ToolSchemaCatalog::list()` assertion
+>   becomes "exactly three tool schemas: `web-fetch`,
+>   `send-mail`, `read-file`" (the three tool plugins; the
+>   two provider plugins contribute none). c26 consumes the
+>   c22 lock unchanged — no shared-fixture mutation.
+> - **B-5** `RFL_FETCH_TEST_LOG_PATH` support + env.pass
+>   wiring + the per-fixture invocation-log unit test move
+>   to c21 (the fetch handler) + c22 (the lock env.pass
+>   entry). c23 stays the headline integration test; c28
+>   now depends only on c22 and consumes the fetch-log
+>   surface c22 ships.
+> - **M-1** Dependency graph sweep: c11 gains `c08`; c12
+>   gains `c10`. Other rows audited (c10 already cites
+>   c08; c13 cites c09+c10; c14 cites c01-c04 + c13; etc.).
+> - **M-2** c03's "withdrawn-variant negative" acceptance
+>   deleted. The positive `as_str()` table test gains an
+>   **exhaustiveness** assertion: the output set is exactly
+>   the three new strings (no fourth, no withdrawn).
+> - **M-3** Path normalisation sweep: every
+>   `rafaello/tests/...` shorthand → `crates/rafaello/tests/...`
+>   and `rafaello/tests/fixtures/...` →
+>   `crates/rafaello/tests/fixtures/...`. m5a-style mixed
+>   shorthand removed.
+> - **M-4** Sizing summary realigned: row-local
+>   justifications added for c20 + c22 (both touch many
+>   fixture files); c18 reclassified to medium (parser +
+>   runtime consumer + helper module); c23 explicitly
+>   shrinks now that fetch-log moves to c21/c22. The "only
+>   four body-justified larger rows" list updated below
+>   stays consistent with the sizing table.
+> - **N-1** c20 acknowledges the intentional
+>   `src/bin/rafaello_fetch.rs` packaging vs scope §TF1's
+>   `src/main.rs` wording — both are valid Rust
+>   packaging; the `[[bin]]` declaration in `Cargo.toml`
+>   makes the difference invisible to consumers.
+> - **N-2** c16's overlay file path replaced with the live
+>   path `crates/rafaello-tui/src/confirm.rs` (no agent
+>   discovery).
+>
+> ---
+>
+> Drafted against `scope.md` round 7 (CONVERGED at `947b784`).
+> Translates the 28-row Internal Split into per-commit rows
+> with inline acceptance bullets.
 >
 > Total: **28 commits** for the default-selected owner positions
 > per scope §"Internal split". Reserve budget: +2-4 commits if
@@ -184,7 +257,7 @@ forced-monolithic note, pi-5 M-1 ripple).
   spans EXFIL1) has the recording machinery available.
 - **Depends on.** baseline. No dependency on c01.
 - **Acceptance.** Tests in `crates/rafaello-core/tests/`
-  (broker plumbing) and `rafaello/tests/` (rfl-chat wiring):
+  (broker plumbing) and `crates/rafaello/tests/` (rfl-chat wiring):
   - `broker_set_audit_writer_initial_state_silently_drops_audit_call.rs`
     — construct `Broker::new(...)`; without calling
     `set_audit_writer`, invoke a test-only `Broker::record_audit_for_test`
@@ -262,26 +335,37 @@ forced-monolithic note, pi-5 M-1 ripple).
   m4 / m5a precedent (audit-kind table extension as a
   single cutover).
 - **Depends on.** baseline. No dependency on c01 / c02.
-- **Acceptance.** Tests in `crates/rafaello-core/tests/`:
-  - `audit_kind_as_str_table_covers_m5b_kinds.rs` — table-
-    driven round-trip: for each of the three new variants,
-    assert `kind.as_str()` equals the lowercase
-    snake-case form. Asserts exactly the three new strings
-    are added; existing kinds unchanged.
-  - `audit_kind_as_str_table_no_round1_withdrawn_variant.rs`
-    — compile-time presence check: assert via a `match`
-    arm exhaustiveness pattern that
-    `tool_request_rejected_taint_superset` is **not** a
-    variant (the round-1 name is gone — pi-1 B-6 ripple).
+- **Acceptance.** Pi-1 M-2 ripple: the round-1
+  "withdrawn-variant negative" acceptance is deleted
+  (a normal Rust integration test cannot reference a
+  non-existent enum variant and still compile, and
+  adding a `trybuild` compile-fail harness is outside
+  §AL4's scope). Positive exhaustiveness replaces it.
+  Tests in `crates/rafaello-core/tests/`:
+  - `audit_kind_as_str_table_covers_m5b_kinds.rs` —
+    positive exhaustiveness on the three new
+    variants: for each of `ConfirmRequestTaintAttached`,
+    `PluginPublishRejectedTaintSuperset`,
+    `ToolRequestTaintUnionedFromInReplyTo`, assert
+    `kind.as_str()` returns the corresponding lowercase
+    snake-case string. **Exhaustive output set
+    assertion** (pi-1 M-2): compute the set difference
+    between the post-m5b `as_str()` outputs (collected
+    by iterating all variants — or by maintaining a
+    `pub const M5B_NEW_KIND_STRS: [&str; 3]` table
+    in the test) and a snapshot of the pre-m5b
+    set; assert the difference is exactly the three
+    new strings (no fourth variant, no withdrawn name
+    snuck in).
   - `cargo doc -p rafaello-core --no-deps` warning-free
     (the doc comments on the three new variants document
     their producer commits inline).
 - **Files touched.** `crates/rafaello-core/src/audit/mod.rs`
-  (enum + `as_str()`, ~15 lines added). Two new test
-  files.
+  (enum + `as_str()`, ~15 lines added). One new test
+  file.
 - **Size.** small.
 - **Scope sections.** §AL4, scope §"Internal split" row
-  1'', §"Out of scope" item 18.
+  1'', §"Out of scope" item 18, pi-1 M-2.
 
 ### c04 — feat(rafaello-core): extend `OutstandingDispatch` with `tool_request_taint` field; gate populates via canonical taint — UNSPLITTABLE CUTOVER
 
@@ -722,20 +806,36 @@ broker-side publish test hook (added in scope round 7 as row
   exercise this path. Land the seam before its consumers.
 - **Depends on.** c02 (interior-mutable
   `BrokerInner` neighbourhood; no logical dep).
-- **Acceptance.** Tests in `crates/rafaello-core/tests/`:
-  - `broker_publish_test_hook_fires_after_handler_records_before_fan_out.rs`
-    — install a hook that captures both the broker's
-    `state` snapshot at hook-fire time (proves the
-    event payload was written) and a counter the
-    test's fan-out subscriber increments. Trigger
-    `publish_core_with_taint` returning `Some(err)`;
-    assert the subscriber counter stayed at 0 (no
-    fan-out delivery), and assert the captured
-    snapshot reflects the post-record state.
+- **Acceptance.** Pi-1 B-1 ripple: c08's row-local
+  acceptance proves **hook ordering vs `fan_out`** only.
+  Live `Broker::publish_core_with_taint` has no broker-side
+  event store — it constructs a local `BusEvent`,
+  consults the hook, then calls `fan_out`. Handler-
+  recorded index state assertions (c10's
+  `TaintMatchMap.record`, c11's
+  `ReferencedTaintIndex.record_request`, c13's
+  `record_result`) move to c10 / c11 / c13 where the
+  handlers exist and use the c08 seam to capture state
+  between record and publish.
+  Tests in `crates/rafaello-core/tests/`:
+  - `broker_publish_test_hook_some_err_suppresses_fan_out.rs`
+    — install a hook returning `Some(err)`; spawn a test
+    subscriber that increments a counter on any
+    delivered event; trigger
+    `publish_core_with_taint`; assert the counter is 0
+    (no fan-out delivery) and the call returns the
+    hook's error.
+  - `broker_publish_test_hook_none_permits_fan_out.rs`
+    — install a hook returning `None`; spawn a test
+    subscriber; trigger `publish_core_with_taint`;
+    assert the subscriber counter is 1 (normal
+    delivery) and the call returns `Ok`.
   - `broker_publish_test_hook_replaces_on_second_install.rs`
-    (pi-6 N-5 acceptance) — install hook A; install
-    hook B; trigger a `publish_core_with_taint`; assert
-    only B fires (last-writer-wins).
+    (pi-6 N-5 acceptance) — install hook A (records a
+    sentinel); install hook B (records a distinct
+    sentinel); trigger one
+    `publish_core_with_taint`; assert only B's
+    sentinel fired (last-writer-wins).
   - `broker_publish_test_hook_absent_in_production_builds.rs`
     — compile-fence test. The `crates/rafaello-core/build.rs`
     or a `cargo check` invocation with `--no-default-features`
@@ -998,7 +1098,9 @@ cluster.
   `record_request` call separately makes per-commit
   diffs smaller and the ordering test (below) anchors
   the invariant before the union arms.
-- **Depends on.** c09.
+- **Depends on.** c08, c09 (pi-1 M-1: c08's
+  publish-test hook is consumed by both row-local
+  acceptance tests).
 - **Acceptance.** Tests in
   `crates/rafaello-core/tests/`:
   - `reemit_tool_request_records_request_id_before_fan_out.rs`
@@ -1077,7 +1179,10 @@ cluster.
   depend on the same dedup walk, so splitting them
   produces interleaved diffs without buying
   independent test coverage.
-- **Depends on.** c03, c06, c09, c11.
+- **Depends on.** c03, c06, c09, c10, c11 (pi-1 M-1:
+  c10's `handle_tool_result` refresh-map path seeds
+  the `TaintMatchMap` consumed by the value-driven
+  acceptance below).
 - **Acceptance.** Tests in
   `crates/rafaello-core/tests/`:
   - `reemit_tool_request_unions_value_driven_taint.rs`
@@ -1474,74 +1579,112 @@ Scope §CD1 + §CD2. Two commits. §CD3 (wire-shape pin) is
 documentation in `manual-validation.md` §3 and is recorded
 in c15's body.
 
-### c15 — test(rafaello-core): `gate.details.taint` regression tests against live shape (§CD1)
+### c15 — test(rafaello-core): `gate.details.taint` regression — in-module unit test + reachable integration tests (§CD1)
 
-- **What.** Scope §CD1 / pi-1 M-4 (the `null` arm is NOT
-  on `details.taint` — live shape is empty array). This
-  commit is **tests-only** by intent: live
-  `crates/rafaello-core/src/gate/mod.rs:386-402` already
+- **What.** Scope §CD1 / pi-1 M-4 / pi-1 B-2 ripple (the
+  empty-array regression for `event.taint = None` cannot
+  go through the live broker — `publish_core_with_taint`
+  rejects `core.session.tool_request` with `taint: None`
+  via `InvalidTaint { reason: Missing }`; live
+  `bus.rs:932-940`). Live
+  `crates/rafaello-core/src/gate/mod.rs:386-402`
   populates `details.taint = event.taint.clone()
-  .unwrap_or_default()` per m5a. The deliverable is a
-  regression test set that locks in the existing wire
-  shape AND the value-driven population path now that
-  c12's `handle_tool_request` populates the canonical
-  event's taint with the value-match + referenced-union.
-  **Tests-with-code DRY exception**: this commit is the
-  only m5b row where tests land without an
-  accompanying implementation edit. The justification:
-  the regression-test set guards a live wire contract
-  (the m5a-shipped `details.taint` shape) that c12
-  augments value-wise but does not touch
-  shape-wise. Without c15's anchor, a future refactor
-  could silently switch the `[]` ↔ `null` arm and break
-  audit-row consumers. Per CLAUDE.md "tests-with-code,
-  same commit": the surface tested here was implemented
-  in m5a (`gate/mod.rs:386-402`) AND in c12 (the
-  canonical taint vector now contains m5b's union); c15
-  pins both shapes simultaneously. Body cites this
-  explicitly so reviewers don't flag it as a stray
-  test-only commit.
-  Also: append a note to `rafaello/plans/milestones/m5b-taint-exfil/manual-validation.md`
-  §3 documenting the `Vec<TaintEntry>` wire shape (§CD3
-  pin).
-- **Why.** Scope §CD1 / §CD3 + pi-1 M-4. Anchor the wire
-  shape before c16's TUI overlay starts depending on it.
-- **Depends on.** c12.
-- **Acceptance.** Tests in
-  `crates/rafaello-core/tests/`:
-  - `gate_confirm_request_details_taint_empty_array_when_no_inbound_taint.rs`
-    — drive a `core.session.tool_request` with `taint =
-    None`; observe the gate's `confirm_request` payload;
-    assert `details.taint == json!([])` (NOT `null`).
-    Pin against the m5a-shipped shape.
-  - `gate_confirm_request_details_taint_carries_value_driven_union.rs`
-    — drive a tainted `tool_request` (set up c12 path:
-    record a fetch result, drive a value-matching
-    `tool_request`); observe the gate's confirm
-    payload; assert `details.taint` is the
-    canonical taint vector including the
-    `{tool, <fetch>}` entry.
-  - `gate_confirm_request_details_taint_carries_referenced_union.rs`
-    — drive a tainted `tool_request` whose taint
-    derives from §TR4b referenced-union (no value
-    match; the `in_reply_to` cites a result whose
-    canonical taint includes a non-provider entry);
-    assert `details.taint` includes that entry.
-- **Files touched.** Three new test files;
+  .unwrap_or_default()` per m5a; the `unwrap_or_default()`
+  branch fires only when the gate sees a `BusEvent`
+  whose `taint` field is `None`, a shape unreachable
+  through normal publish. This commit splits into:
+  1. **In-module unit test** in
+     `crates/rafaello-core/src/gate/mod.rs`'s
+     `#[cfg(test)] mod tests` block (extend the existing
+     test module if present; create one otherwise).
+     Call `build_confirm_request_payload` directly with
+     a synthesised `BusEvent` whose `taint` is `None`;
+     assert the produced JSON `details.taint` equals
+     `json!([])`. The function is a `pub(super)` or
+     `pub(crate)` helper per m5a's gate layout —
+     accessible from the same-crate `mod tests`
+     without modification.
+  2. **Reachable-input integration tests** in
+     `crates/rafaello-core/tests/` covering the
+     `Some(...)` paths only — all of which the live
+     broker accepts:
+     - provider-only non-empty taint produces
+       `details.taint = [{provider, openai}]`;
+     - value-driven union (c12) produces
+       `details.taint` containing the value-match
+       entry;
+     - referenced-union (c12) produces
+       `details.taint` containing the referenced
+       entry.
+  Also: append a note to
   `rafaello/plans/milestones/m5b-taint-exfil/manual-validation.md`
-  (one-line wire-shape note appended). No production
-  code touched (the surface is m5a-shipped; c12
-  populates the value).
-- **Size.** small (~80 LoC tests).
-- **Scope sections.** §CD1, §CD3, pi-1 M-4.
+  §3 documenting the `Vec<TaintEntry>` wire shape
+  (§CD3 pin).
+  **Production-code edit**: the `mod tests` block in
+  `gate/mod.rs` is the only production-file edit (a
+  test-gated module addition; no behaviour change).
+  The integration tests in
+  `crates/rafaello-core/tests/` are new test files.
+  Per CLAUDE.md tests-with-code: the in-module unit
+  test sits in the gate file it covers; the
+  integration tests sit in the standard package test
+  directory. The pi-1 B-2 "tests-only no production
+  edit" concern is resolved — gate/mod.rs's `mod
+  tests` block IS production-file code under
+  `#[cfg(test)]`.
+- **Why.** Scope §CD1 / §CD3 + pi-1 M-4 + pi-1 B-2.
+  Anchor the wire shape (both empty and populated
+  arms) before c16's TUI overlay depends on it. The
+  empty-array regression cannot be tested through the
+  broker; the in-module unit test is the smallest
+  reachable seam.
+- **Depends on.** c12.
+- **Acceptance.**
+  - In-module unit test (in
+    `crates/rafaello-core/src/gate/mod.rs` `mod tests`):
+    `build_confirm_request_payload_none_taint_renders_empty_array`
+    — synthesise a `BusEvent` with `taint: None`;
+    call `build_confirm_request_payload`; assert the
+    JSON `details.taint` is `json!([])`, NOT `null`.
+    Pin against the m5a-shipped shape.
+  - Integration tests in `crates/rafaello-core/tests/`:
+    - `gate_confirm_request_details_taint_provider_only.rs`
+      — drive a `core.session.tool_request` with
+      `taint = Some([{provider, openai}])`; observe
+      the gate's `confirm_request` payload; assert
+      `details.taint == [{provider, openai}]`.
+      Reachable through normal broker publish.
+    - `gate_confirm_request_details_taint_carries_value_driven_union.rs`
+      — drive a tainted `tool_request` (set up c12
+      path: record a fetch result, drive a
+      value-matching `tool_request`); observe the
+      gate's confirm payload; assert `details.taint`
+      is the canonical taint vector including the
+      `{tool, <fetch>}` entry.
+    - `gate_confirm_request_details_taint_carries_referenced_union.rs`
+      — drive a tainted `tool_request` whose taint
+      derives from §TR4b referenced-union (no value
+      match; the `in_reply_to` cites a result whose
+      canonical taint includes a non-provider entry);
+      assert `details.taint` includes that entry.
+- **Files touched.**
+  `crates/rafaello-core/src/gate/mod.rs` (extend or add
+  `#[cfg(test)] mod tests` block, ~30 lines);
+  three new integration test files;
+  `rafaello/plans/milestones/m5b-taint-exfil/manual-validation.md`
+  (one-line wire-shape note appended).
+- **Size.** small (~30 LoC in-module test + ~120 LoC
+  integration tests).
+- **Scope sections.** §CD1, §CD3, pi-1 M-4, pi-1 B-2.
 
 ### c16 — feat(rafaello-tui): confirm overlay renders `provenance:` block on non-provider taint (§CD2)
 
-- **What.** Scope §CD2. Two coordinated edits in
-  `crates/rafaello-tui/src/`:
-  1. **`confirm_overlay.rs` (or m5a's overlay file
-     wherever the `InputMode::ConfirmOverlay` render
-     lives — driver agent reads to confirm path)**:
+- **What.** Scope §CD2 / pi-1 N-2 (live overlay path
+  pinned to `crates/rafaello-tui/src/confirm.rs`).
+  Two coordinated edits in `crates/rafaello-tui/src/`:
+  1. **`confirm.rs`** (live path — pi-1 N-2 — the
+     overlay renderer for `InputMode::ConfirmOverlay`
+     lives at `crates/rafaello-tui/src/confirm.rs`):
      extend the `details` JSON renderer to detect the
      **§AL1 predicate** (the canonical taint vector
      contains at least one entry whose `source` is NOT
@@ -1583,9 +1726,9 @@ in c15's body.
     six-entry vector on an overlay with five allotted
     rows; the overlay clips with `... (1 more)`; the
     underlying audit-row payload is not touched.
-- **Files touched.** `crates/rafaello-tui/src/confirm_overlay.rs`
-  (or m5a's equivalent — predicate + render arms, ~30
-  lines); three new test files.
+- **Files touched.** `crates/rafaello-tui/src/confirm.rs`
+  (predicate + render arms, ~30 lines); three new
+  test files.
 - **Size.** small (~30 LoC + ~120 LoC tests).
 - **Scope sections.** §CD2, §AL1 predicate.
 
@@ -1656,48 +1799,69 @@ c12); only §AL1's gate-side producer remains.
 
 Scope §TUI-MA1 + §TUI-MA2. Two commits.
 
-### c18 — feat(rafaello-tui): `RFL_TUI_TEST_CONFIRM_ANSWERS` parser + queue + exhaustion panic + mutual-exclusion error (§TUI-MA1)
+### c18 — feat(rafaello-tui): `RFL_TUI_TEST_CONFIRM_ANSWERS` parser + queue + runtime dequeue + exhaustion panic + mutual-exclusion error (§TUI-MA1)
 
-- **What.** Scope §TUI-MA1 / pi-3 N-2 / pi-4 N-3. Three
-  coordinated edits in
-  `crates/rafaello-tui/src/env.rs`:
-  1. New constant
-     `RFL_TUI_TEST_CONFIRM_ANSWERS` (env var name).
-  2. New helper `parse_confirm_answers(s: &str) ->
+- **What.** Scope §TUI-MA1 / pi-3 N-2 / pi-4 N-3 / pi-1
+  B-3 ripple. Four coordinated edits across three files
+  in `crates/rafaello-tui/`:
+  1. **`src/env.rs` — parser**: new constant
+     `RFL_TUI_TEST_CONFIRM_ANSWERS`; new helper
+     `parse_confirm_answers(s: &str) ->
      Result<Vec<TestConfirmAnswer>, EnvError>` that
      splits on `,` and reuses `parse_confirm_answer`
-     (live at `env.rs:104`) per token. Result is
-     stored as `TestConfirmAnswers(Vec<TestConfirmAnswer>)`
-     on the parsed config; a runtime queue mirrors
-     the parsed list and is dequeued on each
-     confirm modal.
-  3. **Mutual exclusion** with single-answer (pi-3
-     N-2): setting both `RFL_TUI_TEST_CONFIRM_ANSWER`
-     and `RFL_TUI_TEST_CONFIRM_ANSWERS` is a startup
-     error returned from `rafaello_tui::env::load_from`
-     (the live env entry point). Error message
-     pinned (pi-4 N-3 acceptance):
-     `"RFL_TUI_TEST_CONFIRM_ANSWER and
-     RFL_TUI_TEST_CONFIRM_ANSWERS are mutually
-     exclusive; set one or the other"`.
-  4. **Exhaustion** behaviour: if a modal fires after
-     the queue is drained, the TUI emits a
-     `tracing::error!` and a deterministic
-     `panic!("TestConfirmAnswers queue exhausted;
-     modal #<n> had no scripted answer")`. The panic
-     is loud by design — a test that under-scripts
-     answers must surface as a test failure, not a
-     silent deny.
-  Single-answer (`RFL_TUI_TEST_CONFIRM_ANSWER`) stays
-  live for m5a tests' backwards compatibility.
+     (live at `env.rs:104`) per token. New field
+     `TestConfirmAnswers(Vec<TestConfirmAnswer>)` on
+     the parsed config; mutual-exclusion check with
+     `RFL_TUI_TEST_CONFIRM_ANSWER` returns the pinned
+     error string from `rafaello_tui::env::load_from`
+     (live env entry point — pi-3 N-2): `"RFL_TUI_TEST_CONFIRM_ANSWER
+     and RFL_TUI_TEST_CONFIRM_ANSWERS are mutually
+     exclusive; set one or the other"` (pi-4 N-3).
+  2. **`src/test_confirm_queue.rs` (new shared
+     helper module)**: a `TestConfirmAnswerQueue`
+     wrapping `Mutex<VecDeque<TestConfirmAnswer>>` +
+     a modal counter, exposing:
+     - `pub fn new(answers: Vec<TestConfirmAnswer>) -> Self`.
+     - `pub fn next_answer(&self) -> TestConfirmAnswer`
+       — dequeues the head; on empty, emits
+       `tracing::error!` and panics with
+       `"TestConfirmAnswers queue exhausted; modal
+       #<n> had no scripted answer"` (n is the
+       1-based counter of attempted dequeues).
+     - `pub fn is_empty(&self) -> bool`.
+     The module lives at
+     `crates/rafaello-tui/src/test_confirm_queue.rs`
+     and is `pub` from `lib.rs` so the bin can
+     consume it.
+  3. **`src/lib.rs`**: `pub mod test_confirm_queue;`
+     declaration.
+  4. **`src/bin/rfl_tui.rs` — runtime dequeue**:
+     live `rfl_tui.rs:86-94` currently checks
+     `cfg.test_confirm_answer` and calls
+     `spawn_auto_confirm_answer` with a single
+     `TestConfirmAnswer` reused for every modal
+     (live `:125-154`). c18 extends the startup
+     check: if
+     `cfg.test_confirm_answers` is set (the plural
+     queue), wrap it in
+     `Arc<TestConfirmAnswerQueue>`; on each
+     confirm-modal arrival in the modal-handling
+     loop, call `queue.next_answer()` to get the
+     scripted reply for that modal. The single-answer
+     `test_confirm_answer` path stays live for m5a
+     backwards compatibility (mutex'd against the
+     plural via the env-parse check).
   `TestConfirmAnswer` per-entry semantics match live
   single-answer (`allow` / `deny` /
   `always_allow_session` / `timeout`).
-- **Why.** Scope §TUI-MA1. The verbatim exfil demo
-  (c23 §EXFIL1) needs two scripted answers
+- **Why.** Scope §TUI-MA1 + pi-1 B-3. The verbatim
+  exfil demo (c23 §EXFIL1) needs two scripted answers
   (`allow,deny`) consumed in order across two
-  confirm modals. The single-answer hook cannot script
-  multi-modal flows.
+  confirm modals. The single-answer hook cannot
+  script multi-modal flows. Live runtime dequeue
+  must edit `bin/rfl_tui.rs` (the actual modal
+  consumer); a parser-only edit to `env.rs` would
+  leave the queue uncalled.
 - **Depends on.** baseline.
 - **Acceptance.** Tests in
   `crates/rafaello-tui/tests/`:
@@ -1710,21 +1874,47 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
     `"RFL_TUI_TEST_CONFIRM_ANSWER and
     RFL_TUI_TEST_CONFIRM_ANSWERS are mutually
     exclusive; set one or the other"`.
-  - `tui_env_confirm_answers_exhaustion_panics.rs` —
-    drive 3 modals with only 2 scripted answers;
-    assert the panic message
-    `"TestConfirmAnswers queue exhausted; modal #3
-    had no scripted answer"`.
-  - `tui_env_confirm_answers_round_trip_two_answers.rs`
-    — two modals → two answers consumed in order
-    (allow then deny); assert the modal outcomes match
-    the scripted answers and the queue is empty
-    afterward.
+  - `tui_test_confirm_queue_next_answer_dequeues_in_order.rs`
+    — unit test on the helper module: construct a
+    queue from `[allow, deny]`; call
+    `next_answer()` twice; assert order.
+  - `tui_test_confirm_queue_exhaustion_panics_with_modal_count.rs`
+    — unit test: construct a queue from `[allow]`;
+    call `next_answer()` once; the second call
+    panics with message containing `"modal #2 had
+    no scripted answer"`. Use `std::panic::catch_unwind`
+    to capture the message.
+  - `tui_runtime_consumes_confirm_answers_queue_for_two_modals.rs`
+    — integration test against the live
+    `rfl_tui.rs` runtime: spawn `rfl-tui` with
+    `RFL_TUI_TEST_CONFIRM_ANSWERS = "allow,deny"`;
+    drive two `confirm_request`s through the
+    bus-fixture publisher; assert the TUI publishes
+    `allow` then `deny` answers in order, observed
+    via a `frontend.tui.confirm_answer` subscriber.
+  - `tui_runtime_confirm_answers_exhaustion_panics_on_third_modal.rs`
+    — integration test: scripted `"allow,deny"`;
+    drive three modals; assert the `rfl-tui`
+    process exits with the panic-shaped exit code
+    and stderr contains the exhaustion message.
 - **Files touched.** `crates/rafaello-tui/src/env.rs`
-  (parser + queue + mutex check, ~80 lines); four new
-  test files.
-- **Size.** small-to-medium (~80 LoC + ~150 LoC tests).
-- **Scope sections.** §TUI-MA1, pi-3 N-2, pi-4 N-3.
+  (parser + mutex check, ~50 lines);
+  `crates/rafaello-tui/src/test_confirm_queue.rs`
+  (new helper module, ~60 lines);
+  `crates/rafaello-tui/src/lib.rs` (one `pub mod`
+  line); `crates/rafaello-tui/src/bin/rfl_tui.rs`
+  (queue construction + per-modal dequeue, ~25
+  lines); six new test files.
+- **Size.** medium (~135 LoC production + ~200 LoC
+  tests). Body-justified: scope §TUI-MA1's "parser +
+  queue + exhaustion + mutual-exclusion" is one
+  coherent surface; splitting parser-only from
+  runtime-consumer would leave the queue uncalled
+  for an intermediate commit (failing the
+  "tests-with-code" rule and the per-commit green
+  bar).
+- **Scope sections.** §TUI-MA1, pi-1 B-3, pi-3 N-2,
+  pi-4 N-3.
 
 ### c19 — feat(rafaello): append `RFL_TUI_TEST_CONFIRM_ANSWERS` to rfl env allowlist + passthrough test (§TUI-MA2)
 
@@ -1739,7 +1929,7 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
   env var before spawning `rfl-tui`, and the queue
   arrives empty in the TUI process.
 - **Depends on.** c18.
-- **Acceptance.** Tests in `rafaello/tests/`:
+- **Acceptance.** Tests in `crates/rafaello/tests/`:
   - `rfl_chat_passes_confirm_answers_env_to_tui.rs` —
     drive `rfl chat` (against the m5a fixture lock —
     m5b lock not landed until c22; the test asserts
@@ -1823,6 +2013,20 @@ then the m5b fixture lock.
   without HTTP-client logic so c21's file-backed
   handler diff is the logic only, and c22's fixture
   lock has a real workspace member to reference.
+  **Packaging note** (pi-1 N-1): scope §TF1 lists
+  `src/main.rs` for the binary entry point. This
+  commit intentionally uses
+  `src/bin/rafaello_fetch.rs` with an explicit
+  `[[bin]]` declaration in `Cargo.toml`. Both forms
+  are valid Rust packaging; the `[[bin]]` declaration
+  makes the choice invisible to downstream consumers
+  (the binary name + path are determined by the
+  manifest, not the file location). The split allows
+  `src/lib.rs` to expose `WebFetchHandler` for unit
+  tests without spawning a process — the same shape
+  used by `rafaello-mailcat` in m5a. Scope traceability
+  preserved: the binary entry point's behaviour
+  matches scope §TF1 verbatim.
 - **Depends on.** baseline.
 - **Acceptance.** Tests run from workspace root:
   - `nix develop --impure --command cargo build
@@ -1841,13 +2045,29 @@ then the m5b fixture lock.
 - **Files touched.** `rafaello/Cargo.toml` (members
   list); seven new files in `crates/rafaello-fetch/`
   + one bin-shim; one new test file.
-- **Size.** small (~150 LoC scaffold + manifest +
-  openrpc + schema + bin-shim).
-- **Scope sections.** §TF1.
+- **Size.** medium — body-justified by fixture
+  surface count (~150 LoC of scaffold across 7
+  fixture files + bin-shim + manifest, mostly
+  TOML / JSON / placeholder Rust). The
+  manifest + openrpc + grant-schema + lib + bin
+  + bin-shim + `Cargo.toml` + `members` edit form a
+  single coherent fixture-plugin scaffold; splitting
+  by file fails the per-commit green bar (an
+  intermediate commit with a `Cargo.toml` referencing
+  missing files breaks workspace `cargo build`).
+  m5a c30 (`rafaello-mailcat` scaffold) is the
+  precedent — pi-1 M-4 ripple. Counted in the
+  "medium" bucket of the sizing summary, not the
+  "body-justified large" list (kept to four:
+  c04, c13, c14, c23).
+- **Scope sections.** §TF1, pi-1 N-1.
 
-### c21 — feat(rafaello-fetch): file-backed `WebFetchHandler` reading `RFL_FETCH_TEST_BODY_PATH` (§TF2)
+### c21 — feat(rafaello-fetch): file-backed `WebFetchHandler` reading `RFL_FETCH_TEST_BODY_PATH` + per-invocation log via `RFL_FETCH_TEST_LOG_PATH` (§TF2)
 
-- **What.** Scope §TF2. Two coordinated edits:
+- **What.** Scope §TF2 / pi-1 B-5 ripple (per-fixture
+  invocation-log emission lands here, not in c23 — c28
+  depends on c22 only and consumes the log surface).
+  Two coordinated edits:
   1. **`crates/rafaello-fetch/src/lib.rs`**: replace
      the placeholder with the
      `WebFetchHandler` struct implementing the
@@ -1860,6 +2080,16 @@ then the m5b fixture lock.
        is missing or unreadable, return the same
        error. Otherwise, return `{ok: true, content:
        <file contents as UTF-8 string>}`.
+     - **Per-invocation log** (pi-1 B-5): if
+       `RFL_FETCH_TEST_LOG_PATH` is set, append one
+       line per invocation to the file at that path
+       capturing the `url` argument (e.g. `web-fetch:
+       <url>\n`). The append is best-effort: failure
+       to open / write the log does NOT fail the
+       handler — it logs at `tracing::warn!` and
+       returns the normal response. This mirrors
+       m5a's `rafaello-mailcat` per-fixture log
+       pattern (`mailcat.log`).
      - The plugin does NOT issue real HTTP requests.
        No `reqwest` dep weight + no flake risk;
        manual validation (scope §"Manual validation")
@@ -1871,7 +2101,13 @@ then the m5b fixture lock.
      replace the placeholder `main` with the fittings
      `run_plugin(WebFetchHandler::new())` shape
      mirroring `rafaello-mailcat`'s bin.
-- **Why.** Scope §TF2 / §A6.
+- **Why.** Scope §TF2 / §A6 + pi-1 B-5. The
+  invocation-log surface must exist by c22's time (c22
+  pins `RFL_FETCH_TEST_LOG_PATH` in env.pass; c28
+  asserts `fetch.log` and depends only on c22). Moving
+  the emission from c23 to c21 keeps c23 a pure
+  integration test and gives c28 the surface it
+  legitimately consumes via its c22 dep.
 - **Depends on.** c20.
 - **Acceptance.** Tests in
   `crates/rafaello-fetch/tests/`:
@@ -1887,19 +2123,44 @@ then the m5b fixture lock.
   - `rafaello_fetch_returns_error_on_missing_file.rs`
     — env var set to a non-existent path; assert the
     same error.
+  - `rafaello_fetch_writes_invocation_log_when_log_path_set.rs`
+    (pi-1 B-5 acceptance) — set both
+    `RFL_FETCH_TEST_BODY_PATH` and
+    `RFL_FETCH_TEST_LOG_PATH` (the latter to a
+    `tempfile`); invoke the handler twice with
+    different URLs; assert the log file contains
+    two lines, each naming the corresponding URL.
+  - `rafaello_fetch_log_unset_path_does_not_fail.rs`
+    — `RFL_FETCH_TEST_LOG_PATH` unset; invoke
+    handler; response is normal (no log writes,
+    no error).
+  - `rafaello_fetch_log_unwritable_path_warns_and_continues.rs`
+    — set the log path to an unwritable location
+    (read-only directory or `/dev/full` if
+    available); invoke; assert the handler still
+    returns the normal response (warn-logged, not
+    failed).
 - **Files touched.** `crates/rafaello-fetch/src/lib.rs`
-  (handler, ~50 lines);
+  (handler + log emission, ~70 lines);
   `crates/rafaello-fetch/src/bin/rafaello_fetch.rs`
-  (bin main, ~10 lines); three new test files.
-- **Size.** small (~60 LoC + ~100 LoC tests).
-- **Scope sections.** §TF2, §A6.
+  (bin main, ~10 lines); five new test files.
+- **Size.** small-to-medium (~80 LoC + ~180 LoC
+  tests). Body justification: §TF2 handler + scope
+  §EXFIL1's per-fixture log surface (pi-1 B-5) are
+  one coherent fetch-plugin behaviour bundle.
+- **Scope sections.** §TF2, §A6, pi-1 B-5.
 
-### c22 — feat(rafaello): m5b fixture lock chaining four plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` (§TF3)
+### c22 — feat(rafaello): m5b fixture lock chaining FIVE plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` + `RFL_FETCH_TEST_LOG_PATH` (§TF3)
 
-- **What.** Scope §TF3 / pi-1 M-5. New directory
+- **What.** Scope §TF3 / pi-1 M-5 / pi-1 B-4 ripple
+  (FINAL five-plugin lock shipped here so c26 does NOT
+  mutate it) / pi-1 B-5 ripple (`RFL_FETCH_TEST_LOG_PATH`
+  env.pass entry lands here, alongside the
+  fetch-handler log emission in c21). New directory
   `rafaello/fixtures/m5b-locks/` containing:
   1. **`rafaello/fixtures/m5b-locks/rafaello.lock`**:
-     the m5b combined lock. Four plugins:
+     the m5b combined lock. **Five plugins** (the
+     final shape; no later commit mutates this lock):
      - `builtin:openai@0.0.0` (active provider —
        reuse m5a fixture entry shape).
        `bindings.provider = true; provider_id =
@@ -1914,9 +2175,12 @@ then the m5b fixture lock.
        "schemas/web-fetch-grant.json";
        .always_confirm = false`.
        `grant.bundles.default.env.pass =
-       ["RFL_FETCH_TEST_BODY_PATH"]` (pi-1 M-5 —
-       the lock pins the env-var passthrough so the
-       plugin receives the path).
+       ["RFL_FETCH_TEST_BODY_PATH",
+       "RFL_FETCH_TEST_LOG_PATH"]` (pi-1 M-5 —
+       body-path passthrough; pi-1 B-5 —
+       log-path passthrough so the c21-shipped
+       fetch-log emission engages from inside the
+       spawned plugin process).
        `grant.bundles.default.network.mode = "deny";
        .allow_hosts = []` — real outbound denied by
        lockin; the gate intercepts before lockin
@@ -1926,19 +2190,29 @@ then the m5b fixture lock.
        `bindings.tool_meta.send-mail.sinks =
        ["mail"]; .grant_match =
        "schemas/send-mail-grant.json"`.
+     - `local:readfile@0.0.0` — non-sink tool, reuse
+       m5a fixture entry shape unchanged.
+       `bindings.tools = ["read-file"]`.
+       `bindings.tool_meta.read-file` carries no
+       `sinks` (read-file is not a sink-class tool).
+       Included so c26's five-tree spawn test
+       consumes this lock unchanged (pi-1 B-4 — no
+       later mutation).
      - `local:mockprovider@0.0.0` —
        installed-but-not-active provider stub for
-       §C38a's five-tree count. `bindings.provider
-       = true; provider_id = "mock"`. Not selected
-       as `session.provider_active`.
+       §C38b's inactive-provider test.
+       `bindings.provider = true; provider_id =
+       "mock"`. Not selected as
+       `session.provider_active`.
      `session.provider_active =
      "builtin:openai@0.0.0"` (live field per
      `rafaello-core/src/lock/session.rs:11`).
      **No `session.tool_owner` entries** — each
-     tool (`web-fetch`, `send-mail`) has exactly
-     one claimant; live `validate::lock` rejects
-     redundant entries with `ToolOwnerRedundant`
-     (m5a c34 / pi-4 B-1 ripple).
+     tool (`web-fetch`, `send-mail`, `read-file`)
+     has exactly one claimant; live `validate::lock`
+     rejects redundant entries with
+     `ToolOwnerRedundant` (m5a c34 / pi-4 B-1
+     ripple).
   2. **`rafaello/fixtures/m5b-locks/rafaello-fetch/`**:
      plugin fixture tree mirroring
      `crates/rafaello-fetch/`'s package shape
@@ -1947,34 +2221,45 @@ then the m5b fixture lock.
      c20).
   3. **`rafaello/fixtures/m5b-locks/rafaello-openai/`**,
      **`rafaello/fixtures/m5b-locks/rafaello-mailcat/`**,
+     **`rafaello/fixtures/m5b-locks/rafaello-readfile/`**,
      **`rafaello/fixtures/m5b-locks/rafaello-mockprovider/`**:
      symlinks (or copies) of m5a's fixture trees
-     mirroring the m5a lock's package layout. The
-     drafting agent chooses copies vs symlinks
-     based on the live m5a-locks structure;
-     **default: copies** (simpler ratification;
+     mirroring the m5a lock's package layout.
+     **Default: copies** (simpler ratification;
      deduplication is m6 polish if needed).
-- **Why.** Scope §TF3 + pi-1 M-5. The c23 EXFIL1
-  headline test consumes this lock; without the
-  env.pass entry, the plugin doesn't receive
-  `RFL_FETCH_TEST_BODY_PATH` and the file-backed
-  semantics never engage.
+- **Why.** Scope §TF3 + pi-1 M-5 + pi-1 B-4 + pi-1
+  B-5. The c23 EXFIL1 headline test consumes this
+  lock; without the body-path env.pass entry, the
+  plugin doesn't receive `RFL_FETCH_TEST_BODY_PATH`
+  and the file-backed semantics never engage.
+  Shipping the five-plugin final shape here (vs the
+  four-plugin shape with c26 mutating to five) is
+  pi-1 B-4: c26 must consume the lock without
+  rewriting it, otherwise c22's
+  `ToolSchemaCatalog::list()` exact-count assertion
+  silently breaks when c26 lands. Adding the
+  `RFL_FETCH_TEST_LOG_PATH` env.pass entry here (vs
+  later in c23) is pi-1 B-5: c28 depends on c22
+  only and asserts `fetch.log`; the env-pass must
+  exist by c22's time.
 - **Depends on.** c20, c21 (the fixture lock
   references the `rafaello-fetch` package shape
-  c20+c21 define).
+  c20+c21 define, including c21's fetch-log
+  emission).
 - **Acceptance.** Tests in
-  `rafaello-core/tests/`:
+  `crates/rafaello-core/tests/`:
   - `m5b_fixture_lock_validates_and_compiles.rs` —
     the combined lock passes `validate::lock` and
-    `compile_plugin` for all four entries. Also
+    `compile_plugin` for all **five** entries. Also
     calls `ToolSchemaCatalog::build(&acl,
     &compiled_plugins, &package_dirs)` against the
     combined lock and asserts the resulting
-    catalog's `list()` contains exactly two
-    `ToolSchema` entries: `web-fetch` (from
-    rafaello-fetch) and `send-mail` (from
-    mailcat). openai + mockprovider providers
-    contribute no entries.
+    catalog's `list()` contains **exactly three**
+    `ToolSchema` entries — `web-fetch` (from
+    rafaello-fetch), `send-mail` (from mailcat),
+    and `read-file` (from readfile). openai +
+    mockprovider providers contribute no entries
+    (no `provides.tools`).
   - `m5b_fixture_lock_session_pins_provider_active.rs`
     — assert `session.provider_active ==
     "builtin:openai@0.0.0"` and
@@ -1987,9 +2272,19 @@ then the m5b fixture lock.
     equals the file contents (proves the env
     var reaches the plugin through lock →
     supervisor → spawn).
+  - `rafaello_fetch_receives_log_path_env_from_lock.rs`
+    (pi-1 B-5 acceptance) — spawn the
+    fixture-plugin from the lock with
+    `RFL_FETCH_TEST_LOG_PATH` set; invoke a
+    `web-fetch`; assert the log file at the path
+    has one entry. Proves the log-path env var
+    reaches the plugin process through the lock
+    + supervisor + spawn path (the c21 emission
+    is exercised end-to-end).
   - **Re-enable c14's deferred test**
     `rfl_chat_pt1_violation_after_plugin_spawn_writes_audit_row.rs`
-    (pi-5 B-2 acceptance): spawn `rfl chat`
+    (pi-5 B-2 acceptance, file lives at
+    `crates/rafaello/tests/`): spawn `rfl chat`
     against the m5b lock; complete the normal
     plugin handshake; publish a violating
     `plugin.<id>.tool_result` (taint that is not
@@ -2003,14 +2298,20 @@ then the m5b fixture lock.
     spawn" + "audit actually fires after spawn"
     pair.
 - **Files touched.** new directory
-  `rafaello/fixtures/m5b-locks/` with lock + four
-  package fixture trees (~10 files, mostly TOML +
-  JSON); four new test files (or three new + one
+  `rafaello/fixtures/m5b-locks/` with lock + five
+  package fixture trees (~12 files, mostly TOML +
+  JSON); five new test files (or four new + one
   un-deferred from c14).
-- **Size.** medium (mostly TOML / JSON content +
-  four sub-trees + four tests). Body-justified by
-  fixture surface count (m5a c34 precedent).
-- **Scope sections.** §TF3, pi-1 M-5, pi-5 B-2.
+- **Size.** medium (~250 LoC of TOML / JSON
+  content + five sub-trees + five tests).
+  Body-justified by fixture surface count (m5a c34
+  precedent; five-plugin lock + env.pass for
+  body-path + log-path is one coherent fixture
+  package). Per pi-1 B-4 + B-5, this row owns the
+  final fixture shape; c26 / c28 consume it
+  unchanged.
+- **Scope sections.** §TF3, pi-1 M-5, pi-1 B-4,
+  pi-1 B-5, pi-5 B-2.
 
 ---
 
@@ -2026,7 +2327,7 @@ coverage.
 
 - **What.** Scope §EXFIL1 / pi-4 M-4. Headline
   integration test at
-  `rafaello/tests/rfl_chat_demo_bar_verbatim_exfil_blocked.rs`.
+  `crates/rafaello/tests/rfl_chat_demo_bar_verbatim_exfil_blocked.rs`.
   Spawns `rfl chat` against
   `rafaello/fixtures/m5b-locks/rafaello.lock` (c22)
   with the `rfl-openai-stub` (m5a-shipped) scripted
@@ -2135,23 +2436,13 @@ coverage.
     (`<tempdir>/fetch.log` mirroring m5a
     `mailcat.log` pattern): one entry for the
     turn-1 invocation, capturing the URL. The
-    fetch handler writes a per-fixture
-    invocation-log file (the file path passed
-    via a `RFL_FETCH_TEST_LOG_PATH` env var —
-    added to the m5b lock's env.pass list inside
-    this commit if not already present; the
-    fetch handler's c21 logic must be extended
-    in this commit if missing).
-    **Decision for the commit plan:** the
-    fetch-log emission is part of the
-    `rafaello-fetch` plugin and would belong in
-    c21. If c21 did NOT ship the log emission,
-    c23 extends c21's handler in the same commit
-    with a body justification "test-fixture
-    instrumentation, mirrors mailcat.log m5a
-    pattern". To keep c21 minimal, c23 owns the
-    log-emission addition; c21's tests are
-    unchanged.
+    fetch handler's log emission lands at c21
+    (pi-1 B-5); the m5b lock's env.pass entry
+    lands at c22. c23 consumes both unchanged —
+    set `RFL_FETCH_TEST_LOG_PATH` in the test
+    harness to a `tempfile`; the plugin process
+    inherits the path via the lock-mediated
+    env passthrough.
   - **`rafaello-mailcat` per-fixture log**
     (`<tempdir>/mailcat.log`): empty — turn-2
     dispatch is blocked by the deny.
@@ -2175,7 +2466,7 @@ coverage.
   - **Lock**: `rafaello/fixtures/m5b-locks/rafaello.lock`
     (c22-shipped).
   - **Stub scripted response**: new JSON file
-    `rafaello/tests/fixtures/exfil-stub-response.json`
+    `crates/rafaello/tests/fixtures/exfil-stub-response.json`
     encoding the two-turn `ChatCompletionResponse`
     shape consumed by m5a-shipped
     `rfl-openai-stub`. Includes the `tool_calls`
@@ -2195,24 +2486,23 @@ coverage.
     `<tempdir>/fetch.log` has 1 entry;
     `<tempdir>/mailcat.log` empty.
 - **Files touched.**
-  `rafaello/tests/rfl_chat_demo_bar_verbatim_exfil_blocked.rs`
+  `crates/rafaello/tests/rfl_chat_demo_bar_verbatim_exfil_blocked.rs`
   (~300 lines integration test);
-  `rafaello/tests/fixtures/exfil-stub-response.json`
-  (~80 lines scripted response);
-  `crates/rafaello-fetch/src/lib.rs` (add per-fixture
-  log emission gated on `RFL_FETCH_TEST_LOG_PATH`,
-  ~20 lines); m5b fixture lock env.pass extension
-  if needed.
-- **Size.** large (~400 LoC test + ~80 LoC fixture
-  + ~20 LoC fetch-log addition). Body-justified per
-  scope §"Demo bar" headline + m5a c39 precedent.
+  `crates/rafaello/tests/fixtures/exfil-stub-response.json`
+  (~80 lines scripted response). No production
+  code touched (pi-1 B-5 ripple: fetch-log emission
+  lives at c21; lock env.pass at c22).
+- **Size.** large (~380 LoC test + fixture). Body-
+  justified per scope §"Demo bar" headline + m5a c39
+  precedent. Smaller than round-1's claim now that
+  the c21/c22 surface is in tree.
 - **Scope sections.** §EXFIL1, §"Demo bar"
   Negative 4, pi-2 B-3, pi-4 B-3, pi-4 M-4.
 
 ### c24 — test(rafaello): allow-arm audit-trail variant (§EXFIL2) — operator allowed the verbatim flow
 
 - **What.** Scope §EXFIL2 / §A5. Companion test
-  `rafaello/tests/rfl_chat_verbatim_exfil_audit_trail_visible_when_allowed.rs`
+  `crates/rafaello/tests/rfl_chat_verbatim_exfil_audit_trail_visible_when_allowed.rs`
   runs the same flow as c23 but with
   `RFL_TUI_TEST_CONFIRM_ANSWERS = "allow,allow"`.
   Assertions:
@@ -2251,7 +2541,7 @@ coverage.
     `tool_result` is `ok: true` (mailcat
     succeeded).
 - **Files touched.** one new test file
-  (`rafaello/tests/rfl_chat_verbatim_exfil_audit_trail_visible_when_allowed.rs`,
+  (`crates/rafaello/tests/rfl_chat_verbatim_exfil_audit_trail_visible_when_allowed.rs`,
   ~250 lines).
 - **Size.** medium (~250 LoC test, reusing c23's
   fixture infrastructure).
@@ -2261,7 +2551,7 @@ coverage.
 
 - **What.** Scope §EXFIL3 / §AL1 predicate-branch
   coverage. Third companion test
-  `rafaello/tests/rfl_chat_no_value_match_keeps_provider_only_taint.rs`.
+  `crates/rafaello/tests/rfl_chat_no_value_match_keeps_provider_only_taint.rs`.
   Runs the same fixture lock (c22) but the
   scripted stub response makes the model propose
   turn-2 `send-mail` with a body the LLM
@@ -2312,9 +2602,9 @@ coverage.
     `confirm_request_taint_attached` rows;
     mailcat log gains the fabricated entry.
 - **Files touched.** one new test file
-  (`rafaello/tests/rfl_chat_no_value_match_keeps_provider_only_taint.rs`,
+  (`crates/rafaello/tests/rfl_chat_no_value_match_keeps_provider_only_taint.rs`,
   ~200 lines); new stub-response fixture file
-  `rafaello/tests/fixtures/no-match-stub-response.json`
+  `crates/rafaello/tests/fixtures/no-match-stub-response.json`
   (~50 lines).
 - **Size.** small-to-medium (~250 LoC total).
 - **Scope sections.** §EXFIL3, §AL1, §TR4b
@@ -2331,55 +2621,41 @@ work.
 
 ### c26 — test(rafaello): five-tree spawn + clean shutdown (§C38a)
 
-- **What.** Scope §C38a / m5a retro §5 item 12.
-  `rafaello/tests/rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`
+- **What.** Scope §C38a / m5a retro §5 item 12 /
+  pi-1 B-4 ripple (c22 ships the FINAL five-plugin
+  lock; c26 consumes it unchanged — no mutation).
+  `crates/rafaello/tests/rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`
   asserts `rfl chat` against the m5b fixture lock
   (one active provider + one inactive provider +
   `rafaello-fetch` + `rafaello-mailcat` +
-  `rfl-readfile` = **five plugins**) brings them
-  up and tears them down via the m4-derived
+  `rafaello-readfile` = **five plugins**) brings
+  them up and tears them down via the m4-derived
   `SIGCHLD`-style cleanup.
-  **Five-plugin count clarification**: scope §C38a
-  pins five plugins. The m5b fixture lock (c22)
-  declares four plugins (openai active + fetch +
-  mailcat + mockprovider inactive); c26 either:
-  (a) extends the m5b lock to add `rfl-readfile`
-  as a fifth plugin **in this commit** (small lock
-  edit, doesn't affect c23/24/25 which don't
-  reference readfile); or
-  (b) the test uses a per-test five-plugin lock
-  variant constructed in the test setup.
-  **Decision for the commit plan:** option (a) —
-  c26 extends `rafaello/fixtures/m5b-locks/rafaello.lock`
-  by appending the readfile entry (reuse m5a
-  fixture's readfile entry verbatim). c23/c24/c25
-  still pass — readfile is unused on those paths.
-  The lock edit lands in c26 with a body note
-  pinning the addition's scope.
   Assertions:
   - Five PIDs reaped within the test timeout
     (default 30s).
   - All five children exit cleanly (no
     `WatcherEvent::Crash` observed for any).
-  - The fifth child (`rfl-readfile`) spawned
-    successfully despite being non-active.
+  - The inactive provider (`local:mockprovider`) and
+    the non-active tool (`local:readfile`) both
+    spawn successfully and reap on shutdown.
 - **Why.** Scope §C38a / m5a retro §5 item 12 —
-  ratified-but-not-landed in m5a.
+  ratified-but-not-landed in m5a. Per pi-1 B-4,
+  c26 does NOT touch the shared c22 lock; the
+  five-plugin shape was finalised at c22.
 - **Depends on.** c22.
-- **Acceptance.** The test passes; lock edit
-  compiles via the m1 path.
+- **Acceptance.** The test passes.
 - **Files touched.** one new test file
-  (`rafaello/tests/rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`,
-  ~150 lines);
-  `rafaello/fixtures/m5b-locks/rafaello.lock`
-  (append readfile entry, ~15 lines).
-- **Size.** small (~150 LoC test + 15 LoC lock).
-- **Scope sections.** §C38a, m5a retro §5 item 12.
+  (`crates/rafaello/tests/rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`,
+  ~150 lines). No lock edit.
+- **Size.** small (~150 LoC test).
+- **Scope sections.** §C38a, m5a retro §5 item 12,
+  pi-1 B-4.
 
 ### c27 — test(rafaello): inactive-provider re-emit ignored (§C38b)
 
 - **What.** Scope §C38b / m5a retro §5 item 13.
-  `rafaello/tests/rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs`
+  `crates/rafaello/tests/rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs`
   asserts that with two providers in the lock
   (`builtin:openai` active +
   `local:mockprovider` inactive) and only `openai`
@@ -2404,7 +2680,7 @@ work.
     `core.session.assistant_message` event for
     it; persisted-entries delta is zero.
 - **Files touched.** one new test file
-  (`rafaello/tests/rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs`,
+  (`crates/rafaello/tests/rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs`,
   ~150 lines).
 - **Size.** small (~150 LoC).
 - **Scope sections.** §C38b, m5a retro §5 item 13.
@@ -2412,7 +2688,7 @@ work.
 ### c28 — test(rafaello): positive gate-through-orchestration (§C38c)
 
 - **What.** Scope §C38c / m5a retro §5 item 15.
-  `rafaello/tests/rfl_chat_tool_dispatch_goes_through_gate.rs`
+  `crates/rafaello/tests/rfl_chat_tool_dispatch_goes_through_gate.rs`
   asserts the positive half of m5a's c38 dispatch
   cutover: a real `core.session.tool_request`
   flows through the gate (gate-decided allow with
@@ -2441,10 +2717,10 @@ work.
 - **Acceptance.** The test passes per the
   assertions above.
 - **Files touched.** one new test file
-  (`rafaello/tests/rfl_chat_tool_dispatch_goes_through_gate.rs`,
+  (`crates/rafaello/tests/rfl_chat_tool_dispatch_goes_through_gate.rs`,
   ~180 lines); may need a small fixture file for
   the `/grant` JSON template under
-  `rafaello/tests/fixtures/`.
+  `crates/rafaello/tests/fixtures/`.
 - **Size.** small (~180 LoC).
 - **Scope sections.** §C38c, m5a retro §5 item 15.
 
@@ -2593,31 +2869,83 @@ union arm, these rows slot before the c23-c25 EXFIL block.
 
 ## Sizing summary
 
-Round 1 sizing — each commit is in exactly one
-category (CLAUDE.md `<100 lines` guideline applied;
-`small` = ≲50 LoC including tests; `medium` =
-50-300 LoC; `medium-to-large` = 300-500 LoC;
-`large` = ≥500 LoC body-justified):
+Round 2 sizing (pi-1 M-4 ripple — each row >100 LoC /
+>5 files has either a row-local body justification or
+is in the "body-justified larger" list; CLAUDE.md
+`<100 lines` guideline applied; `small` = ≲50 LoC
+including tests; `small-to-medium` = 50-150 LoC;
+`medium` = 150-300 LoC, row-local justification
+required; `medium-to-large` = 300-500 LoC,
+body-justified; `large` = ≥500 LoC, body-justified):
 
-- **small** (≲50 LoC): 7 commits — c01, c03, c10,
-  c11, c15, c17, c19.
-- **small-to-medium** (50-100 LoC): 5 commits —
-  c02, c07, c08, c18, c25.
-- **medium** (100-300 LoC): 13 commits — c05, c06,
-  c09, c12, c13, c16, c20, c21, c22, c24, c26, c27,
-  c28.
+- **small** (≲50 LoC): 6 commits — c01, c03, c10,
+  c11, c17, c19.
+- **small-to-medium** (50-150 LoC): 5 commits —
+  c02, c07, c08, c15, c25.
+- **medium** (150-300 LoC, row-local justified): 13
+  commits — c05 (TaintMatchMap literal-hash + 6
+  tests), c06 (substring arm + 10 tests), c09
+  (ReferencedTaintIndex + 8 tests), c12
+  (handle_tool_request value-walk + 8 tests), c13
+  (§TR1 ancestry union + 4 tests + amend), c16
+  (TUI overlay + 3 tests), c18 (parser + queue
+  helper + runtime dequeue + 6 tests), c20
+  (fetch-crate scaffold across 7 fixture files —
+  body-justified by fixture-package atomicity, m5a
+  c30 precedent), c21 (handler + log emission + 5
+  tests), c22 (five-plugin fixture lock + 5
+  sub-trees + 5 tests — body-justified by fixture
+  surface count, m5a c34 precedent), c24 (allow-arm
+  EXFIL variant), c26 (five-tree spawn test), c27
+  (inactive-provider re-emit test), c28
+  (gate-through-orchestration test).
 - **medium-to-large** (300-500 LoC, body-justified):
-  2 commits — c04 (unsplittable cutover; scope
-  §"Risks" #17), c14 (unsplittable cutover; scope
-  §"Internal split" row 10 forced-monolithic).
+  2 commits — c04 (unsplittable cutover;
+  `OutstandingDispatch` field rippling; scope
+  §"Risks" #17 / m0 c08 / m4 c07 precedent), c14
+  (unsplittable cutover; §PT1 critical-section
+  enforcement + audit + lifecycle + synthetic-deny
+  coupled; scope §"Internal split" row 10
+  forced-monolithic).
 - **large** (~500 LoC, body-justified): 1 commit —
-  c23 (§EXFIL1 headline + four sub-fixtures; m5a
-  c39 precedent).
+  c23 (§EXFIL1 headline + sub-fixtures; m5a c39
+  precedent; shrinks vs round-1 now that fetch-log
+  surface moved to c21/c22 per pi-1 B-5).
 
-Total: 7 + 5 + 13 + 2 + 1 = **28 commits**. Matches
-scope §"Internal split" 28-default. Reserve budget
-(§A9 union arm) is +2-4 commits if owner takes the
-alternative; the 30-32-commit max holds.
+Total: 6 + 5 + 13 + 2 + 1 = **27 commits**.
+Discrepancy from the 28-default flagged: c15 was
+small (round 1) and remains small-to-medium (round
+2). The sizing table renumbers c15 into the
+small-to-medium bucket; total row count is
+**28 commits** unchanged.
+
+Recount: small (6: c01, c03, c10, c11, c17, c19) +
+small-to-medium (5: c02, c07, c08, c15, c25) +
+medium (14: c05, c06, c09, c12, c13, c16, c18,
+c20, c21, c22, c24, c26, c27, c28) + medium-to-large
+(2: c04, c14) + large (1: c23) = **28 commits**.
+Matches scope §"Internal split" 28-default. Reserve
+budget (§A9 union arm) is +2-4 commits if owner
+takes the alternative; the 30-32-commit max holds.
+
+**Body-justified larger rows** (the "only four"
+header list preserved):
+
+- c04 — `OutstandingDispatch` field unsplittable
+  cutover (scope §"Risks" #17).
+- c13 — §TR1 ancestry union + §PT2 closure
+  semantically coupled (scope §"Internal split"
+  row 9 forced-monolithic).
+- c14 — §PT1 critical-section enforcement (scope
+  §"Internal split" row 10 forced-monolithic).
+- c23 — §EXFIL1 headline + sub-fixtures (m5a c39
+  precedent).
+
+Rows c18, c20, c21, c22 carry **row-local body
+justifications** in their bodies (pi-1 M-4) but are
+NOT in the "body-justified larger" header list —
+they sit in the medium bucket and remain under
+~300 LoC each.
 
 **Unsplittable cutovers**: c04 (`OutstandingDispatch`
 field — `bus.rs` struct rippling to every test
@@ -2625,23 +2953,15 @@ constructor), c14 (§PT1 critical-section enforcement
 + audit + lifecycle + synthetic-deny coupled). Both
 bodies cite m0 c08 / m4 c07 precedent.
 
-**Body-justified large**: c23 (headline integration
-test + four sub-fixtures; m5a c39 precedent).
-
 Pi round budget on `commits.md`: 4-6 rounds. m5a took
 6 rounds for a 41-commit body; m5b is narrower (28
 commits) but the test-ladder coupling between c10 /
 c12 / c13 and the §PT1 critical-section unsplittable
-in c14 are pi-attention magnets. Expect at least one
-round on the c14 critical-section ordering
-description and one on the c23 EXFIL1 fixture surface.
-
-Round 1 is the initial draft — folds zero pi findings.
-Pi review to follow.
+in c14 are pi-attention magnets. Round 2 folds pi-1's
+5B/4M/2N. Pi review of round 2 to follow.
 
 ---
 
-*End of m5b commits.md round 1 — initial draft from
-scope.md round 7 (CONVERGED at `947b784`). 28 commits
-matching the scope's default sizing; +2-4 reserve for
-§A9 union arm. Pi review pending.*
+*End of m5b commits.md round 2 — folds pi-1
+(5B/4M/2N). Convergence trajectory: 5B → (round 2
+in flight).*
