@@ -33,3 +33,4 @@ tempfile = { workspace = true }
 serial_test = { workspace = true }
 tracing-test = { workspace = true }
 nix = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
