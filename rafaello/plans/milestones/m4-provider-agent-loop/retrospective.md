@@ -12,9 +12,9 @@
 > retrospective rounds + drift commits + polish folds)
 > rebased and ff-merged onto `rafaello-v0.1` for
 > linear history per `decisions.md` row 33. **macOS CI
-> URL remains the only ⏳ item** and lands as a
-> follow-up trailer commit once the branch pushes to
-> GitHub. Round-3 pi review (3b + 2n) was closed by
+> green captured 2026-05-11 as run `25655924846`
+> against the RATIFIED commit `0cc1405`** (both
+> Linux + macOS jobs of `rafaello.yml` passed). Round-3 pi review (3b + 2n) was closed by
 > the round-4 patch summary immediately below; round 2
 > (2b + 2n) was closed by the round-3 patch summary;
 > round 1 (5b + 2n) was closed by the round-2 patch
@@ -1209,10 +1209,10 @@ is the build gate's exact form (the explicit
 | Every named test in §"Positive" / §"Negative" matrices implemented and passing | ✅ §1 (with 2 ratification-time relocations recorded) |
 | `cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture` green on Linux inside devshell | ✅ **608 passed / 0 failed / 0 ignored** across 382 top-level `tests/*.rs` files (Cargo runs ~398 test targets including unit + doc tests), captured 2026-05-11 and re-confirmed on the round-2 branch (`/tmp/m4-acceptance.log`) |
 | Demo-bar headline `rfl_chat_demo_bar_read_file.rs` green | ✅ `test rfl_chat_demo_bar_read_file ... ok` (`/tmp/m4-acceptance.log`); restored under the real Landlock sandbox by `0a0e824` (carveout decomposition fix) |
-| **macOS CI green** (hard gate) | ⏳ pending post-retrospective branch push |
+| **macOS CI green** (hard gate) | ✅ run `25655924846` captured 2026-05-11 against the RATIFIED commit `0cc1405` (`manual-validation.md` §4); both `test (ubuntu-latest)` and `test (macos-latest)` jobs of `rafaello.yml` passed |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-11 (`/tmp/m4-build.log` — `Finished dev profile`) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ re-captured 2026-05-11 on round-2 branch after the bus.rs intra-doc-link fix (`639d7f0`); `/tmp/m4-doc.log` has zero `warning:` lines |
-| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ✅/⏳ companion captures Linux test/build/doc transcripts (`844c17d`); §5 interactive recording **owner-accepted at m4 close 2026-05-11** (mechanical coverage via `rfl_chat_demo_bar_read_file`; recording deferred to m6 where `rfl init` lands); macOS CI URL ⏳ pending post-close branch push (lands as a follow-up trailer commit) |
+| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ✅ all six items captured or owner-accepted: §1-§3 + §5 captured on the dev host; §4/§6 macOS CI green captured 2026-05-11 as run `25655924846`; §5 interactive recording owner-accepted in lieu of capture (mechanical coverage via `rfl_chat_demo_bar_read_file`; recording deferred to m6 where `rfl init` lands) |
 | Stream A §10 v1-summary banner patch | ✅ §2.1 — landed as `c222087` |
 | `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — round-2 `9bd24e3` introduced the entry; round-3 `2e87e44` added the `topic_id` segment per pi-r2 B1; round-4 `41768a5` corrected the banner's live-API claims (`register_provider` signature + `RegisteredProvider` RAII type + `bindings.provider` lock shape + `Broker::new` `InvalidTopic` check location) per pi-r3 B2 |
 | `decisions.md` row for `BusEvent.request_id` rollout | ✅ §2.3 — landed as `d51caba` (row 43) |
@@ -1234,10 +1234,10 @@ capture (mechanical coverage via the c27 headline test
 `rfl_chat_demo_bar_read_file`; recording deferred to m6
 where `rfl init` lands per the roadmap). The 71-commit
 m4 cycle rebased and ff-merged onto `rafaello-v0.1` for
-linear history (decisions row 33). **macOS CI URL
-remains the only ⏳ item** and lands as a follow-up
-trailer commit on `manual-validation.md` §4 once the
-branch pushes to GitHub.
+linear history (decisions row 33). **macOS CI green
+captured 2026-05-11 as run `25655924846`** against
+the RATIFIED commit; `manual-validation.md` §4 + §6
+record the URL. All ratification gates met.
 m5 inherits: the new `Provider` publisher class + envelope
 machinery, the `subscribe_internal` primitive and
 `ReemitRouter`, the `AgentLoop` + tool-dispatch wiring,

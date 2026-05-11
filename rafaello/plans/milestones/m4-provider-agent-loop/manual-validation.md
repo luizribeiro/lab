@@ -81,32 +81,14 @@ additions).
 
 ## 4. macOS CI gate — hard ratification gate
 
-**Status:** to be captured by the driver at
-retrospective time. m4 ratification cannot complete
-until at least one `macos-latest` CI run is green
-(scope §"Acceptance summary"), with the only exception
-being tests explicitly gated `#[cfg(target_os = "linux")]`
-(carried forward from m3's
-`frontend_handle_drop_does_not_leak_zombie.rs` and the
-supervisor `/proc/self/fd` baseline tests).
+**Status:** ✅ green captured 2026-05-11 against the
+RATIFIED commit `0cc1405` on `rafaello-v0.1`. Both
+`test (ubuntu-latest)` and `test (macos-latest)` jobs
+passed under the `rafaello.yml` workflow.
 
-**Capture procedure** (matches m3 manual-validation §4
-and m2 §5.7):
-
-1. Push `rafaello-v0.1` to GitHub: `git push origin
-   rafaello-v0.1`.
-2. The existing `.github/workflows/rafaello.yml` workflow
-   auto-triggers (`test (macos-latest)` job).
-3. Capture the `macos-latest` job URL into this section.
-4. Confirm a green run. Any non-platform-inherent failure
-   must be fixed in m4 before ratification (m3-precedent:
-   macOS failures are NOT retrospective-time follow-ups).
-
-**Placeholder URL** (to be filled in):
-
-- Workflow run: <https://github.com/luizribeiro/lab/actions/runs/__TBD__>
-- `test (macos-latest)`: <https://github.com/luizribeiro/lab/actions/runs/__TBD__/job/__TBD__>
-- `test (ubuntu-latest)`: <https://github.com/luizribeiro/lab/actions/runs/__TBD__/job/__TBD__>
+- Workflow run: <https://github.com/luizribeiro/lab/actions/runs/25655924846>
+- `test (macos-latest)`: <https://github.com/luizribeiro/lab/actions/runs/25655924846/job/75304243945>
+- `test (ubuntu-latest)`: <https://github.com/luizribeiro/lab/actions/runs/25655924846/job/75304243890>
 
 ## 5. Real interactive `rfl chat` smoke — demo bar
 
@@ -216,10 +198,12 @@ pending until that decision is made.
 
 ## 6. CI green — Linux + macOS workflow run URL
 
-**Status:** to be captured by the driver at
-retrospective time.
+**Status:** ✅ run `25655924846` captured 2026-05-11
+against the RATIFIED commit `0cc1405`; both
+`test (ubuntu-latest)` and `test (macos-latest)` jobs
+of the `rafaello.yml` workflow passed.
 
-- Workflow run: <https://github.com/luizribeiro/lab/actions/runs/__TBD__>
+- Workflow run: <https://github.com/luizribeiro/lab/actions/runs/25655924846>
 
 ---
 
@@ -228,11 +212,11 @@ retrospective time.
 | `scope.md` §"Acceptance summary" bullet | Section | Status |
 |-----------------------------------------|---------|--------|
 | `cargo test --workspace --features test-fixture` green on Linux | §1 | ✅ 608/0/0 captured 2026-05-11 (`/tmp/m4-acceptance.log`) |
-| **macOS CI green** (hard gate) | §4 | ⏳ pending post-retrospective branch push |
+| **macOS CI green** (hard gate) | §4 | ✅ run 25655924846 captured 2026-05-11 |
 | `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ✅ captured 2026-05-11 (`/tmp/m4-build.log`) |
 | `cargo doc --workspace --no-deps` warning-free | §3 | ✅ captured 2026-05-11, post bus-rs intra-doc-link fix (`/tmp/m4-doc.log`, 0 warnings) |
 | Interactive `rfl chat` demo-bar walkthrough | §5 | ✅ owner-accepted at m4 close 2026-05-11 (mechanical coverage via `rfl_chat_demo_bar_read_file` post-`0a0e824`; recording deferred to m6 where `rfl init` lands) |
-| CI green Linux + macOS | §6 | ⏳ pending post-retrospective branch push |
+| CI green Linux + macOS | §6 | ✅ run 25655924846 captured 2026-05-11 |
 
 ## Negative-matrix cross-reference
 
@@ -249,15 +233,12 @@ green under the §1 acceptance run.
 | 5 | Bus event missing the `taint` envelope rejected | `rafaello-core/tests/broker_publish_core_session_tool_request_missing_taint_rejected.rs`; `rafaello-core/tests/broker_publish_core_session_tool_result_missing_taint_rejected.rs` (broker errors `InvalidTaint { reason: "missing" }`) |
 | 6 | Plugin-supplied taint discarded/replaced on core re-emit | `rafaello-core/tests/reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs` (pi-3 L-1: provider's claimed `taint: [{source: "user"}]` is discarded; emitted `core.session.tool_request` carries only the canonical `[{source: "provider", detail: "mock"}]`) |
 
-The Linux test/build/doc gates and the mechanical demo-bar
-coverage are captured. §5 (interactive `rfl chat`
-recording) is owner-accepted at m4 close in lieu of a
-recording; the underlying behaviours are mechanically
-covered by `rfl_chat_demo_bar_read_file` and the recording
-itself defers to m6 where `rfl init` lands. **macOS CI
-green (§4 / §6) remains the only ⏳ item** and will
-land as a follow-up trailer commit once the branch
-pushes to GitHub. `retrospective.md` round 4 was
-pi-ratified at zero blockers on
+All gates captured. §1 / §2 / §3 / §4 / §6 ✅; §5
+interactive `rfl chat` recording owner-accepted at m4
+close in lieu of a recording (mechanical coverage via
+`rfl_chat_demo_bar_read_file`; recording deferred to m6
+where `rfl init` lands). `retrospective.md` round 4
+was pi-ratified at zero blockers on
 `retrospective-pi-review-4.md` (`8a8bd6d`); **m4
-ratified and closed 2026-05-11 by the owner**.
+ratified and closed 2026-05-11 by the owner**; macOS
+CI green captured 2026-05-11 (run `25655924846`).
