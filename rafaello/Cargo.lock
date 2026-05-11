@@ -1082,6 +1082,8 @@ dependencies = [
  "fittings-core",
  "fittings-server",
  "fittings-transport",
+ "lockin",
+ "nix",
  "rafaello-core",
  "serde",
  "serde_json",
