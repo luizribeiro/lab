@@ -313,6 +313,7 @@ fn dispatch_event(
             acl,
             active_provider,
             provider_id,
+            taint_match,
             referenced_taint_index,
             event,
         )
@@ -366,19 +367,35 @@ fn handle_user_message(
 
 /// §CR2: `provider.<id>.tool_request` → `core.session.tool_request`.
 ///
-/// §TR3 step 6: the canonical request taint (provider-identity-only for
-/// c11; c12 extends with value-match + referenced-union arms) is recorded
-/// into the router-owned `ReferencedTaintIndex.by_request_id` before the
-/// canonical publish so any subsequent `plugin.<id>.tool_result` whose
-/// `in_reply_to[0]` cites this id hits the cache (c13). On publish
-/// failure the recorded entry is TTL-bounded stale — a misbehaving
-/// plugin fabricating the id is rejected by the m5a broker stale-id
-/// check.
+/// §TR3 steps 1-4 + §TR4b: the canonical request taint is constructed as
+/// the deduplicated, deterministically-sorted union of three arms:
+///
+///   provider-identity ∪ value_match_lookup ∪ referenced_union
+///
+/// where `value_match_lookup` is `TaintMatchMap::lookup(args)` (c05+c06)
+/// and `referenced_union` is the union of taints found by looking up each
+/// id in `event.in_reply_to` via `ReferencedTaintIndex::lookup_result`.
+/// Misses contribute empty (fail-open per §A10). The synthesised envelope
+/// taint is a superset by construction (§TR4b: construct, don't reject).
+///
+/// §TR3 step 6: the full canonical vector is recorded into
+/// `ReferencedTaintIndex.by_request_id` before the canonical publish so
+/// any subsequent `plugin.<id>.tool_result` whose `in_reply_to[0]` cites
+/// this id hits the cache (c13). On publish failure the recorded entry
+/// is TTL-bounded stale — a misbehaving plugin fabricating the id is
+/// rejected by the m5a broker stale-id check.
+///
+/// §AL3: when the referenced-union arm contributes entries that are not
+/// already covered by `provider-identity ∪ value_match`, an
+/// `AuditKind::ToolRequestTaintUnionedFromInReplyTo` row is written via
+/// the audit writer obtained from `broker.audit_writer()`. When the
+/// referenced contribution is redundant, no row is written.
 fn handle_tool_request(
     broker: &Broker,
     acl: &BrokerAcl,
     active_provider: &CanonicalId,
     provider_id: &str,
+    taint_match: &TaintMatchMap,
     referenced_taint_index: &ReferencedTaintIndex,
     event: &BusEvent,
 ) -> Result<(), BrokerError> {
@@ -423,22 +440,72 @@ fn handle_tool_request(
         }
     };
 
-    let taint = vec![TaintEntry {
+    let provider_taint = TaintEntry {
         source: "provider".to_string(),
         detail: Some(provider_id.to_string()),
-    }];
+    };
+    let value_match_taint = taint_match.lookup(&args);
+    let mut referenced_union: Vec<TaintEntry> = Vec::new();
+    if let Some(ids) = event.in_reply_to.as_ref() {
+        for id in ids {
+            if let Some(entries) = referenced_taint_index.lookup_result(id) {
+                for entry in entries {
+                    referenced_union.push(entry);
+                }
+            }
+        }
+    }
+
+    let mut base: Vec<TaintEntry> = vec![provider_taint];
+    for entry in &value_match_taint {
+        if !base.contains(entry) {
+            base.push(entry.clone());
+        }
+    }
+    let mut unioned_extra: Vec<TaintEntry> = Vec::new();
+    for entry in &referenced_union {
+        if !base.contains(entry) && !unioned_extra.contains(entry) {
+            unioned_extra.push(entry.clone());
+        }
+    }
+
+    let mut canonical = base;
+    canonical.extend(unioned_extra.iter().cloned());
+    canonical.sort_by(|a, b| {
+        (a.source.as_str(), a.detail.as_deref()).cmp(&(b.source.as_str(), b.detail.as_deref()))
+    });
+    canonical.dedup();
+
+    let request_id = event.request_id.as_ref().expect("m4 row 43");
+    referenced_taint_index.record_request(request_id, &canonical);
+
+    if !unioned_extra.is_empty() {
+        if let Some(audit) = broker.audit_writer() {
+            let in_reply_to_ids = event.in_reply_to.clone().unwrap_or_default();
+            let payload = serde_json::json!({
+                "request_id": request_id,
+                "unioned_entries": unioned_extra,
+                "in_reply_to_ids": in_reply_to_ids,
+            });
+            let _ = audit.record(
+                AuditKind::ToolRequestTaintUnionedFromInReplyTo,
+                Some(request_id),
+                &payload,
+            );
+        }
+    }
+
     let canonical_payload = serde_json::json!({
         "tool": tool,
         "args": args,
         "dispatch_target": target.to_string(),
     });
-    referenced_taint_index.record_request(event.request_id.as_ref().expect("m4 row 43"), &taint);
     broker.publish_core_with_taint(
         "core.session.tool_request",
         canonical_payload,
         event.request_id.clone(),
         event.in_reply_to.clone(),
-        Some(taint),
+        Some(canonical),
         Some(active_provider.clone()),
     )
 }
