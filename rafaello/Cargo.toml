@@ -38,6 +38,7 @@ unicode-width = "0.2"
 ulid = { version = "1", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 jsonschema = "0.18"
+siphasher = "1"
 
 [profile.dist]
 inherits = "release"

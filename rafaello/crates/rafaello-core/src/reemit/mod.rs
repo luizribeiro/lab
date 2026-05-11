@@ -18,6 +18,8 @@
 //! arm, gated on the optional `confirm_state` + `audit` builder so
 //! m5a's gradual rollout keeps m4-shaped callers working.
 
+pub mod taint_match;
+
 use std::sync::Arc;
 
 use tokio::sync::watch;

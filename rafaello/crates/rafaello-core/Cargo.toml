@@ -32,6 +32,7 @@ anyhow = { workspace = true }
 rusqlite = { workspace = true }
 ulid = { workspace = true }
 jsonschema = { workspace = true }
+siphasher = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
