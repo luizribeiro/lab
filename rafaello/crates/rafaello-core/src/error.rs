@@ -386,6 +386,11 @@ pub enum BrokerError {
     ProviderAlreadyRegistered(CanonicalId),
     #[error("publisher {publisher:?} missing request_id on `{topic}`")]
     MissingRequestId { publisher: Publisher, topic: String },
+    #[error("plugin `{canonical}` published tool_result citing stale request_id `{id:?}`")]
+    StaleRequestId {
+        canonical: CanonicalId,
+        id: JsonRpcId,
+    },
     #[error("publisher {publisher:?} sent invalid taint on `{topic}`: {reason:?}")]
     InvalidTaint {
         publisher: Publisher,

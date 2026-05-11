@@ -1,8 +1,9 @@
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -102,10 +103,30 @@ struct ProviderConn {
     peer: PeerHandle,
 }
 
+/// Per-dispatch record for a `tool_request` routed to a specific plugin
+/// (scope §OM1). The `dispatched_at` instant is unused in m5a but stored
+/// for an m6 metrics hook.
+#[derive(Debug, Clone)]
+pub struct OutstandingDispatch {
+    pub request_id: JsonRpcId,
+    pub dispatched_at: Instant,
+}
+
 struct BrokerState {
     registry: BTreeMap<CanonicalId, PluginConn>,
     frontends: BTreeMap<AttachId, FrontendConn>,
     providers: BTreeMap<CanonicalId, ProviderConn>,
+    outstanding_dispatched: BTreeMap<CanonicalId, HashMap<JsonRpcId, OutstandingDispatch>>,
+}
+
+impl BrokerState {
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn outstanding_dispatched_count(&self, canonical: &CanonicalId) -> usize {
+        self.outstanding_dispatched
+            .get(canonical)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
 }
 
 struct InternalSlot {
@@ -196,6 +217,7 @@ impl Broker {
                 registry: BTreeMap::new(),
                 frontends: BTreeMap::new(),
                 providers: BTreeMap::new(),
+                outstanding_dispatched: BTreeMap::new(),
             }),
             provider_observed_results: Mutex::new(BTreeMap::new()),
             provider_observed_user_messages: Mutex::new(BTreeMap::new()),
@@ -335,6 +357,15 @@ impl Broker {
         state.registry.clear();
         state.frontends.clear();
         state.providers.clear();
+        state.outstanding_dispatched.clear();
+    }
+
+    /// Test-only accessor over [`BrokerState::outstanding_dispatched`]
+    /// (scope §OM1). Returns the number of dispatched-but-not-yet-replied
+    /// `tool_request` ids targeting `canonical`.
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn outstanding_dispatched_count(&self, canonical: &CanonicalId) -> usize {
+        self.0.state.lock().outstanding_dispatched_count(canonical)
     }
 
     pub fn handle_plugin_publish(
@@ -421,6 +452,32 @@ impl Broker {
                     publisher: Publisher::Plugin(canonical.clone()),
                     topic: msg.topic.clone(),
                     reason,
+                });
+            }
+        }
+
+        // Scope §OM2: atomic intake check on plugin `tool_result`. The
+        // entry is drained inside the same critical section as the
+        // presence check so a duplicate publish from the same plugin
+        // citing the same id fails the second call.
+        if last == "tool_result" {
+            let id = msg
+                .in_reply_to
+                .as_ref()
+                .and_then(|v| v.first())
+                .cloned()
+                .expect("in_reply_to validated above");
+            let mut state = self.0.state.lock();
+            let present = state
+                .outstanding_dispatched
+                .get_mut(canonical)
+                .and_then(|m| m.remove(&id))
+                .is_some();
+            drop(state);
+            if !present {
+                return Err(BrokerError::StaleRequestId {
+                    canonical: canonical.clone(),
+                    id,
                 });
             }
         }
@@ -896,8 +953,25 @@ impl Broker {
             publisher: PublisherIdentity::Core,
             in_reply_to,
             taint,
-            request_id: Some(request_id),
+            request_id: Some(request_id.clone()),
         };
+        // Scope §OM1: record `(target, id) -> OutstandingDispatch`
+        // before handing the event to fan-out, so a `tool_result`
+        // observed concurrently from the target plugin cannot race
+        // past the intake check in `handle_plugin_publish`.
+        self.0
+            .state
+            .lock()
+            .outstanding_dispatched
+            .entry(canonical.clone())
+            .or_default()
+            .insert(
+                request_id.clone(),
+                OutstandingDispatch {
+                    request_id,
+                    dispatched_at: Instant::now(),
+                },
+            );
         self.fan_out(&event, None, None, None);
         Ok(())
     }

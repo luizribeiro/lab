@@ -58,10 +58,15 @@ fn tool_result_not_fanned_out_to_other_plugins() {
         .register_plugin(b.clone(), peer_b)
         .expect("registration b succeeds");
 
+    let dispatch_id = rafaello_core::bus::JsonRpcId::from(7i64);
+    broker
+        .publish_for_tool_dispatch(&a, serde_json::json!({}), dispatch_id.clone(), None, None)
+        .expect("dispatch seeds outstanding map");
+    while rx_b.try_recv().is_ok() {}
     let params = serde_json::json!({
         "topic": topic,
         "payload": {"ok": true},
-        "in_reply_to": [7],
+        "in_reply_to": [dispatch_id],
         "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
     });
     broker

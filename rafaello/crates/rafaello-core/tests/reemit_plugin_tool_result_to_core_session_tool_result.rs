@@ -38,6 +38,15 @@ async fn plugin_tool_result_reemitted_as_core_session_tool_result() {
     let tool_request_id = JsonRpcId::from("tool-req-1");
     let request_id = JsonRpcId::from("res-1");
     let inbound_payload = serde_json::json!({"ok": true, "content": "fn main() {}"});
+    rig.broker
+        .publish_for_tool_dispatch(
+            &plugin_canonical,
+            serde_json::json!({}),
+            tool_request_id.clone(),
+            None,
+            None,
+        )
+        .expect("dispatch seeds outstanding map");
     let params = serde_json::json!({
         "topic": format!("plugin.{READFILE_TOPIC_ID}.tool_result"),
         "payload": inbound_payload.clone(),
