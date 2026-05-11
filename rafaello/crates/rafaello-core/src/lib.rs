@@ -19,6 +19,7 @@ pub mod renderer;
 pub mod scrubber;
 pub mod session;
 pub mod sinks;
+pub mod slash;
 pub mod supervisor;
 pub mod topic_id;
 pub mod trifecta;

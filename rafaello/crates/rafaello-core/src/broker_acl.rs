@@ -33,6 +33,16 @@ pub struct BrokerAcl {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AttachId(String);
 
+impl BrokerAcl {
+    /// Look up the canonical id that owns a given tool name (scope §TD1).
+    /// Thin accessor over `BrokerAcl.tool_routes` for callers (e.g. the
+    /// core slash handler at c18) that hold the ACL directly rather
+    /// than going through a registered `Broker`.
+    pub fn tool_route(&self, name: &str) -> Option<&CanonicalId> {
+        self.tool_routes.get(name)
+    }
+}
+
 impl AttachId {
     pub fn new(input: impl Into<String>) -> Result<Self, AttachIdParseError> {
         let s = input.into();
