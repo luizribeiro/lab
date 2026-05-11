@@ -144,6 +144,23 @@ impl Broker {
                     topic: topic.clone(),
                     reason: e.to_string(),
                 })?;
+                if let Some(provider_id) = plugin_acl.provider_id.as_deref() {
+                    if let Some(rest) = topic.strip_prefix("provider.") {
+                        let second = rest.split('.').next().unwrap_or("");
+                        if second != provider_id {
+                            return Err(BrokerError::InvalidTopic {
+                                publisher: Publisher::Provider {
+                                    canonical: canonical.clone(),
+                                    provider_id: provider_id.to_string(),
+                                },
+                                topic: topic.clone(),
+                                reason: format!(
+                                    "publish_topic `{topic}` second segment `{second}` does not match registered provider_id `{provider_id}`"
+                                ),
+                            });
+                        }
+                    }
+                }
             }
             for pattern in plugin_acl
                 .subscribe_patterns
