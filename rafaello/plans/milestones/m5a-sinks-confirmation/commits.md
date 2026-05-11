@@ -1,7 +1,36 @@
 # m5a-sinks-confirmation — commits
 
-> **Status:** round 3 draft — folds `commits-pi-review-2.md`
-> (4 B / 5 M / 3 N). Pi-2 expects one more round after.
+> **Status:** round 4 draft — folds `commits-pi-review-3.md`
+> (1 B / 3 M / 1 N). Pi-3 expects zero-blocker convergence
+> next round.
+>
+> Round-4 fixes by pi-3 finding:
+> - **B-1** c34 lock fixture renamed `session.active_provider`
+>   → `session.provider_active` (live field per
+>   `rafaello-core/src/lock/session.rs:11`). Test renamed
+>   `m5a_fixture_lock_session_pins_provider_active_and_tool_owners.rs`.
+> - **M-1** c11's `broker_publish_*_wire_shape_positive.rs`
+>   reworded to a direct broker / internal-subscriber
+>   wire-shape check (no "gate publishes"); the
+>   gate-publisher positive remains in c24 where the
+>   short-circuit logic actually fires.
+> - **M-2** c38 spawn-loop spelled out: after the gate
+>   spawns and the active provider spawns, iterate the
+>   compiled-plugin map and spawn every other
+>   `provider = true` plugin (installed-but-not-active —
+>   mockprovider in the m5a fixture lock) through
+>   `PluginSupervisor`; `ReemitRouter` stays subscribed
+>   only to `provider.<session.provider_active>.**`. Tool
+>   plugins spawn after.
+> - **M-3** c34's `m5a_fixture_lock_validates_and_compiles.rs`
+>   extended to call `ToolSchemaCatalog::build` against
+>   the combined lock and assert the catalog contains
+>   exactly two tools: `send-mail` (mailcat) and
+>   `read-file` (readfile).
+> - **N-1** Stale `c37` references in c14, c31, c34 row
+>   bodies updated to `c38` (rfl chat orchestration is
+>   c38; the surviving `c37` references are TUI test
+>   hooks).
 >
 > Drafted against scope.md round 6 (ratified `95d6f12`). Pi-6's
 > sole nit (OP6 vs Tr1 wording mismatch on the unused-`allow_secrets`
@@ -698,15 +727,17 @@ Four commits.
   - `broker_publish_core_session_confirm_resolved_missing_in_reply_to_rejected.rs`
   - `broker_publish_core_session_confirm_resolved_in_reply_to_too_many_rejected.rs`
   - `broker_publish_core_session_confirm_resolved_wire_shape_positive.rs`
-    (pi-2 M-1 positive wire-shape check) — gate
-    publishes a well-formed `confirm_resolved` event;
-    the broker's internal subscriber observes
-    envelope `request_id` = fresh ULID,
-    payload `request_id` = the resolved confirm
-    correlation id, envelope `in_reply_to` =
-    `[payload.request_id]`, and payload
-    `reason: "grant_short_circuit"`. Asserts the
-    relationship in one positive test.
+    (pi-2 M-1 + pi-3 M-1) — broker-level test only:
+    a direct synthetic publish via
+    `Broker::publish_core_with_taint("core.session.confirm_resolved",
+    ...)` is accepted; an internal subscriber observes
+    envelope `request_id` = the published ULID,
+    payload `request_id` matches `in_reply_to[0]`, and
+    no broker-side rejection fires. **The
+    gate-publisher positive (does the short-circuit
+    code path actually publish this event with the
+    right `reason`?) lives in c24** alongside the
+    gate's short-circuit logic — pi-3 M-1.
 
   **`core.session.confirm_resolved` wire contract**
   (pi-2 M-1, mirrors §CT0):
@@ -870,9 +901,9 @@ Four commits.
   **drops the event silently with a tracing warning**
   (m5a's m4-shaped paths continue to work without
   confirm wiring during the gradual rollout between
-  c14 and c37). When `Some`, the algorithm runs in
+  c14 and c38). When `Some`, the algorithm runs in
   full.
-  c37 (`rfl chat` orchestration) calls
+  c38 (`rfl chat` orchestration) calls
   `.with_confirm_state_and_audit(...)` on the
   `ReemitRouter` instance during run_chat construction
   — no other live call site changes in c14.
@@ -2102,7 +2133,7 @@ fixtures → stub bin → tools_list call → negative matrix.
       to `PluginSupervisor::new`. This wires the
       catalog at `rfl chat` startup; the rest of the
       orchestration plumbing (gate, UserGrants, etc.)
-      lands at c37.
+      lands at c38.
     - All `rafaello-core/tests/supervisor_*` and any
       other `PluginSupervisor::new` test call sites:
       use a new `ToolSchemaCatalog::empty_for_tests()
@@ -2112,7 +2143,7 @@ fixtures → stub bin → tools_list call → negative matrix.
       `ExtraServiceFactory` test seam is unchanged.
     - The remaining rfl-chat orchestration plumbing
       (gate, UserGrants, slash handler, AuditWriter
-      wired into ReemitRouter) lands at c37 — not
+      wired into ReemitRouter) lands at c38 — not
       deferred call-site updates, but additive
       construction on top of this commit's catalog
       wiring.
@@ -2343,7 +2374,7 @@ fixtures → stub bin → tools_list call → negative matrix.
     `rafaello/fixtures/m5a-locks/rafaello-openai/bin/rfl-openai`
     with `chmod +x` and body `#!/bin/sh\nexec "$@"`. Exists
     only to satisfy `manifest::validate_with_package`'s
-    `entry`-resolution check; runtime spawn (c37) points
+    `entry`-resolution check; runtime spawn (c38) points
     at the cargo-built `target/.../rfl-openai`.
   - **`openrpc.json` sibling** (pi-1 B-4 + scope row 31
     requirement). The openai plugin is a *provider*,
@@ -2412,8 +2443,10 @@ fixtures → stub bin → tools_list call → negative matrix.
     only the tool param schema for the model-facing
     catalog, while grant_match validates the user's
     `/grant` template).
-    The lock also sets `session.active_provider =
-    "builtin:openai@0.0.0"`,
+    The lock also sets `session.provider_active =
+    "builtin:openai@0.0.0"` (pi-3 B-1 — live field name
+    per `rafaello-core/src/lock/session.rs:11`;
+    round-2/3 wrongly named it `active_provider`),
     `session.tool_owner.send-mail = "local:mailcat@0.0.0"`,
     and `session.tool_owner.read-file =
     "local:readfile@0.0.0"`.
@@ -2456,8 +2489,17 @@ fixtures → stub bin → tools_list call → negative matrix.
     `validate::lock` and `compile_plugin` for **all
     four** entries (openai + mailcat + readfile +
     mockprovider — pi-2 B-3) before c39 consumes it.
-  - `m5a_fixture_lock_session_pins_active_provider_and_tool_owners.rs`
-    — assert `session.active_provider`,
+    **Also calls `ToolSchemaCatalog::build(&acl,
+    &compiled_plugins, &package_dirs)` against the
+    combined lock** (pi-3 M-3) and asserts the
+    resulting catalog's `list()` contains exactly
+    two `ToolSchema` entries with `name = "send-mail"`
+    (from mailcat) and `name = "read-file"` (from
+    readfile). The openai + mockprovider providers
+    contribute no entries (no `provides.tools`).
+  - `m5a_fixture_lock_session_pins_provider_active_and_tool_owners.rs`
+    (pi-3 B-1 — renamed from `active_provider`) —
+    assert `session.provider_active`,
     `session.tool_owner.send-mail`, and
     `session.tool_owner.read-file` are pinned to the
     canonical ids above.
@@ -2613,6 +2655,27 @@ agent-loop pivot (old c25) per pi-1 B-3.
     `rfl-mockprovider` retained as installed-but-not-active
     alternatives in the fixture lock for the
     bonus negatives).
+  - **Spawn order at run_chat** (pi-3 M-2). After the
+    gate spawns and after the active provider is
+    spawned via `session.provider_active`, **iterate
+    the compiled-plugin map and spawn every other
+    plugin with `bindings.provider = true` AND a
+    `provider_id` distinct from
+    `session.provider_active`** through the same
+    `PluginSupervisor` — these are
+    *installed-but-not-active* provider entries (e.g.
+    mockprovider in the m5a fixture lock). They
+    spawn so the supervisor can manage their
+    lifecycle and so `rfl provider use` (post-v1)
+    has live children to switch between, but
+    `ReemitRouter` stays subscribed only to
+    `provider.<session.provider_active>.**` —
+    inactive providers can publish but their events
+    are dropped at re-emit. Then iterate
+    `bindings.tools` and spawn every tool plugin
+    (mailcat, readfile). The five-tree orchestration
+    matches scope §CHAT2: active provider + tools
+    + inactive provider all reaped on shutdown.
   - **m4-test migration**: m4 tests that exercise tool
     dispatch through the agent loop must now construct
     a permissive gate or use a small
@@ -2645,6 +2708,16 @@ agent-loop pivot (old c25) per pi-1 B-3.
   - `rfl_chat_eager_spawns_five_tree_and_shuts_down_cleanly.rs`
     — extend m4's c25 smoke test to assert all
     five children reap on shutdown.
+  - `rfl_chat_spawns_inactive_provider_but_reemit_ignores_it.rs`
+    (pi-3 M-2) — load the m5a fixture lock (which
+    has both `openai` active and `mockprovider`
+    installed-but-not-active); assert the
+    supervisor spawns both provider children; assert
+    a `provider.mock.assistant_message` publish from
+    the mockprovider does NOT produce a
+    `core.session.assistant_message` re-emission
+    (ReemitRouter stays scoped to
+    `provider.openai.**`).
   - `core_tools_list_registered_before_provider_spawn.rs`
     (scope §"Risks" #6) — the supervisor's
     per-connection `CorePluginService` is composed
@@ -2957,4 +3030,4 @@ ratification.
 
 ---
 
-*End of m5a commits.md round 3 draft.*
+*End of m5a commits.md round 4 draft.*
