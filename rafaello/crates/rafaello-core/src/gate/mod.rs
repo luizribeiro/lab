@@ -355,6 +355,45 @@ fn handle_tool_request(
     );
 }
 
+/// §CG3 `core.session.confirm_request` payload constructor.
+/// `details.taint = event.taint.clone().unwrap_or_default()` — when
+/// the inbound envelope's taint is `None` the rendered JSON carries
+/// `details.taint == []` (an empty array), not `null`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_confirm_request_payload(
+    event: &BusEvent,
+    confirm_id: &JsonRpcId,
+    held_tool_request_id: &JsonRpcId,
+    dispatch_target: &CanonicalId,
+    tool: &str,
+    args: &serde_json::Value,
+    sinks: &[String],
+    always_confirm: bool,
+    ttl_seconds: u64,
+) -> serde_json::Value {
+    let summary = format!(
+        "{tool} via {plugin} — sinks: [{classes}]",
+        plugin = dispatch_target,
+        classes = sinks.join(", "),
+    );
+    let taint = event.taint.clone().unwrap_or_default();
+    serde_json::json!({
+        "request_id": confirm_id.to_string(),
+        "what": "tool_call",
+        "summary": summary,
+        "details": {
+            "tool_call_id": held_tool_request_id.to_string(),
+            "tool": tool,
+            "args": args,
+            "sinks": sinks,
+            "always_confirm": always_confirm,
+            "taint": taint,
+        },
+        "default": "deny",
+        "ttl_seconds": ttl_seconds,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn hold_for_confirmation(
     broker: &Arc<Broker>,
@@ -380,27 +419,17 @@ fn hold_for_confirmation(
         },
     );
 
-    let summary = format!(
-        "{tool} via {plugin} — sinks: [{classes}]",
-        plugin = dispatch_target,
-        classes = sinks.join(", "),
+    let payload = build_confirm_request_payload(
+        event,
+        &confirm_id,
+        held_tool_request_id,
+        dispatch_target,
+        tool,
+        args,
+        sinks,
+        always_confirm,
+        CONFIRM_TTL.as_secs(),
     );
-    let taint = event.taint.clone().unwrap_or_default();
-    let payload = serde_json::json!({
-        "request_id": confirm_id.to_string(),
-        "what": "tool_call",
-        "summary": summary,
-        "details": {
-            "tool_call_id": held_tool_request_id.to_string(),
-            "tool": tool,
-            "args": args,
-            "sinks": sinks,
-            "always_confirm": always_confirm,
-            "taint": taint,
-        },
-        "default": "deny",
-        "ttl_seconds": CONFIRM_TTL.as_secs(),
-    });
 
     if let Err(err) = broker.publish_core_with_taint(
         "core.session.confirm_request",
@@ -680,4 +709,52 @@ fn dispatch_deny(
             "plugin": held.dispatch_target.to_string(),
         }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::PublisherIdentity;
+
+    fn synth_event(taint: Option<Vec<TaintEntry>>) -> BusEvent {
+        BusEvent {
+            topic: "core.session.tool_request".to_string(),
+            payload: serde_json::json!({}),
+            publisher: PublisherIdentity::Core,
+            in_reply_to: None,
+            taint,
+            request_id: Some(JsonRpcId::from("req-test")),
+        }
+    }
+
+    #[test]
+    fn build_confirm_request_payload_none_taint_renders_empty_array() {
+        let event = synth_event(None);
+        let confirm_id = JsonRpcId::from("confirm-1");
+        let held_id = JsonRpcId::from("tool-call-1");
+        let target = CanonicalId::parse("local/test:mailer@0.1.0").expect("canonical");
+        let sinks = vec!["mail".to_string()];
+
+        let payload = build_confirm_request_payload(
+            &event,
+            &confirm_id,
+            &held_id,
+            &target,
+            "send_mail",
+            &serde_json::json!({"to": "a@b.c"}),
+            &sinks,
+            false,
+            60,
+        );
+
+        assert_eq!(
+            payload["details"]["taint"],
+            serde_json::json!([]),
+            "None inbound taint must render as [] (not null) in details.taint",
+        );
+        assert!(
+            payload["details"]["taint"].is_array(),
+            "details.taint must be a JSON array",
+        );
+    }
 }
