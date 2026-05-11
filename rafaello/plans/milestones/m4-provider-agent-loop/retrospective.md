@@ -1,14 +1,25 @@
 # m4 — provider fixture + secure agent loop + one read-only tool — retrospective
 
-> **Status: round-4, 2026-05-11.** Round-3 pi review
-> (`retrospective-pi-review-3.md`) flagged 3 blockers + 2
-> nits; **pi-review-3 addressed: 3/3 blockers + 2/2 nits
-> closed** in this revision (see "Round-4 patch summary"
-> immediately below). Round 2 pi review (2b + 2n) was
-> closed by the round-3 patch summary further down;
+> **Status: ratified and closed 2026-05-11 by the owner.**
+> Round 4 (with pi-review-4 polish nits folded as
+> `190f5d7`) was pi-ratified at zero blockers in
+> `retrospective-pi-review-4.md` (`8a8bd6d`); §5
+> interactive recording owner-accepted in lieu of a
+> screen capture (mechanical coverage via the c27
+> headline test `rfl_chat_demo_bar_read_file`; recording
+> deferred to m6 where `rfl init` lands). The 71-commit
+> m4 cycle (28 plan-row commits + carveout fix +
+> retrospective rounds + drift commits + polish folds)
+> rebased and ff-merged onto `rafaello-v0.1` for
+> linear history per `decisions.md` row 33. **macOS CI
+> URL remains the only ⏳ item** and lands as a
+> follow-up trailer commit once the branch pushes to
+> GitHub. Round-3 pi review (3b + 2n) was closed by
+> the round-4 patch summary immediately below; round 2
+> (2b + 2n) was closed by the round-3 patch summary;
 > round 1 (5b + 2n) was closed by the round-2 patch
 > summary. m0 needed 2 retro rounds, m1 needed 4, m2
-> needed 2, m3 needed 4.
+> needed 2, m3 needed 4, m4 needed 4.
 >
 > Worktree `/home/luiz/lab-wt/m4-retro-r4` on branch
 > `agents/m4/retro-r4`, forked off `agents/m4/driver` at
@@ -1201,7 +1212,7 @@ is the build gate's exact form (the explicit
 | **macOS CI green** (hard gate) | ⏳ pending post-retrospective branch push |
 | `cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture` green | ✅ captured 2026-05-11 (`/tmp/m4-build.log` — `Finished dev profile`) |
 | `cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps` warning-free | ✅ re-captured 2026-05-11 on round-2 branch after the bus.rs intra-doc-link fix (`639d7f0`); `/tmp/m4-doc.log` has zero `warning:` lines |
-| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ⏳ companion refreshed in round 2 with Linux test/build/doc transcripts (`844c17d`); §5 owner-acceptance wording softened in round 3 to match retro §5.3 (`adf763f`, pi-r2 N1); interactive recording + macOS CI URL pending the post-retrospective driver sweep |
+| `manual-validation.md` records interactive `rfl chat` demo + macOS CI URL | ✅/⏳ companion captures Linux test/build/doc transcripts (`844c17d`); §5 interactive recording **owner-accepted at m4 close 2026-05-11** (mechanical coverage via `rfl_chat_demo_bar_read_file`; recording deferred to m6 where `rfl init` lands); macOS CI URL ⏳ pending post-close branch push (lands as a follow-up trailer commit) |
 | Stream A §10 v1-summary banner patch | ✅ §2.1 — landed as `c222087` |
 | `PublisherIdentity::Provider` Stream A schema additions | ✅ §2.2 — round-2 `9bd24e3` introduced the entry; round-3 `2e87e44` added the `topic_id` segment per pi-r2 B1; round-4 `41768a5` corrected the banner's live-API claims (`register_provider` signature + `RegisteredProvider` RAII type + `bindings.provider` lock shape + `Broker::new` `InvalidTopic` check location) per pi-r3 B2 |
 | `decisions.md` row for `BusEvent.request_id` rollout | ✅ §2.3 — landed as `d51caba` (row 43) |
@@ -1212,23 +1223,21 @@ is the build gate's exact form (the explicit
 
 ---
 
-**m4 round-4 retrospective complete 2026-05-11.**
+**m4 ratified and closed 2026-05-11 by the owner.**
 Pi-review-1 (5/5 blockers + 2/2 nits) closed in round 2;
 pi-review-2 (2/2 blockers + 2/2 nits) closed in round 3;
-**pi-review-3 (3/3 blockers + 2/2 nits) closed in
-round 4**. Round-4 follow-up commits on this branch:
-`63abf51` (decisions row 44 rationale — `provider_active`
-vs `provider_id`, pi-r3 B1), `41768a5` (Stream A §5
-banner — `register_provider` signature +
-`RegisteredProvider` + `bindings.provider` shape +
-`Broker::new` `InvalidTopic` location, pi-r3 B2), plus
-`<this-commit>` (the round-4 retro patch itself,
-pi-r3 B3 §5.5 inventory + N1 round labels + N2
-`RegisteredProvider` naming). Pi round-4 review next
-per `plans/README.md` §"Patterns from prior milestones"
-(m1 also needed exactly 4 retro rounds); the macOS CI
-run + interactive demo recording land in
-`manual-validation.md` once the branch pushes.
+pi-review-3 (3/3 blockers + 2/2 nits) closed in round 4;
+**pi-review-4 (0/0 blockers + 2/2 polish nits) closed
+by `190f5d7` and ratification declared**. §5 interactive
+`rfl chat` recording owner-accepted in lieu of a screen
+capture (mechanical coverage via the c27 headline test
+`rfl_chat_demo_bar_read_file`; recording deferred to m6
+where `rfl init` lands per the roadmap). The 71-commit
+m4 cycle rebased and ff-merged onto `rafaello-v0.1` for
+linear history (decisions row 33). **macOS CI URL
+remains the only ⏳ item** and lands as a follow-up
+trailer commit on `manual-validation.md` §4 once the
+branch pushes to GitHub.
 m5 inherits: the new `Provider` publisher class + envelope
 machinery, the `subscribe_internal` primitive and
 `ReemitRouter`, the `AgentLoop` + tool-dispatch wiring,

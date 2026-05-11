@@ -197,10 +197,22 @@ pending until that decision is made.
   `0a0e824`; retrospective §3.9 records the episode.
 - ⏳ **macOS CI green URL** — pending the
   post-retrospective branch push to GitHub. URL will
-  land in §4 above.
-- ⏳ **Interactive `rfl chat` smoke recording** —
-  pending the post-retrospective driver sweep against
-  the fixture lock per §5 walkthrough.
+  land in §4 above as a follow-up trailer commit.
+- ✅ **Interactive `rfl chat` smoke recording** —
+  **owner-accepted at m4 close 2026-05-11** without
+  a captured recording. The c27 headline test
+  `rfl_chat_demo_bar_read_file` mechanically covers
+  every behaviour the smoke would verify (entry-shape
+  pinning, exact assistant text, four
+  `core.session.entry.finalized` sentinels on TUI
+  stderr, clean shutdown), and m4 ships no `rfl init`
+  ergonomics (deferred to m6 per the roadmap) that
+  would make the manual smoke easy to reproduce.
+  Recording deferred to m6's manual-validation,
+  where `rfl init → install → chat` is the
+  acceptance demo. m3 set the precedent for
+  owner-accepting mechanical coverage in lieu of a
+  recording at milestone close.
 
 ## 6. CI green — Linux + macOS workflow run URL
 
@@ -219,7 +231,7 @@ retrospective time.
 | **macOS CI green** (hard gate) | §4 | ⏳ pending post-retrospective branch push |
 | `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ✅ captured 2026-05-11 (`/tmp/m4-build.log`) |
 | `cargo doc --workspace --no-deps` warning-free | §3 | ✅ captured 2026-05-11, post bus-rs intra-doc-link fix (`/tmp/m4-doc.log`, 0 warnings) |
-| Interactive `rfl chat` demo-bar walkthrough | §5 | ✅ Linux mechanical coverage via `rfl_chat_demo_bar_read_file` (post-`0a0e824`); interactive recording ⏳ pending |
+| Interactive `rfl chat` demo-bar walkthrough | §5 | ✅ owner-accepted at m4 close 2026-05-11 (mechanical coverage via `rfl_chat_demo_bar_read_file` post-`0a0e824`; recording deferred to m6 where `rfl init` lands) |
 | CI green Linux + macOS | §6 | ⏳ pending post-retrospective branch push |
 
 ## Negative-matrix cross-reference
@@ -238,10 +250,14 @@ green under the §1 acceptance run.
 | 6 | Plugin-supplied taint discarded/replaced on core re-emit | `rafaello-core/tests/reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs` (pi-3 L-1: provider's claimed `taint: [{source: "user"}]` is discarded; emitted `core.session.tool_request` carries only the canonical `[{source: "provider", detail: "mock"}]`) |
 
 The Linux test/build/doc gates and the mechanical demo-bar
-coverage are captured; macOS CI green (§4 / §6) and the
-interactive `rfl chat` smoke recording (§5) remain pending
-the post-retrospective branch push to GitHub.
-`retrospective.md` round 4 was pi-ratified at zero blockers
-on `retrospective-pi-review-4.md` (`8a8bd6d`); milestone
-closure additionally waits on the macOS CI URL and
-interactive `rfl chat` smoke recording above.
+coverage are captured. §5 (interactive `rfl chat`
+recording) is owner-accepted at m4 close in lieu of a
+recording; the underlying behaviours are mechanically
+covered by `rfl_chat_demo_bar_read_file` and the recording
+itself defers to m6 where `rfl init` lands. **macOS CI
+green (§4 / §6) remains the only ⏳ item** and will
+land as a follow-up trailer commit once the branch
+pushes to GitHub. `retrospective.md` round 4 was
+pi-ratified at zero blockers on
+`retrospective-pi-review-4.md` (`8a8bd6d`); **m4
+ratified and closed 2026-05-11 by the owner**.
