@@ -95,6 +95,31 @@ pub struct ToolMeta {
     pub always_confirm: bool,
 }
 
+impl CompiledPlugin {
+    pub fn tool_sinks(&self, name: &str) -> Option<&[String]> {
+        self.tool_meta.get(name).map(|m| m.sinks.as_slice())
+    }
+
+    pub fn tool_sink_classes(&self, name: &str) -> Vec<crate::sinks::SinkClass> {
+        self.tool_meta
+            .get(name)
+            .map(|m| {
+                m.sinks
+                    .iter()
+                    .map(|s| crate::sinks::SinkClass::parse(s))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn tool_always_confirm(&self, name: &str) -> bool {
+        self.tool_meta
+            .get(name)
+            .map(|m| m.always_confirm)
+            .unwrap_or(false)
+    }
+}
+
 /// Compile a single plugin's spawn-time policy.
 ///
 /// **Precondition (§C1.1).** A prior successful

@@ -10,6 +10,27 @@
 use crate::lock::{Grant, GrantBundle, GrantFilesystem, GrantNetwork};
 use crate::manifest::capabilities::NetworkMode;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SinkClass {
+    Network,
+    VcsPush,
+    Mail,
+    WorkspaceWrite,
+    Other(String),
+}
+
+impl SinkClass {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "network" => SinkClass::Network,
+            "vcs_push" => SinkClass::VcsPush,
+            "mail" => SinkClass::Mail,
+            "workspace_write" => SinkClass::WorkspaceWrite,
+            other => SinkClass::Other(other.to_owned()),
+        }
+    }
+}
+
 /// Per scope §Si1: when `declared` is `Some(_)`, return its contents
 /// verbatim (no inference). Otherwise infer defaults from the
 /// effective per-tool grant bundle.
