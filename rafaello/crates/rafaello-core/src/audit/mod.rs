@@ -5,6 +5,7 @@
 //! SQLite connection. No bus topic — readers (m6's `rfl audit`) go
 //! straight to SQLite.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use fittings_core::message::JsonRpcId;
@@ -19,6 +20,8 @@ pub enum AuditError {
     Sqlite(#[from] rusqlite::Error),
     #[error("audit serde error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("audit io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +85,30 @@ pub struct AuditWriter {
 impl AuditWriter {
     pub(crate) fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
+    }
+
+    /// Install-time constructor: opens (and creates if needed)
+    /// `${project_root}/.rafaello/state/session.sqlite` directly,
+    /// runs the `audit_events` migration (idempotent), and returns
+    /// an `Arc<AuditWriter>`. Used by `rfl install`, which runs
+    /// without a `SessionController` (pi-1 M-3, pi-2 M-2).
+    pub fn open_for_install(project_root: &Path) -> Result<Arc<Self>, AuditError> {
+        let state_dir = project_root.join(".rafaello").join("state");
+        std::fs::create_dir_all(&state_dir)?;
+        let db_path = state_dir.join("session.sqlite");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS audit_events (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                request_id TEXT,
+                payload    TEXT NOT NULL
+            );
+            "#,
+        )?;
+        Ok(Arc::new(Self::new(Arc::new(Mutex::new(conn)))))
     }
 
     pub fn record(

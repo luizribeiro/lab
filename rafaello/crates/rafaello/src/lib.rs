@@ -1,5 +1,7 @@
 //! `rafaello` library: CLI surface and shared types for the `rfl` binary.
 
+pub mod install;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::Write;
@@ -51,6 +53,8 @@ pub enum RflChatCommand {
         #[arg(long)]
         project_root: Option<PathBuf>,
     },
+    /// Install a local plugin fixture into `${PROJECT_ROOT}/rafaello.lock`.
+    Install(install::InstallArgs),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -667,6 +671,13 @@ pub fn run_cli() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("rfl-chat: {err:?}");
+                    ExitCode::FAILURE
+                }
+            },
+            RflChatCommand::Install(args) => match install::run(args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("rfl-install: {err}");
                     ExitCode::FAILURE
                 }
             },
