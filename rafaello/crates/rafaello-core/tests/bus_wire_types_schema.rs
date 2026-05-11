@@ -80,6 +80,7 @@ fn bus_event_encodes_with_core_publisher_omits_optionals() {
         publisher: PublisherIdentity::Core,
         in_reply_to: None,
         taint: None,
+        request_id: None,
     };
 
     let value = serde_json::to_value(&ev).expect("serialise");
@@ -110,6 +111,7 @@ fn bus_event_encodes_with_plugin_publisher_and_taint() {
             source: "web".to_string(),
             detail: None,
         }]),
+        request_id: None,
     };
 
     let value = serde_json::to_value(&ev).expect("serialise");
@@ -143,6 +145,7 @@ fn bus_event_round_trips_through_permissive_struct() {
             source: "web".to_string(),
             detail: Some("x".to_string()),
         }]),
+        request_id: None,
     };
 
     let value = serde_json::to_value(&ev).expect("serialise");

@@ -290,6 +290,10 @@ pub enum Publisher {
     Core,
     Plugin(CanonicalId),
     Frontend(AttachId),
+    Provider {
+        canonical: CanonicalId,
+        provider_id: String,
+    },
 }
 
 /// Why an [`AttachId`] failed to parse (scope §B1).

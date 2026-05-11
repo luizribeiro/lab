@@ -23,6 +23,8 @@ pub struct PublishMsg {
     pub in_reply_to: Option<Vec<JsonRpcId>>,
     #[serde(default)]
     pub taint: Option<Vec<TaintEntry>>,
+    #[serde(default)]
+    pub request_id: Option<JsonRpcId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,14 +43,26 @@ pub struct BusEvent {
     pub in_reply_to: Option<Vec<JsonRpcId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub taint: Option<Vec<TaintEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<JsonRpcId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PublisherIdentity {
     Core,
-    Plugin { canonical: String, topic_id: String },
-    Frontend { attach_id: String },
+    Plugin {
+        canonical: String,
+        topic_id: String,
+    },
+    Frontend {
+        attach_id: String,
+    },
+    Provider {
+        canonical: String,
+        provider_id: String,
+        topic_id: String,
+    },
 }
 
 struct PluginConn {
@@ -305,6 +319,7 @@ impl Broker {
             },
             in_reply_to: msg.in_reply_to.clone(),
             taint: msg.taint.clone(),
+            request_id: msg.request_id.clone(),
         };
 
         if last == "tool_result" || last == "rpc_reply" {
@@ -396,6 +411,7 @@ impl Broker {
             },
             in_reply_to: msg.in_reply_to.clone(),
             taint: msg.taint.clone(),
+            request_id: msg.request_id.clone(),
         };
         self.fan_out(&event, None, Some(attach_id));
         Ok(())
@@ -460,6 +476,7 @@ impl Broker {
             publisher: PublisherIdentity::Core,
             in_reply_to: None,
             taint: None,
+            request_id: None,
         };
         self.fan_out(&event, None, None);
         Ok(())
