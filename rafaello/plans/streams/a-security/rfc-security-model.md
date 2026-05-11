@@ -257,11 +257,25 @@ binds *content*, not just *name*.
 > `frontend.tui.user_message` /
 > `frontend.tui.confirm_answer` respectively.
 >
+> **m4 ACL extension** (m4 retrospective §2): each
+> `PluginAcl` entry grows a `provider_id:
+> Option<String>` field — populated for plugins
+> declared as `class = "provider"` in the lock, `None`
+> otherwise. The grant compiler also **auto-publishes**
+> `plugin.<topic-id>.tool_result` for every declared
+> tool topic in plugins of class `tool` (m4 c06,
+> `439ddbc`), so tool plugins do not need an explicit
+> publish grant for their own result topic. c13
+> (`bbd840c`) adds the defence-in-depth check at
+> `BrokerAcl::compile` that rejects any compiled ACL
+> whose provider entry's `provider_id` segment does
+> not match the lock's declared provider id.
+>
 > Per `plans/README.md` §"Authoring conventions" stream RFCs
-> are not retroactively rewritten; the m2 / m3 wire
+> are not retroactively rewritten; the m2 / m3 / m4 wire
 > schemas are referenced via this banner rather than
 > inlined into §5.x. m2 retrospective §2.3 + §2.4 +
-> m3 retrospective §2.2 + §2.5.
+> m3 retrospective §2.2 + §2.5 + m4 retrospective §2.
 
 ### 5.1 Topic and pattern grammars (canonical)
 
