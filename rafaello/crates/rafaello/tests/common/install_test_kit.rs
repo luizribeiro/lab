@@ -83,6 +83,18 @@ pub fn write_fixture(dir: &Path, manifest_toml: &str) {
     fs::set_permissions(&entry, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+pub fn run_status(project_root: &Path, force_tty: bool) -> Output {
+    let rfl = workspace_bin("rfl");
+    let mut cmd = Command::new(rfl);
+    cmd.current_dir(project_root).arg("status");
+    if force_tty {
+        cmd.env("RFL_STATUS_FORCE_TTY", "1");
+    } else {
+        cmd.env("RFL_STATUS_FORCE_NO_TTY", "1");
+    }
+    cmd.output().expect("spawn rfl status")
+}
+
 pub fn run_install(project_root: &Path, fixture: &Path, extra: &[&str]) -> Output {
     let rfl = workspace_bin("rfl");
     let mut cmd = Command::new(rfl);
