@@ -1,28 +1,33 @@
-//! Plugin A publishes `tool_result` twice with the same id; the first
-//! succeeds (and drains the outstanding entry), the second fails at
-//! intake with `StaleRequestId` (scope §OM2, commits c10).
+//! c04 — `Broker::publish_for_tool_dispatch` records the canonical
+//! `tool_request_taint` argument on the inserted
+//! [`OutstandingDispatch`] entry (scope §PT1 data model).
+//!
+//! The `peek_outstanding_for_test` seam reads the live entry back so
+//! the populator + inspector contract is checked end-to-end without
+//! consuming the entry (c14 will read it during plugin `tool_result`
+//! enforcement).
+
+#![cfg(feature = "test-fixture")]
 
 use std::collections::BTreeMap;
 
 use rafaello_core::broker_acl::{BrokerAcl, PluginAcl};
-use rafaello_core::bus::{Broker, JsonRpcId};
+use rafaello_core::bus::{Broker, JsonRpcId, TaintEntry};
 use rafaello_core::lock::CanonicalId;
-use rafaello_core::BrokerError;
 
 mod common;
 use common::peer_test_kit::fresh_peer;
 
 #[test]
-fn tool_result_duplicate_publish_rejected() {
+fn outstanding_dispatch_carries_request_taint() {
     let canonical = CanonicalId::parse("local/test:plug@0.1.0").expect("canonical");
     let topic_id = "plug_local_test";
-    let topic = format!("plugin.{topic_id}.tool_result");
     let mut plugins = BTreeMap::new();
     plugins.insert(
         canonical.clone(),
         PluginAcl {
             topic_id: topic_id.to_string(),
-            publish_topics: vec![topic.clone()],
+            publish_topics: vec![format!("plugin.{topic_id}.tool_result")],
             subscribe_patterns: vec![],
             auto_subscribes: vec![format!("plugin.{topic_id}.tool_request")],
             provider_id: None,
@@ -39,7 +44,12 @@ fn tool_result_duplicate_publish_rejected() {
         .register_plugin(canonical.clone(), peer)
         .expect("registered");
 
-    let id = JsonRpcId::from("req-7");
+    let id = JsonRpcId::from("req-c04");
+    let canonical_taint = vec![TaintEntry {
+        source: "provider".to_string(),
+        detail: Some("openai".to_string()),
+    }];
+
     broker
         .publish_for_tool_dispatch(
             &canonical,
@@ -47,28 +57,12 @@ fn tool_result_duplicate_publish_rejected() {
             id.clone(),
             None,
             None,
-            Vec::new(),
+            canonical_taint.clone(),
         )
         .expect("dispatch ok");
 
-    let params = serde_json::json!({
-        "topic": topic,
-        "payload": {},
-        "in_reply_to": [id.clone()],
-        "request_id": JsonRpcId::from("resp-1"),
-    });
-    broker
-        .handle_plugin_publish(&canonical, &params)
-        .expect("first tool_result accepted");
-    let err = broker
-        .handle_plugin_publish(&canonical, &params)
-        .expect_err("duplicate tool_result must be rejected");
-    assert!(
-        matches!(
-            err,
-            BrokerError::StaleRequestId { canonical: ref c, id: ref i }
-                if c == &canonical && i == &id
-        ),
-        "expected StaleRequestId on duplicate, got {err:?}"
-    );
+    let entry = broker
+        .peek_outstanding_for_test(&canonical, &id)
+        .expect("outstanding entry present");
+    assert_eq!(entry.tool_request_taint, canonical_taint);
 }

@@ -63,6 +63,7 @@ pub fn spawn(broker: Broker) -> SyntheticDispatch {
                         request_id,
                         event.in_reply_to.clone(),
                         event.taint.clone(),
+                        event.taint.clone().unwrap_or_default(),
                     );
                 }
             }

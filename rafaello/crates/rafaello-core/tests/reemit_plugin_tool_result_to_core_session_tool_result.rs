@@ -45,6 +45,7 @@ async fn plugin_tool_result_reemitted_as_core_session_tool_result() {
             tool_request_id.clone(),
             None,
             None,
+            Vec::new(),
         )
         .expect("dispatch seeds outstanding map");
     let params = serde_json::json!({

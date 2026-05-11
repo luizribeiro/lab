@@ -48,6 +48,7 @@ fn outstanding_dispatched_populated_by_publish_for_tool_dispatch() {
             JsonRpcId::from("req-1"),
             None,
             None,
+            Vec::new(),
         )
         .expect("dispatch ok");
     assert_eq!(broker.outstanding_dispatched_count(&canonical), 1);

@@ -60,7 +60,14 @@ fn tool_result_not_fanned_out_to_other_plugins() {
 
     let dispatch_id = rafaello_core::bus::JsonRpcId::from(7i64);
     broker
-        .publish_for_tool_dispatch(&a, serde_json::json!({}), dispatch_id.clone(), None, None)
+        .publish_for_tool_dispatch(
+            &a,
+            serde_json::json!({}),
+            dispatch_id.clone(),
+            None,
+            None,
+            Vec::new(),
+        )
         .expect("dispatch seeds outstanding map");
     while rx_b.try_recv().is_ok() {}
     let params = serde_json::json!({

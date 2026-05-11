@@ -299,6 +299,7 @@ fn handle_tool_request(
             request_id.clone(),
             event.in_reply_to.clone(),
             event.taint.clone(),
+            event.taint.clone().unwrap_or_default(),
         ) {
             tracing::error!(error = %err, "gate: passthrough dispatch publish failed");
             return;
@@ -322,6 +323,7 @@ fn handle_tool_request(
             request_id.clone(),
             event.in_reply_to.clone(),
             event.taint.clone(),
+            event.taint.clone().unwrap_or_default(),
         ) {
             tracing::error!(error = %err, "gate: grant-match dispatch publish failed");
             return;
@@ -561,6 +563,7 @@ fn dispatch_allow(
         tool_request_id,
         held.tool_request.in_reply_to.clone(),
         held.tool_request.taint.clone(),
+        held.tool_request.taint.clone().unwrap_or_default(),
     ) {
         tracing::error!(error = %err, "gate: CG4 allow dispatch publish failed");
         return;
@@ -613,6 +616,7 @@ fn short_circuit_pending_after_grant(
             tool_request_id,
             held.tool_request.in_reply_to.clone(),
             held.tool_request.taint.clone(),
+            held.tool_request.taint.clone().unwrap_or_default(),
         ) {
             tracing::error!(error = %err, "gate: short-circuit dispatch publish failed");
             continue;

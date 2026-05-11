@@ -163,12 +163,17 @@ struct ProviderConn {
 }
 
 /// Per-dispatch record for a `tool_request` routed to a specific plugin
-/// (scope §OM1). The `dispatched_at` instant is unused in m5a but stored
-/// for an m6 metrics hook.
+/// (scope §OM1, §PT1 data model). The `dispatched_at` instant is unused
+/// in m5a but stored for an m6 metrics hook. `tool_request_taint`
+/// records the canonical inbound `core.session.tool_request` taint at
+/// dispatch time so the c14 enforcement path can superset-check a
+/// plugin's later `tool_result` taint against it without re-resolving
+/// the originating event (scope §PT1 step 2).
 #[derive(Debug, Clone)]
 pub struct OutstandingDispatch {
     pub request_id: JsonRpcId,
     pub dispatched_at: Instant,
+    pub tool_request_taint: Vec<TaintEntry>,
 }
 
 struct BrokerState {
@@ -468,6 +473,26 @@ impl Broker {
     #[cfg(any(test, feature = "test-fixture"))]
     pub fn outstanding_dispatched_count(&self, canonical: &CanonicalId) -> usize {
         self.0.state.lock().outstanding_dispatched_count(canonical)
+    }
+
+    /// Test-only inspector over [`BrokerState::outstanding_dispatched`]
+    /// (scope §PT1 data model). Returns a clone of the
+    /// [`OutstandingDispatch`] record for `(canonical, id)` if one is
+    /// currently pending. Mirrors the gating pattern of
+    /// [`Self::outstanding_dispatched_count`].
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn peek_outstanding_for_test(
+        &self,
+        canonical: &CanonicalId,
+        id: &JsonRpcId,
+    ) -> Option<OutstandingDispatch> {
+        self.0
+            .state
+            .lock()
+            .outstanding_dispatched
+            .get(canonical)
+            .and_then(|m| m.get(id))
+            .cloned()
     }
 
     pub fn handle_plugin_publish(
@@ -1042,6 +1067,7 @@ impl Broker {
         request_id: JsonRpcId,
         in_reply_to: Option<Vec<JsonRpcId>>,
         taint: Option<Vec<TaintEntry>>,
+        tool_request_taint: Vec<TaintEntry>,
     ) -> Result<(), BrokerError> {
         let plugin_acl = self
             .0
@@ -1078,6 +1104,7 @@ impl Broker {
                 OutstandingDispatch {
                     request_id,
                     dispatched_at: Instant::now(),
+                    tool_request_taint,
                 },
             );
         self.fan_out(&event, None, None, None);

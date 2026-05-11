@@ -44,7 +44,14 @@ async fn race_two_concurrent_publishes() {
 
     let id = JsonRpcId::from("req-race");
     broker
-        .publish_for_tool_dispatch(&canonical, serde_json::json!({}), id.clone(), None, None)
+        .publish_for_tool_dispatch(
+            &canonical,
+            serde_json::json!({}),
+            id.clone(),
+            None,
+            None,
+            Vec::new(),
+        )
         .expect("dispatch ok");
 
     let params = serde_json::json!({

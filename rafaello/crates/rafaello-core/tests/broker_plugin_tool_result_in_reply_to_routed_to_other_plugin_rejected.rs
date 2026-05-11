@@ -58,7 +58,14 @@ fn tool_result_routed_to_other_plugin_rejected() {
 
     let id = JsonRpcId::from("req-42");
     broker
-        .publish_for_tool_dispatch(&plugin_a, serde_json::json!({}), id.clone(), None, None)
+        .publish_for_tool_dispatch(
+            &plugin_a,
+            serde_json::json!({}),
+            id.clone(),
+            None,
+            None,
+            Vec::new(),
+        )
         .expect("dispatch to A ok");
 
     let params = serde_json::json!({

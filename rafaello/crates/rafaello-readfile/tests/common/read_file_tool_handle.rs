@@ -233,6 +233,7 @@ impl ReadFileToolHandle {
                 id.clone(),
                 None,
                 None,
+                Vec::new(),
             )
             .expect("publish_for_tool_dispatch");
         id
