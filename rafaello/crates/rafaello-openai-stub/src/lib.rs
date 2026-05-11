@@ -1,1 +1,1 @@
-
+//! rafaello-openai-stub scaffolding.

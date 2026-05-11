@@ -1439,6 +1439,13 @@ dependencies = [
 [[package]]
 name = "rafaello-openai-stub"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rafaello-readfile"

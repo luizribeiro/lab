@@ -4,5 +4,21 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+test-fixture = []
+
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "rfl-openai-stub"
+path = "src/bin/rfl_openai_stub.rs"
+required-features = ["test-fixture"]
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "io-util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
