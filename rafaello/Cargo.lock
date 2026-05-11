@@ -1001,6 +1001,7 @@ name = "rafaello"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "nix",
  "rafaello-core",

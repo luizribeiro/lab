@@ -13,9 +13,9 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use rafaello_core::broker_acl::{AttachId, BrokerAcl, FrontendAcl};
+use rafaello_core::broker_acl::{self, AttachId, FrontendAcl};
 use rafaello_core::bus::Broker;
-use rafaello_core::compile::{compile_plugin, EnvPlan};
+use rafaello_core::compile::{compile_plugin, CompiledPlugin, EnvPlan};
 use rafaello_core::digest::{self, RecomputedDigests};
 use rafaello_core::entry::{Entry, EntryFallback, RenderNode, ToolCallStatus};
 use rafaello_core::error::{
@@ -30,6 +30,7 @@ use rafaello_core::manifest::Manifest;
 use rafaello_core::paths::PathContext;
 use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
+use rafaello_core::supervisor::{PluginSupervisor, SpawnHandle, SpawnPaths, SupervisorConfig};
 use rafaello_core::topic_id;
 use rafaello_core::validate::{self, LockValidationContext};
 
@@ -147,6 +148,13 @@ pub fn resolve_tui_path(
     Err(RflChatError::TuiPathUnresolved)
 }
 
+fn plugin_spawn_paths(project_root: &Path, topic_id: &str) -> SpawnPaths {
+    SpawnPaths {
+        project_root: project_root.to_path_buf(),
+        private_state_dir: project_root.join(".rafaello-plugin-data").join(topic_id),
+    }
+}
+
 const ENV_PASS_ALLOWLIST: &[&str] = &[
     "TERM",
     "COLORTERM",
@@ -227,6 +235,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     })?;
 
     // Step 1d: per-plugin compile (scope §C3).
+    let mut compiled_plugins: BTreeMap<CanonicalId, CompiledPlugin> = BTreeMap::new();
     for canonical in lock.plugins.keys() {
         let package_dir = plugin_dirs
             .get(canonical)
@@ -260,13 +269,14 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             cache_dir: cache_root.join(&topic),
             state_dir: state_root.join(&topic),
         };
-        let _plan =
+        let plan =
             compile_plugin(&lock, canonical, &path_ctx, &recomputed_digests).map_err(|source| {
                 RflChatError::CompilePlugin {
                     canonical: canonical.clone(),
                     source: Box::new(source),
                 }
             })?;
+        compiled_plugins.insert(canonical.clone(), plan);
     }
 
     // Step 2: rfl-tui path.
@@ -286,15 +296,16 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         Err(e) => return Err(RflChatError::Session(Box::new(e))),
     };
 
-    // Step 4: BrokerAcl.
+    // Step C4: BrokerAcl from lock + tui frontend extension.
+    let mut acl =
+        broker_acl::compile(&lock).expect("V3 validated; broker_acl::compile cannot fail");
     let attach = AttachId::new("tui").expect("attach id 'tui' is well-formed");
     let mut subscribe_patterns = BTreeSet::new();
     subscribe_patterns.insert("core.session.**".to_string());
     subscribe_patterns.insert("core.lifecycle.**".to_string());
     let mut publish_topics = BTreeSet::new();
     publish_topics.insert("frontend.tui.user_message".to_string());
-    let mut frontends = BTreeMap::new();
-    frontends.insert(
+    acl.frontends.insert(
         attach,
         FrontendAcl {
             subscribe_patterns,
@@ -302,14 +313,48 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             publish_topics,
         },
     );
-    let acl = BrokerAcl {
-        plugins: BTreeMap::new(),
-        tool_routes: BTreeMap::new(),
-        frontends,
-    };
 
-    // Step 5: broker → supervisor → registry → pipeline → controller → CompiledFrontend.
+    // Step C5: broker → plugin supervisor → frontend supervisor → registry → pipeline → controller.
     let broker = Broker::new(acl).map_err(|e| RflChatError::Broker(Box::new(e)))?;
+    let plugin_supervisor = PluginSupervisor::new(broker.clone(), SupervisorConfig::default());
+
+    // Steps C6–C8: eager-spawn the active provider and every installed tool plugin.
+    let mut spawn_handles: Vec<SpawnHandle> = Vec::new();
+    let provider_str = lock
+        .session
+        .provider_active
+        .clone()
+        .ok_or(RflChatError::NoActiveProvider)?;
+    let provider_canonical =
+        CanonicalId::parse(&provider_str).map_err(|_| RflChatError::NoActiveProvider)?;
+    let provider_plan = compiled_plugins
+        .get(&provider_canonical)
+        .ok_or(RflChatError::NoActiveProvider)?;
+    let provider_paths = plugin_spawn_paths(&project_root, &provider_plan.topic_id);
+    let provider_handle = plugin_supervisor
+        .spawn(provider_plan, &provider_paths)
+        .await
+        .map_err(|_| RflChatError::ProviderSpawnFailed {
+            canonical: provider_canonical.clone(),
+        })?;
+    spawn_handles.push(provider_handle);
+
+    for (canonical, entry) in &lock.plugins {
+        if entry.bindings.tools.is_empty() || entry.bindings.provider {
+            continue;
+        }
+        let plan = compiled_plugins
+            .get(canonical)
+            .expect("compiled_plugins covers every lock entry");
+        let paths = plugin_spawn_paths(&project_root, &plan.topic_id);
+        let h = plugin_supervisor.spawn(plan, &paths).await.map_err(|_| {
+            RflChatError::ToolSpawnFailed {
+                canonical: canonical.clone(),
+            }
+        })?;
+        spawn_handles.push(h);
+    }
+
     let supervisor = FrontendSupervisor::new(broker.clone(), FrontendConfig::default());
     let registry = Arc::new(RendererRegistry::with_builtins());
     let pipeline = RenderPipeline::new(registry);
@@ -352,9 +397,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         Ok(Ok(())) => {
             write_parent_sentinel(&stderr_writer_lock, "rfl-chat: frontend-ready-observed").await;
             run_post_ready(handle, forwarder, &controller, &broker, &caps).await?;
-            if lock.session.provider_active.is_none() {
-                return Err(RflChatError::NoActiveProvider);
-            }
+            drop(spawn_handles);
             Ok(())
         }
         Ok(Err(_ready_err)) => {

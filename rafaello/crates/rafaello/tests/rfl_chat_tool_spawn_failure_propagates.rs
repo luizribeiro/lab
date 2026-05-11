@@ -2,16 +2,22 @@ mod common;
 
 use std::process::Command;
 
-use common::m4_lock_fixture::write_empty_lock;
+use common::m4_install::{install_demo_layout, InstallOptions};
 use common::workspace_bin_path::workspace_bin;
 
 #[test]
-fn rfl_chat_no_active_provider_errors() {
-    let _ = workspace_bin("rfl");
+fn rfl_chat_tool_spawn_failure_propagates() {
     let _ = workspace_bin("rfl-tui");
 
     let tmp = tempfile::tempdir().unwrap();
-    write_empty_lock(tmp.path());
+    install_demo_layout(
+        tmp.path(),
+        InstallOptions {
+            provider_executable: true,
+            tool_executable: false,
+            real_binaries: false,
+        },
+    );
 
     let output = Command::new(workspace_bin("rfl"))
         .arg("chat")
@@ -29,7 +35,11 @@ fn rfl_chat_no_active_provider_errors() {
         "expected non-zero exit; stderr={stderr}"
     );
     assert!(
-        stderr.contains("NoActiveProvider"),
-        "stderr missing NoActiveProvider: {stderr}"
+        stderr.contains("ToolSpawnFailed"),
+        "stderr missing ToolSpawnFailed: {stderr}"
+    );
+    assert!(
+        !stderr.contains("ProviderSpawnFailed"),
+        "stderr should not mention ProviderSpawnFailed (provider should succeed): {stderr}"
     );
 }

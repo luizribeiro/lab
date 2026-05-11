@@ -25,12 +25,8 @@ fn resolves_tui_via_env_override() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success(),
-        "expected non-zero exit (NoActiveProvider); stderr={stderr}"
-    );
-    assert!(
-        stderr.contains("NoActiveProvider"),
-        "stderr missing NoActiveProvider: {stderr}"
+        output.status.success(),
+        "expected zero exit; stderr={stderr}"
     );
     assert!(
         stderr.contains("rfl-chat: frontend-ready-observed"),

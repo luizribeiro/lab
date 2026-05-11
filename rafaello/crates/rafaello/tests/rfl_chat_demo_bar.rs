@@ -26,11 +26,11 @@ fn rfl_chat_demo_bar() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !output.status.success(),
-        "expected non-zero exit; stderr={stderr}"
+        output.status.success(),
+        "expected zero exit; stderr={stderr}"
     );
     assert!(
-        stderr.contains("NoActiveProvider"),
-        "stderr missing NoActiveProvider: {stderr}"
+        stderr.contains("rfl-chat: frontend-ready-observed"),
+        "stderr missing parent ready sentinel: {stderr}"
     );
 }
