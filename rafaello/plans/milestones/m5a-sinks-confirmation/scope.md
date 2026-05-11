@@ -1,17 +1,136 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — scope
 
-> **Status:** round 3 — addresses `scope-pi-review-2.md`
-> (2 blocking / 6 major / 5 nit). All 2 B and 6 M findings are
-> resolved (folds). All 5 N folded. The pi-2 verification table
-> confirmed pi accepts the round-2 M-6 pushback; round-2 M-6
-> stays pushed back. Pi convergence call: "1-2 more rounds"
-> after this draft. New owner-judgment item from pi-2 (#3 in
-> the convergence section) — the bundled-`rfl-openai`
-> `*_KEY` scrubber UX — resolved in this round by introducing
+> **Status:** round 4 — addresses `scope-pi-review-3.md`
+> (3 blocking / 5 major / 4 nit). All 3 B and 5 M findings
+> resolved; all 4 N folded. Pi-3 expected 1-2 more rounds;
+> all three blockers were on round-3-introduced surfaces
+> (`ConfirmState` ownership, `confirm_reply` schema,
+> `env.allow_secrets` mechanical wiring) — round 4 takes
+> the smallest fix pi proposed for each.
+>
+> Round-4 fixes by pi-3 finding (one line each):
+> - **B-1** `ConfirmState` ownership inverted: the **gate**
+>   consumes the held entry, not re-emit. Re-emit only
+>   validates (`is_held`, payload-id ↔ envelope
+>   `in_reply_to` match, answer enum) and publishes
+>   `core.session.confirm_reply`; the gate's CG4 handler
+>   atomically `try_resolve`s the active held entry and
+>   dispatches/denies. The `HeldConfirmation` is no longer
+>   split across the bus. §CG1a method table rewritten
+>   (`take_for_publish` removed; `try_resolve` /
+>   `try_take_for_timeout` added; `prior_outcome` survives
+>   for re-emit's audit classification only). §CT5 / §CG4
+>   updated.
+> - **B-2** `core.session.confirm_reply.payload.answer` is
+>   restored to Stream A §5.6's `"allow" | "deny"` only.
+>   When the frontend selects `"always_allow_session"`,
+>   core's re-emit creates the session grant (§CT5 step 5),
+>   audits a separate `grant_added` entry tagged
+>   `source: AlwaysAllowSession`, then publishes
+>   `confirm_reply.answer = "allow"`. The gate's CG4 sees
+>   only `"allow" | "deny"`.
+> - **B-3** `env.allow_secrets` mechanically wired (option
+>   chosen per pi-3 recommendation: full schema path, not
+>   revert). Concretely: m5a adds
+>   `allow_secrets: Vec<String>` to **manifest
+>   `EnvCapabilities`** (live
+>   `crates/rafaello-core/src/manifest/capabilities.rs:69-73`);
+>   to **lock `GrantEnv`** (live
+>   `crates/rafaello-core/src/lock/grant.rs:66-70`);
+>   propagated through `effective_grant` (live
+>   `sinks::union_bundle`); `scrubber::strip` signature
+>   changes from `(env_pass, i_know)` to
+>   `(env_pass, allow_secrets, i_know)`; validation rule:
+>   every `allow_secrets` name must be a syntactically
+>   valid env-var name and must appear in the same
+>   bundle's `env.pass`. §OP4 manifest snippet now shows
+>   the field; §OP5 lock TOML now shows the lock-side
+>   field; §OP6 fully specified end-to-end; §A11
+>   updated. New negative tests for the validation rules.
+> - **M-1** `CorePluginService` data source named.
+>   `ToolSchemaCatalog` (new type in
+>   `rafaello-core/src/supervisor/tool_catalog.rs`)
+>   carrying `Vec<ToolSchema>` is constructed by
+>   `rfl chat` from the compiled-plugin map and passed
+>   into `PluginSupervisor::new` as a third arg
+>   (current live signature is
+>   `PluginSupervisor::new(broker, config)`; m5a extends
+>   to `(broker, config, tool_catalog: Arc<ToolSchemaCatalog>)`).
+>   `build_connection_service` reads
+>   `self.tool_catalog.clone()` and passes it to the
+>   per-connection `CorePluginService`. The "broker's
+>   fittings server" wording in §CHAT1 is replaced
+>   (the broker has no fittings server; the supervisor's
+>   per-connection service is where `core.tools_list`
+>   lives).
+> - **M-2** `parameters_schema` derived from the existing
+>   required `openrpc.json` sibling (pi-3 recommended
+>   path — no new manifest field). m1 already validates
+>   `openrpc.json` presence at install time per
+>   `decisions.md` row 31; m5a's `ToolSchemaCatalog`
+>   construction reads each plugin's `openrpc.json`,
+>   walks `methods`, and synthesises one `ToolSchema`
+>   per `provides.tools` name by matching `methods[i].name
+>   == tool_name` and projecting
+>   `methods[i].params` as the JSON-Schema parameters
+>   object. The §OP2 step 5 manifest extension is
+>   withdrawn; no new lock or manifest field. §TP fixture
+>   gets a tiny `openrpc.json` with one `send-mail`
+>   method.
+> - **M-3** Malformed-answer race fixed: re-emit
+>   validates the answer enum **before** consulting
+>   `ConfirmState`. A malformed payload audit-logs
+>   `confirm_malformed` and drops; the held entry is
+>   **never touched**. The `re_hold` method is
+>   **removed** from §CG1a. The malformed-answer path no
+>   longer races the timeout.
+> - **M-4** Risk 16 (the round-2 `i_know_what_im_doing`
+>   bundled-plugin display) deleted; replaced with a
+>   shorter Risk 16 about the `env.allow_secrets`
+>   schema/UX owner-judgment item.
+> - **M-5** Suffix-list spelling corrected to
+>   un-dot-prefixed strings. Round 3 wrote `.confirm_request`
+>   etc.; live `bus.rs:17-22` stores
+>   `"tool_request" / "tool_result" / "assistant_message" /
+>   "user_message"` (no leading dot) and compares against
+>   `topic.rsplit('.').next()`. m5a additions are
+>   `"confirm_request"`, `"confirm_reply"`,
+>   `"confirm_answer"`, `"slash_command"`,
+>   `"command_result"`. CT2 / SL0 updated; prose retains
+>   the dotted form for readability.
+> - **N-1** Superseded M1.1 historical paragraph deleted
+>   (kept only the round-3 one-line summary).
+> - **N-2** Internal-split item 1 reworded — no
+>   "reserved-env extension"; instead "scrubber
+>   `allow_secrets` signature change + tests".
+> - **N-3** §TUI1 example reworded so `in_reply_to` is
+>   shown as the envelope field (per CT0), not embedded
+>   in the payload literal.
+> - **N-4** §OP7 test
+>   `openai_post_handshake_failure_propagates_through_supervisor.rs`
+>   renamed to
+>   `openai_tools_list_failure_exits_nonzero_and_supervisor_reports_crash.rs`
+>   (round-3 dropped the `PostHandshakeFailure` framing).
+>
+> The roadmap row for m5 (`milestones/README.md`) is the
+> pre-ratified definition; this document scopes **m5a in
+> full** with m5b sketched in Appendix A.
+>
+> ---
+>
+> **(History — round 3 fix list, kept for trajectory.)**
+>
+> Round-3 status: addresses `scope-pi-review-2.md`
+> (2 blocking / 6 major / 5 nit). All 2 B and 6 M findings
+> resolved (folds). All 5 N folded. Pi-2 verification table
+> confirmed pi accepted the round-2 M-6 pushback; round-2
+> M-6 stays pushed back. New owner-judgment item from pi-2
+> (#3 in the convergence section) — the bundled-`rfl-openai`
+> `*_KEY` scrubber UX — resolved in round 3 by introducing
 > a manifest-declared `[capabilities.<bundle>.env].allow_secrets`
-> opt-in (§OP6). See the round-3 fix list immediately below;
-> the change touches m1's manifest schema (additive); flagged
-> for the convergence ping note so the owner can ratify.
+> opt-in (§OP6). The change touches m1's manifest schema
+> (additive); flagged for the convergence ping note so the
+> owner can ratify.
 >
 > Round-3 fixes by pi-2 finding (one line each):
 > - **B-1** `RFL_OPENAI_ENDPOINT_URL` and `RFL_OPENAI_MODEL` are
@@ -1178,14 +1297,22 @@ to security RFC §5.6 pointing at CT0.
 - **CT2.** Extend the
   `request_id`-mandatory topic-suffix list
   (`bus.rs::REQUEST_ID_REQUIRED_SUFFIXES`, m4 §B0
-  table-of-truth / decisions row 43) to include
-  `.confirm_request`, `.confirm_reply`, `.confirm_answer`,
-  **`.slash_command`**, and **`.command_result`**
-  (the slash-command suffixes were named in §SL2 in
-  round 2 but pi-2 M-2 caught that §CT2 didn't actually
-  amend the suffix list; corrected here). Broker rejects
-  missing `request_id` with the existing
-  `MissingRequestId` variant. Per-suffix tests:
+  table-of-truth / decisions row 43). The live list at
+  `bus.rs:17-22` stores **the last topic segment without
+  a leading dot** (`"tool_request"`, `"tool_result"`,
+  `"assistant_message"`, `"user_message"`) and compares
+  it against `topic.rsplit('.').next()` (pi-3 M-5 — the
+  round-3 draft wrote `.confirm_request` etc. with a
+  leading dot, which would silently fail to match;
+  corrected). m5a appends the literal strings
+  `"confirm_request"`, `"confirm_reply"`,
+  `"confirm_answer"`, `"slash_command"`,
+  `"command_result"` (no leading dot). Prose in this
+  document continues to write `.confirm_request` etc.
+  for readability, but every code-level change uses the
+  un-dot-prefixed form. Broker rejects missing
+  `request_id` with the existing `MissingRequestId`
+  variant. Per-suffix tests:
   - `broker_publish_core_session_confirm_request_missing_request_id_rejected.rs`
   - `broker_publish_core_session_confirm_reply_missing_request_id_rejected.rs`
   - `broker_publish_frontend_tui_confirm_answer_missing_request_id_rejected.rs`
@@ -1215,34 +1342,66 @@ to security RFC §5.6 pointing at CT0.
   arm: `frontend.tui.confirm_answer` inbound is
   canonicalised to `core.session.confirm_reply` after
   validation against the shared `ConfirmState` (§CG1a).
-  Validation steps (per CT0 implications):
+  **Round-4 ownership rule** (pi-3 B-1): re-emit
+  *validates* and *publishes the canonical reply*; it
+  **does not consume the held `HeldConfirmation`** — the
+  gate's CG4 handler does that via `try_resolve` after
+  observing the re-emitted `core.session.confirm_reply`.
+  Re-emit's only state mutation against `ConfirmState` is
+  the special `always_allow_session` arm (step 5 below)
+  which adds a `UserGrant`; the held entry itself stays
+  active until CG4 resolves it.
+
+  Validation steps (per CT0 implications + pi-3 M-3
+  malformed-first ordering):
   1. Envelope `request_id` present (broker already
      checked); payload `request_id` is a valid ULID.
   2. `in_reply_to` is exactly one entry **and equals
      `payload.request_id`** (CT0 implication 3 — fail
      with `ReemitError::ConfirmAnswerCorrelationMismatch`
-     if not).
-  3. `ConfirmState::is_held(payload.request_id)` returns
-     `true` — otherwise audit `confirm_unknown` and drop;
-     if returns `true` *and* `take_for_publish` returns
-     `Some(_)`, proceed; if `take_for_publish` returns
-     `None` (already resolved by another arrival or by
-     timeout), audit `confirm_duplicate` (or
-     `confirm_late` if the prior outcome was
-     `mark_timed_out`) and drop.
-  4. The answer string is one of `"allow" | "deny" |
-     "always_allow_session"` (otherwise →
-     `ConfirmAnswerMalformed`; the `ConfirmState` entry
-     is **re-inserted** so a corrected answer can resolve
-     it before timeout — the failed answer doesn't
-     consume the held entry).
-  5. Synthesise canonical taint
+     if not; never touches `ConfirmState`).
+  3. **The answer string is one of `"allow" | "deny" |
+     "always_allow_session"`** (otherwise →
+     `ReemitError::ConfirmAnswerMalformed`; audit
+     `confirm_malformed`; **never touches
+     `ConfirmState`** — pi-3 M-3 fix). The held entry is
+     untouched, so the deadline timer can still
+     resolve it on schedule.
+  4. Classify against the shared map:
+     `prior_outcome(payload.request_id)`:
+     - `Held` → continue to step 5.
+     - `Duplicate` → audit `confirm_duplicate`, drop.
+     - `Late` → audit `confirm_late`, drop.
+     - `Unknown` → audit `confirm_unknown`, drop.
+     `prior_outcome` is read-only on the map; no
+     mutation here.
+  5. **Special-case `always_allow_session`** (pi-3 B-2 —
+     keep `core.session.confirm_reply.payload.answer ∈
+     {"allow", "deny"}` per Stream A §5.6): if the
+     frontend sent `always_allow_session`, re-emit reads
+     the held entry (read-only, no `try_resolve`) to
+     learn `(plugin, tool, args)`, calls
+     `UserGrants::add(UserGrant { plugin, tool, matcher:
+     Structural::from_args(args), source:
+     AlwaysAllowSession })`, and audits `grant_added`.
+     The outbound `confirm_reply.payload.answer` is then
+     **rewritten to `"allow"`** for publication. (If the
+     answer was already `"allow"` or `"deny"`, this step
+     is a no-op and the value is forwarded verbatim.)
+  6. Synthesise canonical taint
      `[{source: "user", detail: None}]` per security RFC
      §7.2.2.
-  6. Publish `core.session.confirm_reply` via
+  7. Publish `core.session.confirm_reply` via
      `Broker::publish_core_with_taint` with payload
-     `{request_id: <correlation_id>, answer: "<...>"}`
-     and `in_reply_to = [<correlation_id>]`.
+     `{request_id: <correlation_id>, answer:
+     "allow" | "deny"}` (Stream A §5.6 schema verbatim;
+     pi-3 B-2) and envelope
+     `in_reply_to = [<correlation_id>]`.
+
+  After step 7 the gate's CG4 handler (subscribed
+  internally to `core.session.confirm_reply`) calls
+  `ConfirmState::try_resolve(<correlation_id>)` — that is
+  where the held entry is finally consumed.
 
   Tests:
   - `reemit_frontend_confirm_answer_to_core_session_confirm_reply.rs`
@@ -1253,8 +1412,16 @@ to security RFC §5.6 pointing at CT0.
   - `reemit_confirm_answer_unknown_request_id_audit_logged.rs`
   - `reemit_confirm_answer_late_after_timeout_audit_logged.rs`
   - `reemit_confirm_answer_duplicate_audit_logged.rs`
-  - `reemit_confirm_answer_malformed_string_re_holds_for_retry.rs`
+  - `reemit_confirm_answer_malformed_string_does_not_touch_confirm_state.rs`
+    (asserts `prior_outcome == Held` both before and
+    after the malformed answer — pi-3 M-3)
   - `reemit_confirm_answer_synthesises_user_taint.rs`
+  - `reemit_confirm_answer_always_allow_session_creates_grant_and_emits_allow.rs`
+    (pi-3 B-2 — asserts the outbound `confirm_reply`
+    payload carries `answer = "allow"`, not
+    `"always_allow_session"`)
+  - `reemit_confirm_answer_always_allow_session_does_not_consume_held_entry.rs`
+    (gate still sees `Active`; CG4 dispatches normally)
 
 ### CG — confirmation gate
 
@@ -1302,37 +1469,64 @@ to security RFC §5.6 pointing at CT0.
   }
   ```
 
+  **Round-4 ownership inversion (pi-3 B-1).** The held
+  `HeldConfirmation` is **consumed by the gate**, not by
+  re-emit. Re-emit's job on `frontend.tui.confirm_answer`
+  is purely validation + canonical re-emission: confirm
+  the entry is held, audit-classify if not, publish
+  `core.session.confirm_reply` (which the gate receives on
+  its internal subscription). The gate's CG4 handler then
+  calls `try_resolve` to atomically take the `Active`
+  entry and dispatch (allow) or synthesise deny. Splitting
+  the `HeldConfirmation` across an uncarried bus payload
+  (round-3's `take_for_publish` flow) was mechanically
+  broken; pi-3 B-1 caught it.
+
   Atomic methods (each acquires the mutex, mutates,
   drops):
 
-  | Method                                  | Caller       | Atomic effect                                                                                            | Returns                                                          |
-  |-----------------------------------------|--------------|----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------|
-  | `reserve(confirm_id, held: HeldConfirmation)` | gate (CG2 step 5) | insert `confirm_id → Active(held)` if absent; otherwise panic (gate's confirm_id is fresh per call)      | `()`                                                             |
-  | `is_held(confirm_id)`                   | re-emit (CT5 step 3) | read; returns `true` iff entry is `Active`                                                                | `bool`                                                           |
-  | `take_for_publish(confirm_id)`          | re-emit (CT5 step 3) | if `Active`, replace with `ResolvedByAnswer` and return the inner `HeldConfirmation`; else return `None`  | `Option<HeldConfirmation>`                                       |
-  | `mark_timed_out(confirm_id)`            | gate (CG5)   | if `Active`, replace with `TimedOut` and return the inner `HeldConfirmation`; else return `None`          | `Option<HeldConfirmation>`                                       |
-  | `re_hold(confirm_id, held)`             | re-emit (CT5 step 4) | if entry is `ResolvedByAnswer`, swap back to `Active(held)` (used for the malformed-answer retry path)   | `Result<(), ReHoldError>`                                        |
-  | `prior_outcome(confirm_id)`             | re-emit (CT5 step 3 audit) | classify a non-`Active` entry: `ResolvedByAnswer` → `Duplicate`; `TimedOut` → `Late`; absent → `Unknown` | `PriorOutcome`                                                   |
+  | Method                                              | Caller            | Atomic effect                                                                                                 | Returns                          |
+  |-----------------------------------------------------|-------------------|----------------------------------------------------------------------------------------------------------------|----------------------------------|
+  | `reserve(confirm_id, held: HeldConfirmation)`       | gate (CG2 step 5) | insert `confirm_id → Active(held)` if absent; otherwise panic (gate's confirm_id is fresh per call)            | `()`                             |
+  | `is_held(confirm_id)`                               | re-emit (CT5 step 3) | read; returns `true` iff entry is `Active`                                                                  | `bool`                           |
+  | `try_resolve(confirm_id)`                           | gate (CG4)        | if `Active`, replace with `ResolvedByAnswer` and return the inner `HeldConfirmation`; else return `None`       | `Option<HeldConfirmation>`       |
+  | `try_take_for_timeout(confirm_id)`                  | gate (CG5)        | if `Active`, replace with `TimedOut` and return the inner `HeldConfirmation`; else return `None`               | `Option<HeldConfirmation>`       |
+  | `prior_outcome(confirm_id)`                         | re-emit (CT5 step 3 audit) | classify the entry: `Active` → `Held`; `ResolvedByAnswer` → `Duplicate`; `TimedOut` → `Late`; absent → `Unknown` | `PriorOutcome`                   |
 
-  **Ownership of publishing for non-happy paths** (pi-2 M-5
-  asked this be stated explicitly):
+  Notes:
+  - Round 3's `take_for_publish` is **renamed to
+    `try_resolve`** and **moved from re-emit to the
+    gate's CG4 path** (per pi-3 B-1).
+  - Round 3's `re_hold` is **removed** entirely (per
+    pi-3 M-3 — malformed-answer validation now happens
+    *before* any state mutation).
+  - There is no separate `resolve` (the round-3 status
+    text mentioned one); the only resolving methods are
+    `try_resolve` (answer arrival) and
+    `try_take_for_timeout` (deadline fire).
 
-  | Path                          | Who publishes                                                                                | Audit kind             |
-  |-------------------------------|----------------------------------------------------------------------------------------------|------------------------|
-  | allow / deny / always_allow_session (the happy paths) | gate (after re-emit hands the `HeldConfirmation` back via `take_for_publish` and the `core.session.confirm_reply` reaches the gate's CG4 handler) | `confirm_allowed` / `confirm_denied` / `confirm_allowed_with_session_grant` |
-  | timeout                       | gate (CG5 — fires the deadline timer, calls `mark_timed_out`, publishes synthetic deny `tool_result`) | `confirm_timeout`      |
-  | duplicate / late / unknown    | **re-emit pipeline** (it has the answer event in hand and the audit writer; the gate is not involved) | `confirm_duplicate` / `confirm_late` / `confirm_unknown` |
-  | malformed answer string       | **re-emit pipeline** (re-holds the entry via `re_hold` so a corrected answer can resolve it before timeout) | `confirm_malformed`    |
+  **Ownership of publishing for each path** (pi-2 M-5
+  format; round-4 inversion):
+
+  | Path                                          | Who publishes                                                                                       | Audit kind                                  |
+  |-----------------------------------------------|------------------------------------------------------------------------------------------------------|---------------------------------------------|
+  | answer arrives + valid + held (`allow`/`deny`)| **re-emit** publishes `core.session.confirm_reply`; **gate** (CG4) consumes via `try_resolve` and publishes `plugin.<id>.tool_request` (allow) or synthetic `core.session.tool_result` (deny) | `confirm_allowed` / `confirm_denied` (gate audits after dispatch) |
+  | answer arrives = `always_allow_session`       | **re-emit** creates the session grant via `UserGrants::add`, audits `grant_added{source: AlwaysAllowSession}`, publishes `core.session.confirm_reply { answer: "allow" }`; **gate** dispatches as the `allow` arm, audits `confirm_allowed_with_session_grant` | `grant_added` (re-emit) + `confirm_allowed_with_session_grant` (gate) |
+  | timeout fires before answer                   | **gate** (CG5) — `try_take_for_timeout` returns the held entry; gate publishes synthetic deny `tool_result`; gate audits | `confirm_timeout`                            |
+  | duplicate (answer arrives after `try_resolve` already ran) | **re-emit** classifies via `prior_outcome` → `Duplicate`; audit-logs and drops; never publishes `confirm_reply` | `confirm_duplicate`                          |
+  | late (answer arrives after `try_take_for_timeout` already ran) | **re-emit** classifies via `prior_outcome` → `Late`; audit-logs and drops; never publishes `confirm_reply` | `confirm_late`                               |
+  | unknown (`payload.request_id` was never held) | **re-emit** classifies via `prior_outcome` → `Unknown`; audit-logs and drops                          | `confirm_unknown`                            |
+  | malformed answer string                       | **re-emit** validates the enum **before** consulting `ConfirmState`; audit-logs and drops; the held entry is **untouched** (so the user's next correctly-formed answer or the deadline timer can still resolve it) | `confirm_malformed`                          |
 
   Tests in `rafaello-core/tests/`:
-  - `confirm_state_reserve_then_take_for_publish_returns_held.rs`
-  - `confirm_state_take_for_publish_twice_returns_none_second_time.rs`
-  - `confirm_state_mark_timed_out_then_take_for_publish_returns_none.rs`
-  - `confirm_state_take_for_publish_after_timed_out_returns_none.rs`
-  - `confirm_state_re_hold_after_resolved_by_answer_succeeds.rs`
-  - `confirm_state_re_hold_after_timed_out_fails.rs`
-  - `confirm_state_prior_outcome_distinguishes_late_duplicate_unknown.rs`
-  - `confirm_state_concurrent_take_for_publish_exactly_one_winner.rs`
+  - `confirm_state_reserve_then_try_resolve_returns_held.rs`
+  - `confirm_state_try_resolve_twice_returns_none_second_time.rs`
+  - `confirm_state_try_take_for_timeout_then_try_resolve_returns_none.rs`
+  - `confirm_state_try_resolve_then_try_take_for_timeout_returns_none.rs`
+  - `confirm_state_prior_outcome_distinguishes_held_duplicate_late_unknown.rs`
+  - `confirm_state_concurrent_try_resolve_and_try_take_for_timeout_exactly_one_winner.rs`
+  - `confirm_state_no_re_hold_method_exists.rs` (compile-time
+    assertion that `re_hold` was removed; type-level test)
 - **CG2.** Decision logic on each `core.session.tool_request`:
   1. Resolve `dispatch_target` from the event payload
      (m4 already populates this); look up the
@@ -1383,23 +1577,54 @@ to security RFC §5.6 pointing at CT0.
   audit-log correlation and TUI display).
 - **CG4.** On `core.session.confirm_reply` arrival
   (re-emitted by core after the §CT5 validation chain):
-  the reply's `in_reply_to[0]` *is* the confirm key; look
-  up `held[confirm_key]`. If absent, audit `confirm_late`
-  and drop. If present, dispatch on `payload.answer`:
-  - **`"allow"`**: publish the held tool_request via
-    `Broker::publish_for_tool_dispatch` (the same call
-    the m4 agent loop made directly); remove from
-    `held`; audit `confirm_allowed`.
-  - **`"deny"`**: synthesise a `core.session.tool_result`
-    via the helper `gate::synthesise_deny_tool_result`
-    (§CG4a); remove from `held`; audit `confirm_denied`.
-  - **`"always_allow_session"`**: insert a `UserGrant`
-    matching `(tool, args)` exactly via
-    `UserGrants::add(UserGrant { tool, matcher:
-    Structural::from_args(args), source:
-    AlwaysAllowSession })`; then take the `"allow"`
-    branch (publish the held request, remove,
-    audit `confirm_allowed_with_session_grant`).
+  the reply's envelope `in_reply_to[0]` (= payload
+  `request_id`) *is* the confirm correlation id. Per
+  pi-3 B-2 the payload `answer` is restricted to
+  `"allow" | "deny"` (Stream A §5.6); the
+  `always_allow_session` path was already handled by
+  re-emit (CT5 step 5). Per pi-3 B-1 the gate is the
+  consumer of the held entry.
+
+  CG4 algorithm:
+  1. Call `state.try_resolve(correlation_id)`. If
+     `None`, this means the timeout fired between
+     re-emit's publish and this handler's run (rare but
+     possible — CG5's `try_take_for_timeout` won the
+     race). Audit `confirm_resolved_after_timeout`
+     and drop; the synthetic deny `tool_result` from
+     CG5 already covered the held call.
+  2. If `Some(held)`, dispatch on `payload.answer`:
+     - **`"allow"`**: publish the held tool_request via
+       `Broker::publish_for_tool_dispatch(canonical:
+       held.dispatch_target, payload, request_id:
+       held.tool_request.request_id, in_reply_to:
+       held.tool_request.in_reply_to, taint:
+       held.tool_request.taint)`. If re-emit's CT5
+       step 5 created a session grant first (i.e. the
+       original frontend answer was
+       `always_allow_session`), audit
+       `confirm_allowed_with_session_grant`; otherwise
+       audit `confirm_allowed`. (The gate distinguishes
+       the two by reading `UserGrants` for a fresh
+       `AlwaysAllowSession`-sourced entry matching
+       `(canonical, tool, args)` added in the same
+       millisecond — or by re-emit signalling via a
+       cheap side channel like a `Cow<'static, str>`
+       in the `confirm_reply.payload.details`. The
+       cleaner option is pi's hint: CT5 sets a
+       `details.session_grant_added: true` payload
+       field that the gate reads. Final choice for
+       `commits.md`.)
+     - **`"deny"`**: synthesise a
+       `core.session.tool_result` via the helper
+       `gate::synthesise_deny_tool_result(&held,
+       DenyReason::UserDenied)` (§CG4a); audit
+       `confirm_denied`.
+
+  Note: `"always_allow_session"` does **not** appear as
+  an arm here per pi-3 B-2 — by the time CG4 runs, CT5
+  has already rewritten the payload to `"allow"`. The
+  gate sees only the two-value enum, matching Stream A.
 - **CG4a.** **Synthetic deny `core.session.tool_result`
   shape** (pi-1 B-3 — pinned to compile cleanly under
   the live m4 envelope rules and consume cleanly by
@@ -1457,15 +1682,20 @@ to security RFC §5.6 pointing at CT0.
     "user_denied"` rendered through the existing m3
     rendering pipeline. No new render kind, no
     persistence-layer change.
-- **CG5.** 60 s timeout: each `held` insertion schedules a
+- **CG5.** 60 s timeout: each `reserve` call schedules a
   `tokio::time::sleep_until(deadline)` task; on fire, the
-  task acquires the gate's lock, checks `held[confirm_id]`
-  is still present (not raced by an arriving allow/deny),
-  and if so:
-  1. publishes the synthetic deny `core.session.tool_result`
-     via §CG4a with `reason = ConfirmTimeout`;
-  2. removes the held entry;
-  3. audit-logs `confirm_timeout`.
+  task calls `state.try_take_for_timeout(confirm_id)`
+  (atomic — replaces `Active` with `TimedOut` and returns
+  the `HeldConfirmation`, or returns `None` if an
+  arriving answer's CG4 path already won the race via
+  `try_resolve`). If `Some(held)`:
+  1. publishes the synthetic deny
+     `core.session.tool_result` via §CG4a with
+     `reason = ConfirmTimeout`;
+  2. audit-logs `confirm_timeout`.
+  If `None` (resolved before the deadline), the timeout
+  task simply exits — no audit, no publish; the answer
+  arm has already done the work.
   Tests use `tokio::time::pause` per m3's idiom.
 - **CG6.** Agent-loop change. The current
   `crates/rafaello-core/src/agent/mod.rs:143` direct call
@@ -1729,12 +1959,14 @@ Implications:
    bus envelope's `request_id` (mandatory per the §CT2
    suffix-list extension) carries correlation; the result's
    envelope `in_reply_to` references it.
-2. Suffix-list extensions (mirrors §CT2): `.slash_command`
-   and `.command_result` are added to
-   `bus.rs::REQUEST_ID_REQUIRED_SUFFIXES`. `.slash_command`
-   is **not** added to the `in_reply_to`-mandatory list (it
-   is a root event); `.command_result` **is** added to
-   that list with cardinality exactly one.
+2. Suffix-list extensions (mirrors §CT2): the literal
+   strings `"slash_command"` and `"command_result"`
+   (no leading dot per pi-3 M-5 / live `bus.rs:17-22`)
+   are added to `bus.rs::REQUEST_ID_REQUIRED_SUFFIXES`.
+   `"slash_command"` is **not** added to the
+   `in_reply_to`-mandatory list (it is a root event);
+   `"command_result"` **is** added to that list with
+   cardinality exactly one.
 3. The TUI matches incoming `command_result` events to
    pending slash commands by `in_reply_to[0] == issued
    slash command's envelope request_id`. The TUI keeps a
@@ -1844,10 +2076,14 @@ deleted.
   the TUI's bus subscriber observes
   `core.session.confirm_request`. While in this mode the
   input line is non-editable; key events drive the
-  answer:
-  - `y` / `a` / `Enter` → publish
-    `frontend.tui.confirm_answer { answer: "allow",
-    in_reply_to: [confirm_id] }`
+  answer. Each key publishes `frontend.tui.confirm_answer`
+  with **payload** `{request_id: confirm_id, answer: "..."}`
+  (Stream A §5.6 schema; payload `request_id` carries
+  the correlation id per §CT0) and **envelope**
+  `in_reply_to: [confirm_id]` (pi-3 N-3 — round-3 wrote
+  `in_reply_to` inside the payload literal, but it is
+  an envelope field per §CT0):
+  - `y` / `a` / `Enter` → answer `"allow"`
   - `n` / `d` / `Esc` → answer `"deny"`
   - `s` → answer `"always_allow_session"`
 - **TUI2.** Overlay rendering: a framed area above the
@@ -1953,46 +2189,94 @@ deleted.
   cited nonexistent `BrokerAcl.fittings_methods` and
   `SpawnError::PostHandshakeFailure`; both withdrawn):
 
-  1. The live `PluginSupervisor::build_connection_service`
-     (`crates/rafaello-core/src/supervisor.rs:813`) currently
-     composes a `BusPublishService { broker, canonical }`
-     in production and an optional `extra` service via
-     `ExtraServiceFactory` only under
+  1. **`ToolSchemaCatalog` shared type** (round 4 / pi-3
+     M-1 — round 3 left "where does the schema data
+     live" unanswered). New type in
+     `crates/rafaello-core/src/supervisor/tool_catalog.rs`:
+     ```rust
+     pub struct ToolSchemaCatalog {
+         schemas: Vec<ToolSchema>,
+     }
+     impl ToolSchemaCatalog {
+         pub fn build(
+             acl: &BrokerAcl,
+             compiled: &BTreeMap<CanonicalId, CompiledPlugin>,
+             package_dirs: &BTreeMap<CanonicalId, PathBuf>,
+         ) -> Result<Self, ToolCatalogError> { ... }
+         pub fn list(&self) -> &[ToolSchema] { &self.schemas }
+     }
+     ```
+     Constructed by `rfl chat` in `run_chat`
+     (`crates/rafaello/src/lib.rs`) **after** lock
+     compilation and **before** spawning any plugin —
+     so it is ready by the time the first provider
+     subscribes. Wrapped in `Arc<ToolSchemaCatalog>`.
+
+  2. **`PluginSupervisor::new` signature extension.**
+     Live signature (`supervisor.rs:282-303`) is
+     `PluginSupervisor::new(broker, config) -> Self`.
+     m5a extends to
+     `PluginSupervisor::new(broker, config,
+     tool_catalog: Arc<ToolSchemaCatalog>) -> Self`.
+     The new field is stored alongside the existing
+     `Arc<Broker>`. (For test fixtures the existing
+     `ExtraServiceFactory` seam at
+     `supervisor.rs:267-282` is unchanged.)
+     `rfl chat` constructs the catalog via
+     `ToolSchemaCatalog::build(&acl, &compiled,
+     &package_dirs)` and passes it in.
+
+  3. **`build_connection_service` extension.** Live
+     `build_connection_service`
+     (`supervisor.rs:813-826`) currently composes a
+     `BusPublishService { broker, canonical }` and an
+     optional `extra` only under
      `#[cfg(any(test, feature = "test-fixture"))]`. m5a
-     adds a **production** `CorePluginService`
-     (`crates/rafaello-core/src/supervisor/core_service.rs`)
-     composed alongside `BusPublishService` for **provider
-     connections only** (the supervisor knows whether a
-     plugin is a provider via `plan.bindings.provider_id.is_some()`,
-     already populated by m1's compile path). The live
-     `SupervisorConnectionService` struct grows a third
-     optional field `core: Option<CorePluginService>` set
-     by `build_connection_service` when
-     `provider_id.is_some()`. The `ExtraServiceFactory`
-     test seam is unchanged (test fixtures still compose
-     `extra` independently).
+     extends to:
+     ```rust
+     fn build_connection_service(&self, canonical: CanonicalId)
+         -> SupervisorConnectionService
+     {
+         let bus = BusPublishService { broker: self.broker.clone(),
+                                       canonical: canonical.clone() };
+         let core = if self.is_provider(&canonical) {
+             Some(CorePluginService { catalog: self.tool_catalog.clone() })
+         } else {
+             None
+         };
+         #[cfg(any(test, feature = "test-fixture"))]
+         let extra = self.extra_service_factory.as_ref().map(|f| f(canonical));
+         SupervisorConnectionService { bus, core, extra }
+     }
+     ```
+     `is_provider(&canonical)` reads the supervisor's
+     existing per-plan record (the supervisor already
+     stores compiled plans keyed by canonical id in
+     `managed`; the `bindings.provider_id.is_some()`
+     check is local). The
+     `SupervisorConnectionService` struct grows a
+     third optional field `core: Option<CorePluginService>`.
 
-  2. `CorePluginService` registers exactly one fittings
-     method, `core.tools_list`, whose handler captures
-     `Arc<BrokerAcl>` at construction and synthesises the
-     response by walking the **live `BrokerAcl.tool_routes`
-     map** (`crates/rafaello-core/src/broker_acl.rs`,
-     established in m1) plus the **live
-     `CompiledPlugin.tool_meta`** projected by m1's
-     `compile.rs:204` / `:440-463`. (Round 2 wrongly cited
-     a `BrokerAcl.fittings_methods` field that does not
-     exist; deleted. The actual `BrokerAcl` has `plugins`,
-     `tool_routes`, `frontends` — verified
-     `crates/rafaello-core/src/broker_acl.rs:30-78`.)
+  4. `CorePluginService` registers exactly one fittings
+     method, `core.tools_list`, whose handler clones
+     `self.catalog.clone()` and returns
+     `{ tools: catalog.list().to_vec() }`. No
+     per-call recomputation; the catalog is built once
+     at `rfl chat` startup. (Round 3 said the handler
+     captures `Arc<BrokerAcl>` and walks
+     `tool_routes` plus `tool_meta`; pi-3 M-1 is right
+     that this is wrong — `BrokerAcl` does not contain
+     `tool_meta`, and the supervisor does not have
+     access to the `compiled_plugins` map. The catalog
+     is the right place for the join.)
 
-  3. **Method-not-found fall-through** is the natural
+  5. **Method-not-found fall-through** is the natural
      fittings behaviour: a non-provider plugin whose
-     `SupervisorConnectionService` lacks the `core` arm
+     `SupervisorConnectionService` has `core: None`
      gets `MethodNotFound` if it tries to call
-     `core.tools_list`. No ACL plumbing required;
-     `CorePluginService` is per-connection-typed.
+     `core.tools_list`. No ACL plumbing required.
 
-  4. **Provider-side caller.** `rfl-openai` calls
+  6. **Provider-side caller.** `rfl-openai` calls
      `peer.call("core.tools_list", json!({}))` once after
      completing the fittings handshake, before
      subscribing to `core.session.user_message`. The
@@ -2004,32 +2288,50 @@ deleted.
      `WatcherEvent::Crash` path (m2 / m3) catches the
      non-zero exit and reports it as a normal
      plugin-startup failure to `rfl chat`. **No new
-     `SpawnError` variant required** — the round-2
-     `PostHandshakeFailure` reference was a pi-2 M-1
-     phantom and is removed.
+     `SpawnError` variant required.**
 
-  5. **Tool-schema source.** Core synthesises one
-     `ToolSchema` per `tool_routes` entry by reading the
-     target plugin's `bindings.tool_meta` for
-     `name` and (when m1's manifest carries it) `description`;
-     `parameters_schema` is read from the target plugin's
-     manifest's `[provides.tool.<n>].parameters_schema`
-     field. **m5a additive m1 schema bullet:**
-     `parameters_schema: Option<SafePath>` field on
-     `ToolMeta` referencing a sibling JSON-Schema file
-     (mirrors `grant_match`'s shape and validation per
-     m1 §M11). Validated for presence at
-     `manifest::validate_with_package` time; the
-     `parameters_schema` JSON is loaded and embedded in
-     `ToolMeta` at compile time (one disk read per
-     install). Sinks and `grant_match` are **not**
-     forwarded to the model.
+  7. **Tool-schema source — `openrpc.json` derivation**
+     (round 4 / pi-3 M-2; replaces round-3's additive
+     `parameters_schema` manifest field). m1 already
+     **requires** an `openrpc.json` sibling at the
+     manifest's parent directory, validated at install
+     time per `decisions.md` row 31. m5a's
+     `ToolSchemaCatalog::build` reads each plugin's
+     `openrpc.json` (path resolved from
+     `package_dirs[canonical]`), parses it with
+     `serde_json`, and synthesises one `ToolSchema`
+     per declared tool name by:
+     - matching the OpenRPC `methods[i].name` against
+       the manifest's `provides.tools` entries (the
+       method-name convention is the same string for
+       this project — m1's `validate_with_package`
+       already enforces method-vs-tool consistency at
+       install time);
+     - projecting `methods[i].params` (an OpenRPC
+       parameter list) into a JSON-Schema object
+       `{type: "object", properties: { param.name:
+       param.schema, ... }, required: [<required
+       names>] }`. This is the standard OpenRPC →
+       OpenAI-tools mapping documented in OpenRPC's
+       playground; ~30 lines of code.
+     **The round-3 `parameters_schema: Option<SafePath>`
+     manifest field is withdrawn** — no new manifest
+     field, no new lock field, no new compiled-`ToolMeta`
+     field. The round-3 acceptance-summary entry for
+     "`overview.md` §15.1 / Stream F manifest RFC banner
+     — add `parameters_schema`" is dropped.
+     Sinks / `grant_match` / `always_confirm` are
+     **not** forwarded to the model (they are gate-side
+     concerns; see §OP6 audit-correlation discussion).
 
-  6. Tests:
+  8. Tests:
+     - `tool_schema_catalog_build_from_openrpc_synthesises_parameters_schema.rs`
+     - `tool_schema_catalog_build_errors_when_openrpc_method_missing_for_tool.rs`
+     - `tool_schema_catalog_omits_sinks_grant_match_always_confirm.rs`
      - `core_plugin_service_responds_to_core_tools_list_for_provider.rs`
      - `core_plugin_service_method_not_found_for_non_provider_plugin.rs`
-     - `core_tools_list_returns_compiled_tool_routes_with_parameters_schema.rs`
-     - `core_tools_list_excludes_sinks_and_grant_match_fields.rs`
+     - `supervisor_new_accepts_tool_catalog_arg.rs` (signature
+       extension)
      - `openai_calls_tools_list_after_handshake.rs` (the
        provider-side integration test against the
        in-tree `CorePluginService`)
@@ -2083,6 +2385,16 @@ deleted.
   [capabilities.default.network]
   mode = "proxy"
   allow_hosts = ["litellm.thepromisedlan.club"]   # dev default; lock overrides per deployment
+
+  # Round 4 / pi-3 B-3: the bundled manifest declares which secret
+  # env-var names are intentional (the OpenAI Chat Completions
+  # protocol historically uses *_KEY-suffixed env vars; m1's
+  # SECRET_PATTERNS scrubber strips them by default). The lock
+  # snapshots this list into bindings and the compiler honours it
+  # — see §OP6 for the full schema/scrubber/status path.
+  [capabilities.default.env]
+  pass          = []     # the deployment's lock supplies the actual key name; here just declares the field
+  allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
   ```
 - **OP5.** **Lock binding shape** (env model resolved
   per pi-1 B-5 / round-2 prompt: simplest path — no
@@ -2105,8 +2417,11 @@ deleted.
 
   # Pass the deployment's host env var verbatim. The plugin reads its
   # name from RFL_OPENAI_API_KEY_ENV (set below) and looks up the value.
+  # `allow_secrets` snapshots the manifest list so the compiler's
+  # scrubber honours the *_KEY pass entry (see §OP6).
   [plugin."builtin:openai@0.0.0".grant.bundles.default.env]
-  pass = ["LITELLM_API_KEY"]
+  pass          = ["LITELLM_API_KEY"]
+  allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
 
   [plugin."builtin:openai@0.0.0".grant.bundles.default.env.set]
   RFL_OPENAI_API_KEY_ENV  = "LITELLM_API_KEY"
@@ -2174,42 +2489,128 @@ deleted.
   - `openai_endpoint_url_taken_from_env_var.rs`
   - `openai_model_taken_from_env_var.rs`
   - `openai_api_key_resolved_via_indirection_env_var.rs`
-- **OP6.** **`env.allow_secrets` opt-in** (round-3
-  addition resolving pi-2 owner-judgment #3 — the
-  bundled-default-provider scrubber UX problem).
-  Manifest schema (additive m1 extension):
+- **OP6.** **`env.allow_secrets` opt-in — full
+  mechanical wiring** (round-4, pi-3 B-3 — round 3 left
+  the data path against nonexistent live structures;
+  round 4 specifies every layer against verified live
+  source).
 
-  ```toml
-  [capabilities.default.env]
-  pass          = ["LITELLM_API_KEY"]
-  allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY"]
+  Manifest schema (additive m1 extension to live
+  `EnvCapabilities` at
+  `crates/rafaello-core/src/manifest/capabilities.rs:69-73`):
+
+  ```rust
+  // crates/rafaello-core/src/manifest/capabilities.rs
+  #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+  pub struct EnvCapabilities {
+      #[serde(default)]
+      pub pass: Vec<String>,
+      #[serde(default)]
+      pub set: BTreeMap<String, String>,
+      // NEW (m5a):
+      #[serde(default)]
+      pub allow_secrets: Vec<String>,
+  }
   ```
 
-  Semantics:
-  - `allow_secrets` is a list of env-var names whose
-    presence in `env.pass` (this bundle or any inheriting
-    bundle) bypasses the `SECRET_PATTERNS` strip. Names
-    not in `allow_secrets` are stripped per m1's
-    existing rule.
-  - Snapshotted into `bindings.capability.env.allow_secrets`
-    at install time (m1's `compile.rs` projection
-    extended).
-  - Surfaced in `rfl status` distinctly from
-    `flags.i_know_what_im_doing`: yellow ANSI marker
-    "explicit secret" (vs the red `[OVERRIDE]` for the
-    nuclear flag), with the matched env-var names
-    listed inline. Non-TTY: `[SECRET]` prefix.
-  - Audit log: `install_accepted` rows include the
-    `allow_secrets` list when non-empty, so the
-    operator's first install of the bundled provider
-    creates an audit entry with the explicit secret
-    declaration.
-  - **Mutually composable** with `flags.i_know_what_im_doing`:
-    `allow_secrets` is the narrow path
-    (per-secret-name); the nuclear flag remains as the
-    fallback for users who genuinely want
-    "i_know_what_im_doing" semantics on a non-bundled
-    plugin.
+  Lock schema (additive m1 extension to live `GrantEnv`
+  at `crates/rafaello-core/src/lock/grant.rs:66-70`):
+
+  ```rust
+  // crates/rafaello-core/src/lock/grant.rs
+  #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+  pub struct GrantEnv {
+      #[serde(default, skip_serializing_if = "Vec::is_empty")]
+      pub pass: Vec<String>,
+      #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+      pub set: BTreeMap<String, String>,
+      // NEW (m5a):
+      #[serde(default, skip_serializing_if = "Vec::is_empty")]
+      pub allow_secrets: Vec<String>,
+  }
+  ```
+
+  Effective-grant merge: live `sinks::union_bundle`
+  (`crates/rafaello-core/src/sinks.rs:52-69`) currently
+  unions `pass` and merges `set`. m5a extends to also
+  union `allow_secrets` (concat + dedup). The same
+  `effective_grant(grant, tool)` function the gate
+  already calls (per §Si) returns the union.
+
+  Scrubber signature change: live
+  `crates/rafaello-core/src/scrubber.rs::strip` is
+  currently:
+  ```rust
+  pub fn strip(env_pass: &[String], i_know_what_im_doing: bool) -> Vec<String>
+  ```
+  m5a changes to:
+  ```rust
+  pub fn strip(
+      env_pass: &[String],
+      allow_secrets: &[String],
+      i_know_what_im_doing: bool,
+  ) -> Vec<String>
+  ```
+  Behaviour: a name in `env_pass` is retained if
+  (a) `i_know_what_im_doing == true`, OR
+  (b) it does not match `SECRET_PATTERNS`, OR
+  (c) it appears in `allow_secrets` (case-sensitive
+  exact match). Otherwise it is stripped.
+
+  Caller change: live
+  `crates/rafaello-core/src/compile.rs` line ~191 calls
+  `scrubber::strip(&eff.env.pass, entry.flags.i_know_what_im_doing)`
+  (after `scrubber::reject_reserved`). m5a changes the
+  call site to
+  `scrubber::strip(&eff.env.pass, &eff.env.allow_secrets,
+  entry.flags.i_know_what_im_doing)`. The
+  `EnvPlan` struct stored in the compiled plan is
+  unchanged in shape (`pass` is still the
+  post-scrubber list); only the input to the scrubber
+  changes.
+
+  Validation rules at install time
+  (`validate::lock`, augmented):
+  1. Every entry in `allow_secrets` must match the
+     env-var-name regex `^[A-Za-z_][A-Za-z0-9_]*$`.
+  2. Every entry in `allow_secrets` should appear in the
+     same bundle's `env.pass` (or in an inheriting
+     bundle's `env.pass`); a `allow_secrets` entry that
+     doesn't cover any pass name is a warning at install
+     (the install proceeds; `rfl install` prints a
+     "unused allow_secrets entry: <name>" stderr line)
+     — not an error, because the manifest may declare
+     more deployment-flexibility than a particular
+     deployment uses.
+  3. **No interaction with `RESERVED_ENV_VARS`**:
+     `allow_secrets` is for *user-named* env vars, not
+     core-injected names. A name appearing in both
+     `RESERVED_ENV_VARS` and `allow_secrets` is rejected
+     by the existing `reject_reserved` step before
+     `strip` runs.
+
+  `rfl status` surface (extends §Tr3):
+  - For each lock entry whose `bindings.tool_meta`
+    *(actually wait — the lock side is on the bundle,
+    not on tool_meta; the projection lives in the
+    grant's `GrantEnv`)* — restated: for each lock
+    entry whose any-bundle `GrantEnv.allow_secrets` is
+    non-empty, `rfl status` renders the entry with a
+    yellow ANSI "explicit secret: <names>" suffix
+    (vs the red `[OVERRIDE]` for `flags.i_know_what_im_doing`).
+    Non-TTY: `[SECRET: <names>]` suffix.
+
+  Audit log (extends §AL):
+  - `install_accepted` rows include
+    `details.allow_secrets: ["<name>", ...]` when the
+    candidate's `GrantEnv.allow_secrets` is non-empty,
+    so the first install of a plugin with explicit
+    secrets is auditable.
+
+  **Mutually composable** with `flags.i_know_what_im_doing`:
+  `allow_secrets` is the narrow per-name path; the
+  nuclear flag remains as the fallback for non-bundled
+  plugins or for users who want broader bypass.
 
   Why not the rejected alternatives:
   - Rename the host env var (`LITELLM_PROXY_TOKEN`):
@@ -2220,20 +2621,28 @@ deleted.
     doesn't scale to OpenAI / Anthropic / etc.
   - Drop the `*_KEY` strip entirely: regression on
     third-party plugins.
+  - Revert to round-2's `i_know_what_im_doing` path:
+    bad UX for the bundled default provider (the
+    original pi-2 owner-judgment #3 problem).
 
-  **Owner-judgment flag.** This is a manifest-schema
-  extension (additive — existing manifests without
-  `allow_secrets` continue to compile, the field
-  defaults to `[]`). Surfaced in the convergence ping
-  per pi-2's owner-judgment item #3.
+  **Owner-judgment flag.** Touches m1's manifest schema
+  and the scrubber signature. Both additive (existing
+  manifests / locks without `allow_secrets` continue
+  to compile and behave identically). Surfaced in the
+  convergence ping per pi-2 owner-judgment item #3.
 
   Tests:
-  - `manifest_capabilities_env_allow_secrets_parses.rs`
-  - `manifest_capabilities_env_allow_secrets_validates.rs`
-  - `compile_propagates_allow_secrets_into_bindings.rs`
-  - `scrubber_honours_allow_secrets_for_listed_names.rs`
-  - `scrubber_strips_unlisted_secrets_even_when_allow_secrets_present.rs`
+  - `manifest_env_capabilities_allow_secrets_parses.rs`
+  - `lock_env_grant_allow_secrets_parses_and_serialises.rs`
+  - `effective_grant_unions_allow_secrets_across_bundles.rs`
+  - `scrubber_strip_honours_allow_secrets_for_listed_names.rs`
+  - `scrubber_strip_strips_unlisted_secrets_when_allow_secrets_present.rs`
+  - `compile_passes_allow_secrets_into_scrubber.rs`
+  - `validate_lock_warns_on_unused_allow_secrets_entry.rs`
+  - `validate_lock_rejects_invalid_allow_secrets_name_shape.rs`
+  - `validate_lock_rejects_reserved_name_in_allow_secrets.rs`
   - `rfl_status_yellow_marker_for_allow_secrets_lock_entry.rs`
+  - `rfl_status_non_tty_secret_suffix_for_allow_secrets.rs`
   - `audit_install_accepted_records_allow_secrets_list.rs`
 - **OP7.** Tests in `rafaello-openai/tests/`:
   - `openai_manifest_compiles.rs`
@@ -2258,7 +2667,9 @@ deleted.
     - `openai_unknown_tool_name_from_model_emits_error_assistant.rs`
     - `openai_multiple_tool_calls_one_response_emits_each_with_shared_in_reply_to.rs`
     - `openai_mixed_content_and_tool_calls_emits_assistant_then_tool_requests.rs`
-    - `openai_post_handshake_failure_propagates_through_supervisor.rs`
+    - `openai_tools_list_failure_exits_nonzero_and_supervisor_reports_crash.rs`
+      (round-4 / pi-3 N-4 rename — round-3 used the
+      removed `PostHandshakeFailure` framing)
 
 ### TP — `rafaello-mailcat` sink-declaring tool fixture
 
@@ -2384,25 +2795,10 @@ deleted.
   three RFL_OPENAI names that would have been added —
   is withdrawn entirely; pi-2 B-1 fold.)**
 
-- **(Original M1.1 text follows for trajectory; superseded
-  by the round-3 paragraph above.)** Extend m1's
-  `RESERVED_ENV_VARS`
-  (`crates/rafaello-core/src/scrubber.rs:23-31` —
-  **currently seven** per pi-1 N-5; the round-1
-  count of "six per row 40" was stale, the live list is
-  `RFL_BUS_FD`, `RFL_PLUGIN`, `RFL_HELPER_FD`,
-  `RFL_TOPIC_ID`, `RFL_PROJECT_ROOT`,
-  `RFL_PRIVATE_STATE_DIR`, `RFL_PROVIDER_ID`) to **nine**
-  by adding `RFL_OPENAI_ENDPOINT_URL` and
-  `RFL_OPENAI_MODEL`. Per row 40's pattern: rejected at
-  compile / V3 time when present in `env.set` or
-  `env.pass` of any plugin's lock entry. The
-  `RFL_OPENAI_API_KEY_ENV` indirection name (§OP5) is
-  intentionally **not** reserved — it is a user-set
-  string whose *value* is interpreted as the name of
-  another env var. Round 1's `RFL_OPENAI_API_KEY`
-  reservation and the `<host>:<canonical>` rename
-  syntax are both withdrawn (pi-1 B-5).
+  *(Round-1 and round-2 §M1.1 text — which proposed
+  adding `RFL_OPENAI_*` to `RESERVED_ENV_VARS` — is
+  fully deleted in round 4 per pi-3 N-1 to avoid
+  copy/paste implementation errors.)*
 - **M1.2.** Lock-side `check_lock_publish_topic`
   unknown-namespace tightening. m1's
   `validate/mod.rs` currently accepts any grammatically
@@ -2429,10 +2825,18 @@ deleted.
   - construct an `AuditWriter` against the SQLite path
     (the connection is shared with m3's session store
     via the existing `Arc<SessionController>` pool);
-  - register the `core.tools_list` fittings RPC method
-    on the broker's fittings server with the compiled
-    tool-routing table (§OP2 — replaces round 1's
-    bus-event approach per pi-1 B-4);
+  - construct the `ToolSchemaCatalog` via
+    `ToolSchemaCatalog::build(&acl, &compiled_plugins,
+    &package_dirs)` (§OP2 — derives schemas from each
+    plugin's existing required `openrpc.json` sibling).
+    There is **no broker fittings server**; the
+    supervisor's per-connection `CorePluginService`
+    (composed in `build_connection_service` for provider
+    connections only) hosts `core.tools_list`. The
+    `Arc<ToolSchemaCatalog>` is passed into
+    `PluginSupervisor::new` as the third arg (round-4
+    pi-3 M-1 — round-3's "register on the broker's
+    fittings server" wording was wrong; corrected);
   - register the core-side slash-command handler
     (§SL3) as an internal subscriber on
     `frontend.tui.slash_command`;
@@ -2976,16 +3380,19 @@ selected sub-option text. Default expectation:
     the gate's runtime structural-subset matcher does
     not need it.
 
-16. **`flags.i_know_what_im_doing` on the bundled
-    `rfl-openai` lock entry** (§OP5). The dev deployment
-    requires this flag because `LITELLM_API_KEY` matches
-    the scrubber's `*_KEY` pattern. The risk is operator
-    confusion ("why does the bundled provider need this
-    scary flag?"). Mitigation: `rfl status` rendering
-    distinguishes bundled-plugin overrides from
-    third-party overrides (a future `--bundled-ok`
-    affordance is m6); the manual-validation script
-    documents the flag with rationale.
+16. **`env.allow_secrets` schema/UX owner-judgment**
+    (§OP6 / §A11). m5a's selected resolution to the
+    bundled-`rfl-openai` `*_KEY` scrubber UX is the
+    additive `allow_secrets` opt-in (rather than the
+    rejected round-2 `i_know_what_im_doing` fallback —
+    pi-3 M-4 caught the round-2 wording lingering here
+    and required a rewrite). Risk: owner rejects the
+    schema extension at convergence; fall back is the
+    round-2 nuclear-flag path with the documented bad-UX
+    tradeoff. Mitigation: §"Owner-judgment items"
+    surfaces this for explicit ratification; the fall
+    back is mechanical (revert §OP6, restore the
+    `i_know_what_im_doing = true` lock-entry flag).
 
 ---
 
@@ -3044,12 +3451,22 @@ post-merge driver sweep, mirroring m4.
 Suggested grouping; `commits.md` picks final granularity.
 Pi review may reshape.
 
-1. **Workspace + crate scaffolds + m1 reserved-env
-   extension (W1-W4 + M1.1)** — ~3 commits. The
+1. **Workspace + crate scaffolds + scrubber
+   `allow_secrets` schema (W1-W4 + §OP6 schema bullet)**
+   — ~3-4 commits (round-4 / pi-3 N-2 — round-3 said
+   "m1 reserved-env extension" but M1.1 was reduced to
+   "no new reserved names"; the workspace-shaped change
+   is now the `allow_secrets` schema landing in
+   manifest `EnvCapabilities`, lock `GrantEnv`, and
+   `scrubber::strip` signature). The
    `rafaello-openai`, `rafaello-openai-stub`,
-   `rafaello-mailcat` crate skeletons land here separately
-   from logic. `reqwest` workspace-dep addition is its
-   own commit.
+   `rafaello-mailcat` crate skeletons land here
+   separately from logic. `reqwest` and `jsonschema`
+   workspace-dep additions are their own commit. The
+   `allow_secrets` field land + scrubber signature
+   change is one commit (additive across all four
+   call sites — manifest, lock, effective merge,
+   compile-time scrub).
 2. **m1 lock-side namespace tightening (M1.2)** —
    ~1 commit. Closes m4 §2.6.
 3. **Sink-class consumer (Si1-Si3) + per-plugin
@@ -3211,11 +3628,18 @@ m5a is done when:
     explaining the distinction between core-injected
     reserved names and well-known plugin-config names
     documented for plugin authors' reference.
+  - **(Withdrawn round 4 / pi-3 M-2.)** Round-3
+    proposed adding `parameters_schema: SafePath?` to
+    `[provides.tool.<n>]`; round 4 derives schemas
+    from the existing required `openrpc.json` sibling
+    instead. No new manifest field. The round-3
+    "first non-trivial m1 manifest schema extension"
+    bullet is dropped from the drift list.
   - **`overview.md` §15.1 / Stream F manifest RFC banner**
-    — add `parameters_schema: SafePath?` to the
-    `[provides.tool.<n>]` shape (§OP2 step 5 additive
-    extension — m5a's first non-trivial m1 manifest
-    schema extension; symmetrical to `grant_match`).
+    — add `allow_secrets: Vec<String>` to the
+    `[capabilities.<bundle>.env]` shape (§OP6 / pi-3 B-3
+    full mechanical wiring). m5a's only
+    non-trivial m1 manifest schema extension.
   - **`glossary.md`** — add an `Audit log` entry
     (table-passive, append-only); adjust the
     `Confirmation protocol` entry to point at m5a's
@@ -3392,4 +3816,4 @@ override.
 
 ---
 
-*End of m5a scope round 3.*
+*End of m5a scope round 4.*
