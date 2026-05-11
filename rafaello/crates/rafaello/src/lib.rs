@@ -142,13 +142,15 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     let mut subscribe_patterns = BTreeSet::new();
     subscribe_patterns.insert("core.session.**".to_string());
     subscribe_patterns.insert("core.lifecycle.**".to_string());
+    let mut publish_topics = BTreeSet::new();
+    publish_topics.insert("frontend.tui.user_message".to_string());
     let mut frontends = BTreeMap::new();
     frontends.insert(
         attach,
         FrontendAcl {
             subscribe_patterns,
             auto_subscribes: BTreeSet::new(),
-            publish_topics: BTreeSet::new(),
+            publish_topics,
         },
     );
     let acl = BrokerAcl {
