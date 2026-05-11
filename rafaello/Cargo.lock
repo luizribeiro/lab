@@ -1523,6 +1523,7 @@ dependencies = [
  "chrono",
  "clap",
  "nix",
+ "parking_lot",
  "rafaello-core",
  "rusqlite",
  "serde_json",

@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use serde_json::{json, Map, Value};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -31,7 +31,7 @@ const SLASH_CHANNEL_CAPACITY: usize = 256;
 pub struct SlashHandler {
     broker: Broker,
     acl: Arc<BrokerAcl>,
-    user_grants: Arc<Mutex<UserGrants>>,
+    user_grants: Arc<RwLock<UserGrants>>,
     audit: Arc<AuditWriter>,
     tool_grant_match_schemas: BTreeMap<String, Value>,
     shutdown_rx: watch::Receiver<bool>,
@@ -41,7 +41,7 @@ impl SlashHandler {
     pub fn new(
         broker: Broker,
         acl: Arc<BrokerAcl>,
-        user_grants: Arc<Mutex<UserGrants>>,
+        user_grants: Arc<RwLock<UserGrants>>,
         audit: Arc<AuditWriter>,
         tool_grant_match_schemas: BTreeMap<String, Value>,
         shutdown_rx: watch::Receiver<bool>,
@@ -100,7 +100,7 @@ impl SlashHandler {
 fn handle_event(
     broker: &Broker,
     acl: &BrokerAcl,
-    user_grants: &Arc<Mutex<UserGrants>>,
+    user_grants: &Arc<RwLock<UserGrants>>,
     audit: &AuditWriter,
     schemas: &BTreeMap<String, Value>,
     event: &BusEvent,
@@ -148,7 +148,7 @@ fn handle_event(
 fn handle_grant(
     broker: &Broker,
     acl: &BrokerAcl,
-    user_grants: &Arc<Mutex<UserGrants>>,
+    user_grants: &Arc<RwLock<UserGrants>>,
     audit: &AuditWriter,
     schemas: &BTreeMap<String, Value>,
     slash_request_id: &JsonRpcId,
@@ -224,7 +224,7 @@ fn handle_grant(
         added_at: chrono::Utc::now(),
         source: GrantSource::SlashCommand,
     };
-    let grant_id = user_grants.lock().add(grant);
+    let grant_id = user_grants.write().add(grant);
     let _ = audit.record(
         AuditKind::GrantAdded,
         Some(slash_request_id),
@@ -247,12 +247,12 @@ fn handle_grant(
 
 fn handle_list_grants(
     broker: &Broker,
-    user_grants: &Arc<Mutex<UserGrants>>,
+    user_grants: &Arc<RwLock<UserGrants>>,
     audit: &AuditWriter,
     slash_request_id: &JsonRpcId,
 ) {
     let entries: Vec<Value> = {
-        let g = user_grants.lock();
+        let g = user_grants.read();
         g.list()
             .into_iter()
             .map(|(id, grant)| {
@@ -284,7 +284,7 @@ fn handle_list_grants(
 
 fn handle_revoke(
     broker: &Broker,
-    user_grants: &Arc<Mutex<UserGrants>>,
+    user_grants: &Arc<RwLock<UserGrants>>,
     audit: &AuditWriter,
     slash_request_id: &JsonRpcId,
     args: &Map<String, Value>,
@@ -304,7 +304,7 @@ fn handle_revoke(
         return;
     };
     let grant_id = GrantId(ulid);
-    match user_grants.lock().revoke(grant_id) {
+    match user_grants.write().revoke(grant_id) {
         Ok(()) => {
             let _ = audit.record(
                 AuditKind::GrantRevoked,

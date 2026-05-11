@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rafaello_core::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use rafaello_core::bus::{Broker, BusEvent, InternalSubscription, JsonRpcId};
 use rafaello_core::lock::CanonicalId;
@@ -40,7 +40,7 @@ pub struct SlashRig {
     pub broker: Broker,
     pub acl: Arc<BrokerAcl>,
     pub attach: AttachId,
-    pub user_grants: Arc<Mutex<UserGrants>>,
+    pub user_grants: Arc<RwLock<UserGrants>>,
     pub audit: AuditRig,
     pub shutdown_tx: watch::Sender<bool>,
     pub join: JoinHandle<()>,
@@ -87,7 +87,7 @@ pub fn build_slash_rig(opts: SlashRigOpts) -> SlashRig {
     Box::leak(Box::new(guard));
 
     let audit = AuditRig::new(&broker);
-    let user_grants = Arc::new(Mutex::new(UserGrants::new()));
+    let user_grants = Arc::new(RwLock::new(UserGrants::new()));
     let acl_arc = Arc::new(acl);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handler = SlashHandler::new(

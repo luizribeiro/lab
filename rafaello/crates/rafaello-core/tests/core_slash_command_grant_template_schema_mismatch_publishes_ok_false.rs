@@ -56,7 +56,7 @@ async fn grant_template_schema_mismatch_publishes_ok_false() {
         "message should mention schema mismatch: {:?}",
         event.payload["message"]
     );
-    assert_eq!(rig.user_grants.lock().list().len(), 0);
+    assert_eq!(rig.user_grants.read().list().len(), 0);
 
     shutdown(rig).await;
 }

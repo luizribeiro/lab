@@ -41,7 +41,7 @@ async fn grant_unknown_tool_publishes_ok_false() {
         "expected a slash_unknown audit row, got {:?}",
         rows
     );
-    assert_eq!(rig.user_grants.lock().list().len(), 0);
+    assert_eq!(rig.user_grants.read().list().len(), 0);
 
     shutdown(rig).await;
 }

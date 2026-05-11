@@ -21,7 +21,7 @@ async fn list_grants_returns_entries() {
         )],
         ..Default::default()
     });
-    let pre_id = rig.user_grants.lock().add(UserGrant {
+    let pre_id = rig.user_grants.write().add(UserGrant {
         tool: "send-mail".to_string(),
         plugin: common::slash_test_kit::cid(MAILCAT_CANONICAL),
         matcher: GrantMatcher::Any,

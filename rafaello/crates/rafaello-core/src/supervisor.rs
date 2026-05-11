@@ -215,6 +215,11 @@ pub struct TestHooks {
     pre_spawn_fault_consumed_flag: std::sync::atomic::AtomicBool,
     post_spawn_pre_register_fault_consumed_flag: std::sync::atomic::AtomicBool,
     post_register_fault_consumed_flag: std::sync::atomic::AtomicBool,
+    /// c38: monotonic-clock nanos at the first `spawn` call. Lets
+    /// integration tests assert that the [`crate::gate::ConfirmationGate`]
+    /// subscribed BEFORE any plugin was spawned. `0` until the first
+    /// spawn fires.
+    first_spawn_instant_nanos: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(any(test, feature = "test-fixture"))]
@@ -232,6 +237,7 @@ impl Default for TestHooks {
             pre_spawn_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
             post_spawn_pre_register_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
             post_register_fault_consumed_flag: std::sync::atomic::AtomicBool::new(false),
+            first_spawn_instant_nanos: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -264,6 +270,44 @@ impl TestHooks {
         self.post_register_fault_consumed_flag
             .load(std::sync::atomic::Ordering::SeqCst)
     }
+
+    /// c38: monotonic nanos at which the first `PluginSupervisor::spawn`
+    /// fired in this supervisor. `None` until any spawn starts. Used by
+    /// `rfl_chat_constructs_gate_before_provider_spawn` to assert
+    /// `gate.subscribed_at < first_spawn_at`.
+    pub fn first_spawn_instant_nanos(&self) -> Option<u64> {
+        let raw = self
+            .first_spawn_instant_nanos
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if raw == 0 {
+            None
+        } else {
+            Some(raw)
+        }
+    }
+
+    pub(crate) fn record_first_spawn_now(&self) {
+        let now_nanos = monotonic_nanos();
+        let _ = self.first_spawn_instant_nanos.compare_exchange(
+            0,
+            now_nanos,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+
+#[cfg(any(test, feature = "test-fixture"))]
+pub fn monotonic_nanos() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(Instant::now);
+    Instant::now()
+        .saturating_duration_since(*epoch)
+        .as_nanos()
+        .min(u64::MAX as u128) as u64
+        + 1
 }
 
 /// Test-only factory for additional `core.fixture.*` services
@@ -357,6 +401,8 @@ impl PluginSupervisor {
         plan: &CompiledPlugin,
         paths: &SpawnPaths,
     ) -> Result<SpawnHandle, SpawnError> {
+        #[cfg(any(test, feature = "test-fixture"))]
+        self.test_hooks.record_first_spawn_now();
         let in_flight_guard = InFlightGuard::acquire(Arc::clone(&self.in_flight), &plan.canonical)?;
 
         self.broker

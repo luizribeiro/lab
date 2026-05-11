@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use serde_json::json;
+use parking_lot::RwLock;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use rafaello_core::agent::AgentLoop;
@@ -29,17 +30,20 @@ use rafaello_core::error::{
 use rafaello_core::frontend::{
     CompiledFrontend, FrontendConfig, FrontendHandle, FrontendPaths, FrontendSupervisor,
 };
+use rafaello_core::gate::{ConfirmState, ConfirmationGate};
 use rafaello_core::lock::{CanonicalId, Lock};
 use rafaello_core::manifest::Manifest;
 use rafaello_core::paths::PathContext;
 use rafaello_core::reemit::ReemitRouter;
 use rafaello_core::renderer::{Capabilities, RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionError, SessionStore};
+use rafaello_core::slash::SlashHandler;
 use rafaello_core::supervisor::{
     PluginSupervisor, SpawnHandle, SpawnPaths, SupervisorConfig, ToolCatalogError,
     ToolSchemaCatalog,
 };
 use rafaello_core::topic_id;
+use rafaello_core::user_grants::UserGrants;
 use rafaello_core::validate::{self, LockValidationContext};
 
 #[derive(Debug, Parser)]
@@ -341,12 +345,39 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
 
     // Step C5: broker → plugin supervisor → frontend supervisor → registry → pipeline → controller.
     let acl_for_routing = acl.clone();
+    let acl_arc = Arc::new(acl.clone());
     let broker = Broker::new(acl).map_err(|e| RflChatError::Broker(Box::new(e)))?;
-    let plugin_supervisor =
-        PluginSupervisor::new(broker.clone(), SupervisorConfig::default(), tool_catalog);
+    let plugin_supervisor = PluginSupervisor::new(
+        broker.clone(),
+        SupervisorConfig::default(),
+        tool_catalog.clone(),
+    );
 
-    // Steps C6–C8: eager-spawn the active provider and every installed tool plugin.
-    let mut spawn_handles: Vec<SpawnHandle> = Vec::new();
+    // c38 / scope §CHAT1: pre-spawn wiring of confirmation + slash
+    // surfaces. The gate must be subscribed BEFORE any plugin spawns
+    // so the first `core.session.tool_request` reaches it.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let user_grants = Arc::new(RwLock::new(UserGrants::new()));
+    let confirm_state = Arc::new(ConfirmState::new());
+
+    let supervisor = FrontendSupervisor::new(broker.clone(), FrontendConfig::default());
+    let registry = Arc::new(RendererRegistry::with_builtins());
+    let pipeline = RenderPipeline::new(registry);
+    let controller = Arc::new(SessionController::new(store, pipeline, broker.clone()));
+    let caps = Capabilities::tui_default();
+    let audit = controller.audit_writer();
+
+    let slash_schemas = load_grant_match_schemas(&lock, &plugin_dirs);
+    let slash_handler = SlashHandler::new(
+        broker.clone(),
+        acl_arc,
+        user_grants.clone(),
+        audit.clone(),
+        slash_schemas,
+        shutdown_rx.clone(),
+    );
+    let slash_join = slash_handler.start();
+
     let provider_str = lock
         .session
         .provider_active
@@ -354,9 +385,26 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         .ok_or(RflChatError::NoActiveProvider)?;
     let provider_canonical =
         CanonicalId::parse(&provider_str).map_err(|_| RflChatError::NoActiveProvider)?;
-    let provider_plan = compiled_plugins
+    let _ = compiled_plugins
         .get(&provider_canonical)
         .ok_or(RflChatError::NoActiveProvider)?;
+
+    let gate = ConfirmationGate::new(
+        Arc::new(broker.clone()),
+        user_grants.clone(),
+        audit.clone(),
+        confirm_state.clone(),
+        compiled_plugins.clone(),
+    );
+    let gate_join = gate.spawn();
+
+    // Steps C6–C8: eager-spawn the active provider first, then every
+    // other plugin with `bindings.provider = true` (inactive
+    // providers — pi-3 M-2 + pi-4 M-1), then every tool plugin.
+    let mut spawn_handles: Vec<SpawnHandle> = Vec::new();
+    let provider_plan = compiled_plugins
+        .get(&provider_canonical)
+        .expect("active provider validated above");
     let provider_paths = plugin_spawn_paths(&project_root, &provider_plan.topic_id);
     let provider_handle = plugin_supervisor
         .spawn(provider_plan, &provider_paths)
@@ -365,6 +413,27 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             canonical: provider_canonical.clone(),
         })?;
     spawn_handles.push(provider_handle);
+
+    // c38 / scope §CHAT2 + pi-3 M-2: spawn every other provider
+    // (installed-but-not-active). The active provider's canonical id
+    // is compared (not its `provider_id`). Inactive provider events
+    // (e.g. `provider.mock.**`) are outside `ReemitRouter`'s
+    // subscribe scope and so are silently dropped.
+    for (canonical, entry) in &lock.plugins {
+        if !entry.bindings.provider || *canonical == provider_canonical {
+            continue;
+        }
+        let plan = compiled_plugins
+            .get(canonical)
+            .expect("compiled_plugins covers every lock entry");
+        let paths = plugin_spawn_paths(&project_root, &plan.topic_id);
+        let h = plugin_supervisor.spawn(plan, &paths).await.map_err(|_| {
+            RflChatError::ProviderSpawnFailed {
+                canonical: canonical.clone(),
+            }
+        })?;
+        spawn_handles.push(h);
+    }
 
     for (canonical, entry) in &lock.plugins {
         if entry.bindings.tools.is_empty() || entry.bindings.provider {
@@ -382,24 +451,19 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         spawn_handles.push(h);
     }
 
-    // Steps C9–C10: shutdown channel + ReemitRouter + AgentLoop spawned
-    // BEFORE the TUI starts, so the user_message → reemit → tool_request
-    // → tool_result chain is wired before any input arrives.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
+    // Steps C9–C10: ReemitRouter + AgentLoop spawned BEFORE the TUI
+    // starts, so the user_message → reemit → tool_request → gate →
+    // dispatch → tool_result chain is wired before any input
+    // arrives. The router opts into the §CT5 confirm_answer arm via
+    // `with_confirm_state_and_audit` (c14 builder).
     let router = ReemitRouter::new(
         broker.clone(),
         acl_for_routing.clone(),
         provider_canonical.clone(),
         shutdown_rx.clone(),
-    );
+    )
+    .with_confirm_state_and_audit(confirm_state.clone(), audit.clone());
     let router_join = router.start();
-
-    let supervisor = FrontendSupervisor::new(broker.clone(), FrontendConfig::default());
-    let registry = Arc::new(RendererRegistry::with_builtins());
-    let pipeline = RenderPipeline::new(registry);
-    let controller = Arc::new(SessionController::new(store, pipeline, broker.clone()));
-    let caps = Capabilities::tui_default();
 
     let agent = AgentLoop::new(
         broker.clone(),
@@ -451,15 +515,71 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     )
     .await;
 
-    // Steps C11–C12: signal shutdown → join router + agent → drop plugin
-    // handles → plugin supervisor shutdown.
+    // Steps C11–C12: signal shutdown → join router + agent + slash
+    // handler → drop plugin handles → plugin supervisor shutdown.
+    // The gate task exits when the broker subscription channel
+    // closes during the supervisor shutdown that drops the broker's
+    // last registration; we abort it explicitly to bound shutdown
+    // latency.
     let _ = shutdown_tx.send(true);
     let _ = router_join.await;
     let _ = agent_join.await;
+    let _ = slash_join.await;
+    gate_join.abort();
+    let _ = gate_join.await;
     drop(spawn_handles);
     let _shutdown_report = plugin_supervisor.shutdown().await;
 
     inner
+}
+
+/// Build the per-tool `grant_match` JSON Schema map consumed by
+/// [`SlashHandler`] at `/grant` time. Walks every lock entry,
+/// resolves each `tool_meta.grant_match` path against its plugin
+/// dir, and loads + parses the file. Failures are logged at
+/// `tracing::warn!` and the tool is omitted from the schema map
+/// (treated as "no schema" — `compile_template` then accepts any
+/// shape).
+fn load_grant_match_schemas(
+    lock: &Lock,
+    plugin_dirs: &BTreeMap<CanonicalId, PathBuf>,
+) -> BTreeMap<String, Value> {
+    let mut out: BTreeMap<String, Value> = BTreeMap::new();
+    for (canonical, entry) in &lock.plugins {
+        let Some(pkg_dir) = plugin_dirs.get(canonical) else {
+            continue;
+        };
+        for (tool, meta) in &entry.bindings.tool_meta {
+            let Some(rel) = meta.grant_match.as_ref() else {
+                continue;
+            };
+            let path = pkg_dir.join(rel.as_str());
+            match std::fs::read_to_string(&path) {
+                Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+                    Ok(v) => {
+                        out.insert(tool.clone(), v);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            tool = %tool,
+                            path = ?path,
+                            error = %err,
+                            "rfl chat: grant_match schema failed to parse; omitting"
+                        );
+                    }
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        tool = %tool,
+                        path = ?path,
+                        error = %err,
+                        "rfl chat: grant_match schema unreadable; omitting"
+                    );
+                }
+            }
+        }
+    }
+    out
 }
 
 async fn run_chat_after_spawns(

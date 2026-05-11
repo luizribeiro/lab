@@ -38,7 +38,7 @@ async fn grant_handler_inserts_user_grant() {
     assert_eq!(event.payload["kind"], json!("grant"));
     assert_eq!(event.in_reply_to.as_deref(), Some(&[slash_id][..]));
 
-    assert_eq!(rig.user_grants.lock().list().len(), 1);
+    assert_eq!(rig.user_grants.read().list().len(), 1);
 
     shutdown(rig).await;
 }

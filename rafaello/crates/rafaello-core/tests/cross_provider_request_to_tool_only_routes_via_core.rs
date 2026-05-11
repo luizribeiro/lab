@@ -17,6 +17,7 @@ use common::agent_test_kit::{
     build_agent_rig, AgentRigOpts, READFILE_CANONICAL, READFILE_TOPIC_ID,
 };
 use common::peer_test_kit::fresh_peer;
+use common::synthetic_dispatch;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_provider_request_to_tool_only_routes_via_core() {
@@ -40,6 +41,9 @@ async fn cross_provider_request_to_tool_only_routes_via_core() {
         shutdown_rx,
     );
     let join = agent.start();
+    // c38: agent loop no longer dispatches; m4 cross-provider routing
+    // assertion exercised via the gate_or_synthetic_dispatch helper.
+    let dispatcher = synthetic_dispatch::spawn(rig.broker.clone());
 
     let request_id = JsonRpcId::from("req-100");
     rig.broker
@@ -94,4 +98,6 @@ async fn cross_provider_request_to_tool_only_routes_via_core() {
         .await
         .expect("agent exits")
         .expect("agent task did not panic");
+    dispatcher.shutdown.send(true).expect("dispatcher shutdown");
+    let _ = tokio::time::timeout(Duration::from_secs(2), dispatcher.join).await;
 }

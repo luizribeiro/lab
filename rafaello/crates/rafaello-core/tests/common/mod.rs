@@ -10,6 +10,7 @@ pub mod provider_test_kit;
 pub mod reemit_test_kit;
 pub mod session_test_kit;
 pub mod slash_test_kit;
+pub mod synthetic_dispatch;
 pub mod tool_catalog_kit;
 
 #[cfg(feature = "test-fixture")]

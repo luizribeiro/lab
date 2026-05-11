@@ -8,9 +8,11 @@
 //!
 //! - persists every event as a typed `Entry` via
 //!   [`crate::session::SessionController::finalize_entry`];
-//! - on `core.session.tool_request`, publishes the per-plugin dispatch
-//!   `plugin.<topic-id>.tool_request` via
-//!   [`crate::bus::Broker::publish_for_tool_dispatch`].
+//! - on `core.session.tool_request`, persists the `tool_call` entry only.
+//!   The per-plugin dispatch (`plugin.<topic-id>.tool_request`) is owned
+//!   by [`crate::gate::ConfirmationGate`] (scope §CG6 + pi-1 B-3): the
+//!   agent loop observes the canonical event but no longer publishes
+//!   `plugin.<topic-id>.tool_request` itself.
 
 use std::sync::Arc;
 
@@ -23,7 +25,6 @@ use crate::broker_acl::BrokerAcl;
 use crate::bus::{Broker, BusEvent};
 use crate::entry::payloads::{TextPayload, ToolCallPayload, ToolCallStatus, ToolResultPayload};
 use crate::entry::{Entry, EntryAuthor, EntryMetadata, RenderNode, StreamState};
-use crate::lock::canonical_id::CanonicalId;
 use crate::renderer::Capabilities;
 use crate::session::SessionController;
 
@@ -65,8 +66,8 @@ impl AgentLoop {
             .broker
             .subscribe_internal(patterns, AGENT_CHANNEL_CAPACITY);
 
-        let broker = self.broker.clone();
-        let acl = self.acl.clone();
+        let _ = self.broker;
+        let _ = self.acl;
         let controller = self.controller;
         let caps = self.caps;
         let mut shutdown_rx = self.shutdown_rx;
@@ -85,7 +86,7 @@ impl AgentLoop {
                     maybe_event = rx.recv() => {
                         match maybe_event {
                             Some(event) => {
-                                handle_event(&broker, &acl, &controller, &caps, event).await;
+                                handle_event(&controller, &caps, event).await;
                             }
                             None => break,
                         }
@@ -96,21 +97,13 @@ impl AgentLoop {
     }
 }
 
-async fn handle_event(
-    broker: &Broker,
-    acl: &BrokerAcl,
-    controller: &SessionController,
-    caps: &Capabilities,
-    event: BusEvent,
-) {
+async fn handle_event(controller: &SessionController, caps: &Capabilities, event: BusEvent) {
     match event.topic.as_str() {
         "core.session.user_message" => handle_user_message(controller, caps, &event).await,
         "core.session.assistant_message" => {
             handle_assistant_message(controller, caps, &event).await
         }
-        "core.session.tool_request" => {
-            handle_tool_request(broker, acl, controller, caps, &event).await
-        }
+        "core.session.tool_request" => handle_tool_request(controller, caps, &event).await,
         "core.session.tool_result" => handle_tool_result(controller, caps, &event).await,
         _ => {}
     }
@@ -140,9 +133,14 @@ async fn handle_assistant_message(
     }
 }
 
+/// §CG6 + pi-1 B-3: the agent loop persists the `tool_call` entry but
+/// no longer publishes `plugin.<topic-id>.tool_request`. The
+/// [`crate::gate::ConfirmationGate`] owns dispatch from
+/// `core.session.tool_request` onward (passthrough, grant-match, and
+/// post-confirm allow). Removing the direct publish here is the
+/// cutover half of c38; the gate's construction in
+/// `rafaello::run_chat` is the other half.
 async fn handle_tool_request(
-    broker: &Broker,
-    _acl: &BrokerAcl,
     controller: &SessionController,
     caps: &Capabilities,
     event: &BusEvent,
@@ -160,10 +158,6 @@ async fn handle_tool_request(
         .unwrap_or_default()
         .to_string();
     let args = obj.get("args").cloned().unwrap_or(Value::Null);
-    let dispatch_target = obj
-        .get("dispatch_target")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
     let request_id = match event.request_id.as_ref() {
         Some(r) => r.clone(),
         None => {
@@ -179,8 +173,8 @@ async fn handle_tool_request(
         schema: None,
         payload: serde_json::to_value(ToolCallPayload {
             id: request_id.to_string(),
-            name: tool.clone(),
-            args: args.clone(),
+            name: tool,
+            args,
             status: ToolCallStatus::Pending,
         })
         .expect("ToolCallPayload serializes"),
@@ -189,30 +183,6 @@ async fn handle_tool_request(
     };
     if let Err(err) = controller.finalize_entry(entry, caps).await {
         tracing::error!(error = %err, "agent_loop: failed to persist tool_call entry");
-    }
-
-    let canonical = match dispatch_target
-        .as_deref()
-        .and_then(|s| CanonicalId::parse(s).ok())
-    {
-        Some(c) => c,
-        None => {
-            tracing::error!(
-                ?dispatch_target,
-                "agent_loop: tool_request missing or invalid dispatch_target"
-            );
-            return;
-        }
-    };
-    let dispatch_payload = serde_json::json!({"tool": tool, "args": args});
-    if let Err(err) = broker.publish_for_tool_dispatch(
-        &canonical,
-        dispatch_payload,
-        request_id,
-        event.in_reply_to.clone(),
-        event.taint.clone(),
-    ) {
-        tracing::error!(error = %err, "agent_loop: tool dispatch publish failed");
     }
 }
 

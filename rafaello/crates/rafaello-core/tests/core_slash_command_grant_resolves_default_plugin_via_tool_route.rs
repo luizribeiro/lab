@@ -39,7 +39,7 @@ async fn grant_resolves_default_plugin_via_tool_route() {
     assert_eq!(event.payload["ok"], json!(true));
 
     let (plugin_str, tool) = {
-        let grants = rig.user_grants.lock();
+        let grants = rig.user_grants.read();
         let (_, grant) = grants.list().into_iter().next().expect("one grant");
         (grant.plugin.to_string(), grant.tool.clone())
     };

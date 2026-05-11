@@ -36,7 +36,7 @@ async fn grant_no_schema_template_accepted() {
     let event = await_command_result(&mut rx).await;
     assert_eq!(event.payload["ok"], json!(true));
     assert_eq!(event.payload["kind"], json!("grant"));
-    assert_eq!(rig.user_grants.lock().list().len(), 1);
+    assert_eq!(rig.user_grants.read().list().len(), 1);
 
     shutdown(rig).await;
 }
