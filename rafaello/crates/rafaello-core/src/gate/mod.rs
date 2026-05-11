@@ -23,6 +23,12 @@
 //! the synthetic deny `tool_result` with `reason = ConfirmTimeout`
 //! (audit `confirm_timeout`); if the entry was already resolved by
 //! an answer the timeout task exits silently.
+//! §CG7: after CG4's `always_allow_session` path inserts a new
+//! `UserGrant`, the gate walks `ConfirmState::active_entries_snapshot`
+//! and short-circuits any Active entry that newly matches a grant —
+//! dispatch + audit `gate_grant_match_short_circuit` + publish
+//! `core.session.confirm_resolved` (`reason: "grant_short_circuit"`)
+//! so the TUI's queue-pruning subscriber sees the resolution.
 
 pub mod confirm_state;
 
@@ -38,7 +44,7 @@ use tokio::task::JoinHandle;
 use ulid::Ulid;
 
 use crate::audit::{AuditKind, AuditWriter};
-use crate::bus::{Broker, BusEvent, JsonRpcId, TaintEntry};
+use crate::bus::{Broker, BusEvent, JsonRpcId, TaintEntry, CORE_SESSION_CONFIRM_RESOLVED};
 use crate::compile::CompiledPlugin;
 use crate::lock::canonical_id::CanonicalId;
 use crate::user_grants::{GrantMatcher, GrantSource, UserGrant, UserGrants};
@@ -483,6 +489,7 @@ fn handle_confirm_reply(
             broker,
             user_grants,
             audit,
+            state,
             &correlation_id,
             held,
             session_grant_requested,
@@ -501,6 +508,7 @@ fn dispatch_allow(
     broker: &Broker,
     user_grants: &RwLock<UserGrants>,
     audit: &AuditWriter,
+    state: &Arc<ConfirmState>,
     correlation_id: &JsonRpcId,
     held: HeldConfirmation,
     session_grant_requested: bool,
@@ -539,6 +547,7 @@ fn dispatch_allow(
                 "source": "AlwaysAllowSession",
             }),
         );
+        short_circuit_pending_after_grant(broker, user_grants, audit, state);
     }
 
     let tool_request_id = held
@@ -570,6 +579,67 @@ fn dispatch_allow(
             "plugin": held.dispatch_target.to_string(),
         }),
     );
+}
+
+/// §CG7 short-circuit walk. After CG4's `always_allow_session`
+/// path inserts a new `UserGrant`, every still-`Active` held entry
+/// whose `(plugin, tool, args)` now matches a grant is resolved
+/// in-place: dispatch via `publish_for_tool_dispatch`, audit
+/// `gate_grant_match_short_circuit`, and publish
+/// `core.session.confirm_resolved` (pi-1 M-1) as the bus-visible
+/// signal the TUI subscribes to for queue pruning.
+fn short_circuit_pending_after_grant(
+    broker: &Broker,
+    user_grants: &RwLock<UserGrants>,
+    audit: &AuditWriter,
+    state: &Arc<ConfirmState>,
+) {
+    for (confirm_id, plugin, tool, args) in state.active_entries_snapshot() {
+        let grant_id = match user_grants.read().matches(&plugin, &tool, &args) {
+            Some(id) => id,
+            None => continue,
+        };
+        let Some((held, _)) = state.try_resolve(&confirm_id) else {
+            continue;
+        };
+        let tool_request_id = held
+            .tool_request
+            .request_id
+            .clone()
+            .expect("held tool_request always carries request_id");
+        if let Err(err) = broker.publish_for_tool_dispatch(
+            &held.dispatch_target,
+            serde_json::json!({"tool": tool, "args": args}),
+            tool_request_id,
+            held.tool_request.in_reply_to.clone(),
+            held.tool_request.taint.clone(),
+        ) {
+            tracing::error!(error = %err, "gate: short-circuit dispatch publish failed");
+            continue;
+        }
+        let _ = audit.record(
+            AuditKind::GateGrantMatchShortCircuit,
+            Some(&confirm_id),
+            &serde_json::json!({
+                "tool": tool,
+                "plugin": plugin.to_string(),
+                "grant_id": grant_id.0.to_string(),
+            }),
+        );
+        if let Err(err) = broker.publish_core_with_taint(
+            CORE_SESSION_CONFIRM_RESOLVED,
+            serde_json::json!({
+                "request_id": confirm_id.to_string(),
+                "reason": "grant_short_circuit",
+            }),
+            Some(JsonRpcId::from(Ulid::new().to_string())),
+            Some(vec![confirm_id.clone()]),
+            None,
+            None,
+        ) {
+            tracing::error!(error = %err, "gate: confirm_resolved publish failed");
+        }
+    }
 }
 
 fn dispatch_deny(

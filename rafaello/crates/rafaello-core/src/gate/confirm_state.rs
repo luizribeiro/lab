@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use parking_lot::Mutex;
+use serde_json::Value;
 
 use crate::bus::{BusEvent, JsonRpcId};
 use crate::lock::canonical_id::CanonicalId;
@@ -139,6 +140,27 @@ impl ConfirmState {
             HeldEntry::Active { held, .. } => Some(held),
             _ => unreachable!("checked Active above"),
         }
+    }
+
+    /// §CG7 short-circuit support — snapshot of currently-Active
+    /// entries as `(confirm_id, plugin, tool, args)`. The gate's
+    /// CG4 grant-creation site walks this snapshot post-add and
+    /// resolves any entries whose `(plugin, tool, args)` now match
+    /// a grant via `UserGrants::matches`.
+    pub fn active_entries_snapshot(&self) -> Vec<(JsonRpcId, CanonicalId, String, Value)> {
+        let guard = self.inner.lock();
+        guard
+            .iter()
+            .filter_map(|(id, entry)| match entry {
+                HeldEntry::Active { held, .. } => {
+                    let obj = held.tool_request.payload.as_object()?;
+                    let tool = obj.get("tool")?.as_str()?.to_string();
+                    let args = obj.get("args").cloned().unwrap_or(Value::Null);
+                    Some((id.clone(), held.dispatch_target.clone(), tool, args))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn prior_outcome(&self, confirm_id: &JsonRpcId) -> PriorOutcome {
