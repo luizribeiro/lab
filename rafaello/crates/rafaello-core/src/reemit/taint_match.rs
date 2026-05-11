@@ -121,8 +121,6 @@ impl TaintMatchMap {
         hits
     }
 
-    #[allow(dead_code)]
-    // consumer lands in c08 per m5b commits.md
     pub fn clear(&self) {
         let mut inner = self.entries.lock();
         inner.by_hash.clear();
