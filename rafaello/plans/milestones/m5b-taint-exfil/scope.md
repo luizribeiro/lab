@@ -1,103 +1,69 @@
 # m5b — taint matching + propagation + verbatim exfil demo — scope
 
-> **Status:** round 6 — folds `scope-pi-review-5.md`
-> (2 blockers / 5 majors / 4 nits). Pi-5 verified
-> all pi-4 findings resolved; no pi-4 carry-overs.
-> Round-6 closes the two fresh mechanics blockers
-> (publish-side fault seam, production
-> audit-wiring ordering test) plus the five
-> majors and four nits. Convergence trajectory:
-> 6B → 3B → 3B → 3B → 2B → (pending pi-6).
+> **Status:** round 7 — **CONVERGED**. Folds
+> `scope-pi-review-6.md` (0 blockers / 2
+> majors / 5 nits) as a short editorial pass
+> per pi-6's "one short round before
+> convergence" call. Pi-6 found zero blockers
+> and asked for `commits.md`-readiness polish:
+> §TM4 representation in the internal split,
+> a malformed `cfg` spelling, and four
+> owner-item / row-number cross-references.
+> All folded. Convergence trajectory:
+> 6B → 3B → 3B → 3B → 2B → 0B → CONVERGED.
 >
-> History trimmed per pi-5 N-4: detailed
-> round-by-round fix lists live in
-> `scope-pi-review-N.md` (pi review notes are
-> authoritative for trajectory). A one-line
-> changelog pointer sits at the bottom of this
-> file.
+> Round-7 fixes by pi-6 finding:
 >
-> Round-6 fixes by pi-5 finding:
+> - **M-1** Internal split adds **row 4'**
+>   for §TM4 (broker publish-test hook),
+>   sequenced before rows 5 / 6 so the
+>   TR1/TR3 stale-entry tests have the seam
+>   available. Commit budget recomputed:
+>   **28 default / 30-32 max** (was 27 /
+>   29-31). §TR5 / §A9 / sizing paragraph
+>   updated.
+> - **M-2** §TM4 production compile-fence
+>   syntax corrected to
+>   `#[cfg(not(any(test, feature =
+>   "test-fixture")))]` (was the malformed
+>   `cfg(not(test, not feature = ...))`).
+>   Acceptance test bullet updated.
+> - **N-1** §TM2 / §TM3 substring-threshold
+>   cross-refs corrected to owner-judgment
+>   item **5** (was stale "item 2"). §A3 was
+>   already correct.
+> - **N-2** §TR4a unknown-id fail-open
+>   cross-ref corrected to owner-judgment
+>   item **8** (was stale "item 10").
+> - **N-3** Forced-monolithic bullet for the
+>   `AuditKind` extension cites **row 1''**
+>   (was stale "row 13", which is now the
+>   vacated row).
+> - **N-4** Sizing paragraph "round 5 in
+>   flight" replaced with "round 7 is the
+>   convergence fold".
+> - **N-5** §TM4 overwrite/clear semantics
+>   pinned: each test uses a fresh `Broker`;
+>   `install_publish_test_hook` is
+>   last-writer-wins on second install; no
+>   explicit clear method (install a no-op
+>   hook if removal is needed). New
+>   acceptance test
+>   `broker_publish_test_hook_replaces_on_second_install.rs`.
 >
-> - **B-1** §TR1 + §TR3 publish-failure tests
->   replace the wrong fault seam. New scope
->   item §TM4: a test-only
->   `Broker::install_publish_test_hook(impl
->   Fn(&BusEvent) -> Option<BrokerError> +
->   Send + Sync + 'static)` fires **inside**
->   `publish_core_with_taint` **after** the
->   handler-side records but **before**
->   `fan_out`. The two stale-entry tests are
->   renamed and wired to the new hook (not the
->   existing re-emit fault injector, which
->   runs upstream of the handlers).
-> - **B-2** §PT1 production-wiring acceptance
->   rewritten: assert `broker.set_audit_writer`
->   is called **before** the first
->   `PluginSupervisor::spawn` /
->   `broker.register_plugin` (whichever the
->   live `rfl chat` startup calls first), via a
->   `rfl chat`-side startup instrumentation
->   hook
->   (`rfl::chat::TestStartupOrderingHook`).
->   The pre-handshake PT1-violation claim is
->   dropped. A separate post-spawn end-to-end
->   PT1 violation test keeps the audit-row
->   coverage. Two tests, distinct concerns.
+> Pi-6's verification table confirmed all
+> pi-5 findings resolved; pi-6 found no
+> blockers (`scope-pi-review-6.md`
+> "convergence call: Blocking count: **0**").
+> Round 7 is the convergence fold; ready
+> for owner ratification + `commits.md`
+> drafting.
 >
-> - **M-1** Internal split reordered: the
->   `AuditKind` table-extension commit (was
->   row 13) moves to **row 1''**, ahead of
->   every consumer (rows 8, 10, 14). Per-
->   commit green bar holds without
->   `#[allow(unused)]` shims.
-> - **M-2** §PT1 lifecycle-rejection ownership
->   pinned: the **outer**
->   `emit_publish_rejected_for_plugin` mapper
->   (live `bus.rs:1113-1154`) is extended with
->   the `TaintSupersetViolated` arm
->   (`code = "taint_superset_violated"`); the
->   **inner** `handle_plugin_publish_inner`
->   violation path owns only the audit-row
->   write + the synthetic
->   `core.session.tool_result` publish. No
->   duplicate `core.lifecycle.publish_rejected`.
-> - **M-3** §TM3 + §TR4a cleanup model: the
->   `TaintMatchMap.clear()` /
->   `ReferencedTaintIndex.clear()` calls move
->   into the shutdown branch of the spawned
->   re-emit task (live
->   `reemit/mod.rs:168-200` `tokio::select!`
->   loop), where `shutdown_rx.changed()`
->   already drives orderly teardown. The
->   round-5 `ReemitRouter::Drop` claim was
->   stale against `start(self)` ownership;
->   removed.
-> - **M-4** §TR5 and §A9 reserve-language
->   updated to the recomputed 27 default /
->   29-31 max range. No more "27 ceiling"
->   wording.
-> - **M-5** Scope text does not cite commit
->   hashes. Pi review files cite the hash they
->   reviewed; scope.md is hash-stable across
->   worktrees / cherry-picks.
->
-> - **N-1** §TUI-MA1 wording: the
->   mutual-exclusion test snapshots the
->   returned error string (not a "stderr
->   line"); CLI-level stderr coverage is out
->   of scope for m5b.
-> - **N-2** Status preamble says "all pi-N
->   findings" rather than counting them.
-> - **N-3** Internal split row 20 entries-
->   golden language mirrors §EXFIL1 precise
->   shape: `ok = false`,
->   `call_id = <turn-2 send-mail tool_request
->   request_id>`, `content = ""`,
->   `details = None`. The "synthetic
->   user_denied result" phrasing is dropped.
-> - **N-4** Status banner trimmed (this
->   block); detailed round-by-round fix
->   lists live in `scope-pi-review-N.md`.
+> Detailed per-round fix lists live in
+> `scope-pi-review-N.md` (review files are
+> authoritative for trajectory); the
+> changelog pointer at the bottom of this
+> file lists them in order.
 >
 > The roadmap row for m5 (`milestones/README.md`)
 > is the pre-ratified definition; m5a Appendix A
@@ -833,7 +799,7 @@ register only against the literal-hash arm
 (their content is too short to substring-match
 meaningfully). Default `substring_min_bytes`:
 **16 bytes** of raw string content (§A3 /
-owner-judgment item 2).
+owner-judgment item 5 — pi-6 N-1).
 
 **Acceptance bullets:**
 - `taint_match_walks_nested_objects.rs`.
@@ -851,8 +817,9 @@ Arc<TaintMatchMap>)` mirrors
 `with_confirm_state_and_audit`. The default
 `ReemitRouter::new` constructs a map with the
 **§A4 / owner-judgment item 4** default TTL
-(5 min) and the §A3 / owner-judgment item 2
-default substring threshold (16 bytes).
+(5 min) and the §A3 / owner-judgment item 5
+default substring threshold (16 bytes —
+pi-6 N-1).
 
 **Acceptance:**
 - `taint_match_map_default_ttl_five_minutes.rs`
@@ -900,8 +867,21 @@ event payload + before `fan_out` runs. A
 with that error; `None` proceeds normally.
 The hook is gated by `#[cfg(any(test, feature
 = "test-fixture"))]`; production builds
-neither expose the method nor pay the
-conditional.
+(`#[cfg(not(any(test, feature =
+"test-fixture")))]` — pi-6 M-2 ripple) neither
+expose the method nor pay the conditional.
+
+**Overwrite / clear semantics (pi-6 N-5).**
+Each acceptance test constructs a fresh
+`Broker`, so the lifecycle is "install once
+per test". Calling `install_publish_test_hook`
+twice on the same broker replaces the prior
+hook (last-writer-wins, stored as
+`Mutex<Option<Arc<...>>>`); there is no
+explicit `clear_publish_test_hook` method in
+m5b. If a future test needs hook removal it
+can install a no-op hook
+(`Arc::new(|_| None)`).
 
 The seam is exposed at the `Broker` level
 (not `ReemitRouter`) because the
@@ -918,10 +898,17 @@ re-emit handler's outer wrapper.
   the absence of any fan-out delivery
   (proves the hook short-circuits before
   `fan_out`).
+- `broker_publish_test_hook_replaces_on_second_install.rs`
+  — install hook A, install hook B; a
+  subsequent `publish_core_with_taint` call
+  invokes B only (last-writer-wins).
 - `broker_publish_test_hook_absent_in_production_builds.rs`
-  — compile-fence test: `cfg(not(test, not
-  feature = "test-fixture"))` build does
-  not expose `install_publish_test_hook`.
+  — compile-fence test:
+  `#[cfg(not(any(test, feature =
+  "test-fixture")))]` build does not expose
+  `install_publish_test_hook` (pi-6 M-2
+  syntax fix from round 6's malformed
+  `cfg(not(test, not feature = ...))`).
 
 ### TR — Re-emit propagation through the match map
 
@@ -1231,7 +1218,10 @@ already validates provider `tool_request`
 — a provider that cites an unobserved id is
 rejected at intake. Owner may push back on the
 fail-open default; surfaced in §A10 /
-owner-judgment item 10.
+owner-judgment item 8 (pi-6 N-2 — the
+round-3 list renumbered the unknown-id
+item to 8; §TR4a still cited the stale
+"item 10").
 
 The sole consumers are §TR1
 (`handle_tool_result`, `lookup_request`) and
@@ -1385,7 +1375,7 @@ alternative (land the assistant_message +
 confirm_* superset paths in m5b), the surface
 adds ~4 commits + ~6 tests; the budget at
 §"Internal split" reserves slack toward the
-29-31-commit max (above the 27-commit
+30-32-commit max (above the 28-commit
 default) to absorb this if the owner pushes
 (pi-5 M-4).
 
@@ -2610,9 +2600,9 @@ Alternative: land the four rows
 `confirm_reply`, `plugin.<a>.rpc_reply`)
 in m5b. Adds ~4 commits + ~6 tests; the
 budget at §"Internal split" reserves slack
-toward the 29-31-commit max (above the
-27-commit default) to absorb this if owner
-pushes (pi-5 M-4).
+toward the 30-32-commit max (above the
+28-commit default) to absorb this if owner
+pushes (pi-5 M-4 / pi-6 M-1 ripple).
 
 ### A10. `ReferencedTaintIndex` unknown-id semantics
 
@@ -2863,12 +2853,15 @@ driver sweep.
 
 Suggested grouping; `commits.md` picks
 final granularity. Pi review may reshape.
-Targets **27 commits default, 29-31 max**
-(pi-4 M-5 recompute: 25 numbered rows + 1
-for row 1' + 1 extra for row 3's two
-commits = 27; +2-4 reserve for §A9 union
-arm gives the max). Supersedes the round-2
-"22-27 / 28 max" estimate.
+Targets **28 commits default, 30-32 max**
+(pi-6 M-1 recompute: 25 numbered rows + 1
+for row 1' + 1 for row 1'' + 1 for row 4'
+(§TM4 broker publish-test hook, added in
+round 7) + 1 extra for row 3's two commits
+− 1 for vacated row 13 = 28; +2-4 reserve
+for §A9 union arm gives the max).
+Supersedes round 5's "27 default / 29-31
+max".
 
 | # | Section | Subject sketch | ~commits |
 |---|---------|----------------|----------|
@@ -2878,6 +2871,7 @@ arm gives the max). Supersedes the round-2
 | 2 | §PT1 data model | `OutstandingDispatch.tool_request_taint` field; gate calls `publish_for_tool_dispatch` with canonical taint (pi-2 M-1) | 1 |
 | 3 | §TM1+§TM2 | `TaintMatchMap` module + literal-hash + substring + walk + TTL + hash-key constant + scalar canonicalization (pi-2 M-6) | 2 |
 | 4 | §TM3 | `ReemitRouter::with_taint_match_map` builder + default TTL test | 1 |
+| 4' | §TM4 | `Broker::install_publish_test_hook` test seam (cfg-gated; fires after handler records + before `fan_out`) + `Mutex<Option<...>>` storage on `BrokerInner` + replaces-on-second-install semantics + the three §TM4 acceptance tests. Lands **before** rows 5 / 6 so the TR1/TR3 stale-entry tests have the seam available (pi-6 M-1) | 1 |
 | 5 | §TR1+§TR2 | `handle_tool_result` + `handle_user_message` refresh map; record-before-publish ordering | 1 |
 | 6 | §TR3 | `handle_tool_request` lookup + union; records canonical request taint in `ReferencedTaintIndex.by_request_id` | 1 |
 | 7 | §TR4a | `ReferencedTaintIndex` cache + `record_request` / `record_result` / `lookup_request` / `lookup_result` / `clear` (pi-2 B-1) | 1 |
@@ -2901,12 +2895,15 @@ arm gives the max). Supersedes the round-2
 | 25 | §C38c | positive gate-through-orchestration | 1 |
 | | reserve | §A9 fallback (`assistant_message` + `confirm_*` superset paths) if owner takes the union arm | +2-4 |
 
-Realistic total: **27 commits** for the
-default-selected owner positions. **29-31
+Realistic total: **28 commits** for the
+default-selected owner positions (pi-6
+M-1 / round-7 fold added row 4' for the
+§TM4 broker publish-test hook). **30-32
 max** if owner takes the §A9 union arm
 (+2-4 reserve). Pi round budget: 5-7 scope
-rounds (round 5 in flight; m5a took 6 for
-a wider surface; m5b is narrower but adds
+rounds (round 7 is the convergence fold;
+m5a took 6 for a wider surface; m5b is
+narrower but adds
 real new data structures and three
 load-bearing ordering invariants that
 needed multiple folds to land).
@@ -2924,9 +2921,15 @@ explicitly:**
   consumer, the lifecycle publish, and the
   synthetic-deny `tool_result` publish are
   coupled at the critical-section level.
-- **Row 13 (`AuditKind` table extension)**
-  lands as one commit covering all three new
-  kinds. Per m4 / m5a precedent.
+- **Row 1'' (`AuditKind` enum + `as_str()`
+  table extension)** lands as one commit
+  covering all three new variants. Per
+  m4 / m5a precedent. Sequenced **before**
+  consumers (rows 8 / 10 / 14) so per-commit
+  green bar holds without `#[allow(unused)]`
+  shims (pi-5 M-1 / pi-6 N-3 ripple — the
+  table extension was at row 13 in round 5
+  and moved to row 1'' in round 6).
 - **Row 9 (§TR1 ancestry union)** lands as one
   commit. The §TR1 `record` order + the union
   computation + the §PT2 closure are coupled
@@ -3122,7 +3125,11 @@ verdict / authoritative pi review file):
   (3B / 6M / 4N, BLOCKING).
 - Round 5 → `scope-pi-review-5.md`
   (2B / 5M / 4N, BLOCKING).
-- Round 6 → pending pi-6.
+- Round 6 → `scope-pi-review-6.md`
+  (0B / 2M / 5N, "zero blockers, one
+  short editorial round before
+  convergence").
+- Round 7 → CONVERGED (this commit).
 
 Per pi-5 N-4 the per-round fix lists are
 no longer carried in this file; each pi
@@ -3131,9 +3138,11 @@ round's fix list verbatim.
 
 ---
 
-*End of m5b scope round 6. Folds pi-5's 2
-blockers / 5 majors / 4 nits. Convergence
-trajectory 6B → 3B → 3B → 3B → 2B
-suggests round 7 should report zero or
-near-zero blockers; m5a / m4 took 6
-rounds at comparable surface area.*
+*End of m5b scope round 7 — CONVERGED.
+Folds pi-6's 0 blockers / 2 majors / 5
+nits as a short editorial pass per
+pi-6's "one short round before
+convergence" call. Convergence
+trajectory 6B → 3B → 3B → 3B → 2B →
+0B → CONVERGED. Ready for owner
+ratification and `commits.md` drafting.*
