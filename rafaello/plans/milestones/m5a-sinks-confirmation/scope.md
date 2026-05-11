@@ -1,11 +1,114 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — scope
 
-> **Status:** round 4 — addresses `scope-pi-review-3.md`
+> **Status:** round 5 — addresses `scope-pi-review-4.md`
+> (1 blocking / 6 major / 4 nit). The single blocker
+> (`always_allow_session` grant-creation wiring) and all 6
+> majors resolved; all 4 nits folded. Pi-4 expected one more
+> round if the fix is kept narrow; round 5 takes the
+> narrow path.
+>
+> Round-5 fixes by pi-4 finding (one line each):
+> - **B-1** `always_allow_session` grant creation wired
+>   through the gate, not re-emit. `ConfirmState::try_resolve`
+>   now returns `Option<(HeldConfirmation,
+>   session_grant_requested: bool)>`. New atomic method
+>   `ConfirmState::mark_session_grant_requested(confirm_id)
+>   -> Result<(), MarkError>` lets re-emit (after
+>   validating the answer enum) flip the flag on the
+>   `Active` entry *without consuming it*. CG4 reads the
+>   flag from `try_resolve`'s return tuple, creates the
+>   `UserGrant` itself (it already holds
+>   `Arc<RwLock<UserGrants>>` and `Arc<AuditWriter>`),
+>   audits `grant_added` followed by
+>   `confirm_allowed_with_session_grant`, then dispatches.
+>   Re-emit does **not** gain `UserGrants` or
+>   `AuditWriter` handles; its sole `always_allow_session`
+>   side effect is the `mark_session_grant_requested` call
+>   plus the answer-rewrite to `"allow"`. §CT5 / §CG1a /
+>   §CG4 updated.
+> - **M-1** `is_provider` source corrected to
+>   `self.broker.plugin_acl(&canonical).and_then(|a|
+>   a.provider_id).is_some()` (live
+>   `crates/rafaello-core/src/bus.rs:243` —
+>   `Broker::plugin_acl` exists and exposes the
+>   `provider_id` field on the `PluginAcl` clone). The
+>   round-4 reference to `managed` as a compiled-plan
+>   store was wrong (live `managed` holds `ManagedSpawn`
+>   records per `supervisor.rs:109` comment); corrected.
+> - **M-2** OpenRPC method-vs-tool consistency moves into
+>   `ToolSchemaCatalog::build` (m5a-owned validation,
+>   not a m1 extension). Round-4 wrongly claimed m1's
+>   `validate_with_package` already enforced this —
+>   pi-4 M-2 caught it; live `validate_with_package`
+>   only checks sibling presence, entry resolution,
+>   `grant_match` path resolution, and exec-path
+>   syntax. §TP gains an `openrpc.json` snippet for
+>   `crates/rafaello-mailcat` with one `send-mail`
+>   method declaring `to: string` (required).
+> - **M-3** `allow_secrets` merge moved to the right
+>   function. Live `compile.rs::effective_grant`
+>   (`crates/rafaello-core/src/compile.rs:248-312`)
+>   is the function that unions/dedups `env.pass` and
+>   merges `env.set` for the scrubber call; m5a extends
+>   that function to union `allow_secrets`. Live
+>   `sinks::union_bundle` only handles
+>   filesystem/network for sink inference and is left
+>   unchanged. §OP6 corrected.
+> - **M-4** `allow_secrets` validation semantics
+>   coherent: unused entries are **accepted silently
+>   at `validate::lock`** and **warned at `rfl install`
+>   stderr** (installer-side diagnostic). The
+>   `validate_lock_warns_on_unused_allow_secrets_entry.rs`
+>   test is dropped (live `validate::lock` returns
+>   `Result<(), ValidationError>` with no warning
+>   channel — pi-4 M-4 caught it); replaced with
+>   `rfl_install_warns_on_unused_allow_secrets_entry.rs`
+>   capturing stderr. Reserved-name overlap moves to
+>   explicit `validate::lock` check
+>   (`ValidationError::AllowSecretsReservesCoreName`)
+>   rather than relying on `reject_reserved` (which only
+>   checks `pass` and `set`). §OP6 corrected.
+> - **M-5** CG4 session-grant classification done via
+>   the `session_grant_requested` flag from
+>   `try_resolve`'s return tuple (tied to B-1); the
+>   round-4 "session_grant_added in payload" /
+>   "millisecond race read of UserGrants" alternatives
+>   are both removed. The Stream A `confirm_reply`
+>   schema stays unchanged.
+> - **M-6** `confirm_malformed` and
+>   `confirm_resolved_after_timeout` added to §AL1's
+>   `kind` list. New §AL4 audit tests named for both.
+> - **N-1** §CT0 stale method names — `resolve` /
+>   `mark_timed_out` / `is_held finds resolved` —
+>   renamed to `try_resolve` / `try_take_for_timeout` /
+>   `prior_outcome` consistently.
+> - **N-2** §OP6 "*(actually wait — ...)*" editorial
+>   aside removed.
+> - **N-3** §A11 lock path updated from the withdrawn
+>   `bindings.capability.env.allow_secrets` to the live
+>   `grant.bundles.<bundle>.env.allow_secrets`.
+> - **N-4** §OP2 duplicate `7` renumbered to `9`.
+>
+> **Convergence proposal.** Pi-4 said "one more round if
+> the fix is kept narrow." Round 5 keeps it narrow. If
+> the pi-5 verification confirms zero blockers, this
+> draft is ready for owner ratification — see the
+> §"Owner-judgment items" block near the end.
+>
+> The roadmap row for m5 (`milestones/README.md`) is the
+> pre-ratified definition; this document scopes **m5a in
+> full** with m5b sketched in Appendix A.
+>
+> ---
+>
+> **(History — round 4 fix list, kept for trajectory.)**
+>
+> Round-4 status: addresses `scope-pi-review-3.md`
 > (3 blocking / 5 major / 4 nit). All 3 B and 5 M findings
 > resolved; all 4 N folded. Pi-3 expected 1-2 more rounds;
 > all three blockers were on round-3-introduced surfaces
 > (`ConfirmState` ownership, `confirm_reply` schema,
-> `env.allow_secrets` mechanical wiring) — round 4 takes
+> `env.allow_secrets` mechanical wiring) — round 4 took
 > the smallest fix pi proposed for each.
 >
 > Round-4 fixes by pi-3 finding (one line each):
@@ -1231,7 +1334,7 @@ semantics:
 |--------------------------------|----------------------------------------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
 | `core.session.confirm_request` | fresh ULID = the **confirmation correlation id** (gate-allocated; equals payload field) | the same id (the confirmation correlation id; Stream A §5.6 schema) | exactly `[held_tool_request.request_id]` (one entry, the held call's id)              | n/a (core publishes; broker accepts)                                                  | gate enforces single-fire per held tool_request; second publish is a logic bug           | n/a                                                                                   |
 | `frontend.tui.confirm_answer`  | fresh ULID per answer publish (TUI generates; **distinct from payload**)               | the **confirmation correlation id** (Stream A §5.6 schema verbatim) | exactly `[payload.request_id]` (= confirmation correlation id)                        | broker rejects missing `in_reply_to` via `BrokerError::InvalidInReplyTo`; re-emit drops unknown ids and audit-logs `confirm_unknown` | re-emit checks `ConfirmState::is_held` and rejects already-resolved with `confirm_duplicate` | gate has already resolved (timeout path published synthetic deny); re-emit audits `confirm_late` and drops |
-| `core.session.confirm_reply`   | fresh ULID = the reply event's id (gate-allocated)                                     | the **confirmation correlation id** (Stream A §5.6 schema verbatim) | exactly `[payload.request_id]` (= confirmation correlation id, forwarded by re-emit)  | n/a (core publishes after re-emit validation succeeds)                                | n/a (gate publishes exactly once per held tool_request, after `ConfirmState::resolve`)   | n/a                                                                                   |
+| `core.session.confirm_reply`   | fresh ULID = the reply event's id (gate-allocated)                                     | the **confirmation correlation id** (Stream A §5.6 schema verbatim) | exactly `[payload.request_id]` (= confirmation correlation id, forwarded by re-emit)  | n/a (core publishes after re-emit validation succeeds)                                | n/a (re-emit publishes exactly once per held tool_request; gate's CG4 consumes via `ConfirmState::try_resolve`) | n/a                                                                                   |
 
 Implications, pinned:
 
@@ -1263,10 +1366,11 @@ Implications, pinned:
    m4 `in_reply_to` mechanism for any event that "inherits"
    from another). The audit log records both.
 5. **Timeout vs. late answer.** When the 60 s deadline
-   fires, the gate calls `ConfirmState::mark_timed_out`
-   and publishes the synthetic `core.session.tool_result`
-   (deny path — see §CG5). A `confirm_answer` arriving
-   *after* timeout: the broker accepts the publish (envelope
+   fires, the gate calls
+   `ConfirmState::try_take_for_timeout` and publishes
+   the synthetic `core.session.tool_result` (deny path —
+   see §CG5). A `confirm_answer` arriving *after*
+   timeout: the broker accepts the publish (envelope
    shape is valid); the re-emit pipeline checks
    `ConfirmState::is_held(payload.request_id)`, finds
    resolved, audits `confirm_late`, and drops. No
@@ -1375,19 +1479,27 @@ to security RFC §5.6 pointing at CT0.
      - `Unknown` → audit `confirm_unknown`, drop.
      `prior_outcome` is read-only on the map; no
      mutation here.
-  5. **Special-case `always_allow_session`** (pi-3 B-2 —
-     keep `core.session.confirm_reply.payload.answer ∈
-     {"allow", "deny"}` per Stream A §5.6): if the
-     frontend sent `always_allow_session`, re-emit reads
-     the held entry (read-only, no `try_resolve`) to
-     learn `(plugin, tool, args)`, calls
-     `UserGrants::add(UserGrant { plugin, tool, matcher:
-     Structural::from_args(args), source:
-     AlwaysAllowSession })`, and audits `grant_added`.
-     The outbound `confirm_reply.payload.answer` is then
-     **rewritten to `"allow"`** for publication. (If the
-     answer was already `"allow"` or `"deny"`, this step
-     is a no-op and the value is forwarded verbatim.)
+  5. **Special-case `always_allow_session`** (pi-3 B-2 +
+     pi-4 B-1 — keep
+     `core.session.confirm_reply.payload.answer ∈
+     {"allow", "deny"}` per Stream A §5.6, *and* keep
+     `UserGrants` mutation on the gate's side so re-emit
+     does not need `UserGrants` or `AuditWriter`
+     handles): if the frontend sent
+     `always_allow_session`, re-emit calls
+     `state.mark_session_grant_requested(payload.request_id)`
+     — atomic, sets the `Active` entry's
+     `session_grant_requested = true` without consuming
+     the `HeldConfirmation`. The outbound
+     `confirm_reply.payload.answer` is then **rewritten
+     to `"allow"`** for publication. (If the answer was
+     already `"allow"` or `"deny"`, this step is a
+     no-op and the value is forwarded verbatim.) The
+     grant-creation + `grant_added` audit happen in
+     CG4 (the gate already holds
+     `Arc<RwLock<UserGrants>>` and the audit writer);
+     re-emit deliberately does **not** gain those
+     handles.
   6. Synthesise canonical taint
      `[{source: "user", detail: None}]` per security RFC
      §7.2.2.
@@ -1458,12 +1570,15 @@ to security RFC §5.6 pointing at CT0.
 
   enum HeldEntry {
       /// The gate inserted this entry; not yet resolved.
-      Active(HeldConfirmation),
-      /// Resolved by an arriving allow/deny answer (`resolve` consumed
+      /// `session_grant_requested` is flipped to `true` by re-emit
+      /// when the frontend answer was `always_allow_session`, before
+      /// the gate's `try_resolve` consumes the entry (round 5 / pi-4 B-1).
+      Active { held: HeldConfirmation, session_grant_requested: bool },
+      /// Resolved by an arriving allow/deny answer (`try_resolve` consumed
       /// the `Active`); kept as a tombstone so a duplicate arrival
       /// can be distinguished from an unknown id.
       ResolvedByAnswer,
-      /// Resolved by deadline timer (`mark_timed_out`); kept so a late
+      /// Resolved by deadline timer (`try_take_for_timeout`); kept so a late
       /// answer can be distinguished from a duplicate.
       TimedOut,
   }
@@ -1485,13 +1600,14 @@ to security RFC §5.6 pointing at CT0.
   Atomic methods (each acquires the mutex, mutates,
   drops):
 
-  | Method                                              | Caller            | Atomic effect                                                                                                 | Returns                          |
-  |-----------------------------------------------------|-------------------|----------------------------------------------------------------------------------------------------------------|----------------------------------|
-  | `reserve(confirm_id, held: HeldConfirmation)`       | gate (CG2 step 5) | insert `confirm_id → Active(held)` if absent; otherwise panic (gate's confirm_id is fresh per call)            | `()`                             |
-  | `is_held(confirm_id)`                               | re-emit (CT5 step 3) | read; returns `true` iff entry is `Active`                                                                  | `bool`                           |
-  | `try_resolve(confirm_id)`                           | gate (CG4)        | if `Active`, replace with `ResolvedByAnswer` and return the inner `HeldConfirmation`; else return `None`       | `Option<HeldConfirmation>`       |
-  | `try_take_for_timeout(confirm_id)`                  | gate (CG5)        | if `Active`, replace with `TimedOut` and return the inner `HeldConfirmation`; else return `None`               | `Option<HeldConfirmation>`       |
-  | `prior_outcome(confirm_id)`                         | re-emit (CT5 step 3 audit) | classify the entry: `Active` → `Held`; `ResolvedByAnswer` → `Duplicate`; `TimedOut` → `Late`; absent → `Unknown` | `PriorOutcome`                   |
+  | Method                                                       | Caller                       | Atomic effect                                                                                                                                                 | Returns                                                |
+  |--------------------------------------------------------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+  | `reserve(confirm_id, held: HeldConfirmation)`                | gate (CG2 step 5)            | insert `confirm_id → Active { held, session_grant_requested: false }` if absent; otherwise panic (gate's confirm_id is fresh per call)                       | `()`                                                   |
+  | `is_held(confirm_id)`                                        | re-emit (CT5 step 3)         | read; returns `true` iff entry is `Active`                                                                                                                    | `bool`                                                 |
+  | `mark_session_grant_requested(confirm_id)`                   | re-emit (CT5 step 5)         | if `Active`, set `session_grant_requested = true` **without consuming the entry**; if `Active` is already flagged, no-op; otherwise return `MarkError::NotActive` | `Result<(), MarkError>`                                |
+  | `try_resolve(confirm_id)`                                    | gate (CG4)                   | if `Active { held, session_grant_requested }`, replace with `ResolvedByAnswer` and return `Some((held, session_grant_requested))`; else return `None`        | `Option<(HeldConfirmation, bool)>`                     |
+  | `try_take_for_timeout(confirm_id)`                           | gate (CG5)                   | if `Active { held, .. }`, replace with `TimedOut` and return the inner `HeldConfirmation`; else return `None` (the `session_grant_requested` flag is discarded — the call timed out before being dispatched) | `Option<HeldConfirmation>`                             |
+  | `prior_outcome(confirm_id)`                                  | re-emit (CT5 step 3 audit)   | classify the entry: `Active` → `Held`; `ResolvedByAnswer` → `Duplicate`; `TimedOut` → `Late`; absent → `Unknown`                                              | `PriorOutcome`                                         |
 
   Notes:
   - Round 3's `take_for_publish` is **renamed to
@@ -1500,6 +1616,13 @@ to security RFC §5.6 pointing at CT0.
   - Round 3's `re_hold` is **removed** entirely (per
     pi-3 M-3 — malformed-answer validation now happens
     *before* any state mutation).
+  - Round 5 adds `mark_session_grant_requested` (per
+    pi-4 B-1). It is the only state mutation re-emit
+    performs on `ConfirmState`; the held entry is not
+    consumed. The flag is then carried back to CG4 via
+    `try_resolve`'s tuple return, so the gate (which
+    holds `Arc<RwLock<UserGrants>>` and the audit
+    writer) does the actual grant creation.
   - There is no separate `resolve` (the round-3 status
     text mentioned one); the only resolving methods are
     `try_resolve` (answer arrival) and
@@ -1511,15 +1634,16 @@ to security RFC §5.6 pointing at CT0.
   | Path                                          | Who publishes                                                                                       | Audit kind                                  |
   |-----------------------------------------------|------------------------------------------------------------------------------------------------------|---------------------------------------------|
   | answer arrives + valid + held (`allow`/`deny`)| **re-emit** publishes `core.session.confirm_reply`; **gate** (CG4) consumes via `try_resolve` and publishes `plugin.<id>.tool_request` (allow) or synthetic `core.session.tool_result` (deny) | `confirm_allowed` / `confirm_denied` (gate audits after dispatch) |
-  | answer arrives = `always_allow_session`       | **re-emit** creates the session grant via `UserGrants::add`, audits `grant_added{source: AlwaysAllowSession}`, publishes `core.session.confirm_reply { answer: "allow" }`; **gate** dispatches as the `allow` arm, audits `confirm_allowed_with_session_grant` | `grant_added` (re-emit) + `confirm_allowed_with_session_grant` (gate) |
+  | answer arrives = `always_allow_session`       | **re-emit** calls `mark_session_grant_requested(confirm_id)` (sets the flag; does **not** consume the entry; does **not** call `UserGrants` or audit), rewrites the outbound `confirm_reply.payload.answer` to `"allow"`, and publishes `core.session.confirm_reply { request_id: confirm_id, answer: "allow" }`; **gate** (CG4) sees `try_resolve` return `Some((held, session_grant_requested: true))`, creates the `UserGrant` via `UserGrants::add(UserGrant { plugin: held.dispatch_target, tool, matcher: Structural::from_args(args), source: AlwaysAllowSession })`, audits `grant_added`, then dispatches the held `tool_request` and audits `confirm_allowed_with_session_grant` (pi-4 B-1 fix — round 4 had re-emit doing the `UserGrants::add` and audit, which it has no handles for) | `grant_added` (gate) + `confirm_allowed_with_session_grant` (gate) |
   | timeout fires before answer                   | **gate** (CG5) — `try_take_for_timeout` returns the held entry; gate publishes synthetic deny `tool_result`; gate audits | `confirm_timeout`                            |
   | duplicate (answer arrives after `try_resolve` already ran) | **re-emit** classifies via `prior_outcome` → `Duplicate`; audit-logs and drops; never publishes `confirm_reply` | `confirm_duplicate`                          |
   | late (answer arrives after `try_take_for_timeout` already ran) | **re-emit** classifies via `prior_outcome` → `Late`; audit-logs and drops; never publishes `confirm_reply` | `confirm_late`                               |
   | unknown (`payload.request_id` was never held) | **re-emit** classifies via `prior_outcome` → `Unknown`; audit-logs and drops                          | `confirm_unknown`                            |
   | malformed answer string                       | **re-emit** validates the enum **before** consulting `ConfirmState`; audit-logs and drops; the held entry is **untouched** (so the user's next correctly-formed answer or the deadline timer can still resolve it) | `confirm_malformed`                          |
+  | CG4 race vs. timeout (gate observes `confirm_reply` but `try_resolve` returns `None` because CG5 already flipped to `TimedOut`) | **gate** (CG4 step 1) audits `confirm_resolved_after_timeout` and drops; the synthetic deny `tool_result` from CG5 already covered the held call | `confirm_resolved_after_timeout`             |
 
   Tests in `rafaello-core/tests/`:
-  - `confirm_state_reserve_then_try_resolve_returns_held.rs`
+  - `confirm_state_reserve_then_try_resolve_returns_held_with_false_flag.rs`
   - `confirm_state_try_resolve_twice_returns_none_second_time.rs`
   - `confirm_state_try_take_for_timeout_then_try_resolve_returns_none.rs`
   - `confirm_state_try_resolve_then_try_take_for_timeout_returns_none.rs`
@@ -1527,6 +1651,13 @@ to security RFC §5.6 pointing at CT0.
   - `confirm_state_concurrent_try_resolve_and_try_take_for_timeout_exactly_one_winner.rs`
   - `confirm_state_no_re_hold_method_exists.rs` (compile-time
     assertion that `re_hold` was removed; type-level test)
+  - `confirm_state_mark_session_grant_requested_flips_flag_without_consuming.rs`
+    (after the call, `is_held` still returns `true`;
+    a subsequent `try_resolve` returns
+    `Some((held, true))`)
+  - `confirm_state_mark_session_grant_requested_twice_is_idempotent.rs`
+  - `confirm_state_mark_session_grant_requested_on_resolved_returns_mark_error.rs`
+  - `confirm_state_mark_session_grant_requested_on_timed_out_returns_mark_error.rs`
 - **CG2.** Decision logic on each `core.session.tool_request`:
   1. Resolve `dispatch_target` from the event payload
      (m4 already populates this); look up the
@@ -1593,33 +1724,44 @@ to security RFC §5.6 pointing at CT0.
      race). Audit `confirm_resolved_after_timeout`
      and drop; the synthetic deny `tool_result` from
      CG5 already covered the held call.
-  2. If `Some(held)`, dispatch on `payload.answer`:
-     - **`"allow"`**: publish the held tool_request via
-       `Broker::publish_for_tool_dispatch(canonical:
-       held.dispatch_target, payload, request_id:
-       held.tool_request.request_id, in_reply_to:
-       held.tool_request.in_reply_to, taint:
-       held.tool_request.taint)`. If re-emit's CT5
-       step 5 created a session grant first (i.e. the
-       original frontend answer was
-       `always_allow_session`), audit
-       `confirm_allowed_with_session_grant`; otherwise
-       audit `confirm_allowed`. (The gate distinguishes
-       the two by reading `UserGrants` for a fresh
-       `AlwaysAllowSession`-sourced entry matching
-       `(canonical, tool, args)` added in the same
-       millisecond — or by re-emit signalling via a
-       cheap side channel like a `Cow<'static, str>`
-       in the `confirm_reply.payload.details`. The
-       cleaner option is pi's hint: CT5 sets a
-       `details.session_grant_added: true` payload
-       field that the gate reads. Final choice for
-       `commits.md`.)
+  2. If `Some((held, session_grant_requested))`,
+     dispatch on `payload.answer`:
+     - **`"allow"`**:
+       - if `session_grant_requested == true` (the
+         original frontend answer was
+         `always_allow_session`; re-emit flagged it via
+         `mark_session_grant_requested` per CT5 step 5):
+         **the gate creates the `UserGrant`** —
+         `user_grants.write().add(UserGrant { plugin:
+         held.dispatch_target, tool: <extracted from
+         held.tool_request.payload>, matcher:
+         Structural::from_args(<extracted args>), source:
+         AlwaysAllowSession })`; audit `grant_added`;
+       - publish the held tool_request via
+         `Broker::publish_for_tool_dispatch(canonical:
+         held.dispatch_target, payload, request_id:
+         held.tool_request.request_id, in_reply_to:
+         held.tool_request.in_reply_to, taint:
+         held.tool_request.taint)`;
+       - audit `confirm_allowed_with_session_grant` if
+         `session_grant_requested`, else
+         `confirm_allowed` (pi-4 M-5 — the round-4
+         "read `UserGrants` in the same millisecond" /
+         "`details.session_grant_added` payload field"
+         alternatives are both dropped; the
+         `session_grant_requested` flag in
+         `try_resolve`'s return tuple is the canonical
+         signal).
      - **`"deny"`**: synthesise a
        `core.session.tool_result` via the helper
        `gate::synthesise_deny_tool_result(&held,
        DenyReason::UserDenied)` (§CG4a); audit
-       `confirm_denied`.
+       `confirm_denied`. The `session_grant_requested`
+       flag is **ignored** for `deny` (a frontend
+       sending `always_allow_session` would have been
+       rewritten to `"allow"` by re-emit; a `deny` here
+       means the frontend chose `deny` directly, in
+       which case the flag is always `false`).
 
   Note: `"always_allow_session"` does **not** appear as
   an arm here per pi-3 B-2 — by the time CG4 runs, CT5
@@ -2249,13 +2391,21 @@ deleted.
          SupervisorConnectionService { bus, core, extra }
      }
      ```
-     `is_provider(&canonical)` reads the supervisor's
-     existing per-plan record (the supervisor already
-     stores compiled plans keyed by canonical id in
-     `managed`; the `bindings.provider_id.is_some()`
-     check is local). The
-     `SupervisorConnectionService` struct grows a
-     third optional field `core: Option<CorePluginService>`.
+     `is_provider(&canonical)` is implemented as
+     `self.broker.plugin_acl(&canonical)
+     .and_then(|a| a.provider_id).is_some()` against
+     the live `Broker::plugin_acl` method
+     (`crates/rafaello-core/src/bus.rs:243`, which
+     returns `Option<PluginAcl>`; `PluginAcl` carries
+     `provider_id: Option<String>` populated at
+     `BrokerAcl::compile` time per m4 row 42).
+     Round 4 incorrectly cited `managed` as a
+     compiled-plan store; pi-4 M-1 corrected — live
+     `managed` holds `ManagedSpawn` records
+     (`supervisor.rs:109` comment), not compiled plans.
+     The `SupervisorConnectionService` struct grows a
+     third optional field
+     `core: Option<CorePluginService>`.
 
   4. `CorePluginService` registers exactly one fittings
      method, `core.tools_list`, whose handler clones
@@ -2302,11 +2452,25 @@ deleted.
      `serde_json`, and synthesises one `ToolSchema`
      per declared tool name by:
      - matching the OpenRPC `methods[i].name` against
-       the manifest's `provides.tools` entries (the
-       method-name convention is the same string for
-       this project — m1's `validate_with_package`
-       already enforces method-vs-tool consistency at
-       install time);
+       the manifest's `provides.tools` entries. Round 4
+       claimed m1's `validate_with_package` already
+       enforced method-vs-tool consistency; pi-4 M-2
+       corrected — live
+       `crates/rafaello-core/src/manifest/validate_with_package.rs:25-38`
+       only checks `openrpc.json` sibling **presence**,
+       entry resolution, `grant_match` path resolution,
+       and exec-path syntax. **m5a owns the
+       method-vs-tool consistency check**:
+       `ToolSchemaCatalog::build` returns
+       `ToolCatalogError::ToolMissingOpenRpcMethod
+       { canonical, tool }` if a name from
+       `provides.tools` has no matching `methods[i].name`
+       in that plugin's `openrpc.json`. Surplus methods
+       (in `openrpc.json` but not in `provides.tools`)
+       are accepted silently — OpenRPC may legitimately
+       describe non-tool methods like internal RPC.
+       Construction failure is fatal at `rfl chat`
+       startup, before any plugin spawns;
      - projecting `methods[i].params` (an OpenRPC
        parameter list) into a JSON-Schema object
        `{type: "object", properties: { param.name:
@@ -2337,13 +2501,14 @@ deleted.
        in-tree `CorePluginService`)
      - `openai_exits_nonzero_when_core_tools_list_returns_method_not_found.rs`
 
-  7. The two related m4 dead-code allows
+  9. The two related m4 dead-code allows
      (`ProviderConn.peer`, `SpawnRegistration::Provider`)
      are *still* not naturally read by m5a per pi-1 M-6;
      `core.tools_list` is a normal fittings server method
      hosted by the supervisor's connection service, not a
      peer-direct call. The allow-removal stays a m4 retro
-     follow-up.
+     follow-up. (Renumbered from `7` per pi-4 N-4 — the
+     OP2 list previously had two `7`s.)
 - **OP3.** Bus-side adapter: subscribes to
   `core.session.user_message` and
   `core.session.tool_result` per the m4 fixture pattern;
@@ -2530,12 +2695,28 @@ deleted.
   }
   ```
 
-  Effective-grant merge: live `sinks::union_bundle`
-  (`crates/rafaello-core/src/sinks.rs:52-69`) currently
-  unions `pass` and merges `set`. m5a extends to also
-  union `allow_secrets` (concat + dedup). The same
-  `effective_grant(grant, tool)` function the gate
-  already calls (per §Si) returns the union.
+  Effective-grant merge (pi-4 M-3 correction). The
+  scrubber call sits in `compile_plugin` and reads the
+  bundle-level env merge produced by
+  `compile.rs::effective_grant` (live
+  `crates/rafaello-core/src/compile.rs:248-312`), which
+  unions/dedups `env.pass` and merges `env.set` across
+  the `default` bundle and the named bundle. m5a
+  extends **that** function to also union/dedup
+  `env.allow_secrets` (concat + dedup, same shape as
+  `env.pass`). The compiled `EffectiveGrant.env`
+  passed to the scrubber therefore carries the merged
+  `allow_secrets` list.
+
+  **`sinks::union_bundle` is unchanged.** Round 4
+  wrongly placed the union there; live
+  `sinks::union_bundle`
+  (`crates/rafaello-core/src/sinks.rs:52-69`) only
+  handles filesystem and network bundles for sink
+  *inference* (`infer_defaults`'s consumer). It does
+  not touch `env`. Sink inference does not need
+  `allow_secrets`. The two effective-grant functions
+  remain separate paths with distinct responsibilities.
 
   Scrubber signature change: live
   `crates/rafaello-core/src/scrubber.rs::strip` is
@@ -2569,36 +2750,47 @@ deleted.
   post-scrubber list); only the input to the scrubber
   changes.
 
-  Validation rules at install time
-  (`validate::lock`, augmented):
-  1. Every entry in `allow_secrets` must match the
-     env-var-name regex `^[A-Za-z_][A-Za-z0-9_]*$`.
-  2. Every entry in `allow_secrets` should appear in the
-     same bundle's `env.pass` (or in an inheriting
-     bundle's `env.pass`); a `allow_secrets` entry that
-     doesn't cover any pass name is a warning at install
-     (the install proceeds; `rfl install` prints a
-     "unused allow_secrets entry: <name>" stderr line)
-     — not an error, because the manifest may declare
-     more deployment-flexibility than a particular
-     deployment uses.
-  3. **No interaction with `RESERVED_ENV_VARS`**:
-     `allow_secrets` is for *user-named* env vars, not
-     core-injected names. A name appearing in both
-     `RESERVED_ENV_VARS` and `allow_secrets` is rejected
-     by the existing `reject_reserved` step before
-     `strip` runs.
+  Validation rules at install time (pi-4 M-4
+  resolution — `validate::lock` returns `Result<(),
+  ValidationError>` with no warning channel, so the
+  "warning" semantic moves to `rfl install` stderr):
 
-  `rfl status` surface (extends §Tr3):
-  - For each lock entry whose `bindings.tool_meta`
-    *(actually wait — the lock side is on the bundle,
-    not on tool_meta; the projection lives in the
-    grant's `GrantEnv`)* — restated: for each lock
-    entry whose any-bundle `GrantEnv.allow_secrets` is
-    non-empty, `rfl status` renders the entry with a
-    yellow ANSI "explicit secret: <names>" suffix
-    (vs the red `[OVERRIDE]` for `flags.i_know_what_im_doing`).
-    Non-TTY: `[SECRET: <names>]` suffix.
+  1. **At `validate::lock` (errors):**
+     - Every entry in `allow_secrets` must match the
+       env-var-name regex `^[A-Za-z_][A-Za-z0-9_]*$`
+       — fail with
+       `ValidationError::AllowSecretsInvalidName
+       { name }`.
+     - No entry in `allow_secrets` may overlap with
+       `RESERVED_ENV_VARS` — fail with
+       `ValidationError::AllowSecretsReservesCoreName
+       { name }`. This is an **explicit** check
+       (pi-4 M-4 — round 4 wrongly relied on
+       `reject_reserved`, which live
+       `crates/rafaello-core/src/scrubber.rs:48` only
+       checks `env.pass` and `env.set`).
+     - **Unused-name entries are not an error**
+       (pi-4 M-4 preferred semantic — the bundled
+       `rfl-openai` manifest deliberately declares
+       three names so deployments can pick one
+       without forking the manifest).
+  2. **At `rfl install` (stderr diagnostics):**
+     - For each `allow_secrets` name that does not
+       appear in the same bundle's *effective*
+       `env.pass`, `rfl install` prints
+       `"unused allow_secrets entry: <name>"` to
+       stderr. The install proceeds; the audit log's
+       `install_accepted` row records the warning in
+       `details.unused_allow_secrets: ["<name>", ...]`.
+     - This is a UX warning only; it does not affect
+       gate behaviour or scrubber output.
+
+  `rfl status` surface (extends §Tr3): for each lock
+  entry whose any-bundle `GrantEnv.allow_secrets` is
+  non-empty, `rfl status` renders the entry with a
+  yellow ANSI "explicit secret: <names>" suffix (vs
+  the red `[OVERRIDE]` for `flags.i_know_what_im_doing`).
+  Non-TTY: `[SECRET: <names>]` suffix.
 
   Audit log (extends §AL):
   - `install_accepted` rows include
@@ -2634,16 +2826,26 @@ deleted.
   Tests:
   - `manifest_env_capabilities_allow_secrets_parses.rs`
   - `lock_env_grant_allow_secrets_parses_and_serialises.rs`
-  - `effective_grant_unions_allow_secrets_across_bundles.rs`
+  - `compile_effective_grant_unions_allow_secrets_across_bundles.rs`
   - `scrubber_strip_honours_allow_secrets_for_listed_names.rs`
   - `scrubber_strip_strips_unlisted_secrets_when_allow_secrets_present.rs`
   - `compile_passes_allow_secrets_into_scrubber.rs`
-  - `validate_lock_warns_on_unused_allow_secrets_entry.rs`
+  - `rfl_install_warns_on_unused_allow_secrets_entry.rs`
+    (captures stderr — pi-4 M-4 replacement for the
+    withdrawn `validate_lock_warns_on_unused_…` test
+    that would have required a warning channel
+    `validate::lock` does not have)
   - `validate_lock_rejects_invalid_allow_secrets_name_shape.rs`
   - `validate_lock_rejects_reserved_name_in_allow_secrets.rs`
+    (asserts the explicit
+    `ValidationError::AllowSecretsReservesCoreName`
+    variant, not the `reject_reserved` step)
   - `rfl_status_yellow_marker_for_allow_secrets_lock_entry.rs`
   - `rfl_status_non_tty_secret_suffix_for_allow_secrets.rs`
   - `audit_install_accepted_records_allow_secrets_list.rs`
+  - `audit_install_accepted_records_unused_allow_secrets.rs`
+    (the stderr-warning case is also recorded in the
+    audit row's `details.unused_allow_secrets` array)
 - **OP7.** Tests in `rafaello-openai/tests/`:
   - `openai_manifest_compiles.rs`
   - `openai_calls_tools_list_after_handshake.rs`
@@ -2707,10 +2909,44 @@ deleted.
   structural-subset (cheap; no per-call schema compile).
   m5a does **not** run JSON-Schema validation on every
   tool invocation — see §"Out of scope".
-- **TP3.** Tests:
+- **TP3.** `crates/rafaello-mailcat/openrpc.json` (pi-4
+  M-2). m1 already requires every plugin to ship an
+  `openrpc.json` sibling at the manifest's parent
+  directory (decisions row 31); m5a's
+  `ToolSchemaCatalog::build` reads it to derive the
+  model-facing parameters schema. The mailcat fixture's
+  `openrpc.json` declares one method matching the
+  `provides.tools` entry:
+  ```json
+  {
+    "openrpc": "1.2.6",
+    "info": { "title": "mailcat", "version": "0.0.0" },
+    "methods": [
+      {
+        "name": "send-mail",
+        "params": [
+          { "name": "to",      "required": true,  "schema": { "type": "string" } },
+          { "name": "subject", "required": false, "schema": { "type": "string" } },
+          { "name": "body",    "required": false, "schema": { "type": "string" } }
+        ],
+        "result": { "name": "ok", "schema": { "type": "object" } }
+      }
+    ]
+  }
+  ```
+  This is the data `core.tools_list` returns to the
+  `rfl-openai` plugin; the model gets enough schema to
+  emit a well-formed `send-mail` tool call.
+- **TP4.** Tests:
   - `mailcat_appends_to_log_on_tool_request.rs`
   - `mailcat_returns_error_on_missing_to_field.rs`
   - `mailcat_manifest_declares_mail_sink.rs`
+  - `mailcat_openrpc_method_matches_provides_tools.rs`
+    (positive — `ToolSchemaCatalog::build` succeeds)
+  - `mailcat_openrpc_missing_method_for_provides_tools_errors.rs`
+    (negative — a fixture variant with a typo'd
+    method name fails catalog construction with
+    `ToolCatalogError::ToolMissingOpenRpcMethod`)
 
 ### AL — audit log
 
@@ -2730,8 +2966,16 @@ deleted.
     `confirm_allowed`, `confirm_denied`,
     `confirm_allowed_with_session_grant`,
     `confirm_timeout`, `confirm_late`,
-    `confirm_duplicate`, `confirm_unknown`;
-  - **slash command** (core-side handler): `grant_added`,
+    `confirm_duplicate`, `confirm_unknown`,
+    `confirm_malformed`,
+    `confirm_resolved_after_timeout` (pi-4 M-6 —
+    round-4 §CT5 and §CG4 referenced these two
+    audit kinds but §AL1 didn't list them);
+  - **slash command** (core-side handler): `grant_added`
+    (also emitted by the gate's CG4 path when
+    `session_grant_requested == true` —
+    pi-4 B-1; same kind, distinguished by
+    `payload.source: "AlwaysAllowSession"`),
     `grant_revoked`, `grant_list`, `slash_unknown`;
   - **install**: `install_refused`, `install_accepted`,
     `trifecta_overridden`, `credential_paths_overridden`.
@@ -2759,7 +3003,15 @@ deleted.
   - `audit_records_confirm_timeout_with_reason.rs`
   - `audit_records_confirm_late_after_timeout.rs`
   - `audit_records_confirm_duplicate.rs`
+  - `audit_records_confirm_malformed.rs` (pi-4 M-6)
+  - `audit_records_confirm_resolved_after_timeout.rs`
+    (pi-4 M-6 — gate's CG4 step 1 race-loser path)
   - `audit_records_grant_addition_with_plugin_pin.rs`
+  - `audit_records_grant_added_from_always_allow_session_path.rs`
+    (pi-4 B-1 — the gate-side grant creation path
+    records `payload.source: "AlwaysAllowSession"`,
+    distinguishing it from `/grant` slash-command
+    grants which record `"SlashCommand"`)
   - `audit_records_grant_revocation.rs`
   - `audit_records_slash_unknown.rs`
   - `audit_records_trifecta_override_at_install.rs`
@@ -3232,7 +3484,10 @@ bypasses the strip, surfaced in `rfl status` distinctly
 field is a small additive m1 schema extension;
 existing manifests without `allow_secrets` continue to
 compile. The lock side carries
-`bindings.capability.env.allow_secrets`.
+`grant.bundles.<bundle>.env.allow_secrets` (pi-4 N-3 —
+round-3 named the withdrawn `bindings.capability.env`
+path; corrected to match the live `GrantEnv` location
+under `Grant::bundles`).
 
 **Trade-off.** Versus the rejected alternatives:
 - *No opt-in, force `i_know_what_im_doing`*: bad UX
@@ -3816,4 +4071,5 @@ override.
 
 ---
 
-*End of m5a scope round 4.*
+*End of m5a scope round 5. Believed ready for owner
+ratification pending the pi-5 verification pass.*
