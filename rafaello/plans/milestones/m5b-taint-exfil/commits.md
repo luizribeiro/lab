@@ -1,6 +1,57 @@
 # m5b-taint-exfil — commits
 
-> **Status:** round 5 — folds `commits-pi-review-4.md`
+> **Status:** round 6 — folds `commits-pi-review-5.md`
+> (1B / 2M / 1N), **CONVERGED**. Pi-5's verification
+> table closed all round-4 findings; one narrow new
+> blocker (c20 manifest used a non-live
+> `bindings.tool_meta` shape that belongs in the lock,
+> not the package manifest) plus two majors and a nit.
+> Round 6 fixes all four without expanding the commit
+> count.
+>
+> Convergence trajectory:
+> 5B → 3B → 4B → 3B → 1B → CONVERGED.
+>
+> Round-6 fixes by pi-5 finding:
+>
+> - **B-1** c20's `crates/rafaello-fetch/rafaello.toml`
+>   package manifest AND c22's copied fixture-tree
+>   `rafaello/fixtures/m5b-locks/rafaello-fetch/rafaello.toml`
+>   updated to use the live `rafaello-mailcat/rafaello.toml`
+>   shape: tool metadata lives under
+>   `[provides.tool.web-fetch]` in the package
+>   manifest. `bindings.tool_meta.web-fetch.*` keys
+>   stay in the **lock entry** only (where they
+>   belong per m5a c30 / c34 precedent — bindings
+>   are the lock-side projection of the package's
+>   `provides.tool.*` declarations).
+> - **M-1** c21's `handle_web_fetch` now calls
+>   `maybe_write_invocation_log(url)` internally, so
+>   handler unit tests prove logging end-to-end
+>   without needing to drive the bin's loop. The
+>   bin code no longer calls
+>   `maybe_write_invocation_log` directly; the
+>   helper invocation moves into the library
+>   function. Files-touched and acceptance bullets
+>   updated.
+> - **M-2** c08 row body acknowledges the
+>   compile-fence policy relaxation explicitly:
+>   round 5 dropped the `trybuild` production-absence
+>   test as a deliberate policy choice. The
+>   `pub fn install_publish_test_hook` is
+>   self-documenting — it touches no production
+>   code paths and is gated by being only called
+>   from test seams. The relaxation note replaces
+>   the round-5 stub-comment about the missing
+>   test.
+> - **N-1** c21's bin template imports expanded to
+>   include `tokio::sync::Mutex` and
+>   `fittings_core::error::FittingsError` per live
+>   `rfl_mailcat.rs:17, 22`.
+>
+> ---
+>
+> Round 5 — folds `commits-pi-review-4.md`
 > (3B / 2M / 1N), **CONVERGED**. Pi-4's verification
 > table closed B2 / B4 / N1 / N2 of round 3 fully and
 > spawned narrower B1 / B2 / B3 / M1 / M2 / N1 findings
@@ -1114,16 +1165,23 @@ broker-side publish test hook (added in scope round 7 as row
     sentinel); trigger one
     `publish_core_with_taint`; assert only B's
     sentinel fired (last-writer-wins).
-  *(Pi-2 M-4 / pi-3 N-2 compile-fence test removed
-  per pi-4 B-2 ripple: a `trybuild` fixture cannot
-  meaningfully prove absence of a private cfg-gated
-  method without either exposing a public sentinel
-  or fighting feature unification across the
-  workspace. The `#[cfg(any(test, feature =
-  "test-fixture"))]` gate is self-documenting in
-  source; round 5 trusts it. The `Broker::install_publish_test_hook`
-  method stays cfg-gated — only the compile-fence
-  test is removed.)*
+  **Compile-fence policy relaxation** (pi-5 M-2,
+  explicit acknowledgement): round 5 dropped the
+  `trybuild` production-absence test as a
+  deliberate policy choice. The `pub fn
+  install_publish_test_hook` is self-documenting —
+  it touches no production code paths and is
+  gated by being only called from test seams (the
+  `Mutex<Option<Arc<...>>>` field is initialised
+  `None` and the publish-side consult is a
+  conditional read that is a no-op when no test
+  has installed a hook). The
+  `#[cfg(any(test, feature = "test-fixture"))]`
+  attribute on the method definition is the
+  documentation of intent; round 6 does not
+  re-introduce a compile-fence test, and the m5b
+  retrospective records this as a deliberate
+  policy relaxation (not a coverage gap).
   - `cargo doc -p rafaello-core --no-deps` warning-free
     (the cfg-gated method's docs describe its
     intended use).
@@ -2405,24 +2463,49 @@ then the m5b fixture lock.
   4. **`crates/rafaello-fetch/src/bin/rafaello_fetch.rs`**:
      minimal `fn main() { eprintln!("rafaello-fetch:
      scaffolding only."); std::process::exit(0); }`.
-  5. **`crates/rafaello-fetch/rafaello.toml`** manifest:
-     `schema = 1`, `name = "rafaello-fetch"`, `version
-     = "0.0.0"`, `entry = "bin/rafaello-fetch"`,
-     `rafaello = ">=0.1, <0.2"`, `load = "eager"`.
-     `[provides] tools = ["web-fetch"]`.
-     `[bus] subscribes = []`, `publishes = []`.
-     `[capabilities.default.filesystem] read_dirs =
-     [] write_dirs = []`.
-     `[capabilities.default.network] mode = "deny"`
-     (no real network — the gate intercepts before
-     lockin runs; the network sink declaration is the
-     load-bearing fact, not the network call itself).
-     `[capabilities.default.env] pass =
-     ["RFL_FETCH_TEST_BODY_PATH"]; allow_secrets = []`.
-     `[bindings.tool_meta.web-fetch] sinks =
-     ["network"]; grant_match =
-     "schemas/web-fetch-grant.json"; always_confirm =
-     false`.
+  5. **`crates/rafaello-fetch/rafaello.toml`** manifest
+     (mirroring live
+     `crates/rafaello-mailcat/rafaello.toml` — pi-5
+     B-1): tool metadata lives under
+     `[provides.tool.<name>]` in the package
+     manifest; `bindings.tool_meta.*` keys belong in
+     the lock entry, not the package manifest
+     (c22). Concretely:
+     ```toml
+     schema = 1
+     name = "rafaello-fetch"
+     version = "0.0.0"
+     entry = "bin/rafaello-fetch"
+     rafaello = ">=0.1, <0.2"
+     load = "eager"
+
+     [provides]
+     tools = ["web-fetch"]
+
+     [provides.tool.web-fetch]
+     sinks = ["network"]
+     grant_match = "schemas/web-fetch-grant.json"
+     always_confirm = false
+
+     [bus]
+     subscribes = []
+     publishes = []
+
+     [capabilities.default.filesystem]
+     read_dirs = []
+     write_dirs = []
+
+     [capabilities.default.network]
+     mode = "deny"
+
+     [capabilities.default.env]
+     pass = ["RFL_FETCH_TEST_BODY_PATH"]
+     allow_secrets = []
+     ```
+     `network.mode = "deny"` because no real network
+     — the gate intercepts before lockin runs; the
+     network sink declaration is the load-bearing
+     fact, not the network call itself.
   6. **`crates/rafaello-fetch/openrpc.json`**: minimal
      OpenRPC sibling declaring `web-fetch` with a
      `{url: string}` param schema (mirrors mailcat's
@@ -2506,8 +2589,13 @@ then the m5b fixture lock.
        path is missing or unreadable, return the
        same error. Otherwise return
        `{ok: true, content: <file contents>}`.
-       The plugin does NOT issue real HTTP
-       requests (scope §A6).
+       Before returning, **`handle_web_fetch`
+       calls `maybe_write_invocation_log(url)`
+       internally** (pi-5 M-1 ripple) so the
+       handler-only unit tests prove log
+       emission end-to-end without driving the
+       bus-client bin. The plugin does NOT issue
+       real HTTP requests (scope §A6).
      - `pub fn maybe_write_invocation_log(url:
        &str)` — **unconditionally compiled** (no
        `cfg` gate; pi-4 B-2): if
@@ -2523,6 +2611,8 @@ then the m5b fixture lock.
        production-runtime expectation —
        fixture env vars accepted in production
        binaries, exercised only by tests).
+       Called from `handle_web_fetch`; not
+       called directly from the bin (pi-5 M-1).
      - `pub fn take_taint_override() ->
        Option<Vec<TaintEntry>>` — **unconditionally
        compiled** (no `cfg` gate; pi-4 B-2): if
@@ -2564,19 +2654,21 @@ then the m5b fixture lock.
      ```rust
      use std::os::fd::{FromRawFd, OwnedFd, RawFd};
      use anyhow::{anyhow, Context, Result};
+     use async_trait::async_trait;
      use fittings_client::{Client, InboundNotification};
      use fittings_core::context::PeerHandle;
      use fittings_core::message::JsonRpcId;
-     use fittings_core::transport::Connector;
+     use fittings_core::{error::FittingsError,
+         transport::Connector};  // pi-5 N-1
      use fittings_transport::stdio::StdioTransport;
      use rafaello_fetch::{
          handle_web_fetch,
-         maybe_write_invocation_log,
          take_taint_override,
-     };
+     };  // pi-5 M-1: no direct maybe_write_invocation_log
+         // import — handle_web_fetch calls it internally
      use serde_json::{json, Value};
      use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
-     use tokio::sync::broadcast;
+     use tokio::sync::{broadcast, Mutex};  // pi-5 N-1
      use ulid::Ulid;
 
      type BusTransport =
@@ -2611,9 +2703,11 @@ then the m5b fixture lock.
        `params["request_id"]`; skip if `None`;
      - read `payload` from `params["payload"]`;
      - call `handle_web_fetch(&payload)` →
-       `tool_result_payload`;
-     - call `maybe_write_invocation_log(<url
-       extracted from payload>)`;
+       `tool_result_payload`; the library's
+       internal `maybe_write_invocation_log`
+       call fires from inside `handle_web_fetch`
+       (pi-5 M-1 — the bin no longer calls
+       the log helper directly);
      - determine `taint`:
        `take_taint_override()` →
        `Some(vec)` supplies the override
@@ -2809,7 +2903,11 @@ then the m5b fixture lock.
   2. **`rafaello/fixtures/m5b-locks/rafaello-fetch/`**:
      plugin fixture tree mirroring
      `crates/rafaello-fetch/`'s package shape
-     (`rafaello.toml`, `openrpc.json`, `schemas/`,
+     (`rafaello.toml` using the
+     `[provides.tool.web-fetch]` shape per c20 /
+     pi-5 B-1 — NOT `bindings.tool_meta.*` in the
+     package manifest; bindings live in the lock
+     entry below — `openrpc.json`, `schemas/`,
      `bin/rafaello-fetch` shim — same content as
      c20).
   3. **`rafaello/fixtures/m5b-locks/rafaello-openai/`**,
@@ -3659,21 +3757,19 @@ constructor), c14 (§PT1 critical-section enforcement
 bodies cite m0 c08 / m4 c07 precedent.
 
 Pi round budget on `commits.md`: 4-6 rounds. m5a took
-6 rounds for a 41-commit body; m5b is narrower (28
-commits) but the test-ladder coupling between c10 /
-c12 / c13 and the §PT1 critical-section unsplittable
-in c14 are pi-attention magnets. Round 5 folds pi-4's
-3B/2M/1N — mechanical handoff fixes (live
-bus-client API verbatim, fixture env vars
-unconditionally compiled, exact-URL grant template,
-helper-signature pinning without hedge). 28-commit
-total preserved. **Round 5 is the genuine
-convergence draft** — ready for owner ratification.
+6 rounds for a 41-commit body; m5b also lands at 6
+rounds for the narrower 28-commit body. Round 6 folds
+pi-5's 1B/2M/1N — narrow fixture-manifest shape
+fix, log-call relocation into the library helper,
+compile-fence relaxation acknowledgement, and bin
+import expansion. 28-commit total preserved.
+**Round 6 is the genuine convergence draft** —
+ready for owner ratification.
 
 ---
 
-*End of m5b commits.md round 5 — folds pi-4
-(3B/2M/1N), CONVERGED. Convergence trajectory:
-5B → 3B → 4B → 3B → CONVERGED. 28 commits total
-preserved across all five rounds. Ready for owner
-ratification.*
+*End of m5b commits.md round 6 — folds pi-5
+(1B/2M/1N), CONVERGED. Convergence trajectory:
+5B → 3B → 4B → 3B → 1B → CONVERGED. 28 commits
+total preserved across all six rounds. Ready for
+owner ratification.*
