@@ -1051,6 +1051,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rafaello-mailcat"
+version = "0.0.0"
+
+[[package]]
 name = "rafaello-mockprovider"
 version = "0.0.0"
 dependencies = [
@@ -1072,6 +1076,14 @@ dependencies = [
  "tracing-test",
  "ulid",
 ]
+
+[[package]]
+name = "rafaello-openai"
+version = "0.0.0"
+
+[[package]]
+name = "rafaello-openai-stub"
+version = "0.0.0"
 
 [[package]]
 name = "rafaello-readfile"
