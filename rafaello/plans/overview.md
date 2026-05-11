@@ -474,6 +474,14 @@ Core injects, and never exposes to user-supplied `env.pass`:
   for the parent-helper point-to-point channel. Mutually
   exclusive with `RFL_BUS_FD`: helpers have one or the other,
   never both.
+- `RFL_PROVIDER_ID` — for provider plugins (the lock entry
+  whose `bindings.provider = true`), the runtime-active
+  provider-id segment used in `provider.<provider-id>.*`
+  topics. Injected by core at spawn time so a provider
+  plugin can self-identify its publish namespace without
+  parsing the lock. Rejected by `RESERVED_ENV_VARS` from
+  any user-supplied `env.set` / `env.pass` (m4 c05). See
+  `decisions.md` rows 43–44 and m4 retrospective §2.5.
 
 Authoritative: security RFC §5.5.1.
 
