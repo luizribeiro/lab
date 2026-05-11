@@ -175,13 +175,30 @@ mode        = "proxy"
 allow_hosts = ["crates.io", "*.crates.io", "static.crates.io"]
 
 [capabilities.env]
-pass = ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"]
-set  = { CARGO_TERM_COLOR = "always" }
+pass           = ["PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME"]
+set            = { CARGO_TERM_COLOR = "always" }
+allow_secrets  = []  # m5a: opt-in to forwarding named secrets without --i-know-what-im-doing
 
 [capabilities.limits]
 max_cpu_time   = 300
 max_open_files = 1024
 ```
+
+**`env.allow_secrets` (m5a, `decisions.md` row 46).** Optional
+`Vec<String>` listing env-var names the scrubber honours without
+`flags.i_know_what_im_doing`. Pairs with `env.pass`: only names
+also present in `env.pass` for the same bundle are forwarded to
+the spawned plugin. Unused entries (declared in `allow_secrets`
+but not in `env.pass`) emit a plain stderr warning at install
+(`warning: unused allow_secrets entry '<name>' (no matching
+env.pass entry)`) and surface in the `install_accepted` audit
+payload (m5a c27). `rfl status` decorates accepted entries with
+a TTY-yellow `explicit secret: <names>` suffix (non-TTY
+`[SECRET: <names>]`) per m5a c28. Distinct from the nuclear
+`flags.i_know_what_im_doing` override (which remains for env
+names not declared by the manifest); the two are mutually
+exclusive at install time for any given env name. m5a
+retrospective §6.2.
 
 ### Variable substitution
 

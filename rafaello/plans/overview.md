@@ -464,7 +464,14 @@ verifies the superset rule).
 
 ### 4.6 Reserved env vars
 
-Core injects, and never exposes to user-supplied `env.pass`:
+Two distinct classes of `RFL_*` env vars: *core-injected
+reserved* (rejected by the manifest scrubber, set by core at
+spawn) and *well-known plugin-config* (declared by plugin
+manifests as the canonical configuration names; not
+core-injected).
+
+**Core-injected reserved.** Core injects, and never exposes to
+user-supplied `env.pass`:
 
 - `RFL_BUS_FD` — inherited fd number for the plugin's bus
   socketpair. Integer, not a secret.
@@ -484,6 +491,31 @@ Core injects, and never exposes to user-supplied `env.pass`:
   `decisions.md` rows 43–44 and m4 retrospective §2.5.
 
 Authoritative: security RFC §5.5.1.
+
+**Well-known plugin-config (m5a addition).** Names a plugin
+manifest may declare in `env.pass` as the canonical
+configuration for a bundled plugin. These are **not**
+core-injected; they are merely conventional names a plugin
+author uses so operators and CI fixtures know what to set in
+the parent shell. The bundled `rfl-openai` provider (m5a
+`decisions.md` row 49) declares:
+
+- `RFL_OPENAI_API_KEY_ENV` — the *name* of the env var
+  holding the OpenAI-compatible endpoint's API key (e.g.
+  `LITELLM_API_KEY`). The plugin reads this name, then
+  reads the named env var.
+- `RFL_OPENAI_ENDPOINT_URL` — the OpenAI-compatible
+  endpoint URL the plugin posts Chat Completion requests to.
+- `RFL_OPENAI_MODEL` — the model id the plugin sends in
+  `ChatCompletionRequest.model`.
+
+These names are convention, not core-enforced reservation:
+plugin authors may pick other names in their own manifests.
+The two classes are listed together here so future readers
+understand why some `RFL_*` names are scrubber-rejected and
+others are first-class manifest config.
+
+m5a retrospective §6.3.
 
 ## 5. Plugins: manifest, lock, policy, lifecycle
 
@@ -1332,6 +1364,22 @@ schema delta Stream F must adopt before m1 implementation:
 Items 1–4 are real Stream F work for m1; items 5–7 were
 documentation fixes applied in this revision (commit
 `docs(rafaello-overview): manifest documentation harmonisation`).
+
+**8. `env.allow_secrets` (m5a addition; `decisions.md` row 46).**
+`[capabilities.<bundle>.env]` grows an optional `allow_secrets:
+Vec<String>` field listing env-var names the scrubber honours
+without `flags.i_know_what_im_doing`. Only names that also appear
+in `env.pass` for the same bundle are forwarded to the spawned
+plugin. Unused entries (declared in `allow_secrets` but not in
+`env.pass`) emit a plain stderr warning at install
+(`warning: unused allow_secrets entry '<name>' (no matching
+env.pass entry)`) and are recorded in the `install_accepted`
+audit payload (m5a c27). `rfl status` shows accepted entries
+with a TTY-yellow `explicit secret: <names>` suffix (non-TTY
+`[SECRET: <names>]`) per m5a c28. The bundled `rfl-openai`
+manifest uses this for `LITELLM_API_KEY` / `OPENAI_API_KEY`
+forwarding without tripping the red `[OVERRIDE]` marker. m5a
+retrospective §6.3, §7.1.
 
 ### 15.2 Schema ownership: Stream A owns broker envelopes; Stream B owns JSON-RPC framing
 

@@ -292,11 +292,63 @@ binds *content*, not just *name*.
 > `BrokerError::InvalidTopic` and exercised by
 > `broker_construct_with_provider_publish_id_mismatch_rejected.rs`.
 >
+> **m5a additions** (m5a retrospective §6.1).
+>
+> - `SinkClass` enum (`Network` / `VcsPush` / `Mail` /
+>   `WorkspaceWrite` / `Other(String)`) + `CompiledPlugin`
+>   accessors `tool_sinks` / `tool_sink_classes` /
+>   `tool_always_confirm` (m5a c09; live signatures at
+>   `rafaello-core/src/compile.rs:99-117`).
+> - `ConfirmationGate` (m5a c20-c24, c38) + the confirm topic
+>   family on the wire — `core.session.confirm_request` (gate
+>   publish on hold, m5a c11), `frontend.tui.confirm_answer`
+>   (TUI publish on key press, m5a c12 + c25),
+>   `core.session.confirm_reply` (re-emit's canonicalised
+>   reply after answer-enum validation, m5a c14), and
+>   `core.session.confirm_resolved` (gate publish, **only**
+>   on grant-short-circuit queue pruning, reason
+>   `grant_short_circuit`). Normal allow/deny answers do not
+>   publish `confirm_resolved`; timeout audits
+>   `confirm_timeout` and synthesises a deny-shaped tool_result
+>   without publishing `confirm_resolved`. See §5.6 below for
+>   the wire-shape clarification.
+> - `UserGrants` + `GrantMatcher::Structural { template }`
+>   with `jsonschema`-template-as-shape-contract (m5a c15 +
+>   c16; `decisions.md` row 47).
+> - Bus-mediated slash commands —
+>   `frontend.tui.slash_command` + `core.session.command_result`
+>   (m5a c17 + c19), `SlashHandler` with
+>   `Arc<RwLock<UserGrants>>` (m5a c18, RwLock cutover at
+>   c38).
+> - Broker `outstanding_dispatched` atomic intake map (m5a
+>   c10) — partially closes §7.2.6 row 1's
+>   "must reference the matching tool_request previously
+>   routed to this plugin" check (the routed-to-this-plugin
+>   half; the superset half is m5b).
+> - `audit_events` SQLite table + `AuditWriter` (m5a c08),
+>   co-resident in `${PROJECT_ROOT}/.rafaello/state/session.sqlite`
+>   alongside `entries`. Authoritative audit-kind enumeration:
+>   `rafaello-core/src/audit/mod.rs::AuditKind::as_str()`.
+> - `env.allow_secrets` manifest extension + scrubber-signature
+>   cutover (m5a c06; `decisions.md` row 46). Refines §7.4
+>   env scrubbing.
+> - One-hop trifecta refusal at `rfl install --fixture` (m5a
+>   c27) + `rfl status` override / explicit-secret markers
+>   (m5a c28).
+> - `core.tools_list` fittings RPC + `CorePluginService`
+>   on the supervisor (m5a c31, c36; `decisions.md` row 49).
+> - m5a / m5b split — m5a covers positive + 3 of 4
+>   roadmap-row negatives; m5b owns negative 4 (verbatim
+>   exfil), taint matching (§7.2.1 primitives), and the
+>   plugin-supplied-taint superset check half of §7.2.6 row
+>   1 (`decisions.md` row 48).
+>
 > Per `plans/README.md` §"Authoring conventions" stream RFCs
-> are not retroactively rewritten; the m2 / m3 / m4 wire
-> schemas are referenced via this banner rather than
+> are not retroactively rewritten; the m2 / m3 / m4 / m5a
+> wire schemas are referenced via this banner rather than
 > inlined into §5.x. m2 retrospective §2.3 + §2.4 +
-> m3 retrospective §2.2 + §2.5 + m4 retrospective §2.
+> m3 retrospective §2.2 + §2.5 + m4 retrospective §2 +
+> m5a retrospective §6.1.
 
 ### 5.1 Topic and pattern grammars (canonical)
 
@@ -527,8 +579,48 @@ exporting `RFL_BUS_FD=99` cannot redirect a plugin's bus.
 
 ### 5.6 Confirmation protocol (core-mediated)
 
-When core needs explicit user consent (sink confirmation per
-§7.2.3, or a plugin-requested confirmation), the protocol is:
+> **m5a clarification (retrospective §6.1).** The protocol's
+> live wire shape is four topics, not two. The §5 banner above
+> enumerates them; this section preserves the original
+> two-topic introduction (for round-1 RFC trajectory) and adds
+> the live-shape table below. The original `core.session.confirm_request`
+> + `core.session.confirm_reply` framing in this section was a
+> simplification: in the live m5a wire, the frontend's answer
+> flows on `frontend.tui.confirm_answer` (this RFC's
+> "frontend.<id>.confirm_answer" namespace, instantiated at
+> `<id> = tui` in v1), the re-emit canonicalises it to
+> `core.session.confirm_reply`, and the gate may emit
+> `core.session.confirm_resolved` for grant-short-circuit
+> queue pruning visibility.
+>
+> **Live wire-shape table (m5a):**
+>
+> | Topic                            | Publisher        | Subscribers                | When                            |
+> |----------------------------------|------------------|----------------------------|---------------------------------|
+> | `core.session.confirm_request`   | core (gate)      | frontends (TUI, web, …)    | gate holds a tool_request       |
+> | `frontend.tui.confirm_answer`    | frontend (TUI)   | core (re-emit)             | user key press                  |
+> | `core.session.confirm_reply`     | core (re-emit)   | the requesting plugin      | answer-enum validated           |
+> | `core.session.confirm_resolved`  | core (gate)      | frontends (observability)  | grant-short-circuit pruning only |
+>
+> **Correlation contract.** The bus envelope's `request_id`,
+> the payload's `request_id`, and `in_reply_to` jointly
+> identify the in-flight confirmation. `ConfirmState`'s
+> `try_resolve(confirm_id) -> Option<(HeldConfirmation,
+> session_grant_requested: bool)>` and
+> `mark_session_grant_requested(confirm_id) -> Result<(),
+> MarkError>` atomic methods serialise concurrent answer
+> arrivals against the 60s gate-side timeout
+> (`try_take_for_timeout`); `MarkError::NotActive` covers
+> the race where the timeout fires between the re-emit's
+> re-read of `prior_outcome` and the mark attempt — re-emit
+> audits `confirm_late` / `confirm_duplicate` /
+> `confirm_unknown` and does not publish `confirm_reply` in
+> that branch (m5a scope §CT0 / §CT5). m5a retrospective
+> §6.1.
+>
+> The original two-topic table below remains as the
+> minimum-protocol description; v1 implements the four-topic
+> shape above.
 
 | Topic                            | Publisher | Subscribers              |
 |----------------------------------|-----------|--------------------------|
