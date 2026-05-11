@@ -621,7 +621,10 @@ most coupled phase.
   set, so c12 deletes c10's seed seam (per `commits.md`
   round-3 B-1).
 - **c13** (`bbd840c`) — defence-in-depth provider
-  publish-id check at `BrokerAcl::compile` (B11).
+  publish-id check in `Broker::new` ACL revalidation
+  (`BrokerError::InvalidTopic`), exercised by
+  `broker_construct_with_provider_publish_id_mismatch_rejected.rs`
+  (B11).
 
 ### 3.3 Phase C — m2 row-39 removal (c14)
 

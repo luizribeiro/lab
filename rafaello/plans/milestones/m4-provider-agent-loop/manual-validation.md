@@ -241,5 +241,7 @@ The Linux test/build/doc gates and the mechanical demo-bar
 coverage are captured; macOS CI green (§4 / §6) and the
 interactive `rfl chat` smoke recording (§5) remain pending
 the post-retrospective branch push to GitHub.
-Ratification additionally waits on pi ratification of
-`retrospective.md` round 2.
+`retrospective.md` round 4 was pi-ratified at zero blockers
+on `retrospective-pi-review-4.md` (`8a8bd6d`); milestone
+closure additionally waits on the macOS CI URL and
+interactive `rfl chat` smoke recording above.
