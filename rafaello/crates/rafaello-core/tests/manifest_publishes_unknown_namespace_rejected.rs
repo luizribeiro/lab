@@ -34,9 +34,9 @@ fn publishes_unknown_namespace_rejected() {
     // evil.foo → PublishUnknownNamespace
     let m = manifest_with_publish("", "evil.foo");
     match validate::manifest_standalone(&m) {
-        Err(ValidationError::PublishUnknownNamespace { topic, namespace }) => {
+        Err(ValidationError::PublishUnknownNamespace { topic, top }) => {
             assert_eq!(topic, "evil.foo");
-            assert_eq!(namespace, "evil");
+            assert_eq!(top, "evil");
         }
         other => panic!("expected PublishUnknownNamespace for `evil.foo`, got {other:?}"),
     }

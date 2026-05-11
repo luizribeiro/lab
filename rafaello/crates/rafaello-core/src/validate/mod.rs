@@ -398,7 +398,7 @@ fn check_publish_topic(topic: &str) -> Result<(), ValidationError> {
         "plugin" | "provider" => Ok(()),
         other => Err(ValidationError::PublishUnknownNamespace {
             topic: topic.to_string(),
-            namespace: other.to_string(),
+            top: other.to_string(),
         }),
     }
 }
@@ -432,7 +432,12 @@ fn check_lock_publish_topic(
                 return Err(ValidationError::LockProviderNamespaceMismatch);
             }
         }
-        _ => {}
+        other => {
+            return Err(ValidationError::PublishUnknownNamespace {
+                topic: topic.to_string(),
+                top: other.to_string(),
+            });
+        }
     }
     Ok(())
 }
