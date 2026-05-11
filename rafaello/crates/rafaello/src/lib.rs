@@ -183,6 +183,11 @@ const ENV_PASS_ALLOWLIST: &[&str] = &[
     "RFL_TUI_READY_DELAY_MS",
     "RFL_TUI_MAX_LIFETIME",
     "RFL_TUI_TEST_MESSAGE",
+    // c37/c38 follow-up: forward the c37 confirm-answer + grant-before-message
+    // hooks so c39's demo-bar test can drive the TUI end-to-end.
+    "RFL_TUI_TEST_CONFIRM_ANSWER",
+    "RFL_TUI_TEST_CONFIRM_DELAY_MS",
+    "RFL_TUI_TEST_GRANT_BEFORE_MESSAGE",
     "RFL_FIXTURE_MODE",
     "RFL_FIXTURE_MAX_LIFETIME",
     "RFL_FIXTURE_EXIT_CODE",
