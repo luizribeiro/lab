@@ -3,9 +3,11 @@
 > Companion to `retrospective.md`. Records the exact
 > acceptance-gate transcripts and out-of-band evidence
 > that `scope.md` §"Acceptance summary" requires before
-> ratification. Status: round 1, drafted 2026-05-11 at
-> the close of c28; CI URLs are placeholders to be
-> captured by the driver at retrospective time.
+> ratification. Status: round 2, refreshed 2026-05-11
+> alongside the round-2 retrospective with the post-
+> `0a0e824` Linux test/build/doc transcripts inlined.
+> CI URLs + interactive recording remain placeholders
+> pending the post-retrospective branch push.
 
 The scope's acceptance summary names four cargo-driven
 gates, one out-of-band interactive smoke, and a CI green
@@ -19,11 +21,19 @@ matrix cross-reference.
 nix develop --impure --command cargo test --manifest-path rafaello/Cargo.toml --workspace --features test-fixture
 ```
 
-**Status:** to be captured by the driver at retrospective
-time, after pushing `agents/m4/driver` to `rafaello-v0.1`.
-The aggregate count and a tail snippet of the test log
-should be inlined here for durability, mirroring m3
-§1's format.
+**Status:** ✅ Linux, captured 2026-05-11 against the
+retro-round-2 branch after the `0a0e824` carveout fix. The
+full transcript lives at `/tmp/m4-acceptance.log`; the
+aggregate is **608 passed / 0 failed / 0 ignored** across
+the workspace.
+
+Tail snippet:
+
+```
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
 
 ## 2. Linux build gate — `cargo build --workspace --bins`
 
@@ -32,8 +42,10 @@ should be inlined here for durability, mirroring m3
 nix develop --impure --command cargo build --manifest-path rafaello/Cargo.toml --workspace --bins --features rafaello-core/test-fixture
 ```
 
-**Status:** to be captured by the driver. Verifies all
-five bins build:
+**Status:** ✅ Linux, captured 2026-05-11. Transcript at
+`/tmp/m4-build.log`; ends with `Finished `dev` profile
+[unoptimized + debuginfo] target(s)`. Verifies all five
+bins build:
 
 - `rfl` (`rafaello/crates/rafaello`)
 - `rfl-tui` (`rafaello/crates/rafaello-tui`)
@@ -55,9 +67,12 @@ skip it.
 nix develop --impure --command cargo doc --manifest-path rafaello/Cargo.toml --workspace --no-deps
 ```
 
-**Status:** to be captured by the driver. Expected to be
-warning-free; no new doc warnings should be introduced
-under m4's expanded surface (rafaello-mockprovider,
+**Status:** ✅ Linux, captured 2026-05-11 (warning-free)
+on retro round 2 after the rustdoc intra-doc-link fix on
+`rafaello-core::bus::subscribe_internal`. Transcript at
+`/tmp/m4-doc.log`; ends with `Finished `dev` profile` and
+contains zero `warning:` lines. No new doc warnings under
+m4's expanded surface (rafaello-mockprovider,
 rafaello-readfile, the agent-loop module, the core
 re-emit pipeline, and the `Publisher::Provider` schema
 additions).
@@ -160,48 +175,26 @@ fixture lock, drives it with `RFL_TUI_TEST_MESSAGE`, and
 asserts the exact SQLite row shape (seq / kind / author /
 text payload) plus the four `core.session.entry.finalized`
 sentinels on TUI stderr. Owner accepts mechanical
-coverage in lieu of a screen-recording (m3-precedent),
-modulo the §"Known local environment issue" caveat
-below.
+coverage in lieu of a screen-recording (m3-precedent).
 
-### Known local environment issue
+### Post-fix demo-bar status
 
-On the dev host this commit was authored on
-(Linux 6.12.84 / Landlock ABI 6), `rfl chat` against the
-mockprovider+readfile fixture lock currently fails
-locally: `syd` emits
-
-```
-incompatible directory-only access-rights: AccessFs(8) / LinuxError: EOPNOTSUPP
-```
-
-for each eager-spawned child during the landlock-apply
-step. The c27 `rfl_chat_demo_bar_read_file` cargo test
-hits the same failure mode (the mockprovider→readfile
-round-trip wedges after the first `entry.finalized` is
-forwarded), even though c26's `rfl_chat_demo_bar` smoke
-(echo path only, no readfile child) continues to pass.
-
-The failure is **environmental** (kernel / syd /
-Landlock-ABI interaction on this dev box), not a defect
-in the m4 code under test. The walkthrough steps above
-are written as they will execute on an unaffected
-environment.
-
-**TODO at retrospective time:**
-
-- Capture the macOS CI green URL into §4 above. macOS
-  does not exercise Landlock, so a green `macos-latest`
-  run is the first independent confirmation the demo
-  bar works end-to-end on a non-affected platform.
-- Capture an `ubuntu-latest` CI green URL alongside;
-  GitHub-hosted Linux runners typically pair newer
-  kernels with the syd build used by the workflow, so
-  a green run there is the second independent
-  confirmation.
-- **m4 ratification cannot be declared until at least
-  one CI runner is confirmed green.** Local-only sign-off
-  is insufficient given the Landlock failure mode above.
+- ✅ **Linux:** as of the `0a0e824` carveout fix the
+  `rfl_chat_demo_bar_read_file` cargo test passes
+  cleanly under kernel 6.12 / Landlock ABI 6 / syd
+  3.49.1 on the dev host, and the workspace-wide
+  acceptance gate (§1) records 608 / 0 / 0 with the
+  demo-bar headline among them. The earlier
+  `incompatible directory-only access-rights: AccessFs(8)
+  / EOPNOTSUPP` failure (caused by `decompose_dir`
+  routing regular files into `read_dirs`) is resolved by
+  `0a0e824`; retrospective §3.9 records the episode.
+- ⏳ **macOS CI green URL** — pending the
+  post-retrospective branch push to GitHub. URL will
+  land in §4 above.
+- ⏳ **Interactive `rfl chat` smoke recording** —
+  pending the post-retrospective driver sweep against
+  the fixture lock per §5 walkthrough.
 
 ## 6. CI green — Linux + macOS workflow run URL
 
@@ -216,12 +209,12 @@ retrospective time.
 
 | `scope.md` §"Acceptance summary" bullet | Section | Status |
 |-----------------------------------------|---------|--------|
-| `cargo test --workspace --features test-fixture` green on Linux | §1 | ⏳ driver-captured |
-| **macOS CI green** (hard gate) | §4 | ⏳ driver-captured |
-| `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ⏳ driver-captured |
-| `cargo doc --workspace --no-deps` warning-free | §3 | ⏳ driver-captured |
-| Interactive `rfl chat` demo-bar walkthrough | §5 | ✅ mechanical coverage via `rfl_chat_demo_bar_read_file` (caveat: local Landlock failure, §5 "Known local environment issue") |
-| CI green Linux + macOS | §6 | ⏳ driver-captured |
+| `cargo test --workspace --features test-fixture` green on Linux | §1 | ✅ 608/0/0 captured 2026-05-11 (`/tmp/m4-acceptance.log`) |
+| **macOS CI green** (hard gate) | §4 | ⏳ pending post-retrospective branch push |
+| `cargo build --workspace --bins --features rafaello-core/test-fixture` green | §2 | ✅ captured 2026-05-11 (`/tmp/m4-build.log`) |
+| `cargo doc --workspace --no-deps` warning-free | §3 | ✅ captured 2026-05-11, post bus-rs intra-doc-link fix (`/tmp/m4-doc.log`, 0 warnings) |
+| Interactive `rfl chat` demo-bar walkthrough | §5 | ✅ Linux mechanical coverage via `rfl_chat_demo_bar_read_file` (post-`0a0e824`); interactive recording ⏳ pending |
+| CI green Linux + macOS | §6 | ⏳ pending post-retrospective branch push |
 
 ## Negative-matrix cross-reference
 
@@ -238,6 +231,9 @@ green under the §1 acceptance run.
 | 5 | Bus event missing the `taint` envelope rejected | `rafaello-core/tests/broker_publish_core_session_tool_request_missing_taint_rejected.rs`; `rafaello-core/tests/broker_publish_core_session_tool_result_missing_taint_rejected.rs` (broker errors `InvalidTaint { reason: "missing" }`) |
 | 6 | Plugin-supplied taint discarded/replaced on core re-emit | `rafaello-core/tests/reemit_discards_plugin_supplied_taint_on_core_session_tool_request.rs` (pi-3 L-1: provider's claimed `taint: [{source: "user"}]` is discarded; emitted `core.session.tool_request` carries only the canonical `[{source: "provider", detail: "mock"}]`) |
 
-The retrospective remains pre-evidence on §1–§4 and §6
-plus the §5 CI-green confirmation; ratification waits on
-those captures plus pi ratification of `retrospective.md`.
+The Linux test/build/doc gates and the mechanical demo-bar
+coverage are captured; macOS CI green (§4 / §6) and the
+interactive `rfl chat` smoke recording (§5) remain pending
+the post-retrospective branch push to GitHub.
+Ratification additionally waits on pi ratification of
+`retrospective.md` round 2.
