@@ -10,6 +10,7 @@ pub mod digest;
 pub mod entry;
 pub mod error;
 pub mod frontend;
+pub mod gate;
 pub mod lock;
 pub mod manifest;
 pub mod paths;

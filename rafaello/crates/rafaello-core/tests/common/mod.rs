@@ -2,6 +2,7 @@
 //! Shared lock-fixture helpers for c22+ V3 integration tests.
 
 pub mod agent_test_kit;
+pub mod confirm_state_kit;
 pub mod frontend_test_kit;
 pub mod peer_test_kit;
 pub mod provider_test_kit;
