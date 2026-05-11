@@ -2,8 +2,10 @@
 //!
 //! `compile(lock)` builds the typed value the m2 broker consumes:
 //! per-plugin publish/subscribe authority + the compiler-inserted
-//! `plugin.<topic-id>.tool_request` self-subscribe + the resolved
-//! tool-name routing table (pi review-2 finding 4).
+//! `plugin.<topic-id>.tool_request` self-subscribe + the
+//! compiler-inserted `plugin.<topic-id>.tool_result` auto-publish
+//! for tool plugins (scope §M1.3) + the resolved tool-name routing
+//! table (pi review-2 finding 4).
 //!
 //! Same V3-must-run-first contract as `compile::compile_plugin`:
 //! a handful of obvious invariants are spot-checked and the
@@ -96,6 +98,12 @@ pub fn compile(lock: &Lock) -> Result<BrokerAcl, CompileError> {
 
         let topic_id_str = topic_id::derive(&canonical.to_string());
         let auto_subscribes = vec![format!("plugin.{}.tool_request", topic_id_str)];
+        let mut publish_topics = entry.grant.publishes.clone();
+        if !entry.bindings.tools.is_empty() {
+            publish_topics.push(format!("plugin.{}.tool_result", topic_id_str));
+        }
+        publish_topics.sort();
+        publish_topics.dedup();
         let provider_id = if entry.bindings.provider {
             entry.bindings.provider_id.clone()
         } else {
@@ -106,7 +114,7 @@ pub fn compile(lock: &Lock) -> Result<BrokerAcl, CompileError> {
             canonical.clone(),
             PluginAcl {
                 topic_id: topic_id_str,
-                publish_topics: entry.grant.publishes.clone(),
+                publish_topics,
                 subscribe_patterns: entry.grant.subscribes.clone(),
                 auto_subscribes,
                 provider_id,

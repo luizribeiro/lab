@@ -38,7 +38,10 @@ fn two_plugin_lock_extracts_per_plugin_acl() {
     assert_eq!(plugin_a.topic_id, topic_a);
     assert_eq!(
         plugin_a.publish_topics,
-        vec![format!("plugin.{}.doc_written", topic_a)]
+        vec![
+            format!("plugin.{}.doc_written", topic_a),
+            format!("plugin.{}.tool_result", topic_a),
+        ]
     );
     assert_eq!(
         plugin_a.subscribe_patterns,
@@ -54,7 +57,10 @@ fn two_plugin_lock_extracts_per_plugin_acl() {
     assert_eq!(plugin_b.topic_id, topic_b);
     assert_eq!(
         plugin_b.publish_topics,
-        vec![format!("plugin.{}.completion", topic_b)]
+        vec![
+            format!("plugin.{}.completion", topic_b),
+            format!("plugin.{}.tool_result", topic_b),
+        ]
     );
     assert_eq!(
         plugin_b.subscribe_patterns,
