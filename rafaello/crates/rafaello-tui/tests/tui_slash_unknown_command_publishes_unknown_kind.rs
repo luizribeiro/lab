@@ -17,6 +17,9 @@ async fn slash_unknown_command_publishes_unknown_kind() {
             max_lifetime: Some(5),
             ready_delay_ms: None,
             test_message: Some("/foo bar baz".to_string()),
+            test_confirm_answer: None,
+            test_confirm_delay_ms: None,
+            test_grant_before_message: None,
         },
         recorder,
     );

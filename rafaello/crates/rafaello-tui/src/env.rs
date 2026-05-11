@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
+use serde_json::Value;
 
 pub const RFL_BUS_FD: &str = "RFL_BUS_FD";
 pub const RFL_PROJECT_ROOT: &str = "RFL_PROJECT_ROOT";
@@ -10,6 +11,9 @@ pub const RFL_TUI_TEST_MODE: &str = "RFL_TUI_TEST_MODE";
 pub const RFL_TUI_READY_DELAY_MS: &str = "RFL_TUI_READY_DELAY_MS";
 pub const RFL_TUI_MAX_LIFETIME: &str = "RFL_TUI_MAX_LIFETIME";
 pub const RFL_TUI_TEST_MESSAGE: &str = "RFL_TUI_TEST_MESSAGE";
+pub const RFL_TUI_TEST_CONFIRM_ANSWER: &str = "RFL_TUI_TEST_CONFIRM_ANSWER";
+pub const RFL_TUI_TEST_CONFIRM_DELAY_MS: &str = "RFL_TUI_TEST_CONFIRM_DELAY_MS";
+pub const RFL_TUI_TEST_GRANT_BEFORE_MESSAGE: &str = "RFL_TUI_TEST_GRANT_BEFORE_MESSAGE";
 
 pub const ENV_PASS_ALLOWLIST: &[&str] = &[
     RFL_BUS_FD,
@@ -18,7 +22,35 @@ pub const ENV_PASS_ALLOWLIST: &[&str] = &[
     RFL_TUI_READY_DELAY_MS,
     RFL_TUI_MAX_LIFETIME,
     RFL_TUI_TEST_MESSAGE,
+    RFL_TUI_TEST_CONFIRM_ANSWER,
+    RFL_TUI_TEST_CONFIRM_DELAY_MS,
+    RFL_TUI_TEST_GRANT_BEFORE_MESSAGE,
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestConfirmAnswer {
+    Allow,
+    Deny,
+    AlwaysAllowSession,
+    Timeout,
+}
+
+impl TestConfirmAnswer {
+    pub fn answer_str(self) -> Option<&'static str> {
+        match self {
+            TestConfirmAnswer::Allow => Some("allow"),
+            TestConfirmAnswer::Deny => Some("deny"),
+            TestConfirmAnswer::AlwaysAllowSession => Some("always_allow_session"),
+            TestConfirmAnswer::Timeout => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestGrantBeforeMessage {
+    pub tool: String,
+    pub args_subset: Value,
+}
 
 #[derive(Debug, Clone)]
 pub struct TuiEnv {
@@ -28,6 +60,9 @@ pub struct TuiEnv {
     pub ready_delay_ms: Option<u64>,
     pub max_lifetime_secs: Option<u64>,
     pub test_message: Option<String>,
+    pub test_confirm_answer: Option<TestConfirmAnswer>,
+    pub test_confirm_delay_ms: u64,
+    pub test_grant_before_message: Option<TestGrantBeforeMessage>,
 }
 
 pub fn load() -> Result<TuiEnv> {
@@ -44,6 +79,14 @@ where
     let ready_delay_ms = parse_optional_u64(RFL_TUI_READY_DELAY_MS, get(RFL_TUI_READY_DELAY_MS))?;
     let max_lifetime_secs = parse_optional_u64(RFL_TUI_MAX_LIFETIME, get(RFL_TUI_MAX_LIFETIME))?;
     let test_message = get(RFL_TUI_TEST_MESSAGE).filter(|s| !s.is_empty());
+    let test_confirm_answer = parse_confirm_answer(get(RFL_TUI_TEST_CONFIRM_ANSWER))?;
+    let test_confirm_delay_ms = parse_optional_u64(
+        RFL_TUI_TEST_CONFIRM_DELAY_MS,
+        get(RFL_TUI_TEST_CONFIRM_DELAY_MS),
+    )?
+    .unwrap_or(0);
+    let test_grant_before_message =
+        parse_grant_before_message(get(RFL_TUI_TEST_GRANT_BEFORE_MESSAGE))?;
 
     Ok(TuiEnv {
         bus_fd,
@@ -52,7 +95,50 @@ where
         ready_delay_ms,
         max_lifetime_secs,
         test_message,
+        test_confirm_answer,
+        test_confirm_delay_ms,
+        test_grant_before_message,
     })
+}
+
+fn parse_confirm_answer(value: Option<String>) -> Result<Option<TestConfirmAnswer>> {
+    match value.filter(|s| !s.is_empty()).as_deref() {
+        None => Ok(None),
+        Some("allow") => Ok(Some(TestConfirmAnswer::Allow)),
+        Some("deny") => Ok(Some(TestConfirmAnswer::Deny)),
+        Some("always_allow_session") => Ok(Some(TestConfirmAnswer::AlwaysAllowSession)),
+        Some("timeout") => Ok(Some(TestConfirmAnswer::Timeout)),
+        Some(other) => Err(anyhow!(
+            "{} must be one of allow|deny|always_allow_session|timeout (got {:?})",
+            RFL_TUI_TEST_CONFIRM_ANSWER,
+            other
+        )),
+    }
+}
+
+fn parse_grant_before_message(value: Option<String>) -> Result<Option<TestGrantBeforeMessage>> {
+    let Some(raw) = value.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let v: Value = serde_json::from_str(&raw)
+        .with_context(|| format!("{} must be valid JSON", RFL_TUI_TEST_GRANT_BEFORE_MESSAGE))?;
+    let tool = v
+        .get("tool")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| {
+            anyhow!(
+                "{} requires string field `tool`",
+                RFL_TUI_TEST_GRANT_BEFORE_MESSAGE
+            )
+        })?
+        .to_string();
+    let args_subset = v.get("args_subset").cloned().ok_or_else(|| {
+        anyhow!(
+            "{} requires field `args_subset`",
+            RFL_TUI_TEST_GRANT_BEFORE_MESSAGE
+        )
+    })?;
+    Ok(Some(TestGrantBeforeMessage { tool, args_subset }))
 }
 
 fn parse_bus_fd(value: Option<String>) -> Result<i32> {

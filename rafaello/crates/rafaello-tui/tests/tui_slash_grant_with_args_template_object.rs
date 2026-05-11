@@ -18,6 +18,9 @@ async fn slash_grant_with_args_template_object() {
             max_lifetime: Some(5),
             ready_delay_ms: None,
             test_message: Some("/grant tool_a path=/etc cmd=ls".to_string()),
+            test_confirm_answer: None,
+            test_confirm_delay_ms: None,
+            test_grant_before_message: None,
         },
         recorder,
     );

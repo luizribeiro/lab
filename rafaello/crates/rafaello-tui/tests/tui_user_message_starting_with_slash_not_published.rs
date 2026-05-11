@@ -17,6 +17,9 @@ async fn user_message_starting_with_slash_not_published() {
             max_lifetime: Some(5),
             ready_delay_ms: None,
             test_message: Some("/foo".to_string()),
+            test_confirm_answer: None,
+            test_confirm_delay_ms: None,
+            test_grant_before_message: None,
         },
         recorder,
     );

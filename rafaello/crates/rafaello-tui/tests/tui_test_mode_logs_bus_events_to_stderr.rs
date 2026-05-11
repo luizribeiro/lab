@@ -19,6 +19,9 @@ async fn bus_event_to_child_appears_on_stderr() {
             max_lifetime: Some(3),
             ready_delay_ms: None,
             test_message: None,
+            test_confirm_answer: None,
+            test_confirm_delay_ms: None,
+            test_grant_before_message: None,
         },
         svc,
     );

@@ -122,6 +122,9 @@ pub struct SpawnOpts {
     pub max_lifetime: Option<u64>,
     pub ready_delay_ms: Option<u64>,
     pub test_message: Option<String>,
+    pub test_confirm_answer: Option<String>,
+    pub test_confirm_delay_ms: Option<u64>,
+    pub test_grant_before_message: Option<String>,
 }
 
 impl Default for SpawnOpts {
@@ -131,6 +134,9 @@ impl Default for SpawnOpts {
             max_lifetime: Some(2),
             ready_delay_ms: None,
             test_message: None,
+            test_confirm_answer: None,
+            test_confirm_delay_ms: None,
+            test_grant_before_message: None,
         }
     }
 }
@@ -163,6 +169,15 @@ pub fn spawn_tui<S: Service + Send + Sync + 'static>(opts: SpawnOpts, service: S
     if let Some(msg) = opts.test_message.as_deref() {
         cmd.env("RFL_TUI_TEST_MESSAGE", msg);
     }
+    if let Some(a) = opts.test_confirm_answer.as_deref() {
+        cmd.env("RFL_TUI_TEST_CONFIRM_ANSWER", a);
+    }
+    if let Some(ms) = opts.test_confirm_delay_ms {
+        cmd.env("RFL_TUI_TEST_CONFIRM_DELAY_MS", ms.to_string());
+    }
+    if let Some(j) = opts.test_grant_before_message.as_deref() {
+        cmd.env("RFL_TUI_TEST_GRANT_BEFORE_MESSAGE", j);
+    }
 
     let mut child = cmd.spawn().expect("spawn rfl-tui");
     drop(child_fd);
@@ -173,7 +188,7 @@ pub fn spawn_tui<S: Service + Send + Sync + 'static>(opts: SpawnOpts, service: S
 
     let (reader, writer) = parent_stream.into_split();
     let transport = StdioTransport::new(reader, writer, 1 << 20);
-    let server = Server::new(service, transport);
+    let server = Server::new(service, transport).with_max_in_flight(1);
     let parent_peer = server.peer();
     let server_handle = tokio::spawn(async move {
         let _ = server.serve().await;

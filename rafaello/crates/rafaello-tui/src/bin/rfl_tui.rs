@@ -22,8 +22,9 @@ use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_transport::stdio::StdioTransport;
 use futures::stream::StreamExt;
 use rafaello_core::RenderNode;
-use rafaello_tui::env;
+use rafaello_tui::env::{self, TestConfirmAnswer, TestGrantBeforeMessage};
 use rafaello_tui::paint::draw_with_panic_isolation;
+use rafaello_tui::{slash::SlashCommand, slash::SlashKind, CONFIRM_ANSWER_TOPIC};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use serde_json::{json, Value};
@@ -54,7 +55,8 @@ async fn main() -> Result<()> {
         });
     }
 
-    let handler = bus_event_handler(cfg.test_mode);
+    let (confirm_tx, confirm_rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let handler = bus_event_handler(cfg.test_mode, confirm_tx);
 
     let client = Client::connect(OneShotConnector::new(transport))
         .await
@@ -73,15 +75,83 @@ async fn main() -> Result<()> {
         .await
         .context("rfl-tui: frontend.ready RPC")?;
 
+    if let Some(grant) = cfg.test_grant_before_message.as_ref() {
+        publish_synthetic_grant(&client, grant)?;
+    }
+
     if let Some(text) = cfg.test_message.as_deref() {
         publish_submitted_line(&client, text)?;
     }
 
     if cfg.test_mode {
+        if let Some(answer) = cfg.test_confirm_answer {
+            spawn_auto_confirm_answer(
+                client.peer().clone(),
+                confirm_rx,
+                answer,
+                cfg.test_confirm_delay_ms,
+            );
+        }
         std::future::pending::<Result<()>>().await
     } else {
         run_production_mode(notifications).await
     }
+}
+
+fn publish_synthetic_grant(
+    client: &Client<OneShotConnector>,
+    grant: &TestGrantBeforeMessage,
+) -> Result<()> {
+    let cmd = SlashCommand {
+        command: SlashKind::Grant,
+        args: json!({ "tool": grant.tool, "template": grant.args_subset }),
+    };
+    let payload = serde_json::to_value(&cmd).expect("SlashCommand serialises");
+    let request_id = JsonRpcId::String(Ulid::new().to_string());
+    client
+        .peer()
+        .notify(
+            "bus.publish",
+            json!({
+                "topic": "frontend.tui.slash_command",
+                "payload": payload,
+                "request_id": request_id,
+            }),
+        )
+        .context("rfl-tui: bus.publish frontend.tui.slash_command (synthetic /grant)")?;
+    Ok(())
+}
+
+fn spawn_auto_confirm_answer(
+    peer: fittings_core::context::PeerHandle,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    answer: TestConfirmAnswer,
+    delay_ms: u64,
+) {
+    tokio::spawn(async move {
+        while let Some(payload) = rx.recv().await {
+            let Some(answer_str) = answer.answer_str() else {
+                continue;
+            };
+            let Some(confirm_id) = payload.get("request_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let confirm_id = confirm_id.to_string();
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            let request_id = JsonRpcId::String(Ulid::new().to_string());
+            let _ = peer.notify(
+                "bus.publish",
+                json!({
+                    "topic": CONFIRM_ANSWER_TOPIC,
+                    "payload": { "request_id": confirm_id, "answer": answer_str },
+                    "request_id": request_id,
+                    "in_reply_to": [JsonRpcId::String(confirm_id.clone())],
+                }),
+            );
+        }
+    });
 }
 
 fn publish_submitted_line(client: &Client<OneShotConnector>, text: &str) -> Result<()> {
@@ -127,7 +197,10 @@ fn adopt_bus_fd(fd: RawFd) -> Result<BusTransport> {
     Ok(StdioTransport::new(reader, writer, MAX_FRAME_BYTES))
 }
 
-fn bus_event_handler(test_mode: bool) -> impl Fn(String, Value) + Send + Sync + 'static {
+fn bus_event_handler(
+    test_mode: bool,
+    confirm_tx: tokio::sync::mpsc::UnboundedSender<Value>,
+) -> impl Fn(String, Value) + Send + Sync + 'static {
     let seq = Arc::new(AtomicU64::new(0));
     move |method, params| {
         if method != "bus.event" {
@@ -143,6 +216,11 @@ fn bus_event_handler(test_mode: bool) -> impl Fn(String, Value) + Send + Sync + 
             .to_string();
         let n = seq.fetch_add(1, Ordering::SeqCst) + 1;
         emit_sentinel(&format!("bus.event topic={topic} seq={n}"));
+        if topic == rafaello_tui::CONFIRM_REQUEST_TOPIC {
+            if let Some(payload) = params.get("payload") {
+                let _ = confirm_tx.send(payload.clone());
+            }
+        }
         if topic == "core.lifecycle.test_done" {
             emit_sentinel("test-done");
             std::process::exit(0);
