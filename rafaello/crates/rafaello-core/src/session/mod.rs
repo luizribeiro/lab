@@ -12,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
 use nix::fcntl::{Flock, FlockArg};
 use parking_lot::Mutex;
@@ -19,6 +20,7 @@ use rusqlite::Connection;
 use thiserror::Error;
 use ulid::Ulid;
 
+use crate::audit::AuditWriter;
 use crate::bus::Broker;
 use crate::entry::Entry;
 use crate::error::BrokerError;
@@ -53,7 +55,7 @@ pub struct StoredEntry {
 }
 
 pub struct SessionStore {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     #[allow(dead_code)]
     lock_guard: Flock<File>,
     session_id: String,
@@ -109,13 +111,20 @@ impl SessionStore {
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS audit_events (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                at         TEXT NOT NULL,
+                kind       TEXT NOT NULL,
+                request_id TEXT,
+                payload    TEXT NOT NULL
+            );
             "#,
         )?;
 
         let session_id = init_or_verify_meta(&conn)?;
 
         Ok(SessionStore {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             lock_guard,
             session_id,
         })
@@ -128,6 +137,10 @@ impl SessionStore {
     #[allow(dead_code)]
     pub(crate) fn conn(&self) -> &Mutex<Connection> {
         &self.conn
+    }
+
+    pub(crate) fn conn_arc(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
     }
 
     pub fn append_entry(&self, entry: &Entry) -> Result<u64, SessionError> {
@@ -257,6 +270,7 @@ pub struct SessionController {
     store: SessionStore,
     pipeline: RenderPipeline,
     broker: Broker,
+    audit_writer: OnceLock<Arc<AuditWriter>>,
 }
 
 impl SessionController {
@@ -265,11 +279,19 @@ impl SessionController {
             store,
             pipeline,
             broker,
+            audit_writer: OnceLock::new(),
         }
     }
 
     pub fn store(&self) -> &SessionStore {
         &self.store
+    }
+
+    pub fn audit_writer(&self) -> Arc<AuditWriter> {
+        Arc::clone(
+            self.audit_writer
+                .get_or_init(|| Arc::new(AuditWriter::new(self.store.conn_arc()))),
+        )
     }
 
     pub async fn finalize_entry(
