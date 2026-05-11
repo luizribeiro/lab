@@ -11,6 +11,7 @@ pub mod frontend;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
+pub mod reemit;
 pub mod renderer;
 pub mod scrubber;
 pub mod session;
