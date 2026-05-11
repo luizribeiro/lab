@@ -1,9 +1,19 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — retrospective
 
-> **Status: round 5 draft — ratification polish.** Folds
-> `retrospective-pi-review-4.md` (0 B / 1 M / 1 N — pi-4
-> explicitly stated "retrospective.md is ready for owner
-> ratification") at hash TBD-round-5.
+> **Status: round 6 — drift landed.** Round 6 has no pi
+> findings to fold; it converts the round-5 "deferred"
+> markers in §6 to "landed in commit `816b273`" after the
+> drift patches landed on the retro branch.
+>
+> ---
+>
+> **(History — round 5 ratification polish.)**
+>
+> Round 5 folded `retrospective-pi-review-4.md` (0 B / 1 M /
+> 1 N) at hash `c72aca2` and applied the small drift patches
+> (`decisions.md` row appends + `glossary.md` updates); the
+> larger `overview.md` + Stream A + Stream F patches deferred
+> to commit `816b273`.
 >
 > Round-5 fixes by pi-4 finding (one line each):
 > - **M-1** §5 follow-up summary updated: "items 12-14" →
@@ -25,19 +35,14 @@
 >   enum; new `Audit log` entry added pointing at
 >   `AuditKind::as_str()` as authoritative.
 >
-> **Drift patches deferred to follow-up commits on this retro
-> branch (too large for a single ratification-polish commit;
-> precedent: m4 retro §6 drift commits landed as separate
-> commits after retrospective ratification):**
+> **Drift patches that landed in round-6 follow-up commit
+> `816b273`** (m4 retro §6 drift-commit precedent):
 > - `overview.md` §4.6 well-known-plugin-config-env paragraph
->   distinguishing core-injected vs. well-known (§6.3 of this
->   retro is the patch sketch).
+>   distinguishing core-injected vs. well-known.
 > - `overview.md` §15.1 `env.allow_secrets` manifest-shape
 >   addition.
 > - `streams/a-security` m5a implementation-status banner +
->   §5.6 confirmation-payload clarification (1424-line RFC;
->   the banner pass needs an integrated read of §5/§5.6/§7.2.6
->   that exceeds the polish budget here).
+>   §5.6 confirmation-payload clarification.
 > - `streams/f-manifest` `env.allow_secrets` schema patch.
 >
 > ---
@@ -615,15 +620,14 @@ the same pattern: §6 patches land as separate follow-up commits
 on the retro branch before merge to `rafaello-v0.1`. Candidate
 patches:
 
-**Round-5 disposition** (per plans/README.md retrospective phase
-+ pi-4's polish prompt): `glossary.md` patches in §6.4 **landed in
-this round-5 commit**; `decisions.md` row additions in §7 also
-landed in this round-5 commit. `overview.md` §4.6 / §15.1 patches
-and the Stream A / Stream F patches below are **deferred — too
-large for retrospective polish, lands in follow-up commit on this
-retro branch** (m4 §6 drift-commit precedent).
+**Round-5 / round-6 disposition** (per plans/README.md
+retrospective phase + pi-4's polish prompt): `glossary.md`
+patches in §6.4 + `decisions.md` rows in §7 landed in the
+round-5 commit (`c72aca2`). The remaining `overview.md` +
+Stream A + Stream F drift patches landed in the round-6
+drift commit `816b273` per the m4 §6 drift-commit precedent.
 
-### 6.1 Stream A (security) — sink-class + confirmation + grants surface — **deferred to follow-up commit**
+### 6.1 Stream A (security) — sink-class + confirmation + grants surface — **landed in commit `816b273`**
 
 Stream A's **§5 status banner** (the m4 provider/live-wire entry —
 not the §10 sink-confirmation summary, which already carries the
@@ -677,7 +681,7 @@ Concrete patches:
   The round-2 scope.md surfaced this as a needed Stream A
   clarification; pi-1 B-3 flagged its absence here.
 
-### 6.2 Stream F (manifest) — `env.allow_secrets` — **deferred to follow-up commit**
+### 6.2 Stream F (manifest) — `env.allow_secrets` — **landed in commit `816b273`**
 
 Stream F's manifest schema currently does not record
 `env.allow_secrets` because the field was added at m5a scope
@@ -687,7 +691,7 @@ round-3 ratification). Concrete patch: Stream F §"Capabilities"
 gains a one-paragraph entry citing scope §OP6 + c06 + decisions
 row candidate (§7 below).
 
-### 6.3 `overview.md` patches (scope-ratified drift checklist, pi-1 B-3) — **deferred to follow-up commit**
+### 6.3 `overview.md` patches (scope-ratified drift checklist, pi-1 B-3) — **landed in commit `816b273`**
 
 Two `overview.md` patches surface from the scope convergence
 checklist:
@@ -1094,10 +1098,11 @@ exclusive at install time.
 
 ---
 
-*End of m5a retrospective round 5 — ratification polish.
-Pi-4 reported zero blockers and stated "retrospective.md is
-ready for owner ratification"; round 5 applies the two polish
-folds + the `decisions.md` row appends + the `glossary.md`
-patches. `overview.md` and stream RFC patches deferred to
-follow-up commits on this retro branch per the m4 §6
-drift-commit precedent.*
+*End of m5a retrospective round 6 — drift landed. Pi-4
+reported zero blockers and stated "retrospective.md is ready
+for owner ratification"; round 5 applied the two polish folds
++ the `decisions.md` row appends + the `glossary.md` patches.
+Round 6 landed the remaining `overview.md` §4.6 / §15.1
+patches + Stream A m5a banner + §5.6 clarification +
+Stream F `env.allow_secrets` schema patch in commit
+`816b273` per the m4 §6 drift-commit precedent.*
