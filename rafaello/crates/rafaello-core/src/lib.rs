@@ -22,6 +22,7 @@ pub mod sinks;
 pub mod supervisor;
 pub mod topic_id;
 pub mod trifecta;
+pub mod user_grants;
 pub mod validate;
 
 pub use entry::{
