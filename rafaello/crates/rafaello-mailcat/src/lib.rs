@@ -1,1 +1,1 @@
-
+//! rafaello-mailcat scaffolding.
