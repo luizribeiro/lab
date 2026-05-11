@@ -6,3 +6,28 @@ publish = false
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "rfl-openai"
+path = "src/bin/rfl_openai.rs"
+
+[dependencies]
+rafaello-core = { path = "../rafaello-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+fittings-core = { workspace = true }
+fittings-server = { workspace = true }
+fittings-client = { workspace = true }
+fittings-transport = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-test = { workspace = true }

@@ -29,3 +29,5 @@ Concrete designs in flight:
 - Stream F — plugin manifest schema + lazy-loading
 
 See [`plans/`](./plans/) for each stream's brief and current notes.
+
+m5a adds rfl-openai (OpenAI-compatible provider plugin)
