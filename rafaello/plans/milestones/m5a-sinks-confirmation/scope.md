@@ -1,10 +1,66 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — scope
 
-> **Status:** round 5 — addresses `scope-pi-review-4.md`
+> **Status:** round 6 — addresses `scope-pi-review-5.md`
+> (0 blocking / 3 major / 5 nit). Pi-5 reported zero
+> blockers and asked for one short polish fold before
+> owner ratification. All 3 M and 5 N folded.
+>
+> Round-6 fixes by pi-5 finding (one line each):
+> - **M-1** §CT5 step 5 specifies the
+>   `MarkError::NotActive` race: re-emit re-reads
+>   `prior_outcome`, audits `confirm_late` /
+>   `confirm_duplicate` / `confirm_unknown`, and **does
+>   not publish** `core.session.confirm_reply` in that
+>   branch (matching CT0's late-answer contract). New
+>   named test
+>   `reemit_confirm_answer_always_allow_session_races_timeout_drops_without_reply.rs`.
+> - **M-2** §Tr1 algorithm now includes the
+>   unused-`allow_secrets` step (after successful
+>   validation, before lock write): compute unused names
+>   for each newly-installed entry, print one stderr line
+>   per name, include them in the `install_accepted`
+>   audit payload. §Tr4 lists
+>   `rfl_install_warns_on_unused_allow_secrets_entry.rs`.
+> - **M-3** §OP6 reworded: `compile.rs::effective_grant`
+>   unions/dedups `env.pass` and `env.allow_secrets`
+>   across **every** value in `grant.bundles` (matching
+>   live `for bundle in grant.bundles.values()` per
+>   `compile.rs:260-312`). The `default+named` framing
+>   is dropped; `sinks::effective_grant`'s
+>   `default ∪ <tool>` framing remains separate per §Si.
+> - **N-1** §CT5 introduction reworded: re-emit's special
+>   `always_allow_session` arm **marks
+>   `session_grant_requested`** (not "adds a UserGrant").
+> - **N-2** Re-emit test renamed
+>   `reemit_confirm_answer_always_allow_session_marks_state_and_emits_allow.rs`.
+> - **N-3** §CT0 implication 6 method name fixed to
+>   `try_resolve` (round-5 left one `resolve` reference).
+> - **N-4** §OP6 manifest `EnvCapabilities` snippet
+>   includes both `Deserialize` and `Serialize` derives
+>   matching live `manifest/capabilities.rs`.
+> - **N-5** §OP5 lock-snippet comment reworded:
+>   `allow_secrets` is snapshotted into the lock
+>   grant env (not "into bindings"; round-5 partial
+>   carryover).
+>
+> **Convergence proposal.** Pi-5 said zero blockers, one
+> short polish fold, then owner ratification. Round 6
+> applies the narrow polish. The next pi pass should
+> confirm zero blockers and ratification-ready.
+>
+> The roadmap row for m5 (`milestones/README.md`) is the
+> pre-ratified definition; this document scopes **m5a in
+> full** with m5b sketched in Appendix A.
+>
+> ---
+>
+> **(History — round 5 fix list, kept for trajectory.)**
+>
+> Round-5 status: addresses `scope-pi-review-4.md`
 > (1 blocking / 6 major / 4 nit). The single blocker
 > (`always_allow_session` grant-creation wiring) and all 6
 > majors resolved; all 4 nits folded. Pi-4 expected one more
-> round if the fix is kept narrow; round 5 takes the
+> round if the fix was kept narrow; round 5 took the
 > narrow path.
 >
 > Round-5 fixes by pi-4 finding (one line each):
@@ -1261,11 +1317,29 @@ update or review.
      when the override is in play. This is a UX nicety
      and does not affect the gate decision; the
      authoritative refusal is `validate::lock`.
-  10. Write the merged lock back to `<LOCK_PATH>` (default:
+  10. **Unused-`allow_secrets` warning step** (pi-5 M-2 —
+      this step integrates §OP6's installer-side warning
+      into the actual install algorithm). For the
+      candidate's `GrantEnv.allow_secrets` in each
+      bundle, compute the set of names that are listed
+      in `allow_secrets` but **not** present in the
+      same bundle's effective `env.pass`. For each
+      unused name, print one stderr line:
+      `"warning: unused allow_secrets entry '<name>' (no matching env.pass entry)"`.
+      Collect the full unused-names list per bundle for
+      the audit row in step 12. The install proceeds
+      regardless — this is a UX warning only and does
+      not affect gate / scrubber / status output.
+  11. Write the merged lock back to `<LOCK_PATH>` (default:
       `${PROJECT_ROOT}/rafaello.lock`).
-  11. Append `install_accepted` (or
+  12. Append `install_accepted` (or
       `trifecta_overridden` if the flag was set) to the
-      audit log.
+      audit log. The payload includes
+      `details.allow_secrets: [...]` when any bundle's
+      `allow_secrets` is non-empty (§OP6) and
+      `details.unused_allow_secrets: [...]` collected
+      from step 10 (empty when every declared secret
+      name is also in `env.pass`).
 
   Tests are unchanged in shape (the override semantics are
   the same observable outcome); the §Tr4 file
@@ -1314,6 +1388,13 @@ update or review.
   - `rfl_status_prints_red_for_override_flag.rs` — TTY
     capture; `rfl_status_prints_override_prefix_for_non_tty.rs`
     — pipe stdout to a buffer.
+  - `rfl_install_warns_on_unused_allow_secrets_entry.rs`
+    (pi-5 M-2 — install a fixture whose
+    `allow_secrets = ["A", "B"]` and `env.pass = ["A"]`;
+    capture stderr and assert it contains
+    `"warning: unused allow_secrets entry 'B'"`; assert
+    the lock writes succeed; assert the audit row's
+    `details.unused_allow_secrets == ["B"]`).
 
 ### CT — confirmation topics + frontend ACL extension
 
@@ -1378,7 +1459,7 @@ Implications, pinned:
    overlay has already exited.
 6. **Duplicate answer** (two answers for the same held key):
    the second answer finds `ConfirmState::is_held` returns
-   false (the first answer's `resolve` consumed it); audits
+   false (the first answer's `try_resolve` consumed it); audits
    `confirm_duplicate` and drops.
 7. **Unknown id** (`payload.request_id` was never held):
    re-emit audits `confirm_unknown` and drops.
@@ -1453,8 +1534,12 @@ to security RFC §5.6 pointing at CT0.
   observing the re-emitted `core.session.confirm_reply`.
   Re-emit's only state mutation against `ConfirmState` is
   the special `always_allow_session` arm (step 5 below)
-  which adds a `UserGrant`; the held entry itself stays
-  active until CG4 resolves it.
+  which **marks `session_grant_requested`** on the
+  `Active` entry without consuming it (pi-5 N-1 — the
+  round-5 text "adds a `UserGrant`" was a partial
+  carryover; the grant itself is added by CG4 in the
+  gate). The held entry stays `Active` until CG4
+  resolves it.
 
   Validation steps (per CT0 implications + pi-3 M-3
   malformed-first ordering):
@@ -1487,14 +1572,36 @@ to security RFC §5.6 pointing at CT0.
      does not need `UserGrants` or `AuditWriter`
      handles): if the frontend sent
      `always_allow_session`, re-emit calls
-     `state.mark_session_grant_requested(payload.request_id)`
-     — atomic, sets the `Active` entry's
-     `session_grant_requested = true` without consuming
-     the `HeldConfirmation`. The outbound
-     `confirm_reply.payload.answer` is then **rewritten
-     to `"allow"`** for publication. (If the answer was
-     already `"allow"` or `"deny"`, this step is a
-     no-op and the value is forwarded verbatim.) The
+     `state.mark_session_grant_requested(payload.request_id)`.
+     **Result handling** (pi-5 M-1):
+     - `Ok(())` — the `Active` entry's
+       `session_grant_requested` is now `true` (the
+       `HeldConfirmation` is **not** consumed). The
+       outbound `confirm_reply.payload.answer` is
+       **rewritten to `"allow"`** for publication
+       (proceed to step 6).
+     - `Err(MarkError::NotActive)` — the entry was
+       resolved (or never held) between step 4's
+       `prior_outcome == Held` read and this call's
+       atomic mutation. The race winners are CG5's
+       timeout (`TimedOut`), an arriving allow/deny via
+       CG4 (`ResolvedByAnswer`), or — for the
+       `Unknown` case — never-held (the entry was
+       evicted somehow; cannot happen in m5a's
+       single-process design, but the arm is handled
+       defensively). Re-emit re-reads
+       `state.prior_outcome(payload.request_id)`,
+       audits `confirm_late` if `Late`,
+       `confirm_duplicate` if `Duplicate`, or
+       `confirm_unknown` if `Unknown`, and **does not
+       publish `core.session.confirm_reply`** (matching
+       CT0's late-answer contract — no
+       `confirm_reply` is emitted for late answers).
+       The held call has already been resolved by the
+       race winner; no further re-emit action.
+     (If the answer was already `"allow"` or
+     `"deny"`, this step is skipped entirely and the
+     value is forwarded verbatim to step 6.) The
      grant-creation + `grant_added` audit happen in
      CG4 (the gate already holds
      `Arc<RwLock<UserGrants>>` and the audit writer);
@@ -1528,10 +1635,20 @@ to security RFC §5.6 pointing at CT0.
     (asserts `prior_outcome == Held` both before and
     after the malformed answer — pi-3 M-3)
   - `reemit_confirm_answer_synthesises_user_taint.rs`
-  - `reemit_confirm_answer_always_allow_session_creates_grant_and_emits_allow.rs`
-    (pi-3 B-2 — asserts the outbound `confirm_reply`
-    payload carries `answer = "allow"`, not
-    `"always_allow_session"`)
+  - `reemit_confirm_answer_always_allow_session_marks_state_and_emits_allow.rs`
+    (pi-3 B-2 + pi-5 N-2 — asserts the outbound
+    `confirm_reply` payload carries `answer = "allow"`,
+    not `"always_allow_session"`, and that
+    `mark_session_grant_requested` flipped the flag;
+    renamed from the round-5
+    `..._creates_grant_and_emits_allow.rs` form which
+    misattributed grant creation to re-emit)
+  - `reemit_confirm_answer_always_allow_session_races_timeout_drops_without_reply.rs`
+    (pi-5 M-1 — between `prior_outcome == Held` and
+    `mark_session_grant_requested`, CG5's timeout fires;
+    `MarkError::NotActive` returned; re-emit audits
+    `confirm_late` and emits **no**
+    `core.session.confirm_reply`)
   - `reemit_confirm_answer_always_allow_session_does_not_consume_held_entry.rs`
     (gate still sees `Active`; CG4 dispatches normally)
 
@@ -2555,8 +2672,11 @@ deleted.
   # env-var names are intentional (the OpenAI Chat Completions
   # protocol historically uses *_KEY-suffixed env vars; m1's
   # SECRET_PATTERNS scrubber strips them by default). The lock
-  # snapshots this list into bindings and the compiler honours it
-  # — see §OP6 for the full schema/scrubber/status path.
+  # snapshots this list into the lock grant env
+  # (`grant.bundles.<bundle>.env.allow_secrets` — pi-5 N-5
+  # corrected the round-4 "into bindings" wording) and the
+  # compiler honours it — see §OP6 for the full
+  # schema/scrubber/status path.
   [capabilities.default.env]
   pass          = []     # the deployment's lock supplies the actual key name; here just declares the field
   allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
@@ -2666,7 +2786,7 @@ deleted.
 
   ```rust
   // crates/rafaello-core/src/manifest/capabilities.rs
-  #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+  #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
   pub struct EnvCapabilities {
       #[serde(default)]
       pub pass: Vec<String>,
@@ -2695,28 +2815,40 @@ deleted.
   }
   ```
 
-  Effective-grant merge (pi-4 M-3 correction). The
-  scrubber call sits in `compile_plugin` and reads the
-  bundle-level env merge produced by
+  Effective-grant merge (pi-4 M-3 / pi-5 M-3
+  corrections). The scrubber call sits in
+  `compile_plugin` and reads the env merge produced by
   `compile.rs::effective_grant` (live
-  `crates/rafaello-core/src/compile.rs:248-312`), which
-  unions/dedups `env.pass` and merges `env.set` across
-  the `default` bundle and the named bundle. m5a
-  extends **that** function to also union/dedup
-  `env.allow_secrets` (concat + dedup, same shape as
-  `env.pass`). The compiled `EffectiveGrant.env`
-  passed to the scrubber therefore carries the merged
-  `allow_secrets` list.
+  `crates/rafaello-core/src/compile.rs:260-312`),
+  which iterates `for bundle in grant.bundles.values()`
+  and unions/dedups `env.pass` and merges `env.set`
+  across **every** bundle (not just `default` + a
+  named one — pi-5 M-3 corrected the round-4
+  `default+named` wording, which would have left
+  `allow_secrets` diverging from the live spawn-time
+  env merge for plugins with additional bundles). m5a
+  extends `compile.rs::effective_grant` to also
+  union/dedup `env.allow_secrets` across every value
+  in `grant.bundles` (concat + dedup, same shape as
+  `env.pass`'s union). The compiled
+  `EffectiveGrant.env` passed to the scrubber
+  therefore carries `allow_secrets` unioned over the
+  same bundle set as `env.pass`.
 
   **`sinks::union_bundle` is unchanged.** Round 4
   wrongly placed the union there; live
   `sinks::union_bundle`
   (`crates/rafaello-core/src/sinks.rs:52-69`) only
   handles filesystem and network bundles for sink
-  *inference* (`infer_defaults`'s consumer). It does
-  not touch `env`. Sink inference does not need
-  `allow_secrets`. The two effective-grant functions
-  remain separate paths with distinct responsibilities.
+  *inference* (`infer_defaults`'s consumer), and its
+  caller `sinks::effective_grant` uses
+  `default ∪ <tool>` framing scoped to a specific
+  tool. It does not touch `env`. Sink inference does
+  not need `allow_secrets`. The two effective-grant
+  functions remain separate paths with distinct
+  responsibilities and distinct bundle-set framings
+  (`compile.rs::effective_grant` = all bundles;
+  `sinks::effective_grant` = default ∪ <tool>).
 
   Scrubber signature change: live
   `crates/rafaello-core/src/scrubber.rs::strip` is
@@ -4071,5 +4203,7 @@ override.
 
 ---
 
-*End of m5a scope round 5. Believed ready for owner
-ratification pending the pi-5 verification pass.*
+*End of m5a scope round 6. Pi-5 reported zero blockers;
+round 6 folds the three precision majors and five nits.
+Believed ready for owner ratification pending the pi-6
+verification pass.*
