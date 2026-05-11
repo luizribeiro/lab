@@ -37,6 +37,12 @@ pub enum RevokeError {
     Unknown(GrantId),
 }
 
+#[derive(Debug, Error)]
+pub enum GrantCompileError {
+    #[error("matcher schema mismatch: {diag}")]
+    SchemaMismatch { diag: String },
+}
+
 #[derive(Debug, Default)]
 pub struct UserGrants {
     entries: BTreeMap<GrantId, UserGrant>,
@@ -64,6 +70,32 @@ impl UserGrants {
             .remove(&id)
             .map(|_| ())
             .ok_or(RevokeError::Unknown(id))
+    }
+
+    pub fn compile_template(
+        _tool: &str,
+        user_args: BTreeMap<String, Value>,
+        grant_match_schema: Option<&Value>,
+    ) -> Result<GrantMatcher, GrantCompileError> {
+        if user_args.is_empty() && grant_match_schema.is_none() {
+            return Ok(GrantMatcher::Any);
+        }
+        let template = Value::Object(user_args.into_iter().collect());
+        if let Some(schema) = grant_match_schema {
+            let compiled = jsonschema::JSONSchema::compile(schema).map_err(|e| {
+                GrantCompileError::SchemaMismatch {
+                    diag: e.to_string(),
+                }
+            })?;
+            let diag = compiled
+                .validate(&template)
+                .err()
+                .map(|errors| errors.map(|e| e.to_string()).collect::<Vec<_>>().join("; "));
+            if let Some(diag) = diag {
+                return Err(GrantCompileError::SchemaMismatch { diag });
+            }
+        }
+        Ok(GrantMatcher::Structural { template })
     }
 
     pub fn matches(&self, plugin: &CanonicalId, tool: &str, args: &Value) -> Option<GrantId> {
