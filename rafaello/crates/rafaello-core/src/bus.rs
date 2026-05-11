@@ -12,7 +12,7 @@ pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
 
 use crate::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
-use crate::error::{BrokerError, InReplyToReason, Publisher};
+use crate::error::{BrokerError, InReplyToReason, Publisher, TaintReason};
 
 const REQUEST_ID_REQUIRED_SUFFIXES: &[&str] = &[
     "tool_request",
@@ -430,7 +430,7 @@ impl Broker {
             return Ok(());
         }
 
-        self.fan_out(&event, Some(canonical), None);
+        self.fan_out(&event, Some(canonical), None, None);
         Ok(())
     }
 
@@ -732,16 +732,41 @@ impl Broker {
             taint: msg.taint.clone(),
             request_id: msg.request_id.clone(),
         };
-        self.fan_out(&event, None, Some(attach_id));
+        self.fan_out(&event, None, Some(attach_id), None);
         Ok(())
     }
 
     /// Publish a `core.*` event from the broker itself (scope §B1, §B5).
     ///
+    /// Thin wrapper around [`Self::publish_core_with_taint`] for callers
+    /// that have no envelope to forward. See that method for the full
+    /// validation contract.
+    pub fn publish_core(&self, topic: &str, payload: serde_json::Value) -> Result<(), BrokerError> {
+        self.publish_core_with_taint(topic, payload, None, None, None, None)
+    }
+
+    /// Publish a `core.*` event with an explicit envelope (scope §B8).
+    ///
     /// Validates grammar first, then performs the §B3 structural namespace
     /// check with `Publisher::Core`: only `core.*` topics are accepted.
-    /// No publisher exclusion: the broker is not registered as a subscriber.
-    pub fn publish_core(&self, topic: &str, payload: serde_json::Value) -> Result<(), BrokerError> {
+    /// Enforces §B0 (`request_id` required for `.tool_request` /
+    /// `.tool_result` / `.assistant_message` / `.user_message` suffixes)
+    /// and the §B8 taint-envelope rules for
+    /// `core.session.tool_request` / `core.session.tool_result`
+    /// (`taint` must be `Some(non_empty_vec)`; every entry's `source` must
+    /// be one of `{"user", "provider", "tool", "system"}`).
+    ///
+    /// When `origin_provider == Some(c)` the fan-out excludes provider `c`
+    /// from the recipient set (pi-3 H-2 mechanical exclusion hook).
+    pub fn publish_core_with_taint(
+        &self,
+        topic: &str,
+        payload: serde_json::Value,
+        request_id: Option<JsonRpcId>,
+        in_reply_to: Option<Vec<JsonRpcId>>,
+        taint: Option<Vec<TaintEntry>>,
+        origin_provider: Option<CanonicalId>,
+    ) -> Result<(), BrokerError> {
         validate_topic(topic).map_err(|e| BrokerError::InvalidTopic {
             publisher: Publisher::Core,
             topic: topic.to_string(),
@@ -763,7 +788,56 @@ impl Broker {
                 });
             }
         }
-        self.publish_core_internal(topic, payload)
+        // §B8 taint check runs before §B0 request_id check for the
+        // taint-bearing canonical topics so that `publish_core` (the
+        // taint-less wrapper) surfaces `InvalidTaint{Missing}` — the
+        // defence-in-depth signal scope §B8 names — rather than the
+        // generic missing-request-id error.
+        if topic == "core.session.tool_request" || topic == "core.session.tool_result" {
+            match taint.as_ref() {
+                None => {
+                    return Err(BrokerError::InvalidTaint {
+                        publisher: Publisher::Core,
+                        topic: topic.to_string(),
+                        reason: TaintReason::Missing,
+                    });
+                }
+                Some(entries) if entries.is_empty() => {
+                    return Err(BrokerError::InvalidTaint {
+                        publisher: Publisher::Core,
+                        topic: topic.to_string(),
+                        reason: TaintReason::EmptyArray,
+                    });
+                }
+                Some(entries) => {
+                    for e in entries {
+                        match e.source.as_str() {
+                            "user" | "provider" | "tool" | "system" => {}
+                            other => {
+                                return Err(BrokerError::InvalidTaint {
+                                    publisher: Publisher::Core,
+                                    topic: topic.to_string(),
+                                    reason: TaintReason::UnknownSource {
+                                        source: other.to_string(),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        enforce_b0_request_id(|| Publisher::Core, topic, request_id.as_ref())?;
+        let event = BusEvent {
+            topic: topic.to_string(),
+            payload,
+            publisher: PublisherIdentity::Core,
+            in_reply_to,
+            taint,
+            request_id,
+        };
+        self.fan_out(&event, None, None, origin_provider.as_ref());
+        Ok(())
     }
 
     pub fn publish_boot(&self) -> Result<(), BrokerError> {
@@ -797,7 +871,7 @@ impl Broker {
             taint: None,
             request_id: None,
         };
-        self.fan_out(&event, None, None);
+        self.fan_out(&event, None, None, None);
         Ok(())
     }
 
@@ -885,6 +959,7 @@ impl Broker {
         event: &BusEvent,
         exclude_plugin: Option<&CanonicalId>,
         exclude_frontend: Option<&AttachId>,
+        exclude_provider: Option<&CanonicalId>,
     ) {
         // Ordering rule (pi-2 M-1): internal subscribers (e.g. the
         // `ReemitRouter`) observe the event before any external
@@ -894,8 +969,10 @@ impl Broker {
 
         let value =
             serde_json::to_value(event).expect("BusEvent always serialises to a JSON value");
+        let is_core = event.topic.starts_with("core.");
         let plugin_recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)>;
         let frontend_recipients: Vec<(AttachId, PeerHandle, Vec<String>)>;
+        let provider_recipients: Vec<(CanonicalId, PeerHandle, Vec<String>)>;
         {
             let state = self.0.state.lock();
             plugin_recipients = state
@@ -930,6 +1007,26 @@ impl Broker {
                     })
                 })
                 .collect();
+            provider_recipients = if is_core {
+                state
+                    .providers
+                    .iter()
+                    .filter(|(c, _)| exclude_provider != Some(*c))
+                    .filter_map(|(c, conn)| {
+                        self.0.acl.plugins.get(c).map(|acl| {
+                            let patterns: Vec<String> = acl
+                                .subscribe_patterns
+                                .iter()
+                                .chain(acl.auto_subscribes.iter())
+                                .cloned()
+                                .collect();
+                            (c.clone(), conn.peer.clone(), patterns)
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
         }
 
         for (recipient, peer, patterns) in plugin_recipients {
@@ -963,6 +1060,44 @@ impl Broker {
                     error = ?e,
                     "bus.event fan-out notify failed (frontend)"
                 );
+            }
+        }
+
+        for (recipient, peer, patterns) in provider_recipients {
+            let matches = patterns
+                .iter()
+                .any(|pat| pattern_matches_topic(pat, &event.topic));
+            if !matches {
+                continue;
+            }
+            if let Err(e) = peer.notify("bus.event", value.clone()) {
+                tracing::warn!(
+                    recipient = %recipient,
+                    topic = %event.topic,
+                    error = ?e,
+                    "bus.event fan-out notify failed (provider)"
+                );
+                continue;
+            }
+            // §B8 / B7b: populate per-recipient observed-id maps so
+            // the provider can later cite these ids in its own
+            // `tool_request` / `assistant_message` publishes.
+            if let Some(id) = event.request_id.as_ref() {
+                if event.topic == "core.session.tool_result" {
+                    self.0
+                        .provider_observed_results
+                        .lock()
+                        .entry(recipient.clone())
+                        .or_default()
+                        .insert(id.clone());
+                } else if event.topic == "core.session.user_message" {
+                    self.0
+                        .provider_observed_user_messages
+                        .lock()
+                        .entry(recipient.clone())
+                        .or_default()
+                        .insert(id.clone());
+                }
             }
         }
     }
