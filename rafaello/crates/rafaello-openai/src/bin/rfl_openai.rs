@@ -28,8 +28,8 @@ use fittings_core::message::JsonRpcId;
 use fittings_core::transport::Connector;
 use fittings_transport::stdio::StdioTransport;
 use rafaello_openai::{
-    map_to_assistant, read_required_model, ChatCompletionRequest, Msg, OpenaiError, ToolCall,
-    ToolCallFn, WireClient,
+    map_to_assistant, read_required_api_key, read_required_endpoint_url, read_required_model,
+    ChatCompletionRequest, Msg, OpenaiError, ToolCall, ToolCallFn, WireClient,
 };
 use serde_json::{json, Value};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -360,13 +360,8 @@ fn fresh_ulid() -> String {
 fn read_config() -> Result<Config> {
     let provider_id = std::env::var("RFL_PROVIDER_ID").unwrap_or_else(|_| "openai".to_string());
     let model = read_required_model().map_err(|e| anyhow!(e))?;
-    let endpoint =
-        std::env::var("RFL_OPENAI_ENDPOINT_URL").context("RFL_OPENAI_ENDPOINT_URL is required")?;
-    let api_key_env =
-        std::env::var("RFL_OPENAI_API_KEY_ENV").context("RFL_OPENAI_API_KEY_ENV is required")?;
-    let api_key = std::env::var(&api_key_env).with_context(|| {
-        format!("env var named by RFL_OPENAI_API_KEY_ENV ({api_key_env}) not set")
-    })?;
+    let endpoint = read_required_endpoint_url().map_err(|e| anyhow!(e))?;
+    let api_key = read_required_api_key().map_err(|e| anyhow!(e))?;
     Ok(Config {
         provider_id,
         model,

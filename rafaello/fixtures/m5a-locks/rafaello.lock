@@ -1,0 +1,79 @@
+[plugin."builtin:openai@0.0.0"]
+entry = "bin/rfl-openai"
+digest = "sha256:b430f6c827ef20457c7a89d62770331696a0215f5a2a174a0949de55d5bcdf0d"
+manifest_digest = "sha256:3664821c99ec74c1b1b25cbabecc9e9067c42271421b756c07f52cf35129bc36"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."builtin:openai@0.0.0".grant]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.openai.tool_request", "provider.openai.assistant_message"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.network]
+mode = "proxy"
+allow_hosts = ["127.0.0.1"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.env]
+pass = ["LITELLM_API_KEY"]
+allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.env.set]
+RFL_OPENAI_API_KEY_ENV = "LITELLM_API_KEY"
+RFL_OPENAI_ENDPOINT_URL = "https://litellm.thepromisedlan.club/v1"
+RFL_OPENAI_MODEL = "vllm/qwen3.6-27b"
+
+[plugin."builtin:openai@0.0.0".bindings]
+provider = true
+provider_id = "openai"
+load = "eager"
+
+[plugin."local:mailcat@0.0.0"]
+entry = "bin/rfl-mailcat"
+digest = "sha256:1d7583e7c8322b313c352c9affabc0896b72d6df0bf4911296fba1e573d3e6ee"
+manifest_digest = "sha256:ce4dfecdbb288a261558f589da264c3c29b0b0577c080089e1126c8816df21a1"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:mailcat@0.0.0".bindings]
+tools = ["send-mail"]
+load = "eager"
+
+[plugin."local:mailcat@0.0.0".bindings.tool_meta.send-mail]
+sinks = ["mail"]
+always_confirm = false
+grant_match = "schemas/send-mail-grant.json"
+
+[plugin."local:readfile@0.0.0"]
+entry = "bin/rfl-readfile"
+digest = "sha256:8cbfcddbd41f505dbd2fab9270c6cb574ccb361e9331ee18560f91ceb0d684bb"
+manifest_digest = "sha256:2a7f7fb4e4c0e44214164870db0c4483abc6a0d0c66abbf63118920fe7482b9c"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:readfile@0.0.0".bindings]
+tools = ["read-file"]
+load = "eager"
+
+[plugin."local:readfile@0.0.0".grant.bundles.default.filesystem]
+read_dirs = ["${project}"]
+
+[plugin."local:readfile@0.0.0".grant.bundles.default.network]
+mode = "deny"
+
+[plugin."local:mockprovider@0.0.0"]
+entry = "bin/rfl-mockprovider"
+digest = "sha256:defed15106e989272c131dcddc28cedf359141ba624c3832d96be2eebef8b350"
+manifest_digest = "sha256:9cebc36641f8474d2cd2987a0fc8235cc644db372c82ede988b059f1f37f916e"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:mockprovider@0.0.0".grant]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.mock.tool_request", "provider.mock.assistant_message"]
+
+[plugin."local:mockprovider@0.0.0".grant.bundles.default.network]
+mode = "deny"
+
+[plugin."local:mockprovider@0.0.0".bindings]
+provider = true
+provider_id = "mock"
+load = "eager"
+
+[session]
+provider_active = "builtin:openai@0.0.0"

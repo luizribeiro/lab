@@ -1,0 +1,31 @@
+schema = 1
+name = "openai"
+version = "0.0.0"
+entry = "bin/rfl-openai"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+provider = "openai"
+
+[bus]
+subscribes = [
+    "core.session.user_message",
+    "core.session.tool_result",
+]
+publishes = [
+    "provider.openai.tool_request",
+    "provider.openai.assistant_message",
+]
+
+[capabilities.default.filesystem]
+read_dirs = []
+write_dirs = []
+
+[capabilities.default.network]
+mode = "proxy"
+allow_hosts = ["litellm.thepromisedlan.club"]
+
+[capabilities.default.env]
+pass = []
+allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]

@@ -24,6 +24,12 @@ pub enum OpenaiError {
 pub enum OpenaiConfigError {
     #[error("RFL_OPENAI_MODEL is required (no plugin-source default)")]
     MissingModel,
+    #[error("RFL_OPENAI_ENDPOINT_URL is required")]
+    MissingEndpointUrl,
+    #[error("RFL_OPENAI_API_KEY_ENV is required")]
+    MissingApiKeyEnvName,
+    #[error("env var named by RFL_OPENAI_API_KEY_ENV ({name}) not set")]
+    MissingApiKey { name: String },
 }
 
 /// Read `RFL_OPENAI_MODEL` from the environment.
@@ -34,6 +40,27 @@ pub fn read_required_model() -> Result<String, OpenaiConfigError> {
     match std::env::var("RFL_OPENAI_MODEL") {
         Ok(v) if !v.is_empty() => Ok(v),
         _ => Err(OpenaiConfigError::MissingModel),
+    }
+}
+
+/// Read `RFL_OPENAI_ENDPOINT_URL` from the environment (scope §OP5).
+pub fn read_required_endpoint_url() -> Result<String, OpenaiConfigError> {
+    match std::env::var("RFL_OPENAI_ENDPOINT_URL") {
+        Ok(v) if !v.is_empty() => Ok(v),
+        _ => Err(OpenaiConfigError::MissingEndpointUrl),
+    }
+}
+
+/// Resolve the API key value via the indirection env var
+/// `RFL_OPENAI_API_KEY_ENV` (scope §OP5 / pi-1 B-5).
+pub fn read_required_api_key() -> Result<String, OpenaiConfigError> {
+    let name = match std::env::var("RFL_OPENAI_API_KEY_ENV") {
+        Ok(v) if !v.is_empty() => v,
+        _ => return Err(OpenaiConfigError::MissingApiKeyEnvName),
+    };
+    match std::env::var(&name) {
+        Ok(v) if !v.is_empty() => Ok(v),
+        _ => Err(OpenaiConfigError::MissingApiKey { name }),
     }
 }
 

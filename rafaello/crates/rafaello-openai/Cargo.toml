@@ -33,3 +33,4 @@ tempfile = { workspace = true }
 serial_test = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 nix = { workspace = true }
+chrono = { workspace = true }

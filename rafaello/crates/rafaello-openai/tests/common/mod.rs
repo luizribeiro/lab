@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+pub mod lock_kit;
 pub mod openai_provider_handle;
 
 pub struct Stub {
