@@ -30,6 +30,9 @@ pub enum AuditKind {
     GateGrantMatch,
     GateGrantMatchShortCircuit,
     ConfirmRequest,
+    /// Emitted by c17 when a confirm-request is dispatched with a
+    /// non-empty taint set attached (m5b taint-exfil milestone).
+    ConfirmRequestTaintAttached,
     ConfirmAllowed,
     ConfirmDenied,
     ConfirmAllowedWithSessionGrant,
@@ -45,8 +48,16 @@ pub enum AuditKind {
     SlashUnknown,
     InstallRefused,
     InstallAccepted,
+    /// Emitted by c14 when a plugin publish is rejected because the
+    /// outgoing taint set is not a superset of the union of incoming
+    /// taints (m5b taint-exfil milestone, §TR4b).
+    PluginPublishRejectedTaintSuperset,
     TrifectaOverridden,
     CredentialPathsOverridden,
+    /// Emitted by c12 when a tool-request's taint set is constructed
+    /// by unioning the taints of the messages referenced via
+    /// `in_reply_to` (m5b taint-exfil milestone).
+    ToolRequestTaintUnionedFromInReplyTo,
 }
 
 impl AuditKind {
@@ -57,6 +68,7 @@ impl AuditKind {
             GateGrantMatch => "gate_grant_match",
             GateGrantMatchShortCircuit => "gate_grant_match_short_circuit",
             ConfirmRequest => "confirm_request",
+            ConfirmRequestTaintAttached => "confirm_request_taint_attached",
             ConfirmAllowed => "confirm_allowed",
             ConfirmDenied => "confirm_denied",
             ConfirmAllowedWithSessionGrant => "confirm_allowed_with_session_grant",
@@ -72,8 +84,10 @@ impl AuditKind {
             SlashUnknown => "slash_unknown",
             InstallRefused => "install_refused",
             InstallAccepted => "install_accepted",
+            PluginPublishRejectedTaintSuperset => "plugin_publish_rejected_taint_superset",
             TrifectaOverridden => "trifecta_overridden",
             CredentialPathsOverridden => "credential_paths_overridden",
+            ToolRequestTaintUnionedFromInReplyTo => "tool_request_taint_unioned_from_in_reply_to",
         }
     }
 }
