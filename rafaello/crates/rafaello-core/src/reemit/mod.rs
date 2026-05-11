@@ -260,6 +260,7 @@ impl ReemitRouter {
                                     confirm_state.as_ref(),
                                     audit.as_ref(),
                                     &taint_match,
+                                    &referenced_taint_index,
                                     #[cfg(any(test, feature = "test-fixture"))]
                                     confirm_race_hook.as_ref(),
                                     &event,
@@ -284,6 +285,7 @@ fn dispatch_event(
     confirm_state: Option<&Arc<ConfirmState>>,
     audit: Option<&Arc<AuditWriter>>,
     taint_match: &TaintMatchMap,
+    referenced_taint_index: &ReferencedTaintIndex,
     #[cfg(any(test, feature = "test-fixture"))] confirm_race_hook: Option<&TestConfirmRaceHook>,
     event: &BusEvent,
     injected: Option<BrokerError>,
@@ -306,10 +308,15 @@ fn dispatch_event(
             confirm_race_hook,
             event,
         ),
-        ["provider", _, "tool_request"] => {
-            handle_tool_request(broker, acl, active_provider, provider_id, event)
-                .map_err(|e| e.to_string())
-        }
+        ["provider", _, "tool_request"] => handle_tool_request(
+            broker,
+            acl,
+            active_provider,
+            provider_id,
+            referenced_taint_index,
+            event,
+        )
+        .map_err(|e| e.to_string()),
         ["provider", _, "assistant_message"] => {
             handle_assistant_message(broker, provider_id, event).map_err(|e| e.to_string())
         }
@@ -358,11 +365,21 @@ fn handle_user_message(
 }
 
 /// §CR2: `provider.<id>.tool_request` → `core.session.tool_request`.
+///
+/// §TR3 step 6: the canonical request taint (provider-identity-only for
+/// c11; c12 extends with value-match + referenced-union arms) is recorded
+/// into the router-owned `ReferencedTaintIndex.by_request_id` before the
+/// canonical publish so any subsequent `plugin.<id>.tool_result` whose
+/// `in_reply_to[0]` cites this id hits the cache (c13). On publish
+/// failure the recorded entry is TTL-bounded stale — a misbehaving
+/// plugin fabricating the id is rejected by the m5a broker stale-id
+/// check.
 fn handle_tool_request(
     broker: &Broker,
     acl: &BrokerAcl,
     active_provider: &CanonicalId,
     provider_id: &str,
+    referenced_taint_index: &ReferencedTaintIndex,
     event: &BusEvent,
 ) -> Result<(), BrokerError> {
     let obj = event
@@ -415,6 +432,7 @@ fn handle_tool_request(
         "args": args,
         "dispatch_target": target.to_string(),
     });
+    referenced_taint_index.record_request(event.request_id.as_ref().expect("m4 row 43"), &taint);
     broker.publish_core_with_taint(
         "core.session.tool_request",
         canonical_payload,
