@@ -1,10 +1,23 @@
 # m5a-sinks-confirmation — commits
 
-> **Status:** round 5 draft — folds `commits-pi-review-4.md`
-> (2 B / 1 M / 1 N). Pi-4 expects zero-blocker convergence
-> next round.
+> **Status:** round 6 — convergence draft. Folds
+> `commits-pi-review-5.md` (0 B / 1 M / 1 N). Pi-5
+> explicitly stated "commits.md is ready for owner
+> ratification"; round 6 applies the one polish fold so
+> the ratification commit shows zero outstanding findings.
 >
-> Round-5 fixes by pi-4 finding:
+> Round-6 fixes by pi-5 finding:
+> - **M-1** c18's unknown-tool `/grant` audit kind
+>   reuses the existing `slash_unknown` from §AL1
+>   (with the detailed message in `payload.details`)
+>   instead of inventing `grant_failed`. No §AL1
+>   extension. Test renamed accordingly.
+> - **N-1** Tail "Round 3 sizing" header and "round-3
+>   lands at 41" wording updated to round 6.
+>
+> ---
+>
+> Round-5 fixes by pi-4 finding (kept for trajectory):
 > - **B-1** c34's m5a fixture lock drops the
 >   `session.tool_owner.send-mail` and
 >   `session.tool_owner.read-file` entries — live
@@ -1238,7 +1251,10 @@ core handler → TUI rendering of command_result.
        lookup returns `None`, publish `command_result
        {ok: false, kind: "grant", message: "no plugin
        provides tool '<tool>'"}` and audit
-       `grant_failed`. On success, call
+       `slash_unknown` (pi-5 M-1 — reuse the existing
+       audit kind from §AL1 with the detailed message
+       in `payload.details`; no new audit kind, no
+       §AL1 extension). On success, call
        `UserGrants::compile_template(tool, template,
        lock_schema)` (c16); on success insert via
        `UserGrants::add`; audit `grant_added` with
@@ -1292,7 +1308,7 @@ core handler → TUI rendering of command_result.
     (pi-4 B-2) — submit `/grant nonexistent` against
     a lock where no plugin claims the tool; assert
     `command_result {ok: false, message: "no plugin
-    provides tool 'nonexistent'"}` and `grant_failed`
+    provides tool 'nonexistent'"}` and `slash_unknown`
     audit row.
 - **Size.** medium. ~200 LoC handler + ~250 LoC tests.
 
@@ -3043,7 +3059,7 @@ Scope §"Demo bar" + §"Manual validation".
 
 ## Sizing summary
 
-Round 3 sizing — each commit is in exactly one
+Round 6 sizing — each commit is in exactly one
 category:
 
 - **small** (≲50 LoC including tests): 20 commits —
@@ -3065,7 +3081,7 @@ category:
 
 Total: 20 + 4 + 13 + 2 + 1 + 1 = **41 commits**.
 Scope §"Sizing & split recommendation" estimated
-30-38; round-3 lands at 41 for these reasons:
+30-38; round-6 lands at 41 for these reasons:
 
 - Audit log infrastructure (c08) is unbundled from
   gate/slash/install per the tests-with-code rule.
@@ -3083,9 +3099,12 @@ Scope §"Sizing & split recommendation" estimated
   and tools_list call — at scope §"Internal split"
   item 13's "~5-6 commits" upper bound.
 
-Pi-4 expects zero-blocker convergence on round 5;
-ratification follows pending pi-5 verification.
+Pi-5 verified zero blockers and stated "commits.md is
+ready for owner ratification"; round 6 applies the
+single polish fold (M-1 audit-kind reuse, N-1 tail
+labels). Convergence draft — pending owner sign-off
+after pi-6 verification pass.
 
 ---
 
-*End of m5a commits.md round 5 draft.*
+*End of m5a commits.md round 6 — convergence draft.*
