@@ -857,6 +857,52 @@ impl Broker {
         Ok(())
     }
 
+    /// Look up the canonical id that owns a given tool name (scope §TD1).
+    /// Thin accessor over `BrokerAcl.tool_routes`; returns `None` when no
+    /// plugin claims the tool.
+    pub fn tool_route(&self, name: &str) -> Option<CanonicalId> {
+        self.0.acl.tool_routes.get(name).cloned()
+    }
+
+    /// Publish `plugin.<topic-id>.tool_request` from the core agent loop
+    /// (scope §AL5). Mirrors [`Self::publish_core_with_taint`] but emits
+    /// on the per-plugin dispatch topic with `PublisherIdentity::Core`.
+    ///
+    /// Validates that `canonical` is present in `BrokerAcl.plugins`; the
+    /// topic is built from that entry's `topic_id`. This is the only path
+    /// from `core.session.tool_request` to a tool plugin (overview §7).
+    pub fn publish_for_tool_dispatch(
+        &self,
+        canonical: &CanonicalId,
+        payload: serde_json::Value,
+        request_id: JsonRpcId,
+        in_reply_to: Option<Vec<JsonRpcId>>,
+        taint: Option<Vec<TaintEntry>>,
+    ) -> Result<(), BrokerError> {
+        let plugin_acl = self
+            .0
+            .acl
+            .plugins
+            .get(canonical)
+            .ok_or_else(|| BrokerError::NotInAcl(canonical.clone()))?;
+        let topic = format!("plugin.{}.tool_request", plugin_acl.topic_id);
+        validate_topic(&topic).map_err(|e| BrokerError::InvalidTopic {
+            publisher: Publisher::Core,
+            topic: topic.clone(),
+            reason: e.to_string(),
+        })?;
+        let event = BusEvent {
+            topic,
+            payload,
+            publisher: PublisherIdentity::Core,
+            in_reply_to,
+            taint,
+            request_id: Some(request_id),
+        };
+        self.fan_out(&event, None, None, None);
+        Ok(())
+    }
+
     pub fn publish_boot(&self) -> Result<(), BrokerError> {
         let payload = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
