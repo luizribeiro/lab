@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 pub use fittings_core::context::PeerHandle;
 pub use fittings_core::message::JsonRpcId;
 
+use crate::audit::AuditWriter;
 use crate::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use crate::error::{BrokerError, InReplyToReason, Publisher, TaintReason};
 
@@ -200,6 +201,13 @@ struct BrokerInner {
     provider_observed_user_messages: Mutex<BTreeMap<CanonicalId, HashSet<JsonRpcId>>>,
     internal_subscribers: Mutex<Vec<InternalSlot>>,
     next_slot_id: AtomicU64,
+    /// Interior-mutable audit-writer slot (scope §PT1 / §A2). Shared
+    /// across every `Broker::clone()` because all clones hold the
+    /// same `Arc<BrokerInner>`. Stored as `Mutex<Option<_>>` rather
+    /// than `Option<_>` so `Broker::set_audit_writer` can take
+    /// `&self` and every already-cloned handle observes the write
+    /// atomically (pi-3 B-2).
+    audit: Mutex<Option<Arc<AuditWriter>>>,
 }
 
 #[derive(Clone)]
@@ -281,6 +289,7 @@ impl Broker {
             provider_observed_user_messages: Mutex::new(BTreeMap::new()),
             internal_subscribers: Mutex::new(Vec::new()),
             next_slot_id: AtomicU64::new(0),
+            audit: Mutex::new(None),
         })))
     }
 
@@ -408,6 +417,41 @@ impl Broker {
 
     pub fn contains_provider(&self, canonical: &CanonicalId) -> bool {
         self.0.state.lock().providers.contains_key(canonical)
+    }
+
+    /// Install the audit writer all clones of this `Broker` will see
+    /// (scope §PT1 / §A2). Takes `&self` because the writer lives
+    /// behind a `Mutex` in the shared `Arc<BrokerInner>` — every
+    /// already-cloned handle observes the write atomically (pi-3 B-2).
+    /// Idempotent in the sense that a second call replaces the
+    /// writer; production wires it exactly once before plugin spawn.
+    pub fn set_audit_writer(&self, writer: Arc<AuditWriter>) {
+        *self.0.audit.lock() = Some(writer);
+    }
+
+    /// Clone the installed audit writer out of the shared slot, or
+    /// `None` if [`Self::set_audit_writer`] has not yet been called.
+    /// Callers hold the returned `Arc` briefly and drop it; the
+    /// inner `Mutex` is not held across the call.
+    pub fn audit_writer(&self) -> Option<Arc<AuditWriter>> {
+        self.0.audit.lock().clone()
+    }
+
+    /// Test seam: record an audit row through the installed writer
+    /// (scope §AL2). Returns `None` when no writer is installed —
+    /// the production `rfl chat` path always installs one before
+    /// plugin spawn, but unit tests construct bare brokers without
+    /// it. Mirrors the m5a `outstanding_dispatched_count_for_test`
+    /// gating pattern.
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn record_audit_for_test(
+        &self,
+        kind: crate::audit::AuditKind,
+        request_id: Option<&JsonRpcId>,
+        payload: &serde_json::Value,
+    ) -> Option<Result<i64, crate::audit::AuditError>> {
+        let writer = self.audit_writer()?;
+        Some(writer.record(kind, request_id, payload))
     }
 
     pub fn shutdown(&self) {

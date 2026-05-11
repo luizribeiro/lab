@@ -1,5 +1,6 @@
 //! `rafaello` library: CLI surface and shared types for the `rfl` binary.
 
+pub mod chat;
 pub mod install;
 pub mod status;
 
@@ -372,6 +373,14 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     let caps = Capabilities::tui_default();
     let audit = controller.audit_writer();
 
+    // Scope §PT1 audit plumbing / §A2 / pi-3 B-2: install the audit
+    // writer on the broker after the `SessionController` constructor
+    // (which built the `AuditWriter`) returns, BEFORE the first
+    // plugin spawn. This is the canonical ordering the c14 violation
+    // handler relies on so audit rows it later emits are persisted.
+    broker.set_audit_writer(audit.clone());
+    chat::test_ordering_hook::record(chat::test_ordering_hook::StartupEvent::SetAuditWriter);
+
     let slash_schemas = load_grant_match_schemas(&lock, &plugin_dirs);
     let slash_handler = SlashHandler::new(
         broker.clone(),
@@ -411,6 +420,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         .get(&provider_canonical)
         .expect("active provider validated above");
     let provider_paths = plugin_spawn_paths(&project_root, &provider_plan.topic_id);
+    chat::test_ordering_hook::record(chat::test_ordering_hook::StartupEvent::PluginSupervisorSpawn);
     let provider_handle = plugin_supervisor
         .spawn(provider_plan, &provider_paths)
         .await
