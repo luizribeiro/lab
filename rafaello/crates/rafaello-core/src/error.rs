@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use fittings_core::error::FittingsError;
+use fittings_core::message::JsonRpcId;
 use thiserror::Error;
 
 use crate::broker_acl::AttachId;
@@ -317,6 +318,16 @@ pub enum InReplyToReason {
     Missing,
     EmptyArray,
     UnexpectedMultiple,
+    StaleRequestId { id: JsonRpcId },
+}
+
+/// Why a `taint` field on a provider publish was rejected (scope §B4, §B7b).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum TaintReason {
+    Missing,
+    EmptyArray,
+    UnknownSource { source: String },
 }
 
 /// Errors raised by the in-process broker (scope §B2).
@@ -362,6 +373,20 @@ pub enum BrokerError {
         publisher: Publisher,
         topic: String,
         reason: InReplyToReason,
+    },
+    #[error("provider `{0}` not in broker ACL")]
+    ProviderNotInAcl(CanonicalId),
+    #[error("provider `{0}` not registered with broker")]
+    ProviderNotRegistered(CanonicalId),
+    #[error("provider `{0}` already registered with broker")]
+    ProviderAlreadyRegistered(CanonicalId),
+    #[error("publisher {publisher:?} missing request_id on `{topic}`")]
+    MissingRequestId { publisher: Publisher, topic: String },
+    #[error("publisher {publisher:?} sent invalid taint on `{topic}`: {reason:?}")]
+    InvalidTaint {
+        publisher: Publisher,
+        topic: String,
+        reason: TaintReason,
     },
     #[error("internal broker error: {detail}")]
     Internal { detail: String },

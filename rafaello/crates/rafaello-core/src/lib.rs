@@ -39,7 +39,7 @@ pub use error::{
     AttachIdParseError, BrokerError, CarveOutError, CollisionError, CompileError, DigestError,
     Error, FrontendSpawnError, InReplyToReason, InvalidFrontendPlanReason, InvalidPlanReason,
     LockError, ManifestError, PathError, PathKind, Publisher, ReaperOutcome, ShutdownFailure,
-    SpawnError, TrifectaError, ValidationError,
+    SpawnError, TaintReason, TrifectaError, ValidationError,
 };
 
 pub use frontend::{

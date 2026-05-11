@@ -539,6 +539,7 @@ impl Broker {
                     InReplyToReason::Missing => "invalid_in_reply_to_missing",
                     InReplyToReason::EmptyArray => "invalid_in_reply_to_empty",
                     InReplyToReason::UnexpectedMultiple => "invalid_in_reply_to_multiple",
+                    InReplyToReason::StaleRequestId { .. } => "invalid_in_reply_to_stale",
                 };
                 (Some(topic.clone()), code)
             }
