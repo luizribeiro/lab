@@ -1,7 +1,51 @@
 # m5a — sinks + confirmation protocol + user_grants + rfl-openai — retrospective
 
-> **Status: round 4 draft.** Folds `retrospective-pi-review-3.md`
-> (1 B / 3 M / 2 N) at hash TBD-round-4.
+> **Status: round 5 draft — ratification polish.** Folds
+> `retrospective-pi-review-4.md` (0 B / 1 M / 1 N — pi-4
+> explicitly stated "retrospective.md is ready for owner
+> ratification") at hash TBD-round-5.
+>
+> Round-5 fixes by pi-4 finding (one line each):
+> - **M-1** §5 follow-up summary updated: "items 12-14" →
+>   "items 12-15" (item 15 was added in round 3 for the
+>   missing positive gate-through-orchestration assertion;
+>   the summary paragraph below the §5 table was not
+>   updated when item 15 was inserted).
+> - **N-1** `TBD-round-4` hash placeholder replaced with the
+>   actual round-4 commit hash (`f92743b`).
+>
+> **Drift patches applied in this commit (ratification
+> polish, per plans/README.md retrospective phase):**
+> - `decisions.md`: 4 new rows appended (env.allow_secrets,
+>   grant_match shape-contract, m5a/m5b split, core.tools_list
+>   + CorePluginService) — see §7 below for sketches; live rows
+>   match those sketches.
+> - `glossary.md`: confirmation-protocol entry updated to the
+>   four-topic family + `ConfirmState` + three-arm TUI answer
+>   enum; new `Audit log` entry added pointing at
+>   `AuditKind::as_str()` as authoritative.
+>
+> **Drift patches deferred to follow-up commits on this retro
+> branch (too large for a single ratification-polish commit;
+> precedent: m4 retro §6 drift commits landed as separate
+> commits after retrospective ratification):**
+> - `overview.md` §4.6 well-known-plugin-config-env paragraph
+>   distinguishing core-injected vs. well-known (§6.3 of this
+>   retro is the patch sketch).
+> - `overview.md` §15.1 `env.allow_secrets` manifest-shape
+>   addition.
+> - `streams/a-security` m5a implementation-status banner +
+>   §5.6 confirmation-payload clarification (1424-line RFC;
+>   the banner pass needs an integrated read of §5/§5.6/§7.2.6
+>   that exceeds the polish budget here).
+> - `streams/f-manifest` `env.allow_secrets` schema patch.
+>
+> ---
+>
+> **(History — round 4 draft, kept for trajectory.)**
+>
+> Round 4 folded `retrospective-pi-review-3.md`
+> (1 B / 3 M / 2 N) at hash f92743b.
 >
 > Round-4 fixes by pi-3 finding (one line each):
 > - **B-1** §6.1 + §8 bullet 5 `confirm_resolved` claim corrected:
@@ -551,7 +595,7 @@ There are no **load-bearing decisions** routed forward; §5 item
 in live code at `.rafaello/state/session.sqlite` per §2.4).
 Items 6 + 8 are m4 carryovers; items 1-4 are the scope-ratified
 m5a/m5b split; items 7 + 9-11 are known driver-sweep follow-ups;
-items 12-14 are the c38 acceptance-test deviation (§3.1).
+items 12-15 are the c38 acceptance-test deviation (§3.1).
 
 ---
 
@@ -571,7 +615,15 @@ the same pattern: §6 patches land as separate follow-up commits
 on the retro branch before merge to `rafaello-v0.1`. Candidate
 patches:
 
-### 6.1 Stream A (security) — sink-class + confirmation + grants surface
+**Round-5 disposition** (per plans/README.md retrospective phase
++ pi-4's polish prompt): `glossary.md` patches in §6.4 **landed in
+this round-5 commit**; `decisions.md` row additions in §7 also
+landed in this round-5 commit. `overview.md` §4.6 / §15.1 patches
+and the Stream A / Stream F patches below are **deferred — too
+large for retrospective polish, lands in follow-up commit on this
+retro branch** (m4 §6 drift-commit precedent).
+
+### 6.1 Stream A (security) — sink-class + confirmation + grants surface — **deferred to follow-up commit**
 
 Stream A's **§5 status banner** (the m4 provider/live-wire entry —
 not the §10 sink-confirmation summary, which already carries the
@@ -625,7 +677,7 @@ Concrete patches:
   The round-2 scope.md surfaced this as a needed Stream A
   clarification; pi-1 B-3 flagged its absence here.
 
-### 6.2 Stream F (manifest) — `env.allow_secrets`
+### 6.2 Stream F (manifest) — `env.allow_secrets` — **deferred to follow-up commit**
 
 Stream F's manifest schema currently does not record
 `env.allow_secrets` because the field was added at m5a scope
@@ -635,7 +687,7 @@ round-3 ratification). Concrete patch: Stream F §"Capabilities"
 gains a one-paragraph entry citing scope §OP6 + c06 + decisions
 row candidate (§7 below).
 
-### 6.3 `overview.md` patches (scope-ratified drift checklist, pi-1 B-3)
+### 6.3 `overview.md` patches (scope-ratified drift checklist, pi-1 B-3) — **deferred to follow-up commit**
 
 Two `overview.md` patches surface from the scope convergence
 checklist:
@@ -661,7 +713,7 @@ checklist:
   and the unused-entry warning behaviour (c27 stderr line +
   audit-payload list).
 
-### 6.4 `glossary.md` patches (scope-ratified drift checklist, pi-1 B-3)
+### 6.4 `glossary.md` patches (scope-ratified drift checklist, pi-1 B-3) — **landed in this commit**
 
 Two glossary entries to land:
 
@@ -700,10 +752,13 @@ unaffected by m5a — no patches needed beyond those above.
 
 ---
 
-## 7. `decisions.md` additions
+## 7. `decisions.md` additions — **landed in this commit**
 
 m5a lands **four** load-bearing design choices that warrant new
-`decisions.md` rows. Each sketch carries an explicit
+`decisions.md` rows. **All four landed in this round-5 commit
+as rows 46-49**; the sketches below are kept as the rationale
+record (rows 46-49's `Decision` and `Rationale` columns are
+condensed restatements). Each sketch carries an explicit
 `Refines/Reverses` anchor in the decision-table style (pi-1 B-3).
 An editor commit during the retro-branch sweep adds them to
 `decisions.md` proper (m4 precedent: rows 43-45 landed as separate
@@ -1039,5 +1094,10 @@ exclusive at install time.
 
 ---
 
-*End of m5a retrospective round 4 draft. Submitted for pi
-adversarial review.*
+*End of m5a retrospective round 5 — ratification polish.
+Pi-4 reported zero blockers and stated "retrospective.md is
+ready for owner ratification"; round 5 applies the two polish
+folds + the `decisions.md` row appends + the `glossary.md`
+patches. `overview.md` and stream RFC patches deferred to
+follow-up commits on this retro branch per the m4 §6
+drift-commit precedent.*
