@@ -252,9 +252,12 @@ binds *content*, not just *name*.
 > field overview §4.5 enumerates is **not** in m2 / m3
 > events; m4 adds it in the same c07 cutover (overview
 > §4.5 v1-status banner). m4 also lands the broker-side
-> RAII surface `Broker::register_provider(canonical,
-> provider_id) -> ProviderGuard` (m4 c09 `f2c07ad`):
-> dropping the `ProviderGuard` removes the registration
+> RAII surface `Broker::register_provider(canonical:
+> CanonicalId, peer: PeerHandle) -> Result<RegisteredProvider,
+> BrokerError>` (m4 c09 `f2c07ad`): the `provider_id` is
+> derived from `BrokerAcl.plugins[canonical].provider_id`
+> rather than passed by the caller, and dropping the
+> returned `RegisteredProvider` removes the registration
 > and rejects subsequent `provider.<id>.*` publishes.
 >
 > **m3 ACL extension** (m3 retrospective §2.5): the
@@ -269,17 +272,25 @@ binds *content*, not just *name*.
 >
 > **m4 ACL extension** (m4 retrospective §2): each
 > `PluginAcl` entry grows a `provider_id:
-> Option<String>` field — populated for plugins
-> declared as `class = "provider"` in the lock, `None`
-> otherwise. The grant compiler also **auto-publishes**
+> Option<String>` field — populated from
+> `entry.bindings.provider_id` for lock entries whose
+> `bindings.provider = true`, `None` otherwise (the
+> lock shape is `bindings.provider: bool` plus
+> `bindings.provider_id: Option<String>`, not a
+> `class = "provider"` discriminator). The grant
+> compiler also **auto-publishes**
 > `plugin.<topic-id>.tool_result` for every declared
-> tool topic in plugins of class `tool` (m4 c06,
-> `439ddbc`), so tool plugins do not need an explicit
-> publish grant for their own result topic. c13
-> (`bbd840c`) adds the defence-in-depth check at
-> `BrokerAcl::compile` that rejects any compiled ACL
-> whose provider entry's `provider_id` segment does
-> not match the lock's declared provider id.
+> tool topic in plugins with non-empty
+> `bindings.tools` (m4 c06, `439ddbc`), so tool
+> plugins do not need an explicit publish grant for
+> their own result topic. c13 (`bbd840c`) adds the
+> defence-in-depth check in `Broker::new`'s ACL
+> revalidation that rejects any compiled ACL whose
+> provider entry has a `publish_topic` whose second
+> `provider.<seg>.*` segment does not match the
+> registered `provider_id` — surfaced as
+> `BrokerError::InvalidTopic` and exercised by
+> `broker_construct_with_provider_publish_id_mismatch_rejected.rs`.
 >
 > Per `plans/README.md` §"Authoring conventions" stream RFCs
 > are not retroactively rewritten; the m2 / m3 / m4 wire
