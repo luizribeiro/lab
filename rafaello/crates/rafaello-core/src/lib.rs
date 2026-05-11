@@ -31,6 +31,7 @@ pub use renderer::{
 };
 
 pub use broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
+pub use bus::RegisteredProvider;
 pub use compile::{
     compile_plugin, CompiledFlags, CompiledPlugin, EnvPlan, FilesystemPlan, LimitsPlan,
     NetworkPlan, ToolMeta,

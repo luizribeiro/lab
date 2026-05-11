@@ -73,9 +73,15 @@ struct FrontendConn {
     peer: PeerHandle,
 }
 
+struct ProviderConn {
+    #[allow(dead_code)]
+    peer: PeerHandle,
+}
+
 struct BrokerState {
     registry: BTreeMap<CanonicalId, PluginConn>,
     frontends: BTreeMap<AttachId, FrontendConn>,
+    providers: BTreeMap<CanonicalId, ProviderConn>,
 }
 
 struct BrokerInner {
@@ -138,6 +144,7 @@ impl Broker {
             state: Mutex::new(BrokerState {
                 registry: BTreeMap::new(),
                 frontends: BTreeMap::new(),
+                providers: BTreeMap::new(),
             }),
         })))
     }
@@ -221,10 +228,58 @@ impl Broker {
         })
     }
 
+    pub fn try_reserve_provider_registration(
+        &self,
+        canonical: &CanonicalId,
+    ) -> Result<(), BrokerError> {
+        match self.0.acl.plugins.get(canonical) {
+            None => return Err(BrokerError::ProviderNotInAcl(canonical.clone())),
+            Some(acl) if acl.provider_id.is_none() => {
+                return Err(BrokerError::ProviderNotInAcl(canonical.clone()));
+            }
+            Some(_) => {}
+        }
+        if self.0.state.lock().providers.contains_key(canonical) {
+            return Err(BrokerError::ProviderAlreadyRegistered(canonical.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn register_provider(
+        &self,
+        canonical: CanonicalId,
+        peer: PeerHandle,
+    ) -> Result<RegisteredProvider, BrokerError> {
+        match self.0.acl.plugins.get(&canonical) {
+            None => return Err(BrokerError::ProviderNotInAcl(canonical)),
+            Some(acl) if acl.provider_id.is_none() => {
+                return Err(BrokerError::ProviderNotInAcl(canonical));
+            }
+            Some(_) => {}
+        }
+        let mut state = self.0.state.lock();
+        if state.providers.contains_key(&canonical) {
+            return Err(BrokerError::ProviderAlreadyRegistered(canonical));
+        }
+        state
+            .providers
+            .insert(canonical.clone(), ProviderConn { peer });
+        drop(state);
+        Ok(RegisteredProvider {
+            broker: Arc::clone(&self.0),
+            canonical: Some(canonical),
+        })
+    }
+
+    pub fn contains_provider(&self, canonical: &CanonicalId) -> bool {
+        self.0.state.lock().providers.contains_key(canonical)
+    }
+
     pub fn shutdown(&self) {
         let mut state = self.0.state.lock();
         state.registry.clear();
         state.frontends.clear();
+        state.providers.clear();
     }
 
     pub fn handle_plugin_publish(
@@ -691,9 +746,33 @@ impl Drop for RegisteredFrontend {
     }
 }
 
+/// RAII guard for an active broker provider registration. Dropping the
+/// guard removes the provider's registry entry. Mirrors [`RegisteredPlugin`]
+/// and [`RegisteredFrontend`] (scope §B5).
+pub struct RegisteredProvider {
+    broker: Arc<BrokerInner>,
+    canonical: Option<CanonicalId>,
+}
+
+impl std::fmt::Debug for RegisteredProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredProvider")
+            .field("canonical", &self.canonical)
+            .finish()
+    }
+}
+
+impl Drop for RegisteredProvider {
+    fn drop(&mut self) {
+        if let Some(canonical) = self.canonical.take() {
+            self.broker.state.lock().providers.remove(&canonical);
+        }
+    }
+}
+
 #[cfg(test)]
 mod static_assertions {
-    use super::{RegisteredFrontend, RegisteredPlugin};
+    use super::{RegisteredFrontend, RegisteredPlugin, RegisteredProvider};
 
     #[allow(dead_code)]
     fn assert_send_sync<T: Send + Sync>() {}
@@ -702,5 +781,6 @@ mod static_assertions {
     fn assertions() {
         assert_send_sync::<RegisteredPlugin>();
         assert_send_sync::<RegisteredFrontend>();
+        assert_send_sync::<RegisteredProvider>();
     }
 }
