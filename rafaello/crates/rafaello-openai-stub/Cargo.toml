@@ -17,8 +17,12 @@ path = "src/bin/rfl_openai_stub.rs"
 required-features = ["test-fixture"]
 
 [dependencies]
-tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "io-util"] }
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "io-util", "signal", "time", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
