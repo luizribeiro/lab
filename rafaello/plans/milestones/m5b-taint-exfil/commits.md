@@ -1,6 +1,103 @@
 # m5b-taint-exfil — commits
 
-> **Status:** round 3 — folds `commits-pi-review-2.md`
+> **Status:** round 4 — folds `commits-pi-review-3.md`
+> (4B / 2M / 2N, **CONVERGED**). Pi-3's verification
+> table confirmed all named round-2 items closed or
+> partial-with-spawned-finding. Convergence trajectory:
+> 5B → 3B → 4B → CONVERGED. Round 4 fixes the live-
+> plugin-shape mismatch (c20/c21 now mirror
+> `rafaello-mailcat`), the c18 fatal-path race, the
+> c22 PT1 grant-injection, the c23 raw-provider-event
+> assertion seam, the c15 helper signature, the c21
+> fixture-only `cfg` gating, and the two nits.
+>
+> Round-4 fixes by pi-3 finding:
+>
+> - **B-1** c20 / c21 rewritten to mirror live
+>   `rafaello-mailcat` shape. c20 dependencies add
+>   `fittings-client = { workspace = true }`. c21
+>   bin adopts `RFL_BUS_FD`, connects a
+>   `fittings_client::Client`, subscribes to
+>   `bus.event`, and publishes results via
+>   `peer.notify("bus.publish", json!({...}))`
+>   exactly like live `rfl_mailcat.rs:93-103`. The
+>   `WebFetchHandler` becomes a pure library helper
+>   in `src/lib.rs` (no fittings dependency) so unit
+>   tests can exercise it without a bus client. The
+>   `RFL_FETCH_TEST_TAINT_OVERRIDE` mechanism stays
+>   intact but its publish path is the live
+>   mailcat-shape `bus.publish` notification (not the
+>   nonexistent `peer.publish`).
+> - **B-2** c18's queue task **panics** after sending
+>   fatal on the oneshot. The `JoinHandle` arm
+>   therefore returns `Err(JoinError::Panicked)`,
+>   eliminating the round-3 race where
+>   `tokio::select!` could pick the `Ok(())` arm and
+>   pend forever. Pseudocode + acceptance updated.
+> - **B-3** c22's PT1 violation test pre-grants
+>   `web-fetch` via the m5a-shipped
+>   `RFL_TUI_TEST_GRANT_BEFORE_MESSAGE` hook (live
+>   c37; the JSON template matches the lock's
+>   `web-fetch.grant_match` schema). The test
+>   asserts **zero** modals fire during the run —
+>   the grant short-circuit path runs before any
+>   `confirm_request` is published. No
+>   `RFL_TUI_TEST_CONFIRM_ANSWER` noise; the test
+>   isolates the PT1 violation signal cleanly.
+> - **B-4** c23's raw `provider.openai.tool_request`
+>   `in_reply_to` assertion is **dropped**. The
+>   behaviour is already covered by c12 / c13
+>   re-emit unit tests against the in-tree
+>   ReemitRouter surface; c23 asserts only the
+>   canonical consequence (the modal's
+>   `details.taint` containing the
+>   `{tool, <fetch>}` entry, the
+>   `confirm_request_taint_attached` audit row,
+>   the `entries`-table golden, the
+>   plugin-log shape). No new observer-plugin
+>   fixture in the lock.
+> - **M-1** c15's helper signature spelled out:
+>   `build_confirm_request_payload(event: &BusEvent,
+>   confirm_id: &JsonRpcId, held_tool_request_id:
+>   &JsonRpcId, dispatch_target: &CanonicalId,
+>   tool: &str, args: &serde_json::Value, sinks:
+>   &[String], always_confirm: bool, ttl_seconds:
+>   u64) -> serde_json::Value`. No ellipsis.
+>   c17 explicitly consumes the helper's return
+>   value (the JSON payload's `details.taint`
+>   field) by inspection, not by re-deriving the
+>   taint vector.
+> - **M-2** `RFL_FETCH_TEST_TAINT_OVERRIDE` and
+>   `RFL_FETCH_TEST_LOG_PATH` both gated by
+>   `#[cfg(any(test, feature = "test-fixture"))]`
+>   in `crates/rafaello-fetch/src/lib.rs`.
+>   Production builds (`#[cfg(not(any(test, feature
+>   = "test-fixture")))]`) neither read the env
+>   vars nor compile the override branch. The
+>   `rafaello-fetch` crate gains a `test-fixture`
+>   cargo feature; the c22 lock builds the
+>   fetch plugin with that feature on (via the
+>   workspace `test-fixture` aggregator feature
+>   m5a established). Compile-coverage:
+>   c21 ships a `trybuild` compile-fail file
+>   asserting the env-var-reading function is
+>   absent in production builds (mirrors c08's
+>   compile-fence pattern). Cross-check entry
+>   for "test-fixture-only env vars" added.
+> - **N-1** c22's subject heading now reads
+>   `... + env.pass for RFL_FETCH_TEST_BODY_PATH +
+>   RFL_FETCH_TEST_LOG_PATH +
+>   RFL_FETCH_TEST_TAINT_OVERRIDE`.
+> - **N-2** c08's `trybuild` wording simplified:
+>   the compile-fail fixture imports `rafaello-core`
+>   without the `test-fixture` feature; the
+>   `.stderr` snapshot proves the method is absent.
+>   No `cargo check --no-default-features`
+>   over-specification.
+>
+> ---
+>
+> Round 3 — folds `commits-pi-review-2.md`
 > (3B / 4M / 2N, BLOCKING). Pi-2's verification table
 > confirmed B1 / B4 / B5 + M3 / N1 / N2 (round 1) fully
 > closed; B2 / B3 / M1 / M2 (round 1) partially closed
@@ -919,25 +1016,24 @@ broker-side publish test hook (added in scope round 7 as row
     `publish_core_with_taint`; assert only B's
     sentinel fired (last-writer-wins).
   - `broker_publish_test_hook_absent_in_production_builds.rs`
-    — compile-fence test (pi-2 M-4 pinned shape).
-    Uses **`trybuild`** with an explicit
-    compile-fail file at
+    — compile-fence test (pi-2 M-4 / pi-3 N-2
+    pinned shape). Uses **`trybuild`** with an
+    explicit compile-fail file at
     `crates/rafaello-core/tests/compile_fail/install_publish_test_hook_absent_in_production.rs`
-    that references `Broker::install_publish_test_hook(...)`.
-    The `trybuild::TestCases` invocation in
-    `broker_publish_test_hook_absent_in_production_builds.rs`
-    runs `cargo check --no-default-features` (no
-    `test-fixture` feature) against the compile-fail
-    file and asserts the build fails with an error
-    pinned by the matching `.stderr` snapshot. The
-    method's `#[cfg(any(test, feature =
-    "test-fixture"))]` gate (pi-6 M-2 corrected
-    syntax) therefore proves absent in production
-    builds. `trybuild = "1"` is added to
-    `crates/rafaello-core/Cargo.toml`
-    `[dev-dependencies]` in this commit (pi-2 M-4 —
-    no alternative branches; single concrete
-    harness).
+    that references
+    `Broker::install_publish_test_hook(...)`. The
+    fixture file imports `rafaello-core` without
+    enabling the `test-fixture` feature; the
+    `.stderr` snapshot pins the resulting "no
+    method named ..." error. The method's
+    `#[cfg(any(test, feature = "test-fixture"))]`
+    gate (pi-6 M-2 corrected syntax) is therefore
+    proved absent in production builds without a
+    custom cargo invocation (pi-3 N-2 — round-3's
+    `cargo check --no-default-features`
+    over-specification dropped). `trybuild = "1"`
+    is added to `crates/rafaello-core/Cargo.toml`
+    `[dev-dependencies]` in this commit.
   - `cargo doc -p rafaello-core --no-deps` warning-free
     (the cfg-gated method's docs describe its
     intended use).
@@ -1689,25 +1785,41 @@ in c15's body.
   1. **Extract `build_confirm_request_payload`**:
      pull the inline payload-construction block from
      `hold_for_confirmation` (live `:386-401`) into a
-     new `pub(crate)` helper:
+     new `pub(crate)` helper with the **explicit
+     signature** (pi-3 M-1 — no ellipsis):
      ```rust
      pub(crate) fn build_confirm_request_payload(
          event: &BusEvent,
-         // ...other inputs the inline block
-         // currently reads from local state...
+         confirm_id: &JsonRpcId,
+         held_tool_request_id: &JsonRpcId,
+         dispatch_target: &CanonicalId,
+         tool: &str,
+         args: &serde_json::Value,
+         sinks: &[String],
+         always_confirm: bool,
+         ttl_seconds: u64,
      ) -> serde_json::Value;
      ```
+     The exact parameter list mirrors the local
+     variables the inline block at `gate/mod.rs:386-401`
+     currently reads from `hold_for_confirmation`'s
+     scope. (If the live block reads a different
+     subset, the implementation agent uses the live
+     subset and adjusts the helper signature
+     accordingly — the row pins the **shape**, not
+     a guess at the per-field list; live source is
+     the ratification authority.)
      The helper returns the same JSON payload
      `hold_for_confirmation` previously constructed
      inline — same `details.taint =
      event.taint.clone().unwrap_or_default()` shape
      (`[]` when inbound is `None`); same `request_id`,
-     `tool`, `sinks`, etc. **No behaviour change**:
-     `hold_for_confirmation` now calls the helper
-     and uses its return value. The refactor is
-     verified green by m5a's existing
-     gate-integration tests (no test changes
-     required to those).
+     `tool`, `sinks`, `ttl_seconds`, etc. **No
+     behaviour change**: `hold_for_confirmation`
+     now calls the helper and uses its return
+     value. The refactor is verified green by m5a's
+     existing gate-integration tests (no test
+     changes required to those).
   2. **In-module unit test** in
      `crates/rafaello-core/src/gate/mod.rs`'s
      `#[cfg(test)] mod tests` block (extend or
@@ -1943,13 +2055,21 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
        fatal_tx: tokio::sync::oneshot::Sender<String>)
        -> Self`.
      - `pub fn next_answer(&self) ->
-       Option<TestConfirmAnswer>` — dequeues the
-       head; on empty, emits `tracing::error!`,
-       sends the exhaustion message on `fatal_tx`,
-       and returns `None`. (The detached call site
-       sees `None` and stops issuing answers; the
-       fatal signal is what surfaces the failure to
-       the main future per pi-2 B-2.)
+       TestConfirmAnswer` — dequeues the head; on
+       empty, emits `tracing::error!`, sends the
+       exhaustion message on `fatal_tx`, then
+       `panic!`s with the same message. The
+       calling task (the plural-auto-confirm loop
+       spawned from `bin/rfl_tui.rs`) therefore
+       terminates with a `JoinError::Panicked`,
+       AND a fatal message is in `fatal_rx` —
+       belt-and-suspenders so the `tokio::select!`
+       arm that runs cannot leave the process
+       hanging (pi-3 B-2 ripple — the round-3
+       race where `Ok(())` + ready `fatal_rx`
+       could pick the join arm and pend is
+       resolved because the join arm is always
+       `Err` on exhaustion).
      - `pub fn is_empty(&self) -> bool`.
      The module lives at
      `crates/rafaello-tui/src/test_confirm_queue.rs`
@@ -1966,7 +2086,9 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
      `rfl-tui`. c18 restructures the test-mode
      branch:
      ```rust
-     // pseudocode
+     // pseudocode — pi-3 B-2 ripple: queue task
+     // panics after sending fatal, so the join arm
+     // is always Err on exhaustion (no select-race).
      let (fatal_tx, fatal_rx) =
          tokio::sync::oneshot::channel::<String>();
      let queue =
@@ -1977,13 +2099,27 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
              /* bus handle */));
      tokio::select! {
          res = join_handle => {
-             // queue task exited (normally or via panic);
-             // surface to the process
+             // The queue task NEVER exits Ok in test mode:
+             // either it serves modals forever (never
+             // selected before the test ends), or it
+             // panics on exhaustion (Err(JoinError)).
              match res {
-                 Ok(()) => std::future::pending::<()>().await,
-                 Err(join_err) => std::panic::panic_any(
-                     format!("rfl-tui: confirm-answer \
-                         task panicked: {join_err}")),
+                 Ok(()) => unreachable!(
+                     "plural-auto-confirm loop \
+                      exited Ok unexpectedly"),
+                 Err(join_err) => {
+                     // Drain any fatal message that
+                     // the queue task already sent
+                     // before panicking; prefer it
+                     // for the surfaced text.
+                     let msg = fatal_rx.try_recv()
+                         .ok()
+                         .unwrap_or_else(||
+                             format!("rfl-tui: \
+                                 confirm-answer task \
+                                 panicked: {join_err}"));
+                     panic!("{msg}");
+                 }
              }
          }
          msg = fatal_rx => {
@@ -1995,9 +2131,12 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
      ```
      The main future then panics with the surfaced
      message; the process exits with a panic-shaped
-     exit code (the `tokio` runtime propagates the
-     panic up to `main` per `#[tokio::main]`
-     semantics). The single-answer
+     exit code. Either arm of the `select!`
+     reliably surfaces the exhaustion: the
+     `fatal_rx` arm catches it directly; the
+     `join_handle` arm catches the panic and reads
+     the (already-sent) fatal message synchronously
+     via `try_recv()` before re-panicking. The single-answer
      `RFL_TUI_TEST_CONFIRM_ANSWER` path stays live
      for m5a backwards compatibility (mutex'd
      against the plural via the env-parse check;
@@ -2031,15 +2170,19 @@ Scope §TUI-MA1 + §TUI-MA2. Two commits.
     — unit test on the helper module: construct a
     queue from `[allow, deny]`; call
     `next_answer()` twice; assert order.
-  - `tui_test_confirm_queue_exhaustion_sends_fatal_message.rs`
-    — unit test: construct a queue from `[allow]`
-    with a real `oneshot::channel()`; call
-    `next_answer()` once (returns `Some`); call
-    again (returns `None`); assert the
-    `fatal_rx` end of the oneshot receives a
-    message matching `"TestConfirmAnswers queue
-    exhausted; modal #2 had no scripted
-    answer"`.
+  - `tui_test_confirm_queue_exhaustion_sends_fatal_then_panics.rs`
+    (pi-3 B-2 acceptance) — unit test: construct a
+    queue from `[allow]` with a real
+    `oneshot::channel()`; call `next_answer()` once
+    (returns the `allow` answer); call again — use
+    `std::panic::catch_unwind` to capture the
+    panic; assert the panic message is
+    `"TestConfirmAnswers queue exhausted; modal
+    #2 had no scripted answer"`; assert the
+    `fatal_rx` end ALSO received the same
+    message via `try_recv()` (fatal was sent
+    before the panic). This pins both halves of
+    the belt-and-suspenders mechanism.
   - `tui_runtime_consumes_confirm_answers_queue_for_two_modals.rs`
     — integration test against the live
     `rfl_tui.rs` runtime: spawn `rfl-tui` with
@@ -2129,13 +2272,33 @@ then the m5b fixture lock.
      `[lib] path = "src/lib.rs"`.
      `[[bin]] name = "rafaello-fetch"; path =
      "src/bin/rafaello_fetch.rs"`.
-     `[dependencies]`: `fittings-core`,
-     `fittings-server`, `fittings-transport`,
-     `tokio`, `tracing`, `tracing-subscriber`,
-     `serde`, `serde_json`, `async-trait`, `anyhow`
-     (all `workspace = true`).
+     `[dependencies]` (mirroring live
+     `rafaello-mailcat/Cargo.toml` — pi-3 B-1):
+     `fittings-client = { workspace = true }`,
+     `fittings-core = { workspace = true }`,
+     `fittings-transport = { workspace = true }`,
+     `rafaello-core = { path =
+     "../rafaello-core" }` (for `TaintEntry`,
+     `Publisher`, `BusEvent`, `JsonRpcId`), `tokio`,
+     `tracing`, `tracing-subscriber`, `serde`,
+     `serde_json`, `async-trait`, `anyhow` (all
+     `workspace = true`). **No `fittings-server`** —
+     live bundled plugins are bus clients, not
+     servers (live `rfl_mailcat.rs:14` imports
+     `fittings_client::{Client,
+     InboundNotification}`).
+     `[features]`: `default = []`; `test-fixture =
+     []` — the cargo feature gating the m5b
+     fixture-only env-var paths in `src/lib.rs`
+     (pi-3 M-2 — both `RFL_FETCH_TEST_LOG_PATH`
+     and `RFL_FETCH_TEST_TAINT_OVERRIDE` are
+     `#[cfg(any(test, feature = "test-fixture"))]`
+     gated).
      `[dev-dependencies]`: `tempfile`, `serial_test`,
-     `tracing-test` (all workspace).
+     `tracing-test`, `trybuild = "1"` (all
+     workspace where applicable — `trybuild` for
+     c21's compile-fence test mirroring c08's
+     pattern).
   3. **`crates/rafaello-fetch/src/lib.rs`**:
      `//! rafaello-fetch scaffolding.` placeholder.
      Empty for now — c21 fills the `WebFetchHandler`.
@@ -2225,67 +2388,107 @@ then the m5b fixture lock.
   c04, c13, c14, c23).
 - **Scope sections.** §TF1, pi-1 N-1.
 
-### c21 — feat(rafaello-fetch): file-backed `WebFetchHandler` reading `RFL_FETCH_TEST_BODY_PATH` + per-invocation log via `RFL_FETCH_TEST_LOG_PATH` (§TF2)
+### c21 — feat(rafaello-fetch): file-backed `WebFetchHandler` library + bus-client bin mirroring live `rafaello-mailcat` + `RFL_FETCH_TEST_LOG_PATH` / `RFL_FETCH_TEST_TAINT_OVERRIDE` fixture-only env vars (§TF2)
 
-- **What.** Scope §TF2 / pi-1 B-5 ripple (per-fixture
-  invocation-log emission lands here, not in c23 — c28
-  depends on c22 only and consumes the log surface).
-  Two coordinated edits:
-  1. **`crates/rafaello-fetch/src/lib.rs`**: replace
-     the placeholder with the
-     `WebFetchHandler` struct implementing the
-     fittings `Handler` trait for the `web-fetch`
-     method:
-     - On a `web-fetch {url: String}` call: read the
-       path in `RFL_FETCH_TEST_BODY_PATH` env var; if
+- **What.** Scope §TF2 / pi-1 B-5 / pi-2 B-3 / pi-3
+  B-1 (live plugin shape mirror) / pi-3 M-2
+  (fixture-only `cfg` gates). Two coordinated edits:
+  1. **`crates/rafaello-fetch/src/lib.rs`** — pure
+     library helper (no fittings dependency in this
+     module). Replace the c20 placeholder with the
+     `WebFetchHandler` struct + free functions:
+     - `pub struct WebFetchHandler;` and `pub fn
+       handle_web_fetch(args: &serde_json::Value)
+       -> serde_json::Value`. On a `web-fetch
+       {url: String}` call: read the path in
+       `RFL_FETCH_TEST_BODY_PATH` env var; if
        unset, return `{ok: false, error:
-       "fetch_test_body_unavailable"}`. If the path
-       is missing or unreadable, return the same
-       error. Otherwise, return `{ok: true, content:
-       <file contents as UTF-8 string>}`.
-     - **Per-invocation log** (pi-1 B-5): if
-       `RFL_FETCH_TEST_LOG_PATH` is set, append one
-       line per invocation to the file at that path
-       capturing the `url` argument (e.g. `web-fetch:
-       <url>\n`). The append is best-effort: failure
-       to open / write the log does NOT fail the
-       handler — it logs at `tracing::warn!` and
-       returns the normal response. This mirrors
-       m5a's `rafaello-mailcat` per-fixture log
-       pattern (`mailcat.log`).
-     - **Taint-override test mode** (pi-2 B-3): if
-       `RFL_FETCH_TEST_TAINT_OVERRIDE` is set, the
-       plugin treats its value as a JSON
-       `Vec<TaintEntry>` and publishes its **next**
-       `plugin.<id>.tool_result` with that vector
-       in the `taint` field (overriding the normal
-       `None`). The plugin uses the fittings
-       client's `Peer` to call
-       `peer.publish("plugin.<canonical>.tool_result",
-       msg)` with the override; the override
-       applies once and is then cleared in-process
-       (a `OnceCell<Mutex<bool>>` flag avoids
-       repeated overrides if the env var stays
-       set). This lets a test produce a
-       deliberately non-superset publish without
-       adding a separate bus-fixture publisher
-       fixture to the lock. Malformed JSON in the
-       env var → handler logs `tracing::error!` and
-       proceeds with the normal `taint: None`
-       publish (test-side mistake surfaces as a
-       failed PT1-violation assertion, not a
-       plugin crash).
-     - The plugin does NOT issue real HTTP requests.
-       No `reqwest` dep weight + no flake risk;
-       manual validation (scope §"Manual validation")
-       exercises the gate-firing path with
-       deterministic file-backed bodies. Real-network
-       fetch is post-v1 per §A6 / owner-judgment
-       item 3.
-  2. **`crates/rafaello-fetch/src/bin/rafaello_fetch.rs`**:
-     replace the placeholder `main` with the fittings
-     `run_plugin(WebFetchHandler::new())` shape
-     mirroring `rafaello-mailcat`'s bin.
+       "fetch_test_body_unavailable"}`. If the
+       path is missing or unreadable, return the
+       same error. Otherwise, return `{ok: true,
+       content: <file contents as UTF-8 string>}`.
+       Library-only — no fittings imports here;
+       unit tests exercise the handler without a
+       bus client.
+     - **Per-invocation log** (pi-1 B-5,
+       fixture-only per pi-3 M-2): a
+       `#[cfg(any(test, feature = "test-fixture"))]
+       fn maybe_write_invocation_log(url: &str)`
+       that, when `RFL_FETCH_TEST_LOG_PATH` is set,
+       appends one line per invocation (e.g.
+       `web-fetch: <url>\n`). The append is
+       best-effort: failure to open / write the log
+       does NOT fail the handler — it logs at
+       `tracing::warn!`. Production builds
+       (`#[cfg(not(any(test, feature =
+       "test-fixture")))]`) do NOT compile the
+       function or read the env var. Called from
+       `handle_web_fetch` under the same cfg gate.
+     - **Taint-override test mode** (pi-2 B-3,
+       fixture-only per pi-3 M-2): a
+       `#[cfg(any(test, feature = "test-fixture"))]
+       fn take_taint_override() ->
+       Option<Vec<TaintEntry>>` that reads
+       `RFL_FETCH_TEST_TAINT_OVERRIDE`, parses the
+       JSON `Vec<TaintEntry>`, and returns
+       `Some(vec)` for the next publish. A
+       `OnceCell<Mutex<bool>>` flag clears the
+       override after first apply (subsequent
+       calls return `None`). Malformed JSON →
+       `tracing::error!` + return `None`. The
+       function is consumed by the bin (next
+       edit) to choose the `taint` field of the
+       outbound `bus.publish` notification.
+       Production builds do NOT compile this
+       function.
+     - The plugin does NOT issue real HTTP
+       requests. No `reqwest` dep weight + no
+       flake risk; manual validation (scope
+       §"Manual validation") exercises the
+       gate-firing path with deterministic
+       file-backed bodies. Real-network fetch is
+       post-v1 per §A6 / owner-judgment item 3.
+  2. **`crates/rafaello-fetch/src/bin/rafaello_fetch.rs`**
+     — bus-client bin mirroring live
+     `crates/rafaello-mailcat/src/bin/rfl_mailcat.rs:14,
+     93-103` (pi-3 B-1). Replace the c20 placeholder
+     `main` with a bus-client `#[tokio::main]` shape:
+     - Read `RFL_BUS_FD` (the fittings
+       broker-side file descriptor injected by the
+       supervisor; m5a-shipped).
+     - Construct a `fittings_client::Client::new(fd)`
+       and obtain its `Peer` handle.
+     - Subscribe to `bus.event` via
+       `peer.notify("bus.subscribe", json!({
+       "topics": ["plugin.<canonical>.tool_request"]
+       }))`. The `<canonical>` substring is
+       resolved from the m5a-shipped startup
+       handshake — the live bundled plugins
+       receive their canonical id via the same
+       env-var / handshake path as mailcat.
+     - Main loop awaits `InboundNotification`s via
+       `client.recv()`. For each
+       `plugin.<canonical>.tool_request` inbound:
+       call `handle_web_fetch(&args)` on the
+       library; build the `tool_result` payload;
+       determine the `taint` field:
+       `#[cfg(any(test, feature = "test-fixture"))]
+       { take_taint_override() }` — `Some(vec)`
+       supplies the override on this publish only;
+       `None` leaves the publish as the m5a
+       default (no `taint` field, equivalent to
+       `taint: None`).
+       Publish via `peer.notify("bus.publish",
+       json!({ "topic":
+       "plugin.<canonical>.tool_result", "payload":
+       payload, "in_reply_to": [inbound.request_id],
+       "request_id": <fresh JsonRpcId>, "taint":
+       taint_value }))`. The notification shape
+       matches live `rfl_mailcat.rs:93-103`
+       verbatim — pi-3 B-1 ripple.
+     - On shutdown (broker drops the client side
+       of `RFL_BUS_FD`): exit cleanly. Live
+       mailcat's shutdown handling is copied.
 - **Why.** Scope §TF2 / §A6 + pi-1 B-5 + pi-2 B-3.
   The invocation-log surface must exist by c22's
   time (c22 pins `RFL_FETCH_TEST_LOG_PATH` in
@@ -2354,21 +2557,38 @@ then the m5b fixture lock.
     first publish carries the override and the
     second carries `None` (the OnceCell flag
     cleared the override after first apply).
+  - `rafaello_fetch_fixture_envvars_absent_in_production_builds.rs`
+    (pi-3 M-2 acceptance) — `trybuild` compile-fail
+    fixture at
+    `crates/rafaello-fetch/tests/compile_fail/fixture_envvars_absent.rs`
+    that references `take_taint_override()` or
+    `maybe_write_invocation_log(...)`; the
+    fixture imports `rafaello-fetch` without
+    enabling its `test-fixture` feature; the
+    `.stderr` snapshot proves both functions are
+    absent in production builds. Mirrors c08's
+    compile-fence pattern.
 - **Files touched.** `crates/rafaello-fetch/src/lib.rs`
-  (handler + log emission + taint-override mode,
-  ~110 lines);
+  (library helper + cfg-gated fixture-only
+  functions, ~130 lines);
   `crates/rafaello-fetch/src/bin/rafaello_fetch.rs`
-  (bin main, ~10 lines); eight new test files.
-- **Size.** medium (~120 LoC + ~280 LoC tests).
-  Body justification: §TF2 handler + scope §EXFIL1's
+  (bus-client bin mirroring `rfl_mailcat.rs`,
+  ~120 lines);
+  `crates/rafaello-fetch/tests/compile_fail/fixture_envvars_absent.rs`
+  + sibling `.stderr` (~10 lines fixture);
+  nine new test files.
+- **Size.** medium (~250 LoC production + ~300 LoC
+  tests). Body justification: §TF2 handler + §EXFIL1
   per-fixture log surface (pi-1 B-5) + pi-2 B-3
-  taint-override mode are one coherent fetch-plugin
-  test-fixture bundle; all three live on the
-  publish path and would be intermediate-state
-  un-green if split.
-- **Scope sections.** §TF2, §A6, pi-1 B-5, pi-2 B-3.
+  taint-override mode + pi-3 B-1 live-plugin-shape
+  mirror + pi-3 M-2 fixture-only `cfg` gates are
+  one coherent fetch-plugin bundle; splitting the
+  library from the bus-client bin would leave a
+  half-wired plugin in an intermediate commit.
+- **Scope sections.** §TF2, §A6, pi-1 B-5, pi-2
+  B-3, pi-3 B-1, pi-3 M-2.
 
-### c22 — feat(rafaello): m5b fixture lock chaining FIVE plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` + `RFL_FETCH_TEST_LOG_PATH` (§TF3)
+### c22 — feat(rafaello): m5b fixture lock chaining FIVE plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` + `RFL_FETCH_TEST_LOG_PATH` + `RFL_FETCH_TEST_TAINT_OVERRIDE` (§TF3)
 
 - **What.** Scope §TF3 / pi-1 M-5 / pi-1 B-4 ripple
   (FINAL five-plugin lock shipped here so c26 does NOT
@@ -2506,30 +2726,70 @@ then the m5b fixture lock.
     is exercised end-to-end).
   - **Re-enable c14's deferred test**
     `rfl_chat_pt1_violation_after_plugin_spawn_writes_audit_row.rs`
-    (pi-5 B-2 acceptance / pi-2 B-3 mechanism;
-    file lives at `crates/rafaello/tests/`):
+    (pi-5 B-2 / pi-2 B-3 / pi-3 B-3 ripple; file
+    lives at `crates/rafaello/tests/`):
     spawn `rfl chat` against the m5b lock with
-    `RFL_FETCH_TEST_TAINT_OVERRIDE` set to a
-    deliberately non-superset shape (e.g.
-    `'[{"source":"plugin.other","detail":"x"}]'`
-    — a `Vec<TaintEntry>` that does NOT contain
-    the dispatch entry's `tool_request_taint`
-    `[{provider, openai}]`); drive a user message
-    that the openai-stub scripts to call
-    `web-fetch`; the gate allows the fetch
-    dispatch (no other modal scripting); the
-    fetch plugin runs, applies the override on
-    its next publish; broker PT1 intake-side
-    rejects with `taint_superset_violated`;
-    assert the
-    `plugin_publish_rejected_taint_superset`
-    audit row lands. Together with c02's
+    these env vars in the outer process:
+    - `RFL_FETCH_TEST_TAINT_OVERRIDE` set to a
+      deliberately non-superset shape (e.g.
+      `'[{"source":"plugin.other","detail":"x"}]'`
+      — a `Vec<TaintEntry>` that does NOT
+      contain the dispatch entry's
+      `tool_request_taint` `[{provider, openai}]`).
+    - **`RFL_TUI_TEST_GRANT_BEFORE_MESSAGE`** (pi-3
+      B-3 grant-injection mechanism) set to a JSON
+      object matching the lock's
+      `web-fetch.grant_match` schema, e.g.
+      `'{"tool": "web-fetch", "args_subset":
+      {"url": ""}}'`. The m5a-shipped c37 TUI test
+      hook publishes a synthetic
+      `frontend.tui.slash_command` carrying a
+      `/grant` payload on TUI startup, **before**
+      the test message is sent. The core-side
+      slash handler (m5a c18) calls
+      `UserGrants::insert` for the
+      `web-fetch` tool. When the openai-stub-driven
+      `web-fetch` `tool_request` reaches the gate,
+      the grant-match short-circuit path fires
+      (live `gate/mod.rs:558-610`) and dispatch
+      proceeds **without a modal**.
+    - `RFL_TUI_TEST_MESSAGE = "please fetch
+      content.example.com/page"` (any string that
+      the openai stub responds to with a
+      `web-fetch` tool call).
+    - `RFL_FETCH_TEST_BODY_PATH` pointing to a
+      tempfile with arbitrary canned content.
+    - `RFL_OPENAI_STUB_RESPONSE` pointing to a
+      single-turn fixture scripted-response JSON
+      that emits one `web-fetch` tool call (no
+      turn 2 — the test isolates the PT1
+      violation signal).
+    Test sequence: TUI startup → grant injected →
+    user message sent → openai stub responds with
+    `web-fetch` call → gate's grant-match short-
+    circuits to dispatch (the c21-shipped
+    `RFL_FETCH_TEST_TAINT_OVERRIDE` populates
+    the fetch plugin's next publish with the
+    non-superset taint) → fetch plugin publishes
+    `plugin.<fetch>.tool_result` with the
+    violating taint → broker's PT1 intake check
+    rejects with `taint_superset_violated`.
+    Assertions:
+    - The `plugin_publish_rejected_taint_superset`
+      audit row lands (joined on the originating
+      `tool_request request_id`).
+    - **Zero `confirm_request` audit rows** are
+      written during the run (pi-3 B-3) — proves
+      the grant-match short-circuit drove
+      dispatch, not a scripted modal answer.
+    - The synthetic deny-shaped `tool_result`
+      reaches the agent loop's `entries`-table
+      persistence path (c14 acceptance).
+    Together with c02's
     `rfl_chat_calls_set_audit_writer_before_first_plugin_spawn.rs`
     this covers the "wiring happened before
     spawn" + "audit actually fires after spawn"
-    pair. The c21-shipped taint-override mode
-    is the violating-publisher fixture (pi-2
-    B-3).
+    pair.
 - **Files touched.** new directory
   `rafaello/fixtures/m5b-locks/` with lock + five
   package fixture trees (~12 files, mostly TOML +
@@ -2636,16 +2896,25 @@ coverage.
      is `[{provider, openai}, {tool,
      <rafaello-fetch canonical>}]` (provider +
      value-driven union, redundantly also from
-     §TR4b referenced-union).
-     **Provider-event `in_reply_to` assertion**
-     (pi-2 M-2): inspect the published
-     `provider.openai.tool_request` event for turn
-     2; assert its `in_reply_to` is `[<turn-1
-     fetch-tool_result-request_id>]` —
-     `rfl-openai` derived this from
-     `state.observed_tool_results`, not from the
-     stub fixture. This assertion lives on the
-     bus event, not on the JSON fixture file.
+     §TR4b referenced-union via `rfl-openai`'s
+     own derivation of turn-2 `in_reply_to` from
+     `state.observed_tool_results`).
+     **No raw `provider.openai.tool_request`
+     assertion in this test** (pi-3 B-4): the
+     headline integration test runs `rfl chat` as
+     a child process with no in-tree observer
+     fixture on `provider.<id>.**` topics; the
+     re-emit pipeline's `in_reply_to` propagation
+     is already covered by c12's
+     `reemit_tool_request_unions_referenced_ancestry.rs`
+     + c13's
+     `reemit_tool_request_unions_referenced_ancestry_end_to_end.rs`
+     against the in-tree `ReemitRouter` surface.
+     c23 asserts only the **canonical
+     consequence** — the modal's `details.taint`,
+     the `confirm_request_taint_attached` audit
+     row, the `entries`-table golden, and the
+     plugin-log shape.
   5. `confirm_request_taint_attached` audit row
      written for turn 2 (predicate fires —
      `source != "provider"` entry present;
@@ -3091,6 +3360,28 @@ union arm, these rows slot before the c23-c25 EXFIL block.
   env vars introduced in c21 / c22.
 - **`siphasher = "1"` is the only new workspace dep**
   added by m5b (scope §"Risks" #18). Lands at c05.
+  `trybuild = "1"` lands as a **`[dev-dependencies]`**
+  addition on `crates/rafaello-core/Cargo.toml`
+  (c08) and `crates/rafaello-fetch/Cargo.toml` (c21),
+  not a workspace dep.
+- **Fixture-only env vars** (pi-3 M-2): the m5b
+  test-fixture escape hatches —
+  `RFL_FETCH_TEST_LOG_PATH` and
+  `RFL_FETCH_TEST_TAINT_OVERRIDE` — are
+  `#[cfg(any(test, feature = "test-fixture"))]`
+  gated in `crates/rafaello-fetch/src/lib.rs` (c21).
+  Production `rafaello-fetch` builds neither read
+  the env vars nor compile the branches. c21's
+  `trybuild` compile-fail fixture pins the absence.
+  The c22 lock pins all three (`RFL_FETCH_TEST_BODY_PATH`
+  — `BODY_PATH` is in-scope per §TF2 and lives in
+  production; `LOG_PATH` and `TAINT_OVERRIDE` are
+  fixture-only) in `env.pass` because lock-side
+  passthrough is a runtime decision, not a
+  compile-time one — a production build of
+  `rafaello-fetch` linked against the c22 lock
+  simply ignores the two fixture-only env vars
+  even if they reach the plugin process.
 - **No new `crates/` workspace member beyond
   `rafaello-fetch`** (scope §TF1) — m5a's openai +
   stub + mailcat all reused.
@@ -3210,11 +3501,17 @@ Pi round budget on `commits.md`: 4-6 rounds. m5a took
 6 rounds for a 41-commit body; m5b is narrower (28
 commits) but the test-ladder coupling between c10 /
 c12 / c13 and the §PT1 critical-section unsplittable
-in c14 are pi-attention magnets. Round 3 folds pi-2's
-3B/4M/2N. Pi review of round 3 to follow.
+in c14 are pi-attention magnets. Round 4 folds pi-3's
+4B/2M/2N — pi-3's convergence call said "round 4 can
+converge if those are fixed without expanding the
+commit count" and the round-4 fold preserves the
+28-commit total. **Round 4 is the convergence
+draft** — ready for owner ratification.
 
 ---
 
-*End of m5b commits.md round 3 — folds pi-2
-(3B/4M/2N). Convergence trajectory: 5B → 3B →
-(round 3 in flight).*
+*End of m5b commits.md round 4 — folds pi-3
+(4B/2M/2N), CONVERGED. Convergence trajectory:
+5B → 3B → 4B → CONVERGED. 28 commits total
+preserved per pi-3 convergence-call cap. Ready
+for owner ratification.*
