@@ -18,6 +18,7 @@
 //! arm, gated on the optional `confirm_state` + `audit` builder so
 //! m5a's gradual rollout keeps m4-shaped callers working.
 
+pub mod referenced_taint_index;
 pub mod taint_match;
 
 use std::sync::Arc;
@@ -34,11 +35,16 @@ use crate::bus::{
 use crate::error::BrokerError;
 use crate::gate::{ConfirmState, MarkError, PriorOutcome};
 use crate::lock::canonical_id::CanonicalId;
+use crate::reemit::referenced_taint_index::ReferencedTaintIndex;
 use crate::reemit::taint_match::TaintMatchMap;
 
 /// Default TTL for the router-owned `TaintMatchMap` (scope §A4 / pi-6
 /// owner-judgment item 4).
 const DEFAULT_TAINT_MATCH_TTL: Duration = Duration::from_secs(300);
+
+/// Default TTL for the router-owned `ReferencedTaintIndex` (scope §TR4a
+/// / pi-2 B-1).
+const DEFAULT_REFERENCED_TAINT_INDEX_TTL: Duration = Duration::from_secs(300);
 
 /// Default substring-arm minimum byte length for the router-owned
 /// `TaintMatchMap` (scope §A3 / pi-6 owner-judgment item 5, N-1).
@@ -84,6 +90,7 @@ pub struct ReemitRouter {
     confirm_state: Option<Arc<ConfirmState>>,
     audit: Option<Arc<AuditWriter>>,
     taint_match: Arc<TaintMatchMap>,
+    referenced_taint_index: Arc<ReferencedTaintIndex>,
     #[cfg(any(test, feature = "test-fixture"))]
     fault_injector: Option<TestFaultInjector>,
     #[cfg(any(test, feature = "test-fixture"))]
@@ -107,6 +114,9 @@ impl ReemitRouter {
             taint_match: Arc::new(TaintMatchMap::new(
                 DEFAULT_TAINT_MATCH_TTL,
                 DEFAULT_TAINT_MATCH_SUBSTRING_MIN_BYTES,
+            )),
+            referenced_taint_index: Arc::new(ReferencedTaintIndex::new(
+                DEFAULT_REFERENCED_TAINT_INDEX_TTL,
             )),
             #[cfg(any(test, feature = "test-fixture"))]
             fault_injector: None,
@@ -138,6 +148,15 @@ impl ReemitRouter {
         self
     }
 
+    /// Scope §TR4a / pi-2 B-1 wiring point — swap the router's default
+    /// `ReferencedTaintIndex` for a caller-owned one. The `Arc` is
+    /// shared so callers can inspect the cache's state (e.g. from tests)
+    /// while the spawned task continues to mutate it.
+    pub fn with_referenced_taint_index(mut self, idx: Arc<ReferencedTaintIndex>) -> Self {
+        self.referenced_taint_index = idx;
+        self
+    }
+
     /// Test-only accessor exposing the router's `Arc<TaintMatchMap>` so
     /// tests can observe defaults and post-shutdown clear semantics
     /// without touching the spawned task. Gated like the other m5a/c02
@@ -145,6 +164,14 @@ impl ReemitRouter {
     #[cfg(any(test, feature = "test-fixture"))]
     pub fn taint_match_for_test(&self) -> Arc<TaintMatchMap> {
         self.taint_match.clone()
+    }
+
+    /// Test-only accessor exposing the router's `Arc<ReferencedTaintIndex>`
+    /// so tests can observe defaults and post-shutdown clear semantics
+    /// without touching the spawned task.
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn referenced_taint_index_for_test(&self) -> Arc<ReferencedTaintIndex> {
+        self.referenced_taint_index.clone()
     }
 
     #[cfg(any(test, feature = "test-fixture"))]
@@ -195,6 +222,7 @@ impl ReemitRouter {
         let confirm_state = self.confirm_state.clone();
         let audit = self.audit.clone();
         let taint_match = self.taint_match.clone();
+        let referenced_taint_index = self.referenced_taint_index.clone();
         let mut shutdown_rx = self.shutdown_rx;
         #[cfg(any(test, feature = "test-fixture"))]
         let fault_injector = self.fault_injector;
@@ -210,6 +238,7 @@ impl ReemitRouter {
                     res = shutdown_rx.changed() => {
                         if res.is_err() || *shutdown_rx.borrow() {
                             taint_match.clear();
+                            referenced_taint_index.clear();
                             break;
                         }
                     }
