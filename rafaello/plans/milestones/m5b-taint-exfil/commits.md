@@ -1,6 +1,105 @@
 # m5b-taint-exfil — commits
 
-> **Status:** round 4 — folds `commits-pi-review-3.md`
+> **Status:** round 5 — folds `commits-pi-review-4.md`
+> (3B / 2M / 1N), **CONVERGED**. Pi-4's verification
+> table closed B2 / B4 / N1 / N2 of round 3 fully and
+> spawned narrower B1 / B2 / B3 / M1 / M2 / N1 findings
+> on the round-4 mechanics (live bus-client API names,
+> spawned-binary feature wiring, grant-matcher
+> structural-subset semantics). Round 5 fixes all six
+> without expanding the commit count.
+>
+> Convergence trajectory: 5B → 3B → 4B → 3B →
+> CONVERGED.
+>
+> **Hash-stability note** (pi-4 N-1): `scope.md` and
+> `commits.md` are intended to be hash-stable across
+> cherry-picks across worktrees. Round bodies therefore
+> do **not** cite specific commit hashes; trajectories
+> are described by round number only. The round-4
+> `CONVERGED` tag was premature given pi-4's review
+> arrived after the tag landed — round 5 is the
+> genuine convergence draft.
+>
+> Round-5 fixes by pi-4 finding:
+>
+> - **B-1** c21 rewritten to **copy live mailcat
+>   verbatim**. The bin uses `parse_bus_fd` →
+>   `adopt_bus_fd` → `OneShotConnector::new(transport)`
+>   → `Client::connect(...).await` →
+>   `client.subscribe_notifications()` → loop on
+>   `notifications.recv().await` filtering by
+>   `note.method == "bus.event"`. Result publish via
+>   `peer.notify("bus.publish", ...)` with a fresh
+>   `JsonRpcId::String(Ulid::new().to_string())`. No
+>   `Client::new(fd)`, no `peer.notify("bus.subscribe",
+>   ...)`, no `client.recv()`. c20 dependencies add
+>   `ulid` + `tokio` features `[net, macros,
+>   rt-multi-thread, io-util]` (matching live mailcat).
+> - **B-2** The `#[cfg(any(test, feature =
+>   "test-fixture"))]` gates on the fetch plugin's
+>   env-var code are **dropped**. The env vars are
+>   read unconditionally in `crates/rafaello-fetch/src/lib.rs`;
+>   their code paths are simple `if let
+>   Ok(path) = std::env::var(...)` branches that
+>   no-op when unset. Production builds with neither
+>   env var set behave exactly like the live fetch
+>   fixture (the env-reading branches simply don't
+>   fire). The c21 row documents this explicitly as
+>   "fixture env vars accepted in production binaries;
+>   only exercised by tests" — a deliberate
+>   m5b-internal escape hatch with no
+>   production-runtime impact. The `trybuild`
+>   compile-fence acceptance is **dropped** from both
+>   c21 AND c08 (c08's `Broker::install_publish_test_hook`
+>   stays `#[cfg(any(test, feature =
+>   "test-fixture"))]` but the compile-fence test is
+>   removed — the cfg gate is self-documenting and
+>   the absence cannot be proved by `trybuild` without
+>   either making the method public or fighting
+>   feature unification across the workspace). Cross-
+>   check entry updated. `trybuild = "1"` dropped
+>   from `crates/rafaello-core/Cargo.toml` and
+>   `crates/rafaello-fetch/Cargo.toml`
+>   `[dev-dependencies]`.
+> - **B-3** c22 PT1 test grant template pinned to
+>   `{"tool":"web-fetch","args_subset":{"url":"https://content.example.com/page"}}`
+>   — the exact URL the openai stub scripts. Live
+>   `UserGrants::matches` performs recursive
+>   exact-value subset matching (scalar leaves must
+>   be equal per live `user_grants.rs:101-132` /
+>   m5a `slash.rs:193-208`); a `{"url": ""}` template
+>   does NOT match a `{"url":
+>   "https://content.example.com/page"}` argset.
+>   The row cites the URL value and the live
+>   structural-subset semantics.
+> - **M-1** c15 helper signature pinned **without
+>   the "agent may adjust" hedge**. The signature is
+>   the authority; if live source reads a different
+>   subset, the implementation agent migrates the
+>   live block to call the helper at the pinned
+>   signature (move local-var construction into the
+>   helper's body). c17 explicitly consumes only the
+>   helper's **return value** (the JSON payload's
+>   `details.taint` field), not the helper's
+>   signature — c17 does not need to know the input
+>   list. Made explicit so any future helper-signature
+>   evolution does not ripple to c17.
+> - **M-2** c21 compile-fence test removed (B-2
+>   ripple — no more cfg gate to prove absent). The
+>   `crates/rafaello-fetch/tests/compile_fail/`
+>   directory and its `.stderr` snapshot are dropped
+>   from c21's files-touched. Cross-check
+>   "fixture-only env vars" entry updated to describe
+>   the new "unconditionally read; only fire when
+>   set" contract.
+> - **N-1** (commit-hash drift): status banner now
+>   pins the hash-stability convention; round 5
+>   does not cite hashes in the artifact text.
+>
+> ---
+>
+> Round 4 — folds `commits-pi-review-3.md`
 > (4B / 2M / 2N, **CONVERGED**). Pi-3's verification
 > table confirmed all named round-2 items closed or
 > partial-with-spawned-finding. Convergence trajectory:
@@ -1015,37 +1114,25 @@ broker-side publish test hook (added in scope round 7 as row
     sentinel); trigger one
     `publish_core_with_taint`; assert only B's
     sentinel fired (last-writer-wins).
-  - `broker_publish_test_hook_absent_in_production_builds.rs`
-    — compile-fence test (pi-2 M-4 / pi-3 N-2
-    pinned shape). Uses **`trybuild`** with an
-    explicit compile-fail file at
-    `crates/rafaello-core/tests/compile_fail/install_publish_test_hook_absent_in_production.rs`
-    that references
-    `Broker::install_publish_test_hook(...)`. The
-    fixture file imports `rafaello-core` without
-    enabling the `test-fixture` feature; the
-    `.stderr` snapshot pins the resulting "no
-    method named ..." error. The method's
-    `#[cfg(any(test, feature = "test-fixture"))]`
-    gate (pi-6 M-2 corrected syntax) is therefore
-    proved absent in production builds without a
-    custom cargo invocation (pi-3 N-2 — round-3's
-    `cargo check --no-default-features`
-    over-specification dropped). `trybuild = "1"`
-    is added to `crates/rafaello-core/Cargo.toml`
-    `[dev-dependencies]` in this commit.
+  *(Pi-2 M-4 / pi-3 N-2 compile-fence test removed
+  per pi-4 B-2 ripple: a `trybuild` fixture cannot
+  meaningfully prove absence of a private cfg-gated
+  method without either exposing a public sentinel
+  or fighting feature unification across the
+  workspace. The `#[cfg(any(test, feature =
+  "test-fixture"))]` gate is self-documenting in
+  source; round 5 trusts it. The `Broker::install_publish_test_hook`
+  method stays cfg-gated — only the compile-fence
+  test is removed.)*
   - `cargo doc -p rafaello-core --no-deps` warning-free
     (the cfg-gated method's docs describe its
     intended use).
 - **Files touched.** `crates/rafaello-core/src/bus.rs`
   (~40 lines: field + method + publish-side consult);
-  `crates/rafaello-core/Cargo.toml` (`[dev-dependencies]`
-  add `trybuild = "1"` — pi-2 M-4);
-  `crates/rafaello-core/tests/compile_fail/install_publish_test_hook_absent_in_production.rs`
-  + sibling `.stderr` snapshot (the compile-fail
-  fixture); four new test files (two `Some(err)` /
-  `None` runtime + one last-writer-wins + one
-  `trybuild` driver).
+  three new test files (two `Some(err)` / `None`
+  runtime + one last-writer-wins). No `trybuild`
+  dev-dep, no compile-fail fixture (pi-4 B-2
+  ripple).
 - **Size.** small-to-medium (~40 LoC core + ~80 LoC
   tests).
 - **Scope sections.** §TM4, scope §"Internal split" row
@@ -1800,16 +1887,15 @@ in c15's body.
          ttl_seconds: u64,
      ) -> serde_json::Value;
      ```
-     The exact parameter list mirrors the local
-     variables the inline block at `gate/mod.rs:386-401`
-     currently reads from `hold_for_confirmation`'s
-     scope. (If the live block reads a different
-     subset, the implementation agent uses the live
-     subset and adjusts the helper signature
-     accordingly — the row pins the **shape**, not
-     a guess at the per-field list; live source is
-     the ratification authority.)
-     The helper returns the same JSON payload
+     **The signature above is the authority** (pi-4
+     M-1 ripple — round-3's "agent may adjust" hedge
+     is dropped). If the live inline block at
+     `gate/mod.rs:386-401` reads a different subset
+     of local state, the implementation agent
+     migrates the live block to call the helper at
+     the pinned signature (move local-var
+     construction into the helper's body). The
+     helper returns the same JSON payload
      `hold_for_confirmation` previously constructed
      inline — same `details.taint =
      event.taint.clone().unwrap_or_default()` shape
@@ -1820,6 +1906,14 @@ in c15's body.
      value. The refactor is verified green by m5a's
      existing gate-integration tests (no test
      changes required to those).
+     **c17's dependency on the helper** (pi-4 M-1):
+     c17 consumes only the **return value** (the
+     JSON payload's `details.taint` field via
+     `payload["details"]["taint"]`), NOT the
+     helper's signature. The c17 row therefore
+     does not need to know the helper's input
+     list; future helper-signature evolution does
+     not ripple to c17.
   2. **In-module unit test** in
      `crates/rafaello-core/src/gate/mod.rs`'s
      `#[cfg(test)] mod tests` block (extend or
@@ -1966,15 +2060,18 @@ c12); only §AL1's gate-side producer remains.
 ### c17 — feat(rafaello-core): gate writes `confirm_request_taint_attached` audit row on non-provider taint (§AL1)
 
 - **What.** Scope §AL1 / pi-1 B-3 predicate / pi-2 B-1
-  ripple. Edit `crates/rafaello-core/src/gate/mod.rs`
-  (the same neighbourhood that c15 extracted
+  / pi-4 M-1 ripple. Edit
+  `crates/rafaello-core/src/gate/mod.rs` (the same
+  neighbourhood that c15 extracted
   `build_confirm_request_payload` from). c17 consumes
-  the c15-extracted helper to obtain the canonical
-  payload's taint vector without re-deriving it: after
-  `build_confirm_request_payload` returns, inspect
-  the `details.taint` field of the produced JSON
-  payload (or read `event.taint.clone().unwrap_or_default()`
-  with identical semantics). When the §AL1 predicate
+  the c15-extracted helper's **return value only**
+  (NOT its signature — pi-4 M-1): after
+  `build_confirm_request_payload(...)` returns the
+  JSON payload, read `payload["details"]["taint"]`
+  to obtain the canonical taint vector without
+  re-deriving it. c17 does not need to know the
+  helper's input list; if c15's signature evolves
+  later, c17 is unaffected. When the §AL1 predicate
   fires (canonical taint contains at least one entry
   whose `source` is NOT `\"provider\"`),
   write an audit row with kind
@@ -2273,32 +2370,35 @@ then the m5b fixture lock.
      `[[bin]] name = "rafaello-fetch"; path =
      "src/bin/rafaello_fetch.rs"`.
      `[dependencies]` (mirroring live
-     `rafaello-mailcat/Cargo.toml` — pi-3 B-1):
+     `rafaello-mailcat/Cargo.toml` literally —
+     pi-3 B-1 / pi-4 B-1):
      `fittings-client = { workspace = true }`,
      `fittings-core = { workspace = true }`,
      `fittings-transport = { workspace = true }`,
      `rafaello-core = { path =
      "../rafaello-core" }` (for `TaintEntry`,
-     `Publisher`, `BusEvent`, `JsonRpcId`), `tokio`,
+     `Publisher`, `BusEvent`),
+     `tokio = { workspace = true, features =
+     ["net", "macros", "rt-multi-thread",
+     "io-util"] }` (matching live mailcat's
+     `tokio` feature set for the
+     `OwnedReadHalf`/`OwnedWriteHalf` split),
      `tracing`, `tracing-subscriber`, `serde`,
-     `serde_json`, `async-trait`, `anyhow` (all
-     `workspace = true`). **No `fittings-server`** —
-     live bundled plugins are bus clients, not
-     servers (live `rfl_mailcat.rs:14` imports
-     `fittings_client::{Client,
-     InboundNotification}`).
-     `[features]`: `default = []`; `test-fixture =
-     []` — the cargo feature gating the m5b
-     fixture-only env-var paths in `src/lib.rs`
-     (pi-3 M-2 — both `RFL_FETCH_TEST_LOG_PATH`
-     and `RFL_FETCH_TEST_TAINT_OVERRIDE` are
-     `#[cfg(any(test, feature = "test-fixture"))]`
-     gated).
-     `[dev-dependencies]`: `tempfile`, `serial_test`,
-     `tracing-test`, `trybuild = "1"` (all
-     workspace where applicable — `trybuild` for
-     c21's compile-fence test mirroring c08's
-     pattern).
+     `serde_json`, `async-trait`, `anyhow`,
+     `ulid = { workspace = true }` (live mailcat
+     uses `ulid::Ulid` for fresh JSON-RPC
+     request-ids on the result publish — pi-4
+     B-1 ripple) (all `workspace = true` where
+     not otherwise specified). **No
+     `fittings-server`** — live bundled plugins
+     are bus clients, not servers.
+     `[features]`: `default = []` (no
+     `test-fixture` feature — pi-4 B-2 ripple:
+     the fixture env vars are read
+     unconditionally; see c21).
+     `[dev-dependencies]`: `tempfile`,
+     `serial_test`, `tracing-test` (all
+     workspace).
   3. **`crates/rafaello-fetch/src/lib.rs`**:
      `//! rafaello-fetch scaffolding.` placeholder.
      Empty for now — c21 fills the `WebFetchHandler`.
@@ -2388,107 +2488,162 @@ then the m5b fixture lock.
   c04, c13, c14, c23).
 - **Scope sections.** §TF1, pi-1 N-1.
 
-### c21 — feat(rafaello-fetch): file-backed `WebFetchHandler` library + bus-client bin mirroring live `rafaello-mailcat` + `RFL_FETCH_TEST_LOG_PATH` / `RFL_FETCH_TEST_TAINT_OVERRIDE` fixture-only env vars (§TF2)
+### c21 — feat(rafaello-fetch): file-backed library helper + bus-client bin copied from live `rafaello-mailcat` + `RFL_FETCH_TEST_LOG_PATH` / `RFL_FETCH_TEST_TAINT_OVERRIDE` fixture env vars (§TF2)
 
 - **What.** Scope §TF2 / pi-1 B-5 / pi-2 B-3 / pi-3
-  B-1 (live plugin shape mirror) / pi-3 M-2
-  (fixture-only `cfg` gates). Two coordinated edits:
+  B-1 / pi-4 B-1 (mailcat-verbatim bin) / pi-4 B-2
+  (fixture env vars accepted in production binaries,
+  exercised only by tests). Two coordinated edits:
   1. **`crates/rafaello-fetch/src/lib.rs`** — pure
      library helper (no fittings dependency in this
-     module). Replace the c20 placeholder with the
-     `WebFetchHandler` struct + free functions:
-     - `pub struct WebFetchHandler;` and `pub fn
-       handle_web_fetch(args: &serde_json::Value)
-       -> serde_json::Value`. On a `web-fetch
-       {url: String}` call: read the path in
-       `RFL_FETCH_TEST_BODY_PATH` env var; if
-       unset, return `{ok: false, error:
+     module). Replace the c20 placeholder with:
+     - `pub fn handle_web_fetch(args:
+       &serde_json::Value) -> serde_json::Value`.
+       On a `web-fetch {url: String}` call: read
+       `RFL_FETCH_TEST_BODY_PATH`; if unset,
+       return `{ok: false, error:
        "fetch_test_body_unavailable"}`. If the
        path is missing or unreadable, return the
-       same error. Otherwise, return `{ok: true,
-       content: <file contents as UTF-8 string>}`.
-       Library-only — no fittings imports here;
-       unit tests exercise the handler without a
-       bus client.
-     - **Per-invocation log** (pi-1 B-5,
-       fixture-only per pi-3 M-2): a
-       `#[cfg(any(test, feature = "test-fixture"))]
-       fn maybe_write_invocation_log(url: &str)`
-       that, when `RFL_FETCH_TEST_LOG_PATH` is set,
-       appends one line per invocation (e.g.
-       `web-fetch: <url>\n`). The append is
-       best-effort: failure to open / write the log
-       does NOT fail the handler — it logs at
-       `tracing::warn!`. Production builds
-       (`#[cfg(not(any(test, feature =
-       "test-fixture")))]`) do NOT compile the
-       function or read the env var. Called from
-       `handle_web_fetch` under the same cfg gate.
-     - **Taint-override test mode** (pi-2 B-3,
-       fixture-only per pi-3 M-2): a
-       `#[cfg(any(test, feature = "test-fixture"))]
-       fn take_taint_override() ->
-       Option<Vec<TaintEntry>>` that reads
-       `RFL_FETCH_TEST_TAINT_OVERRIDE`, parses the
-       JSON `Vec<TaintEntry>`, and returns
-       `Some(vec)` for the next publish. A
-       `OnceCell<Mutex<bool>>` flag clears the
-       override after first apply (subsequent
-       calls return `None`). Malformed JSON →
-       `tracing::error!` + return `None`. The
-       function is consumed by the bin (next
-       edit) to choose the `taint` field of the
-       outbound `bus.publish` notification.
-       Production builds do NOT compile this
-       function.
-     - The plugin does NOT issue real HTTP
-       requests. No `reqwest` dep weight + no
-       flake risk; manual validation (scope
-       §"Manual validation") exercises the
-       gate-firing path with deterministic
-       file-backed bodies. Real-network fetch is
-       post-v1 per §A6 / owner-judgment item 3.
+       same error. Otherwise return
+       `{ok: true, content: <file contents>}`.
+       The plugin does NOT issue real HTTP
+       requests (scope §A6).
+     - `pub fn maybe_write_invocation_log(url:
+       &str)` — **unconditionally compiled** (no
+       `cfg` gate; pi-4 B-2): if
+       `RFL_FETCH_TEST_LOG_PATH` is set in the
+       current process environment, append one
+       line per invocation (`web-fetch:
+       <url>\n`); else no-op. Best-effort —
+       open/write failures log at
+       `tracing::warn!` and do not fail the
+       handler. Production builds compile the
+       function but the branch is a no-op when
+       the env var is unset (which is the
+       production-runtime expectation —
+       fixture env vars accepted in production
+       binaries, exercised only by tests).
+     - `pub fn take_taint_override() ->
+       Option<Vec<TaintEntry>>` — **unconditionally
+       compiled** (no `cfg` gate; pi-4 B-2): if
+       `RFL_FETCH_TEST_TAINT_OVERRIDE` is set,
+       parse the JSON `Vec<TaintEntry>`; the
+       function uses a process-local
+       `OnceLock<Mutex<bool>>` flag so the
+       override is consumed once per process
+       lifetime (subsequent calls return `None`).
+       Malformed JSON → `tracing::error!` and
+       return `None`. Env-unset → return `None`
+       immediately without locking. Production
+       builds with the env var unset see one
+       env-lookup and an `Option` return; the
+       branch's runtime cost is negligible.
+     - **Pi-4 B-2 documentation note** to be
+       inlined as a `//!`-style doc comment at
+       the top of `lib.rs`:
+       > Fixture env vars accepted in
+       > production binaries; only exercised by
+       > tests. `RFL_FETCH_TEST_BODY_PATH` is
+       > the load-bearing test-input mechanism
+       > per scope §TF2 / §A6. `RFL_FETCH_TEST_LOG_PATH`
+       > and `RFL_FETCH_TEST_TAINT_OVERRIDE`
+       > are m5b test-fixture escape hatches
+       > (pi-1 B-5 / pi-2 B-3). The plugin
+       > reads all three unconditionally; their
+       > code paths are simple `if let Ok(...)`
+       > branches that no-op when the env var
+       > is unset. Production-runtime impact
+       > is zero when the env vars are unset.
+     - No `#[cfg]` gates on any of the three
+       functions; no `test-fixture` cargo
+       feature on the crate.
   2. **`crates/rafaello-fetch/src/bin/rafaello_fetch.rs`**
-     — bus-client bin mirroring live
-     `crates/rafaello-mailcat/src/bin/rfl_mailcat.rs:14,
-     93-103` (pi-3 B-1). Replace the c20 placeholder
-     `main` with a bus-client `#[tokio::main]` shape:
-     - Read `RFL_BUS_FD` (the fittings
-       broker-side file descriptor injected by the
-       supervisor; m5a-shipped).
-     - Construct a `fittings_client::Client::new(fd)`
-       and obtain its `Peer` handle.
-     - Subscribe to `bus.event` via
-       `peer.notify("bus.subscribe", json!({
-       "topics": ["plugin.<canonical>.tool_request"]
-       }))`. The `<canonical>` substring is
-       resolved from the m5a-shipped startup
-       handshake — the live bundled plugins
-       receive their canonical id via the same
-       env-var / handshake path as mailcat.
-     - Main loop awaits `InboundNotification`s via
-       `client.recv()`. For each
-       `plugin.<canonical>.tool_request` inbound:
-       call `handle_web_fetch(&args)` on the
-       library; build the `tool_result` payload;
-       determine the `taint` field:
-       `#[cfg(any(test, feature = "test-fixture"))]
-       { take_taint_override() }` — `Some(vec)`
-       supplies the override on this publish only;
-       `None` leaves the publish as the m5a
-       default (no `taint` field, equivalent to
-       `taint: None`).
-       Publish via `peer.notify("bus.publish",
-       json!({ "topic":
-       "plugin.<canonical>.tool_result", "payload":
-       payload, "in_reply_to": [inbound.request_id],
-       "request_id": <fresh JsonRpcId>, "taint":
-       taint_value }))`. The notification shape
-       matches live `rfl_mailcat.rs:93-103`
-       verbatim — pi-3 B-1 ripple.
-     - On shutdown (broker drops the client side
-       of `RFL_BUS_FD`): exit cleanly. Live
-       mailcat's shutdown handling is copied.
+     — bus-client bin **copied verbatim from live
+     `crates/rafaello-mailcat/src/bin/rfl_mailcat.rs`**
+     (pi-4 B-1). The structural template:
+     ```rust
+     use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+     use anyhow::{anyhow, Context, Result};
+     use fittings_client::{Client, InboundNotification};
+     use fittings_core::context::PeerHandle;
+     use fittings_core::message::JsonRpcId;
+     use fittings_core::transport::Connector;
+     use fittings_transport::stdio::StdioTransport;
+     use rafaello_fetch::{
+         handle_web_fetch,
+         maybe_write_invocation_log,
+         take_taint_override,
+     };
+     use serde_json::{json, Value};
+     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+     use tokio::sync::broadcast;
+     use ulid::Ulid;
+
+     type BusTransport =
+         StdioTransport<OwnedReadHalf, OwnedWriteHalf>;
+
+     #[tokio::main(flavor = "current_thread")]
+     async fn main() -> Result<()> {
+         let fd = parse_bus_fd()?;
+         let topic_id =
+             std::env::var("RFL_TOPIC_ID")
+             .context("RFL_TOPIC_ID not set")?;
+         let transport = adopt_bus_fd(fd)
+             .context("rafaello-fetch: adopt bus fd")?;
+         let client = Client::connect(
+             OneShotConnector::new(transport))
+             .await
+             .context("rafaello-fetch: client connect")?;
+         let notifications =
+             client.subscribe_notifications();
+         let peer = client.peer();
+         run_loop(notifications, peer, topic_id).await
+     }
+     ```
+     The `run_loop`, `parse_bus_fd`, `adopt_bus_fd`,
+     and `OneShotConnector` definitions are copied
+     verbatim from live `rfl_mailcat.rs:57-end`.
+     The `run_loop` body's per-notification handling:
+     - filter `note.method != "bus.event"` (skip);
+     - read `topic` from `params`; filter against
+       `format!("plugin.{}.tool_request", topic_id)`;
+     - read `bus_request_id: Option<JsonRpcId>` from
+       `params["request_id"]`; skip if `None`;
+     - read `payload` from `params["payload"]`;
+     - call `handle_web_fetch(&payload)` →
+       `tool_result_payload`;
+     - call `maybe_write_invocation_log(<url
+       extracted from payload>)`;
+     - determine `taint`:
+       `take_taint_override()` →
+       `Some(vec)` supplies the override
+       once-per-process; `None` leaves the publish
+       without a `taint` field (same as live
+       mailcat's publish, equivalent to
+       `taint: None`);
+     - publish via `peer.notify("bus.publish",
+       json!({ "topic": result_topic, "payload":
+       tool_result_payload, "request_id":
+       JsonRpcId::String(Ulid::new().to_string()),
+       "in_reply_to": [bus_request_id], "taint":
+       taint_value /* if Some */ }))`. When
+       `taint_value` is `None`, the `taint` key is
+       omitted from the JSON object (live
+       mailcat shape).
+     - On `broadcast::error::RecvError::Closed`
+       from `notifications.recv()`, return `Ok(())`;
+       on `Lagged`, `continue`. Identical to live
+       mailcat (`rfl_mailcat.rs:65-69`).
+
+     **No `Client::new(fd)`**, **no
+     `peer.notify("bus.subscribe", ...)`**, **no
+     `client.recv()`** — pi-4 B-1 corrections.
+     `Client::subscribe_notifications()` returns
+     the `broadcast::Receiver` directly; topic
+     filtering happens in the loop, not via a
+     subscribe RPC (the supervisor's ACL routes
+     events to the plugin automatically per the
+     m1-shipped subscribe table).
 - **Why.** Scope §TF2 / §A6 + pi-1 B-5 + pi-2 B-3.
   The invocation-log surface must exist by c22's
   time (c22 pins `RFL_FETCH_TEST_LOG_PATH` in
@@ -2557,36 +2712,31 @@ then the m5b fixture lock.
     first publish carries the override and the
     second carries `None` (the OnceCell flag
     cleared the override after first apply).
-  - `rafaello_fetch_fixture_envvars_absent_in_production_builds.rs`
-    (pi-3 M-2 acceptance) — `trybuild` compile-fail
-    fixture at
-    `crates/rafaello-fetch/tests/compile_fail/fixture_envvars_absent.rs`
-    that references `take_taint_override()` or
-    `maybe_write_invocation_log(...)`; the
-    fixture imports `rafaello-fetch` without
-    enabling its `test-fixture` feature; the
-    `.stderr` snapshot proves both functions are
-    absent in production builds. Mirrors c08's
-    compile-fence pattern.
+  *(Pi-3 M-2 compile-fence test removed per pi-4
+  M-2: the env-var functions are no longer
+  `cfg`-gated; nothing to prove absent in
+  production.)*
 - **Files touched.** `crates/rafaello-fetch/src/lib.rs`
-  (library helper + cfg-gated fixture-only
-  functions, ~130 lines);
+  (library helper + unconditional env-var
+  functions + doc note, ~120 lines);
   `crates/rafaello-fetch/src/bin/rafaello_fetch.rs`
-  (bus-client bin mirroring `rfl_mailcat.rs`,
-  ~120 lines);
-  `crates/rafaello-fetch/tests/compile_fail/fixture_envvars_absent.rs`
-  + sibling `.stderr` (~10 lines fixture);
-  nine new test files.
-- **Size.** medium (~250 LoC production + ~300 LoC
-  tests). Body justification: §TF2 handler + §EXFIL1
-  per-fixture log surface (pi-1 B-5) + pi-2 B-3
-  taint-override mode + pi-3 B-1 live-plugin-shape
-  mirror + pi-3 M-2 fixture-only `cfg` gates are
-  one coherent fetch-plugin bundle; splitting the
-  library from the bus-client bin would leave a
+  (bus-client bin copied verbatim from live
+  `rfl_mailcat.rs`, ~150 lines);
+  `crates/rafaello-fetch/Cargo.toml` (dependencies
+  per c20 mailcat-mirror list);
+  eight new test files (the three handler
+  body-path tests + log-on/off tests + three
+  taint-override tests; no compile-fail fixture).
+- **Size.** medium (~270 LoC production + ~270
+  LoC tests). Body justification: §TF2 handler +
+  §EXFIL1 per-fixture log surface (pi-1 B-5) +
+  pi-2 B-3 taint-override mode + pi-3 B-1 / pi-4
+  B-1 live-plugin-shape mirror are one coherent
+  fetch-plugin bundle; splitting the library
+  from the bus-client bin would leave a
   half-wired plugin in an intermediate commit.
 - **Scope sections.** §TF2, §A6, pi-1 B-5, pi-2
-  B-3, pi-3 B-1, pi-3 M-2.
+  B-3, pi-3 B-1, pi-4 B-1, pi-4 B-2, pi-4 M-2.
 
 ### c22 — feat(rafaello): m5b fixture lock chaining FIVE plugins + env.pass for `RFL_FETCH_TEST_BODY_PATH` + `RFL_FETCH_TEST_LOG_PATH` + `RFL_FETCH_TEST_TAINT_OVERRIDE` (§TF3)
 
@@ -2737,22 +2887,31 @@ then the m5b fixture lock.
       contain the dispatch entry's
       `tool_request_taint` `[{provider, openai}]`).
     - **`RFL_TUI_TEST_GRANT_BEFORE_MESSAGE`** (pi-3
-      B-3 grant-injection mechanism) set to a JSON
-      object matching the lock's
-      `web-fetch.grant_match` schema, e.g.
-      `'{"tool": "web-fetch", "args_subset":
-      {"url": ""}}'`. The m5a-shipped c37 TUI test
-      hook publishes a synthetic
-      `frontend.tui.slash_command` carrying a
-      `/grant` payload on TUI startup, **before**
-      the test message is sent. The core-side
-      slash handler (m5a c18) calls
-      `UserGrants::insert` for the
-      `web-fetch` tool. When the openai-stub-driven
-      `web-fetch` `tool_request` reaches the gate,
-      the grant-match short-circuit path fires
-      (live `gate/mod.rs:558-610`) and dispatch
-      proceeds **without a modal**.
+      B-3 grant-injection / pi-4 B-3 exact-URL
+      ripple) set to the exact-match template
+      `'{"tool":"web-fetch","args_subset":{"url":"https://content.example.com/page"}}'`
+      — the same URL the openai stub scripts for
+      the `web-fetch` call. Live
+      `UserGrants::matches` performs **recursive
+      exact-value subset matching**: scalar leaves
+      must be equal (live
+      `user_grants.rs:101-132`); a `{"url": ""}`
+      template would NOT match a `{"url":
+      "https://content.example.com/page"}` argset
+      and the gate would still fire a confirm
+      modal. Live slash parsing turns
+      `args_subset` into a structural grant
+      template (live `slash.rs:193-208`); the
+      template above matches the structural shape
+      AND the exact URL value, so the c18
+      slash-handler's `UserGrants::insert` stores
+      a grant that matches the stub's scripted
+      `web-fetch` call exactly. When the
+      openai-stub-driven `web-fetch`
+      `tool_request` reaches the gate, the
+      grant-match short-circuit fires (live
+      `gate/mod.rs:558-610`) and dispatch proceeds
+      **without a modal**.
     - `RFL_TUI_TEST_MESSAGE = "please fetch
       content.example.com/page"` (any string that
       the openai stub responds to with a
@@ -3360,28 +3519,30 @@ union arm, these rows slot before the c23-c25 EXFIL block.
   env vars introduced in c21 / c22.
 - **`siphasher = "1"` is the only new workspace dep**
   added by m5b (scope §"Risks" #18). Lands at c05.
-  `trybuild = "1"` lands as a **`[dev-dependencies]`**
-  addition on `crates/rafaello-core/Cargo.toml`
-  (c08) and `crates/rafaello-fetch/Cargo.toml` (c21),
-  not a workspace dep.
-- **Fixture-only env vars** (pi-3 M-2): the m5b
+  No `trybuild` dev-dep is added (pi-4 B-2 / M-2
+  ripple — round-4's compile-fence acceptance was
+  dropped from c08 and c21).
+- **Fixture env vars accepted in production
+  binaries** (pi-4 B-2 update — supersedes pi-3
+  M-2's `cfg`-gating direction): the m5b
   test-fixture escape hatches —
   `RFL_FETCH_TEST_LOG_PATH` and
-  `RFL_FETCH_TEST_TAINT_OVERRIDE` — are
-  `#[cfg(any(test, feature = "test-fixture"))]`
-  gated in `crates/rafaello-fetch/src/lib.rs` (c21).
-  Production `rafaello-fetch` builds neither read
-  the env vars nor compile the branches. c21's
-  `trybuild` compile-fail fixture pins the absence.
-  The c22 lock pins all three (`RFL_FETCH_TEST_BODY_PATH`
-  — `BODY_PATH` is in-scope per §TF2 and lives in
-  production; `LOG_PATH` and `TAINT_OVERRIDE` are
-  fixture-only) in `env.pass` because lock-side
-  passthrough is a runtime decision, not a
-  compile-time one — a production build of
-  `rafaello-fetch` linked against the c22 lock
-  simply ignores the two fixture-only env vars
-  even if they reach the plugin process.
+  `RFL_FETCH_TEST_TAINT_OVERRIDE` — are read
+  **unconditionally** in
+  `crates/rafaello-fetch/src/lib.rs` (c21). Their
+  code paths are simple `if let Ok(...)` branches
+  that no-op when the env var is unset. Production
+  builds compile the branches; production-runtime
+  impact is zero because the env vars are unset
+  outside test fixtures. The c22 lock pins all
+  three (`RFL_FETCH_TEST_BODY_PATH` — `BODY_PATH`
+  is in-scope per §TF2 and is the load-bearing
+  test-input mechanism; `LOG_PATH` and
+  `TAINT_OVERRIDE` are fixture escape hatches) in
+  `env.pass`. The contract is documented as a
+  `//!` doc note at the top of
+  `crates/rafaello-fetch/src/lib.rs` per c21's
+  pi-4 B-2 note.
 - **No new `crates/` workspace member beyond
   `rafaello-fetch`** (scope §TF1) — m5a's openai +
   stub + mailcat all reused.
@@ -3501,17 +3662,18 @@ Pi round budget on `commits.md`: 4-6 rounds. m5a took
 6 rounds for a 41-commit body; m5b is narrower (28
 commits) but the test-ladder coupling between c10 /
 c12 / c13 and the §PT1 critical-section unsplittable
-in c14 are pi-attention magnets. Round 4 folds pi-3's
-4B/2M/2N — pi-3's convergence call said "round 4 can
-converge if those are fixed without expanding the
-commit count" and the round-4 fold preserves the
-28-commit total. **Round 4 is the convergence
-draft** — ready for owner ratification.
+in c14 are pi-attention magnets. Round 5 folds pi-4's
+3B/2M/1N — mechanical handoff fixes (live
+bus-client API verbatim, fixture env vars
+unconditionally compiled, exact-URL grant template,
+helper-signature pinning without hedge). 28-commit
+total preserved. **Round 5 is the genuine
+convergence draft** — ready for owner ratification.
 
 ---
 
-*End of m5b commits.md round 4 — folds pi-3
-(4B/2M/2N), CONVERGED. Convergence trajectory:
-5B → 3B → 4B → CONVERGED. 28 commits total
-preserved per pi-3 convergence-call cap. Ready
-for owner ratification.*
+*End of m5b commits.md round 5 — folds pi-4
+(3B/2M/1N), CONVERGED. Convergence trajectory:
+5B → 3B → 4B → 3B → CONVERGED. 28 commits total
+preserved across all five rounds. Ready for owner
+ratification.*
