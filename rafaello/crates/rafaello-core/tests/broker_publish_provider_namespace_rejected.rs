@@ -41,7 +41,12 @@ fn provider_namespace_rejected() {
         .expect("registration succeeds");
 
     let bad = "provider.openai.tool_request";
-    let params = serde_json::json!({"topic": bad, "payload": {}});
+    let params = serde_json::json!({
+        "topic": bad,
+        "payload": {},
+        "in_reply_to": [rafaello_core::bus::JsonRpcId::from("req-1")],
+        "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
+    });
     let err = broker
         .handle_plugin_publish(&canonical, &params)
         .expect_err("must be rejected");

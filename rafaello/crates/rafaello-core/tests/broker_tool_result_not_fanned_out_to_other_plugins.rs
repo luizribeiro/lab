@@ -62,6 +62,7 @@ fn tool_result_not_fanned_out_to_other_plugins() {
         "topic": topic,
         "payload": {"ok": true},
         "in_reply_to": [7],
+        "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
     });
     broker
         .handle_plugin_publish(&a, &params)

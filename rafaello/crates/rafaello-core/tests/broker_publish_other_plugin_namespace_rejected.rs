@@ -42,7 +42,12 @@ fn cross_plugin_masquerade_rejected() {
         .expect("registration succeeds");
 
     let bad = format!("plugin.{topic_id_b}.tool_result");
-    let params = serde_json::json!({"topic": bad, "payload": {}});
+    let params = serde_json::json!({
+        "topic": bad,
+        "payload": {},
+        "in_reply_to": [rafaello_core::bus::JsonRpcId::from("req-1")],
+        "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
+    });
     let err = broker
         .handle_plugin_publish(&canonical_a, &params)
         .expect_err("must be rejected");

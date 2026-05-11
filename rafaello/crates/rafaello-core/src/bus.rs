@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -11,6 +11,28 @@ pub use fittings_core::message::JsonRpcId;
 
 use crate::broker_acl::{AttachId, BrokerAcl, FrontendAcl, PluginAcl};
 use crate::error::{BrokerError, InReplyToReason, Publisher};
+
+const REQUEST_ID_REQUIRED_SUFFIXES: &[&str] = &[
+    "tool_request",
+    "tool_result",
+    "assistant_message",
+    "user_message",
+];
+
+fn enforce_b0_request_id(
+    make_publisher: impl FnOnce() -> Publisher,
+    topic: &str,
+    msg_request_id: Option<&JsonRpcId>,
+) -> Result<(), BrokerError> {
+    let last = topic.rsplit('.').next().unwrap_or("");
+    if REQUEST_ID_REQUIRED_SUFFIXES.contains(&last) && msg_request_id.is_none() {
+        return Err(BrokerError::MissingRequestId {
+            publisher: make_publisher(),
+            topic: topic.to_string(),
+        });
+    }
+    Ok(())
+}
 use crate::lock::canonical_id::CanonicalId;
 use crate::validate::topic::{pattern_matches_topic, validate_pattern, validate_topic};
 
@@ -87,6 +109,9 @@ struct BrokerState {
 struct BrokerInner {
     acl: BrokerAcl,
     state: Mutex<BrokerState>,
+    provider_observed_results: Mutex<BTreeMap<CanonicalId, HashSet<JsonRpcId>>>,
+    provider_observed_user_messages: Mutex<BTreeMap<CanonicalId, HashSet<JsonRpcId>>>,
+    inbound_provider_events: Mutex<Vec<BusEvent>>,
 }
 
 #[derive(Clone)]
@@ -146,6 +171,9 @@ impl Broker {
                 frontends: BTreeMap::new(),
                 providers: BTreeMap::new(),
             }),
+            provider_observed_results: Mutex::new(BTreeMap::new()),
+            provider_observed_user_messages: Mutex::new(BTreeMap::new()),
+            inbound_provider_events: Mutex::new(Vec::new()),
         })))
     }
 
@@ -313,6 +341,11 @@ impl Broker {
             topic: msg.topic.clone(),
             reason: ve.to_string(),
         })?;
+        enforce_b0_request_id(
+            || Publisher::Plugin(canonical.clone()),
+            &msg.topic,
+            msg.request_id.as_ref(),
+        )?;
         let segments: Vec<&str> = msg.topic.split('.').collect();
         let publisher_acl = self
             .0
@@ -391,6 +424,166 @@ impl Broker {
         Ok(())
     }
 
+    pub fn handle_provider_publish(
+        &self,
+        canonical: &CanonicalId,
+        raw_params: &serde_json::Value,
+    ) -> Result<(), BrokerError> {
+        if !self.0.state.lock().providers.contains_key(canonical) {
+            return Err(BrokerError::ProviderNotRegistered(canonical.clone()));
+        }
+        let publisher_acl = self
+            .0
+            .acl
+            .plugins
+            .get(canonical)
+            .expect("registered provider has acl entry");
+        let provider_id = publisher_acl
+            .provider_id
+            .clone()
+            .expect("registered provider has provider_id");
+        let make_publisher = || Publisher::Provider {
+            canonical: canonical.clone(),
+            provider_id: provider_id.clone(),
+        };
+        let msg: PublishMsg = serde_json::from_value(raw_params.clone()).map_err(|e| {
+            BrokerError::InvalidPayload {
+                publisher: make_publisher(),
+                reason: e.to_string(),
+            }
+        })?;
+        validate_topic(&msg.topic).map_err(|ve| BrokerError::InvalidTopic {
+            publisher: make_publisher(),
+            topic: msg.topic.clone(),
+            reason: ve.to_string(),
+        })?;
+        let segments: Vec<&str> = msg.topic.split('.').collect();
+        match segments[0] {
+            "core" | "plugin" | "frontend" => {
+                return Err(BrokerError::PublishOnReservedNamespace {
+                    publisher: make_publisher(),
+                    topic: msg.topic.clone(),
+                });
+            }
+            "provider" => {
+                if segments.len() < 3 || segments[1] != provider_id.as_str() {
+                    return Err(BrokerError::PublishOnReservedNamespace {
+                        publisher: make_publisher(),
+                        topic: msg.topic.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(BrokerError::UnknownNamespace {
+                    publisher: make_publisher(),
+                    topic: msg.topic.clone(),
+                });
+            }
+        }
+        if !publisher_acl.publish_topics.iter().any(|t| t == &msg.topic) {
+            return Err(BrokerError::PublishOutsideGrant {
+                publisher: make_publisher(),
+                topic: msg.topic.clone(),
+            });
+        }
+        enforce_b0_request_id(make_publisher, &msg.topic, msg.request_id.as_ref())?;
+
+        let last = *segments.last().expect("validate_topic ensures non-empty");
+        if last == "tool_request" {
+            let ids = match msg.in_reply_to.as_ref() {
+                None => {
+                    return Err(BrokerError::InvalidInReplyTo {
+                        publisher: make_publisher(),
+                        topic: msg.topic.clone(),
+                        reason: InReplyToReason::Missing,
+                    });
+                }
+                Some(v) => v,
+            };
+            let results = self.0.provider_observed_results.lock();
+            let empty = HashSet::new();
+            let observed = results.get(canonical).unwrap_or(&empty);
+            for id in ids {
+                if !observed.contains(id) {
+                    return Err(BrokerError::InvalidInReplyTo {
+                        publisher: make_publisher(),
+                        topic: msg.topic.clone(),
+                        reason: InReplyToReason::StaleRequestId { id: id.clone() },
+                    });
+                }
+            }
+        } else if last == "assistant_message" {
+            let ids = match msg.in_reply_to.as_ref() {
+                None => {
+                    return Err(BrokerError::InvalidInReplyTo {
+                        publisher: make_publisher(),
+                        topic: msg.topic.clone(),
+                        reason: InReplyToReason::Missing,
+                    });
+                }
+                Some(v) => v,
+            };
+            let results = self.0.provider_observed_results.lock();
+            let user_msgs = self.0.provider_observed_user_messages.lock();
+            let empty = HashSet::new();
+            let r = results.get(canonical).unwrap_or(&empty);
+            let u = user_msgs.get(canonical).unwrap_or(&empty);
+            for id in ids {
+                if !r.contains(id) && !u.contains(id) {
+                    return Err(BrokerError::InvalidInReplyTo {
+                        publisher: make_publisher(),
+                        topic: msg.topic.clone(),
+                        reason: InReplyToReason::StaleRequestId { id: id.clone() },
+                    });
+                }
+            }
+        }
+
+        let event = BusEvent {
+            topic: msg.topic.clone(),
+            payload: msg.payload.clone(),
+            publisher: PublisherIdentity::Provider {
+                canonical: canonical.to_string(),
+                provider_id: provider_id.clone(),
+                topic_id: publisher_acl.topic_id.clone(),
+            },
+            in_reply_to: msg.in_reply_to.clone(),
+            taint: None,
+            request_id: msg.request_id.clone(),
+        };
+        self.0.inbound_provider_events.lock().push(event);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn seed_provider_observed_result_for_test(&self, canonical: &CanonicalId, id: JsonRpcId) {
+        self.0
+            .provider_observed_results
+            .lock()
+            .entry(canonical.clone())
+            .or_default()
+            .insert(id);
+    }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn seed_provider_observed_user_message_for_test(
+        &self,
+        canonical: &CanonicalId,
+        id: JsonRpcId,
+    ) {
+        self.0
+            .provider_observed_user_messages
+            .lock()
+            .entry(canonical.clone())
+            .or_default()
+            .insert(id);
+    }
+
+    #[cfg(any(test, feature = "test-fixture"))]
+    pub fn drain_inbound_provider_events_for_test(&self) -> Vec<BusEvent> {
+        std::mem::take(&mut *self.0.inbound_provider_events.lock())
+    }
+
     pub fn handle_frontend_publish(
         &self,
         attach_id: &AttachId,
@@ -422,6 +615,11 @@ impl Broker {
             topic: msg.topic.clone(),
             reason: ve.to_string(),
         })?;
+        enforce_b0_request_id(
+            || Publisher::Frontend(attach_id.clone()),
+            &msg.topic,
+            msg.request_id.as_ref(),
+        )?;
         let segments: Vec<&str> = msg.topic.split('.').collect();
         let frontend_acl = self
             .0

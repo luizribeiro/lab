@@ -88,6 +88,7 @@ fn rejection_event_fires_with_expected_code_for_each_class() {
             serde_json::json!({
                 "topic": format!("plugin.{p_topic_id}.tool_result"),
                 "payload": {},
+                "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
             }),
             "invalid_in_reply_to_missing",
         ),

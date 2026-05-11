@@ -41,7 +41,12 @@ fn tool_result_in_reply_to_empty_rejected() {
         .register_plugin(canonical.clone(), peer)
         .expect("registration succeeds");
 
-    let params = serde_json::json!({"topic": topic, "payload": {}, "in_reply_to": []});
+    let params = serde_json::json!({
+        "topic": topic,
+        "payload": {},
+        "in_reply_to": [],
+        "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
+    });
     let err = broker
         .handle_plugin_publish(&canonical, &params)
         .expect_err("must be rejected");

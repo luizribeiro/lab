@@ -45,6 +45,7 @@ fn tool_result_in_reply_to_multiple_rejected() {
         "topic": topic,
         "payload": {},
         "in_reply_to": ["req-1", "req-2"],
+        "request_id": rafaello_core::bus::JsonRpcId::from("req-1"),
     });
     let err = broker
         .handle_plugin_publish(&canonical, &params)
