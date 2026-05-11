@@ -259,6 +259,7 @@ impl ReemitRouter {
                                     &provider_id,
                                     confirm_state.as_ref(),
                                     audit.as_ref(),
+                                    &taint_match,
                                     #[cfg(any(test, feature = "test-fixture"))]
                                     confirm_race_hook.as_ref(),
                                     &event,
@@ -282,6 +283,7 @@ fn dispatch_event(
     provider_id: &str,
     confirm_state: Option<&Arc<ConfirmState>>,
     audit: Option<&Arc<AuditWriter>>,
+    taint_match: &TaintMatchMap,
     #[cfg(any(test, feature = "test-fixture"))] confirm_race_hook: Option<&TestConfirmRaceHook>,
     event: &BusEvent,
     injected: Option<BrokerError>,
@@ -294,7 +296,7 @@ fn dispatch_event(
     let segments: Vec<&str> = event.topic.split('.').collect();
     let result: Result<(), String> = match segments.as_slice() {
         ["frontend", "tui", "user_message"] => {
-            handle_user_message(broker, event).map_err(|e| e.to_string())
+            handle_user_message(broker, taint_match, event).map_err(|e| e.to_string())
         }
         ["frontend", "tui", "confirm_answer"] => handle_confirm_answer(
             broker,
@@ -312,7 +314,7 @@ fn dispatch_event(
             handle_assistant_message(broker, provider_id, event).map_err(|e| e.to_string())
         }
         seg if seg.len() == 3 && seg[0] == "plugin" && seg[2] == "tool_result" => {
-            handle_tool_result(broker, acl, event).map_err(|e| e.to_string())
+            handle_tool_result(broker, acl, taint_match, event).map_err(|e| e.to_string())
         }
         _ => {
             tracing::debug!(
@@ -329,11 +331,22 @@ fn dispatch_event(
 }
 
 /// §CR5: `frontend.tui.user_message` → `core.session.user_message`.
-fn handle_user_message(broker: &Broker, event: &BusEvent) -> Result<(), BrokerError> {
+///
+/// §TR2: the user-source-only canonical taint is recorded into the
+/// router-owned `TaintMatchMap` before the canonical publish so any
+/// subscriber that observes the canonical event finds the map already
+/// populated. On publish failure the recorded entry is TTL-bounded
+/// stale (provenance overreach is harmless, underreach silently drops).
+fn handle_user_message(
+    broker: &Broker,
+    taint_match: &TaintMatchMap,
+    event: &BusEvent,
+) -> Result<(), BrokerError> {
     let taint = vec![TaintEntry {
         source: "user".to_string(),
         detail: None,
     }];
+    taint_match.record(&event.payload, &taint);
     broker.publish_core_with_taint(
         "core.session.user_message",
         event.payload.clone(),
@@ -433,9 +446,17 @@ fn handle_assistant_message(
 }
 
 /// §CR3: `plugin.<topic-id>.tool_result` → `core.session.tool_result`.
+///
+/// §TR1 (refresh-map half): the tool-source-only canonical taint is
+/// recorded into the router-owned `TaintMatchMap` before the canonical
+/// publish so any subscriber that observes the canonical event finds the
+/// map already populated. c13 extends the recorded vector to the full
+/// ancestry union; this commit records the tool-source-only shape. On
+/// publish failure the recorded entry is TTL-bounded stale.
 fn handle_tool_result(
     broker: &Broker,
     acl: &BrokerAcl,
+    taint_match: &TaintMatchMap,
     event: &BusEvent,
 ) -> Result<(), BrokerError> {
     let canonical_str = match &event.publisher {
@@ -458,6 +479,7 @@ fn handle_tool_result(
         source: "tool".to_string(),
         detail: Some(canonical.to_string()),
     }];
+    taint_match.record(&event.payload, &taint);
     broker.publish_core_with_taint(
         "core.session.tool_result",
         event.payload.clone(),
