@@ -1,5 +1,6 @@
 //! `rafaello` library: CLI surface and shared types for the `rfl` binary.
 
+pub mod audit_cli;
 pub mod bundled;
 pub mod chat;
 pub mod init;
@@ -71,6 +72,9 @@ pub enum RflChatCommand {
     Install(install::InstallArgs),
     /// Print a per-plugin status summary from `${PROJECT_ROOT}/rafaello.lock`.
     Status,
+    /// Print rows from `${PROJECT_ROOT}/.rafaello/state/session.sqlite`'s
+    /// `audit_events` table (scope §D1).
+    Audit(audit_cli::AuditArgs),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -851,6 +855,13 @@ pub fn run_cli() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("rfl-status: {err}");
+                    ExitCode::FAILURE
+                }
+            },
+            RflChatCommand::Audit(args) => match audit_cli::run(args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("rfl-audit: {err}");
                     ExitCode::FAILURE
                 }
             },
