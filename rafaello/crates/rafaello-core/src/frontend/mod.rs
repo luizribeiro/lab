@@ -201,8 +201,8 @@ impl FrontendSupervisor {
 
         // Step 6: stderr piped.
         command.stderr(std::process::Stdio::piped());
-        command.stdin(std::process::Stdio::null());
-        command.stdout(std::process::Stdio::null());
+        command.stdin(std::process::Stdio::inherit());
+        command.stdout(std::process::Stdio::inherit());
 
         // Step 7: spawn.
         let mut child = command
