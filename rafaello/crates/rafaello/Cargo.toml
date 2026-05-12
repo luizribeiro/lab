@@ -34,3 +34,4 @@ tracing-test = { workspace = true }
 nix = { workspace = true }
 rusqlite = { workspace = true }
 chrono = { workspace = true }
+ulid = { workspace = true }
