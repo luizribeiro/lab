@@ -1,9 +1,79 @@
 # m6.1 — v0.1.1 cold-start patches — commits
 
-> **Status:** round 1 — claude-authored 2026-05-12, awaiting
-> pi round 1. Built on top of `scope.md` round-5 CONVERGED
-> (`6912344`, owner-ratified). Six commits, sized 5–10 per
-> the owner directive.
+> **Status:** round 2 — claude-authored 2026-05-12, awaiting
+> pi round 2. Folds `commits-pi-review-1.md` (2B / 4M / 3N,
+> BLOCKING) on top of round 1.
+>
+> **Round-2 changelog (every pi-1 finding folded):**
+>
+> - **B-1 (c05 missing `ulid` dev-dep).** `ulid` is a
+>   workspace-level dep but not a direct dep of the
+>   `rafaello` crate. Round-2 c05 explicitly adds
+>   `ulid = { workspace = true }` to
+>   `rafaello/crates/rafaello/Cargo.toml`
+>   `[dev-dependencies]` and updates the c05 files-touched
+>   count.
+> - **B-2 (c05 missing Linux-only cfg gate).** cK5 carries
+>   `#![cfg(target_os = "linux")]` at file top because the
+>   lockin/syd/PTY stack is Linux-only. Round-2 c05 adds
+>   the same cfg gate to `rfl_chat_ctrl_c_quits_cleanly.rs`.
+> - **M-1 (c01 test seam for `current_exe()`-relative
+>   release paths).** Round-2 c01 introduces private
+>   `*_from_exe_parent(parent: &Path, names: &BundledPluginNames)`
+>   helper functions that the public `resolve_*` fns
+>   delegate to with `std::env::current_exe()?.parent()`.
+>   The unit tests target the `_from_exe_parent` seam with
+>   a `tempfile::tempdir()`-rooted exe-parent, avoiding any
+>   mutation of the actual test binary's target tree. The
+>   `not_found_lists_all_arms` test wording is also fixed
+>   per pi-1 M-1 (use a `BundledPluginNames` with a name
+>   whose `runtime_bin` is absent under the temp exe parent
+>   — workspace exists in the dev-fallback sense but the
+>   binary is absent).
+> - **M-2 (c02 SHA-256 introduces a new dep).** Round-2 c02
+>   acceptance switches from SHA-256 hashing to raw
+>   `Vec<u8>` byte equality. No new dep needed. Equivalent
+>   coverage; simpler test.
+> - **M-3 (c06 provenance).** Round-2 c06 adds a
+>   `transcripts/v0_1_1/00-CONTEXT.md` provenance file with
+>   the required metadata (date, hostname or worktree path,
+>   `git rev-parse HEAD`, `tmux -V`, terminal width × height,
+>   exact `cargo build` / `rfl` path used, whether
+>   `CARGO_BIN_EXE_*` / `RFL_BUNDLED_BIN_OPENAI` were
+>   present). Transcripts themselves remain plain text.
+> - **M-4 (acceptance commands drift).** Round-2 c02 / c03 /
+>   c04 / c05 acceptance commands match the scope demo-bar
+>   shape exactly:
+>   `cargo test --manifest-path rafaello/Cargo.toml
+>   --workspace --features rafaello-core/test-fixture -p
+>   rafaello --test <name>`. The c01 acceptance (in-file
+>   unit tests) remains `cargo test --manifest-path
+>   rafaello/Cargo.toml --workspace --features
+>   rafaello-core/test-fixture -p rafaello bundled::`.
+> - **N-1 (c03 topic-id lookup).** Round-2 c03 commits to
+>   `topic_id::derive("builtin:openai@0.0.0")` directly
+>   (not lock-reading). Simpler and decouples the path
+>   lookup from the lock-parse step that the same test
+>   later verifies.
+> - **N-2 (c04 redundant import).** Round-2 c04 specifies
+>   only the top-of-file import update; the inline `use
+>   crossterm::event::KeyModifiers;` is removed from the
+>   snippet.
+> - **N-3 (c01 split apology).** Round-2 c01 size wording
+>   affirms the bundled code+tests shape and removes the
+>   "acceptable to split tests" hedge.
+>
+> Cumulative trajectory: round 1 → 2B/4M/3N (BLOCKING) →
+> round 2 (this commit), target verdict CONVERGED or
+> NON-BLOCKING.
+>
+> ---
+>
+> **(History — round 1 status, preserved for traceability.)**
+>
+> Round 1 — claude-authored 2026-05-12. Built on top of
+> `scope.md` round-5 CONVERGED (`6912344`, owner-ratified).
+> Six commits, sized 5–10 per the owner directive.
 
 ## Reading order for per-commit agents
 
@@ -60,6 +130,20 @@ in this commits.md table — same pattern as m4/m5/m6.
   `rafaello/crates/rafaello/src/bundled.rs`. None modify the
   existing `resolve_plugin_dir(name)` signature or
   behaviour.
+
+  **Test seam (round 2).** The two new public resolvers
+  are thin wrappers around private
+  `*_from_exe_parent(parent: &Path, names: &BundledPluginNames)`
+  helpers. The public fns do
+  `std::env::current_exe()?.parent()` and delegate to the
+  helper; the private helpers do all the actual joining /
+  env reads / walk-up work. Unit tests call the
+  `_from_exe_parent` seam with a
+  `tempfile::tempdir()`-rooted exe parent, so no test
+  mutates the real `<workspace>/target/...` tree (pi-1
+  M-1). The walk-up dev fallback inside
+  `_from_exe_parent` still calls `parent.ancestors()`
+  unchanged.
   1. New `pub struct BundledPluginNames { pub dev_crate:
      &'static str, pub release_dir: &'static str, pub
      runtime_bin: &'static str }` plus `pub const
@@ -128,70 +212,84 @@ in this commits.md table — same pattern as m4/m5/m6.
   + owner-ratification commit.
 - **Acceptance.** Unit tests in
   `rafaello/crates/rafaello/src/bundled.rs`'s `#[cfg(test)]`
-  module:
+  module. Every test below targets the **`_from_exe_parent`
+  seam** with a `tempfile::tempdir()`-rooted `parent`
+  argument; no test touches `std::env::current_exe()` or
+  the real workspace target tree.
   1. `resolve_plugin_dir_release_arm_uses_input_name_verbatim`
-     — pre-existing helper `resolve_plugin_dir("rfl-mailcat")`,
-     `RFL_BUNDLED_PLUGINS_DIR` unset, set up a temp
-     hierarchy with `<exe-parent>/../share/rafaello/plugins/rfl-mailcat/`
-     present and `<exe-parent>/../share/rafaello/plugins/rfl-rfl-mailcat/`
-     absent. Assert the function returns the former (regression
-     guard — proves m6.1 did not break `rfl install`).
+     — the pre-existing `resolve_plugin_dir(name)` (its
+     own `_from_exe_parent` seam, factored in this commit
+     for symmetry). Build a temp exe-parent with
+     `<parent>/../share/rafaello/plugins/rfl-mailcat/`
+     present and `<parent>/../share/rafaello/plugins/rfl-rfl-mailcat/`
+     absent; `RFL_BUNDLED_PLUGINS_DIR` unset. Assert the
+     function returns the former (regression guard —
+     proves m6.1 did not break `rfl install`).
   2. `resolve_plugin_dir_for_bundled_env_arm_hit` — set
      `RFL_BUNDLED_PLUGINS_DIR=<tmp>` and create
      `<tmp>/openai/rafaello.toml`. Assert
-     `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)` returns
-     `<tmp>/openai`.
+     `resolve_plugin_dir_for_bundled_from_exe_parent(
+     &temp_parent, &OPENAI_NAMES)` returns `<tmp>/openai`.
   3. `resolve_plugin_dir_for_bundled_release_arm_hit` —
-     `RFL_BUNDLED_PLUGINS_DIR` unset, set up a temp tree
-     with `<exe-parent>/../share/rafaello/plugins/rfl-openai/`
+     `RFL_BUNDLED_PLUGINS_DIR` unset; set up a temp
+     hierarchy with `<temp-parent>/../share/rafaello/plugins/rfl-openai/`
      present. Assert the function returns that directory.
   4. `resolve_plugin_dir_for_bundled_dev_fallback_hit` —
-     no env, no release tree; assert the function finds the
-     in-tree `crates/rafaello-openai/` (uses
-     `env!("CARGO_MANIFEST_DIR")` to construct expected
-     path; the dev-fallback walks up from the test binary
-     and lands on the workspace).
+     no env, no release tree; build a temp exe parent
+     sitting underneath a temp synthetic workspace
+     (`<tmp-workspace>/Cargo.toml` containing
+     `[workspace]`, plus
+     `<tmp-workspace>/crates/rafaello-openai/`). Assert
+     the function walks up to the workspace and returns
+     `<tmp-workspace>/crates/rafaello-openai/`.
   5. `resolve_runtime_binary_env_override_hit` —
      `RFL_BUNDLED_BIN_OPENAI=<tmp>/sentinel` where
      `<tmp>/sentinel` is a 0o755 regular file; assert the
      resolver returns that path. Negative variant: same
      path but mode 0o644 → `NotFound`.
   6. `resolve_runtime_binary_release_arm_hit` — set up a
-     temp `<exe-parent>/../share/rafaello/plugins/rfl-openai/bin/rfl-openai`
+     temp `<parent>/../share/rafaello/plugins/rfl-openai/bin/rfl-openai`
      0o755 file; no envs set; assert the resolver returns
      that path.
-  7. `resolve_runtime_binary_dev_fallback_hit` — no env,
-     no release tree; touch
-     `<workspace>/target/debug/rfl-openai` 0o755 (or rely
-     on a cargo-built one); assert the resolver returns
-     that path.
+  7. `resolve_runtime_binary_dev_fallback_hit` — synthetic
+     workspace at `<tmp-workspace>/` with
+     `<tmp-workspace>/target/debug/rfl-openai` 0o755;
+     temp exe parent under `<tmp-workspace>/target/debug/`;
+     no envs. Assert the resolver returns the synthetic
+     binary path.
   8. `resolve_runtime_binary_not_found_lists_all_arms` —
-     no env, no release tree, no workspace; assert
-     `BundledError::NotFound`. Inspect the `Display`
-     impl's message and assert it contains the literal
+     synthetic workspace exists but **the runtime binary
+     is absent** under
+     `<tmp-workspace>/target/debug/rfl-openai`; no
+     env; no release tree. Assert
+     `BundledError::NotFound`. Inspect the `Display` impl
+     and assert it contains the literal
      `RFL_BUNDLED_BIN_OPENAI`, the release-arm path
      substring, and the dev-fallback substring.
   9. `resolve_runtime_binary_env_var_name_munge` — call
-     `resolve_runtime_binary` with a `BundledPluginNames
-     { dev_crate: "foo-bar", .. }`, ensure the env-var
-     lookup is `RFL_BUNDLED_BIN_FOO_BAR` (not
-     `RFL_BUNDLED_BIN_foo-bar`) — assertion via setting
-     the expected env var and observing the override hit.
-  - All tests use `tempfile::tempdir` and `serial_test`
-    (already a workspace dep) or `std::env::remove_var`
-    /`std::env::set_var` inside a guard struct, to avoid
-    cross-test env pollution.
-- **Size.** ~3 files touched (`bundled.rs` only, plus its
-  test module if split). ~150 lines added (struct, two
-  sister fns, ~9 test cases). Within the 100-line / 3–5
-  file budget when measured on the production code alone;
-  the test cases are below the per-test review threshold.
-  Pi may flag if the test count is bundled too loosely —
-  acceptable to split tests into a second commit if
-  needed, but round-1 lean is "single c01 lands code +
-  its own tests" per the workspace's CLAUDE.md commit
-  guidelines ("Tests and Business Logic: Same Commit,
-  Always").
+     `resolve_runtime_binary_from_exe_parent` with a
+     `BundledPluginNames { dev_crate: "foo-bar", .. }`;
+     ensure the env-var lookup is
+     `RFL_BUNDLED_BIN_FOO_BAR` (not
+     `RFL_BUNDLED_BIN_foo-bar`) — set the expected env var
+     and observe the override hit.
+  - All tests run under a single `serial_test::serial`
+    key (`bundled_env`) because they mutate process-global
+    env vars (`RFL_BUNDLED_PLUGINS_DIR`,
+    `RFL_BUNDLED_BIN_OPENAI`, `RFL_BUNDLED_BIN_FOO_BAR`).
+    `serial_test` is already a workspace dev-dep
+    (verify via `rafaello/Cargo.toml`). Each test owns a
+    small guard struct (RAII `EnvGuard`) that
+    `remove_var`s anything it set on Drop.
+- **Size.** 1 file modified (`bundled.rs`). Production
+  code ~80 lines (struct + const + two public wrappers +
+  two private `_from_exe_parent` seams; plus a small
+  refactor of the existing `resolve_plugin_dir` to a
+  matching seam for test symmetry). ~9 unit tests inside
+  the same file's `#[cfg(test)]` block. Code + tests
+  ship together per CLAUDE.md "Tests and Business Logic:
+  Same Commit, Always" — this is the cohesive
+  `bundled`-module API surface, not a split candidate.
 
 ### c02 — fix(rafaello): `rfl init` swaps shim for runtime binary at materialisation time
 
@@ -255,9 +353,11 @@ in this commits.md table — same pattern as m4/m5/m6.
   - Call `rafaello::init::run(InitArgs { yes: true, force:
     true, project_root: Some(tmp.path().to_path_buf()) })`.
   - Assert no error.
-  - Compute SHA-256 of the materialised file at
-    `tmp/.rafaello/plugins/<topic>/bin/rfl-openai` and of
-    the `rfl-openai-stub` binary; assert equal.
+  - Read both files into `Vec<u8>` and assert
+    `std::fs::read(&materialised)? == std::fs::read(&stub)?`
+    (raw byte equality — no new `sha2`/`data-encoding` dep
+    needed per pi-1 M-2). The equivalent coverage is
+    "byte-identical to the stub binary".
   - Assert the file size is > 1024 bytes and that its
     first bytes are not the literal shim shebang
     `#!/bin/sh\nexec` (defensive — protects against a
@@ -279,6 +379,10 @@ in this commits.md table — same pattern as m4/m5/m6.
   per-commit agent must take care not to drift into c01's
   helper definitions — the helpers are imported, not
   redefined.
+- **Acceptance command.** `cargo test --manifest-path
+  rafaello/Cargo.toml --workspace --features
+  rafaello-core/test-fixture -p rafaello --test
+  rfl_init_materialises_real_runtime_binary`.
 
 ### c03 — test(rafaello): `rfl init` subprocess regression — no `CARGO_BIN_EXE_*` env leak
 
@@ -316,9 +420,12 @@ in this commits.md table — same pattern as m4/m5/m6.
      to find `<workspace>/target/<profile>/rfl-openai`).
   6. Assert `status.success()`.
   7. Locate `<project-root>/.rafaello/plugins/<topic>/bin/rfl-openai`
-     (compute `<topic>` via `topic_id::derive("builtin:openai@0.0.0")`
-     — or read the lock and extract the canonical id /
-     topic from there).
+     where `<topic> = rafaello_core::topic_id::derive(
+     "builtin:openai@0.0.0")` (the canonical id is fixed
+     by init; `topic_id::derive` is public per
+     `rafaello-core/src/topic_id.rs`). Direct derive
+     avoids coupling the path lookup to the lock-parse
+     step that the same test later verifies (pi-1 N-1).
   8. Assert the materialised file size > 1024 bytes
      (heuristic per scope §C2; the cargo-built
      `rfl-openai` in debug is hundreds of KB, in release
@@ -340,9 +447,11 @@ in this commits.md table — same pattern as m4/m5/m6.
   test's assertions to hold) and c01 (the helpers).
 - **Acceptance.** The test passes against the post-c02
   HEAD. Run via `cargo test --manifest-path
-  rafaello/Cargo.toml -p rafaello --test
-  rfl_init_runtime_binary_outside_cargo_env`. No code
-  edits beyond the new test file.
+  rafaello/Cargo.toml --workspace --features
+  rafaello-core/test-fixture -p rafaello --test
+  rfl_init_runtime_binary_outside_cargo_env` (matches the
+  scope demo-bar shape per pi-1 M-4). No code edits beyond
+  the new test file.
 - **Size.** 1 new file ~150 lines. Within budget.
 
 ### c04 — fix(rafaello-tui): Ctrl-C key event quits the TUI cleanly
@@ -350,19 +459,20 @@ in this commits.md table — same pattern as m4/m5/m6.
 - **What.** Scope §B1, §B4. Edit
   `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`'s
   `handle_terminal_event` (lines 404–442 today):
+  - Update the top-of-file `crossterm::event` import
+    (lines 12–14) to add `KeyModifiers` to the existing
+    import list.
   - Immediately after the `KeyEventKind::Release` early
     return (line 414), and **before** the mode dispatch
     at line 417's `match key.code`, add:
     ```rust
-    use crossterm::event::KeyModifiers;
     if key.modifiers.contains(KeyModifiers::CONTROL)
         && key.code == KeyCode::Char('c')
     {
         return EventOutcome::Quit;
     }
     ```
-  - Update the top-of-file `crossterm::event` import to
-    add `KeyModifiers` to the existing list (line 12–14).
+    (No inline `use`; the top-level import covers it.)
 - **Why.** Scope §B1, §B4. With `enable_raw_mode()` in
   effect (line 326), the kernel TTY discipline does not
   generate SIGINT on Ctrl-C; the byte arrives as a
@@ -397,6 +507,12 @@ in this commits.md table — same pattern as m4/m5/m6.
   **not** quit (proves the modifier check is required).
 - **Size.** 1 file modified, ~10 lines production + ~40
   lines test. Within budget.
+- **Acceptance command.** `cargo test --manifest-path
+  rafaello/Cargo.toml --workspace --features
+  rafaello-core/test-fixture -p rafaello-tui --bin rfl-tui
+  -- handle_terminal_event` (the tests live in the
+  `rfl_tui.rs` bin's `#[cfg(test)]` block, so the bin's
+  test target is the surface).
 
 ### c05 — test(rafaello): tmux-driven Ctrl-C regression for `rfl chat`
 
@@ -404,6 +520,17 @@ in this commits.md table — same pattern as m4/m5/m6.
   `rafaello/crates/rafaello/tests/rfl_chat_ctrl_c_quits_cleanly.rs`.
   Mirrors `rfl_chat_production_tui_input_overlay_e2e.rs`
   (cK5) lines 47–275 closely. Concrete shape:
+  0. File-top cfg gate
+     `#![cfg(target_os = "linux")]` per pi-1 B-2. The
+     lockin/syd/PTY stack the test exercises is
+     Linux-only; cK5 carries the same gate. macOS / other
+     hosts get a clean "no tests" rather than a
+     spawn-time failure.
+  0b. `rafaello/crates/rafaello/Cargo.toml`
+     `[dev-dependencies]` gains
+     `ulid = { workspace = true }` (per pi-1 B-1; the
+     workspace already declares `ulid` but the `rafaello`
+     crate did not depend on it directly).
   1. Skip if `tmux -V` fails (matches cK5 lines 47–48).
   2. `let tmp = tempfile::tempdir().unwrap();` — project
      root.
@@ -461,19 +588,46 @@ in this commits.md table — same pattern as m4/m5/m6.
   pre-c04 the test fails by `session_alive` timeout).
 - **Acceptance.** The test passes against the post-c04
   HEAD. Run via `cargo test --manifest-path
-  rafaello/Cargo.toml -p rafaello --test
-  rfl_chat_ctrl_c_quits_cleanly`. Test takes < 35s wall
-  clock (30s ready timeout + 5s exit timeout + ~few s
-  spawn).
-- **Size.** 1 new file ~180 lines (cK5 is ~280 lines; C4
-  is a smaller surface — no overlay-key sequence, no
-  SQLite assertions, no install). Within budget.
+  rafaello/Cargo.toml --workspace --features
+  rafaello-core/test-fixture -p rafaello --test
+  rfl_chat_ctrl_c_quits_cleanly` (matches scope demo-bar
+  shape per pi-1 M-4). Test takes < 35s wall clock (30s
+  ready timeout + 5s exit timeout + ~few s spawn).
+- **Size.** 2 files modified: 1 new test file ~180 lines
+  (cK5 is ~280 lines; C4 is a smaller surface — no
+  overlay-key sequence, no SQLite assertions, no
+  install) + a 1-line addition to
+  `rafaello/crates/rafaello/Cargo.toml`'s
+  `[dev-dependencies]` (ulid). Within budget.
 
 ### c06 — docs(rafaello-v0_1_1): `manual-validation.md` v0.1.1 appendix + transcripts
 
 - **What.** Scope §D. Create
   `rafaello/plans/milestones/m6.1-cold-start-patches/manual-validation.md`
   with an appendix structure:
+  - **Provenance header** (`transcripts/v0_1_1/00-CONTEXT.md`,
+    new in round 2 per pi-1 M-3): captures the exact
+    conditions of the recording so the transcripts are
+    auditable evidence rather than illustrative samples.
+    Required fields:
+    - Date (ISO 8601).
+    - Hostname or worktree path.
+    - `git rev-parse HEAD` of the m6.1 branch at capture
+      time (must be the tip of `agents/v0.1.1/driver`
+      after c05 lands).
+    - `tmux -V` output.
+    - Terminal size used for capture (cols × rows).
+    - `which rfl` and the `cargo build` invocation used
+      to produce it.
+    - Whether `CARGO_BIN_EXE_*` and
+      `RFL_BUNDLED_BIN_OPENAI` were present in the
+      capturing shell's env (expected: both absent for
+      the cold-start authenticity).
+    - For the `rfl chat` capture, whether
+      `LITELLM_API_KEY` was set (the demo runs against
+      the dev LiteLLM proxy when set; against
+      the in-tree mock fixtures otherwise — call it out
+      so the assistant-output lines can be interpreted).
   - **§1 cold-start.** Three captures under
     `transcripts/v0_1_1/`:
     - `01-cold-init.txt` — tmux capture of `rfl init
@@ -500,7 +654,9 @@ in this commits.md table — same pattern as m4/m5/m6.
   - The three transcript files land under
     `transcripts/v0_1_1/` with literal `.txt` filenames
     and no terminal escape codes (tmux capture-pane
-    output is plain text by default).
+    output is plain text by default). The
+    `00-CONTEXT.md` is markdown so the provenance
+    metadata renders on GitHub.
 - **Why.** Scope §D. Pre/post-fix evidence on disk so the
   retrospective + future operators can verify the cold-
   start UX is repaired against a real `rfl` binary.
@@ -514,8 +670,9 @@ in this commits.md table — same pattern as m4/m5/m6.
   path. No automated test asserts the transcript
   contents; the appendix is documentation-grade
   evidence.
-- **Size.** 4 new files (the appendix + 3 transcripts).
-  Within budget.
+- **Size.** 5 new files (the appendix +
+  `00-CONTEXT.md` + 3 transcripts). Within budget; all
+  docs / capture content.
 
 ## Acceptance traceability appendix
 
@@ -576,8 +733,8 @@ in this commits.md table — same pattern as m4/m5/m6.
 | c02    | 2     | ~150       | 1 integration test (C1)    |
 | c03    | 1     | ~150       | 1 integration test (C2)    |
 | c04    | 1     | ~50        | unit test in-file (C3)     |
-| c05    | 1     | ~180       | this **is** the test (C4)  |
-| c06    | 4     | (docs)     | n/a — manual evidence      |
+| c05    | 2     | ~180 + 1   | this **is** the test (C4)  |
+| c06    | 5     | (docs)     | n/a — manual evidence      |
 
 All commits respect the CLAUDE.md ≤5-file / ≤100-line
 production-code envelope. c01 and c05 hit ~150–180 LoC
@@ -597,4 +754,6 @@ may push back if any line counts feel padded.
 
 ## Disagreements with pi (cumulative)
 
-(None yet — pi review round 1 pending.)
+None across round 1. Both blockers, all four majors, and
+all three nits were substantive and accurate; every one is
+folded in round 2.
