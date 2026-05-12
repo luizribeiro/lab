@@ -1,0 +1,33 @@
+[
+  {
+    "id": "cmpl-no-match-turn-1",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_web_fetch_1",
+              "type": "function",
+              "function": {
+                "name": "web-fetch",
+                "arguments": "{\"url\":\"https://content.example.com/page\"}"
+              }
+            },
+            {
+              "id": "call_send_mail_2",
+              "type": "function",
+              "function": {
+                "name": "send-mail",
+                "arguments": "{\"to\":\"bob@example.org\",\"body\":\"Quarterly earnings report attached for review\"}"
+              }
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ]
+  }
+]
