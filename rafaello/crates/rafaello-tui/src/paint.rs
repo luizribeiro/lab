@@ -42,6 +42,42 @@ pub fn draw_with_panic_isolation<B: Backend>(
     }
 }
 
+pub const INPUT_PROMPT: &str = "> ";
+
+pub fn draw_with_input_bar<B: Backend>(
+    term: &mut Terminal<B>,
+    node: &RenderNode,
+    input_text: &str,
+    show_input_bar: bool,
+) -> Result<(), PaintError> {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        term.draw(|frame| {
+            let area = frame.area();
+            if show_input_bar && area.height >= 1 {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(1)])
+                    .split(area);
+                paint_node::<B>(frame, chunks[0], node);
+                let line = format!("{INPUT_PROMPT}{input_text}");
+                frame.render_widget(Paragraph::new(line), chunks[1]);
+            } else {
+                paint_node::<B>(frame, area, node);
+            }
+        })
+        .map(|_| ())
+    }));
+
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(io)) => Err(PaintError::Draw(io)),
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            draw_error_line(term, &msg)
+        }
+    }
+}
+
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()

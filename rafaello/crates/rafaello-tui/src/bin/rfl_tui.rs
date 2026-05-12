@@ -23,10 +23,10 @@ use fittings_transport::stdio::StdioTransport;
 use futures::stream::StreamExt;
 use rafaello_core::RenderNode;
 use rafaello_tui::env::{self, TestConfirmAnswer, TestGrantBeforeMessage};
-use rafaello_tui::paint::draw_with_panic_isolation;
+use rafaello_tui::paint::draw_with_input_bar;
 use rafaello_tui::test_confirm_queue::TestConfirmAnswerQueue;
-use rafaello_tui::{slash::SlashCommand, slash::SlashKind, CONFIRM_ANSWER_TOPIC};
-use ratatui::backend::CrosstermBackend;
+use rafaello_tui::{slash::SlashCommand, slash::SlashKind, InputMode, CONFIRM_ANSWER_TOPIC};
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 use serde_json::{json, Value};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -330,6 +330,8 @@ async fn ui_loop(
 ) -> Result<()> {
     let mut buffer: VecDeque<RenderNode> = VecDeque::with_capacity(RENDER_BUFFER_CAP);
     let mut scroll: u16 = 0;
+    let input_buffer: String = String::new();
+    let mode: InputMode = InputMode::default();
     let mut events = EventStream::new();
 
     loop {
@@ -354,7 +356,7 @@ async fn ui_loop(
         };
 
         if dirty {
-            redraw(terminal, &buffer, scroll);
+            redraw(terminal, &buffer, scroll, &input_buffer, &mode);
         }
     }
 }
@@ -417,15 +419,18 @@ fn ingest_notification(note: InboundNotification, buffer: &mut VecDeque<RenderNo
     true
 }
 
-fn redraw(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+fn redraw<B: Backend>(
+    terminal: &mut Terminal<B>,
     buffer: &VecDeque<RenderNode>,
     scroll: u16,
+    input_buffer: &str,
+    mode: &InputMode,
 ) {
     let start = scroll as usize;
     let nodes: Vec<RenderNode> = buffer.iter().skip(start).cloned().collect();
     let frame = RenderNode::Block { children: nodes };
-    let _ = draw_with_panic_isolation(terminal, &frame);
+    let show_input_bar = !mode.input_blocked();
+    let _ = draw_with_input_bar(terminal, &frame, input_buffer, show_input_bar);
 }
 
 fn install_panic_hook() {
@@ -464,5 +469,85 @@ impl Connector for OneShotConnector {
             .await
             .take()
             .ok_or_else(|| FittingsError::transport("OneShotConnector::connect called twice"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rafaello_tui::ConfirmDetails;
+    use ratatui::backend::TestBackend;
+    use serde_json::json;
+
+    fn terminal_text(term: &Terminal<TestBackend>) -> String {
+        let buf = term.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn last_row(term: &Terminal<TestBackend>) -> String {
+        let buf = term.backend().buffer();
+        let y = buf.area.height - 1;
+        let mut row = String::new();
+        for x in 0..buf.area.width {
+            row.push_str(buf[(x, y)].symbol());
+        }
+        row
+    }
+
+    #[test]
+    fn production_ui_loop_renders_input_bar_with_prompt() {
+        let backend = TestBackend::new(40, 5);
+        let mut term = Terminal::new(backend).unwrap();
+        let buffer: VecDeque<RenderNode> = VecDeque::new();
+        let mode = InputMode::Normal;
+
+        redraw(&mut term, &buffer, 0, "hello-world", &mode);
+
+        let row = last_row(&term);
+        assert!(
+            row.trim_end().starts_with("> hello-world"),
+            "expected prompt + input on final row, got: {row:?}"
+        );
+    }
+
+    #[test]
+    fn production_ui_loop_hides_input_bar_when_blocked() {
+        let backend = TestBackend::new(40, 5);
+        let mut term = Terminal::new(backend).unwrap();
+        let buffer: VecDeque<RenderNode> = VecDeque::new();
+        let mode = InputMode::ConfirmOverlay {
+            confirm_id: JsonRpcId::String("test-confirm".to_string()),
+            summary: String::new(),
+            details: ConfirmDetails {
+                tool_call_id: String::new(),
+                tool: String::new(),
+                args: json!({}),
+                sinks: Vec::new(),
+                always_confirm: false,
+                taint: json!([]),
+            },
+            ttl_remaining: 0,
+            queued_count: 0,
+        };
+        assert!(mode.input_blocked());
+
+        redraw(&mut term, &buffer, 0, "should-not-appear", &mode);
+
+        let all = terminal_text(&term);
+        assert!(
+            !all.contains("should-not-appear"),
+            "input contents must be hidden when blocked, got: {all:?}"
+        );
+        assert!(
+            !all.contains("> "),
+            "prompt glyph must be hidden when blocked, got: {all:?}"
+        );
     }
 }
