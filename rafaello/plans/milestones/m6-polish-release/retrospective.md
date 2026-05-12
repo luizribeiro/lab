@@ -1,7 +1,106 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 1 draft — claude-authored 2026-05-12,
-> awaiting pi round 1.** Drafted on `agents/m6/retro`
+> **Status: round 2 draft — folds
+> `retrospective-pi-review-1.md` (3 B / 4 M / 2 N,
+> blocking).** Claude-authored 2026-05-12; awaiting pi
+> round 2. Round-2 changelog by pi-1 finding:
+>
+> - **B1 §5 transcripts** — closed by the sibling commit
+>   `fix(rafaello-m6): replace c27 schematic transcripts
+>   with authentic stub-driven captures`. Real `rfl
+>   audit` + sqlite3 dumps replace the fabricated c27
+>   files; live `AuditKind` variants only; real ULID
+>   request id; `wire-events.txt` adds supplementary
+>   real bus-event evidence. The §J2 TUI-render
+>   substring grep set is preserved as the
+>   operator-witnessed gate for the post-merge sweep
+>   (headless `tmux capture-pane` doesn't surface
+>   ratatui's alternate screen in this harness; see the
+>   transcripts' `00-CONTEXT.md`). This re-routes the §5
+>   acceptance from ✅ to ◐ partial + a documented
+>   post-merge gate.
+> - **B2 §4 overclaim** — §4 split into "implemented
+>   scaffolding" vs "witnessed evidence". New §4.5
+>   "Manual-validation residual gates" lists the pending
+>   §1 / §2 / §4 / §6 / §7 / §G items by file/line + the
+>   post-merge driver sweep that fills them. The
+>   "every acceptance bullet maps" sentence dropped; the
+>   table now flags the four bullets whose witnessed-half
+>   is post-merge (macOS CI URL, clean Homebrew install,
+>   LiteLLM bootstrap, §5 attached-tmux render).
+> - **B3 four decisions row corrections** —
+>   - Row 62: typed `SandboxError::SydPtyNotFound` →
+>     `anyhow::bail!` channel matching live
+>     `lockin/crates/sandbox/src/lib.rs:246-272`.
+>   - Row 64: deterministic panic → `std::process::exit(1)`
+>     matching live
+>     `rfl_openai_stub.rs:19-20, :281-294` (test name
+>     `exhaustion_exits_deterministically`).
+>   - Row 65: "for each of the 8 packages" → six
+>     plugin-tree installs + `rfl` and `rfl-tui`
+>     remaining in `$out/bin/` per
+>     `rafaello/nix/package.nix:16-33, :37-63`.
+>   - Row 68: drop the implication that
+>     `tool_to_canonical` participates in routing; live
+>     gate dispatches via `ensure_spawned(
+>     &dispatch_target)` after parsing the canonical
+>     dispatch target from the payload
+>     (`gate/mod.rs:271-292`); `tool_to_canonical` is
+>     written by `register_lazy` but read only by
+>     tests (`supervisor.rs:370-389, :401-421`).
+> - **M1 row 67 allow sites** — corrected to live cites:
+>   `bus.rs`, `session/mod.rs`, `supervisor.rs`,
+>   `reemit/mod.rs`, `agent/mod.rs` (round-1 named the
+>   wrong files).
+> - **M2 row 63 `--since` grammar** — reworded from the
+>   `1h / 30m / 24h` enumeration to "arbitrary
+>   `<number><m|h|d>` per `audit_cli.rs::parse_since`
+>   (`:93-118`, `:46-47`); examples include `1h`, `30m`,
+>   `24h`, `7d`."
+> - **M3 `RFL_SPAWN_TRACE_LOG` overview patch** — §7's
+>   overview.md patch plan now lists an explicit
+>   `overview.md` §4.6 (reserved `RFL_*` env-var index)
+>   append for `RFL_SPAWN_TRACE_LOG` as
+>   test-observability env (per c25 file-log shape).
+> - **M4 I1 deviation reframe** — c23 keeps the literal
+>   filename
+>   `core_tools_list_registered_before_provider_spawn.rs`
+>   under `rafaello/crates/rafaello/tests/`; the
+>   deviation is the **crate/process shape +
+>   assertion-shape** (startup-event ordering against
+>   `StartupEvent::ToolSchemaCatalogBuilt` rather than
+>   the original `Broker::register_rpc("core.tools_list",
+>   _)` synthetic anchor). §4 + the "Open items"
+>   reworded accordingly.
+> - **N1 manual-validation §6 non-live audit kinds** —
+>   closed in the same sibling commit as B1; §6 prose
+>   updated to drop `taint_dropped_in_envelope` /
+>   `tool_call_started` / `tool_call_completed` (none
+>   in live `AuditKind::as_str()`).
+> - **N2 row 66 tap distinction** — row 66 reworded to
+>   say m6 commits `homebrew/rafaello.rb` + the release
+>   automation uploads the per-arch tarballs +
+>   formula-SHA-pinned asset; publishing the formula
+>   into the separate `luizribeiro/homebrew-rafaello`
+>   tap repo is a one-time owner action recorded in
+>   `manual-validation.md` §G and is not done by m6
+>   itself.
+>
+> Round-2 net: 0 fabrications remain. Convergence
+> trajectory: 3B → ? (pending pi-2). m5b retro took 4
+> rounds; m1 took 4; m5a took 6 (with a drift tail). The
+> two surfaced open issues (supervisor `env_clear`
+> regression on `CARGO_BIN_EXE_syd-pty`; headless-tmux
+> render limitation) are routed as post-retro
+> follow-ups, not ratification blockers, per the
+> manual-validation §5 wire-evidence-half closure.
+>
+> ---
+>
+> **(History — round 1 draft, kept for trajectory.)**
+>
+> **Round 1 — claude-authored 2026-05-12,
+> awaited pi round 1.** Drafted on `agents/m6/retro`
 > forked from `agents/m6/driver` at `4e22268` (c28 — the
 > last implementation commit). References:
 >
@@ -266,15 +365,25 @@ RATIFIED.
 ### Phase I — coverage + lazy-load (c23–c26)
 
 - **c23 `a9c07e7`** — `StartupEvent::ToolSchemaCatalogBuilt`
-  instrumentation + regression-anchor test. This
-  replaces I1's original
-  `core_tools_list_registered_before_provider_spawn.rs`
-  shape (owner-judgment item 11) — the structural
-  guarantee is now asserted via the startup-event ordering
-  rather than via the synthetic
-  `core.tools_list`-before-spawn anchor; both are
-  defence-in-depth for `decisions.md` row 49 and the
-  observable event ordering is the cleaner anchor.
+  instrumentation + regression-anchor test. The test
+  **keeps the literal filename
+  `core_tools_list_registered_before_provider_spawn.rs`**
+  (live at `rafaello/crates/rafaello/tests/`); the
+  deviation is the **crate/process shape +
+  assertion-shape** — c23 anchors the structural
+  guarantee via the observable
+  `StartupEvent::ToolSchemaCatalogBuilt` ordering
+  (fires before any provider-spawn event) rather than
+  via the original synthetic
+  `Broker::register_rpc("core.tools_list", _)`
+  before-spawn shape that owner-judgment item 11
+  sketched. Both are defence-in-depth for
+  `decisions.md` row 49; the startup-event ordering
+  is the cleaner anchor against the live structural
+  guarantee (`CorePluginService::new` runs ahead of
+  the supervisor's spawn loop by construction). Pi-1
+  round-1 §M4 correction over round-1's framing as a
+  "missing literal filename" deviation.
 - **c24 `f6cc78f`** — **the lazy-load runtime**.
   `LoadPolicy::Lazy { command }` runtime end-to-end:
   supervisor `lazy_candidates` + `tool_to_canonical`
@@ -399,26 +508,37 @@ scope-side (taint invariants).
 
 ## 4. Coverage / negative-test report
 
-Every roadmap negative landed; every `scope.md`
-§"Acceptance summary" bullet maps to a commit row. Full
-mapping lives in `commits.md` §"Acceptance traceability
-appendix"; this section calls out the **deliberate
-carveouts** that are not bugs.
+Pi-1 round-1 §B2 correction: round-1's "every acceptance
+bullet maps" framing collapsed two distinct closure
+states. m6's scope acceptance bullets split into:
 
-### Acceptance bullet → commit map (summary)
+- **Implemented scaffolding / regression-grade tests** —
+  the code-side surface every bullet relies on (c01..c28
+  + the test suite). All landed.
+- **Witnessed release evidence** — operator-observed
+  rendering / run-URL / clean-host runs that the code
+  itself can't self-prove. Several of these are
+  **pending the post-merge driver sweep**, by design,
+  and the retrospective must say so rather than mark
+  them ✓.
 
-| Acceptance bullet | Commit(s) |
-|---|---|
-| Every named deliverable in §"In scope" implemented + tests pass | c01–c28 |
-| Linux `nix develop … cargo test --workspace --features test-fixture` green | c18 (CI matrix); each phase's tests run under the workspace flag |
-| **macOS CI green (hard gate)** | c18 (matrix); the `macos-latest` leg covers both `cargo test --workspace` and `nix build .#rafaello` |
-| `nix develop … cargo build --workspace --bins` green | c16 (8-package build set) |
-| `nix build .#rafaello` produces the 8-binary release tree + PP1 plugin trees | c16 + c17 + c18 |
-| Post-`rfl init --yes`: `.rafaello/plugins/<topic-id>/rafaello.toml` + `bin/rfl-openai` exist; digests match | c02 + c04 (`rfl_init_materialises_package_dir.rs`) |
-| `brew install` works in a clean macOS shell | c19 + c20 + `manual-validation.md` §G (manual; owner-judgment item 10 default) |
-| 5-line bootstrap in `README.md` verbatim + works against LiteLLM | c21 + manual-validation §1 (stub + LiteLLM) |
-| `manual-validation.md` §1–§7 + §G + §5 tmux recording | c27 + c28 |
-| Retrospective + decisions.md rows 59–68 + glossary additions + v0.1 → main merge plan | **this document** + drift commits planned in §7 |
+The table below splits the two; §4.5 enumerates the
+pending witnessed items.
+
+### Acceptance bullet → closure state
+
+| Acceptance bullet | Implementation closure | Witnessed-evidence closure |
+|---|---|---|
+| Every named deliverable in §"In scope" implemented + tests pass | ✓ c01–c28 | ✓ (CI test run) |
+| Linux `nix develop … cargo test --workspace --features test-fixture` green | ✓ c18 (CI matrix) | ✓ CI green |
+| **macOS CI green (hard gate)** | ✓ c18 macOS matrix leg shipped | ◐ run URL **pending** (manual-validation.md §4 placeholder; post-merge sweep) |
+| `nix develop … cargo build --workspace --bins` green | ✓ c16 (8-package build set) | ✓ exercised by c18 matrix |
+| `nix build .#rafaello` produces the release tree + PP1 plugin trees | ✓ c16 + c17 + c18 | ✓ this round's transcript-capture confirmed the layout against `result/` |
+| Post-`rfl init --yes` PP1 invariants hold | ✓ c02 + c04 (`rfl_init_materialises_package_dir.rs`) | ✓ + this round's stub-driven capture confirmed |
+| `brew install` works in a clean macOS shell | ✓ c19 + c20 formula + automation | ◐ owner-run on clean macOS **pending** (manual-validation.md §G; owner-judgment item 10 manual-only) |
+| 5-line bootstrap in `README.md` verbatim + works against LiteLLM | ✓ c21 README copy | ◐ LiteLLM-live run **pending** (manual-validation.md §1 placeholder; LiteLLM partial-outage carveout 1 below) |
+| `manual-validation.md` §3 wire-shape note + §5 transcripts | ✓ c27 §1–§7 + §G skeleton; ✓ c28 transcript filenames; ✓ round 2 transcript-recapture | ◐ §5 attached-tmux render **pending** (transcripts' `00-CONTEXT.md`; B1 closure); §1 / §2 / §4 / §6 / §7 / §G witnessed-fill **pending** (§4.5 below) |
+| Retrospective + decisions rows + glossary + v0.1 → main merge plan | ✓ this document + drift commits in §7 | ✓ retro round-2 |
 
 ### Defensive negatives landed
 
@@ -437,6 +557,32 @@ landed and pass:
 - `rfl_audit_filters_by_request_id_no_join.rs` (c13)
 - `rfl_openai_stub_scripted_turns_panics_on_exhaustion` (c15)
 - `lazy_load_tool_trigger_spawns_on_first_call.rs` (c25)
+
+### 4.5 Manual-validation residual gates
+
+The witnessed-evidence half of several acceptance
+bullets is **pending the post-merge driver sweep**.
+Pi-1 round-1 §B2 surfaced that round-1 elided this by
+claiming "every acceptance bullet maps". Round 2 lists
+the residual gates explicitly so future maintainers
+see the closure shape:
+
+| `manual-validation.md` section | Live status (round 2) | Closure path |
+|---|---|---|
+| §1 cold-start LiteLLM walkthrough (`manual-validation.md:52-53`) | ⏳ pending | Driver runs the 5-line bootstrap on a clean lab worktree against the dev LiteLLM endpoint (using `mlx/qwen3.6-35b` per the 03:10 owner note if the default `vllm/qwen3.6-27b` is still down). |
+| §2 install walkthrough (`manual-validation.md:82`) | ⏳ pending | Driver runs `rfl install rfl-mailcat --project-root "$PROJECT"` after §1 and pastes the post-install lock+plugin-dir state. |
+| §4 macOS CI run URL (`manual-validation.md:96-109`) | ⏳ pending | Driver pastes the green `m6 / macOS` workflow URL from the first ratification-candidate push. Hard gate per scope §"Acceptance summary" + the m3/m4/m5a/m5b precedent. |
+| §5 attached-tmux TUI render (`transcripts/section-5/00-CONTEXT.md` open issue 2) | ◐ partial (round-2 wire + audit captures landed; render screenshot pending) | Operator on attached tmux runs the scope §J2 script and replaces `01/02/03` with live-rendered captures; re-asserts the four TUI-substring greps (`" confirm "`, `"send-mail via"`, `"sinks: mail"`, `"alice@example.com"`). |
+| §6 audit-log inspection (`manual-validation.md:334-335`) | ⏳ pending | Driver runs `rfl audit --project-root "$PROJECT" --kind confirm_request --kind confirm_allowed` against the §5 project after the live LiteLLM walkthrough and pastes the rows. Round-2's `04-audit.txt` is the stub-driven companion. |
+| §7 syd-pty failure-mode + fix verification (`manual-validation.md:383-385`) | ⏳ pending | Driver runs the pre-m6 build against a clean shell (records the `setup_pty` failure) + the m6 build inside `nix develop` (records the clean entry). |
+| §G Homebrew install smoke (`manual-validation.md:387-420+`) | ⏳ pending (expected steps only) | Owner runs the post-tap-publication `brew install` on a clean macOS arm64 host; owner-judgment item 10 default is manual-only (no CI workflow runs `brew install`). |
+
+The above gates do **not** block retro ratification —
+they block the **m6 RATIFIED → v0.1 → main merge**
+trigger per `decisions.md` row 33. The driver runs the
+sweep on the ratification-candidate commit; once §1–§7
++ §G are filled with operator-witnessed output, the
+fast-forward merge fires.
 
 ### Deliberate carveouts
 
@@ -469,14 +615,21 @@ landed and pass:
      future maintainers know why the real-LLM transcript
      may be missing.
 
-   **Status at round-1 draft time (2026-05-12).** The §5
-   tmux transcript files captured at c28 use the stub.
-   The LiteLLM `mlx/qwen3.6-35b` real-LLM second
-   transcript is **not yet captured**; this is the only
-   open Phase-J item. Owner did not require re-pinging
-   on LiteLLM unless the proxy is still down at retro
-   convergence AND it materially affects ratification —
-   stub-alone is documented as acceptable.
+   **Status at round-2 (2026-05-12).** The §5 transcript
+   files were **recaptured in round 2** with real
+   `nix build .#rafaello`-driven `rfl audit` + sqlite3
+   dumps replacing the c27 schematic content (pi-1 §B1
+   closure). The capture is stub-driven (long-lived
+   Python `http.server` mirroring the in-process stub
+   used by the integration test, because the on-disk
+   `rfl-openai-stub` binary's 5 s self-timeout is too
+   short for an out-of-test interactive run). The
+   LiteLLM `mlx/qwen3.6-35b` real-LLM second transcript
+   remains **not yet captured** — owner's three-step
+   framing routes this to the post-merge driver sweep
+   (manual-validation.md §1 fill); stub-alone is
+   documented as acceptable v1-demo-ready evidence per
+   the owner's 2026-05-12 02:50 note.
 
 2. **`rfl audit --request-id` is a single-table filter,
    not a provenance join.** The live `entries` schema
@@ -494,21 +647,23 @@ landed and pass:
    have no `brew install` path until v2 adds the arch.
    Round-3 M-3 fold; §5 routes this.
 
-4. **Phase I1 landed as `StartupEvent::ToolSchemaCatalogBuilt`
-   ordering, not the literal
-   `core_tools_list_registered_before_provider_spawn.rs`.**
-   Owner-judgment item 11 default was "in scope" but
-   the live structural guarantee
-   (`CorePluginService::new` runs ahead of the
-   supervisor's spawn loop by construction) is better
-   asserted via the observable startup-event ordering
-   (the `ToolSchemaCatalogBuilt` event fires before any
-   provider-spawn event) than via the synthetic
-   `core.tools_list`-before-spawn anchor. Defence-in-depth
-   for `decisions.md` row 49 is preserved; the literal
-   filename in the carryover punchlist is not. This is a
-   deviation in shape (not scope) — flagged here for pi
-   to ratify or push back.
+4. **Phase I1 keeps the literal filename
+   `core_tools_list_registered_before_provider_spawn.rs`;
+   the deviation is the crate/process shape +
+   assertion-shape.** The live test asserts the
+   `StartupEvent::ToolSchemaCatalogBuilt` ordering
+   (fires before any provider-spawn event) rather than
+   the original synthetic
+   `Broker::register_rpc("core.tools_list", _)`
+   before-spawn anchor. Pi-1 round-1 §M4 correction
+   over round-1's "missing literal filename" framing.
+   Defence-in-depth for `decisions.md` row 49 is
+   preserved; the carryover punchlist filename is
+   honoured. Flagged here for pi to ratify the
+   assertion-shape change or push back; the
+   live-structural-guarantee anchor is, I'd argue, the
+   cleaner one because it observes the ordering
+   directly rather than via a synthetic predicate.
 
 ---
 
@@ -661,16 +816,32 @@ execution plan:
 > (a) `rafaello/nix/devenv.nix` exports
 > `CARGO_BIN_EXE_syd-pty` mirroring the existing
 > `LOCKIN_SYD_PATH` export; (b)
-> `lockin/crates/sandbox/src/lib.rs`
-> `SandboxBuilder::syd_pty_path` resolves the path via
+> `lockin/crates/sandbox/src/lib.rs`'s
+> `resolve_syd_pty_path` resolves the path via
 > spec → `$CARGO_BIN_EXE_syd-pty` → sibling-of-syd →
 > `PATH`, then sets the env on the syd child command
-> via `Command::env`. Resolution failure is a hard
-> `Err(SandboxError::SydPtyNotFound)` — no `pty:off`
-> fallback at this layer (a silent fallback would
+> via `Command::env` (live shape:
+> `linux.rs:30-31` —
+> `command.env("CARGO_BIN_EXE_syd-pty", pty)`).
+> Resolution failure is a hard `anyhow::bail!` with the
+> message
+> `"Linux sandbox requires syd-pty but could not find
+> it. Set CARGO_BIN_EXE_syd-pty, place syd-pty next to
+> syd, add syd-pty to PATH, or call .syd_pty_path()
+> explicitly."` (pi-1 round-1 §B3 correction over the
+> round-1 typed
+> `SandboxError::SydPtyNotFound` claim — the live error
+> channel is `anyhow` per
+> `lockin/crates/sandbox/src/lib.rs:246-272`; no typed
+> `SandboxError` variant exists). **No `pty:off`
+> fallback** at this layer (a silent fallback would
 > re-introduce the m5a wall the m6 owner hit on
-> 2026-05-12). Cites m6
-> `lockin/crates/sandbox/src/lib.rs`.
+> 2026-05-12). The fluent
+> `SandboxBuilder::syd_pty_path(...)` setter at
+> `:435-443` is the explicit-override entry point used
+> by tests. Cites m6
+> `lockin/crates/sandbox/src/lib.rs`,
+> `lockin/crates/sandbox/src/linux.rs`.
 
 **Row 63 — `rfl audit` read CLI semantics.**
 > `rfl audit` is a read-only CLI over the live
@@ -685,84 +856,136 @@ execution plan:
 > `audit_events.request_id` — **no join against
 > `entries`** (the live `entries` schema has no
 > `call_id` column; full provenance is a v2 item).
+> `--since <duration>` accepts an arbitrary
+> `<number><m|h|d>` per
+> `audit_cli.rs::parse_since` (`:93-118`, `:46-47` —
+> the error message advertises `7d` as an example).
+> Examples include `1h`, `30m`, `24h`, `7d` (pi-1
+> round-1 §M2 — round-1's `1h/30m/24h` enumeration
+> underspecified the grammar; the live parser is
+> general).
 > `--project-root <path>` mirrors `rfl chat` / `rfl
 > init`. Cites m6 `crates/rafaello/src/audit_cli.rs`.
 
 **Row 64 — `rfl-openai-stub` scripted turns.**
 > `RFL_OPENAI_STUB_SCRIPTED_TURNS = <path-to-toml>`
 > walks an N-turn TOML script and selects the HTTP
-> response per matched turn. Exhaustion is a
-> deterministic panic (mirrors the m5b multi-answer
-> hook per row 56). Mutually exclusive with the
-> singular-turn env from m5a/m5b; both-set is a stub
-> startup error. The stub binary is **buildable in the
-> release tree** (the `test-fixture` gate was dropped
-> from `[[bin]]`) so the
-> `manual-validation.md` §5 scripted demo and the
-> headline integration test consume a runnable
-> stub from `$out/share/rafaello/plugins/rfl-openai-stub/bin/`.
+> response per matched turn. Exhaustion or
+> predicate-miss writes a deterministic stderr line
+> and calls **`std::process::exit(1)`** (not a panic —
+> live shape per `rfl_openai_stub.rs:19-20, :281-294`,
+> regression-anchor test name
+> `exhaustion_exits_deterministically`; pi-1 round-1
+> §B3 correction over round-1's "deterministic panic"
+> claim). Mutually exclusive with the singular-turn
+> env from m5a/m5b; both-set is a stub startup error.
+> The stub binary is **buildable in the release tree**
+> (the `test-fixture` gate was dropped from `[[bin]]`)
+> so the `manual-validation.md` §5 scripted demo and
+> the headline integration test consume a runnable
+> stub from
+> `$out/share/rafaello/plugins/rfl-openai-stub/bin/`.
 > Cites m6
 > `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`.
 
 **Row 65 — `nix build .#rafaello` release artefact
 shape.**
 > `nix build .#rafaello` produces:
-> (a) `$out/bin/rfl` and `$out/bin/rfl-tui` (the only
-> user-facing entry points);
-> (b) `$out/share/rafaello/plugins/<plugin>/` for each
-> of the 8 packages in the build set (`rafaello`,
+> (a) **`$out/bin/`** retains only `rfl` and `rfl-tui`
+> — the two user-facing entry points (per
+> `rafaello/nix/package.nix:16-33, :37-63`);
+> (b) **`$out/share/rafaello/plugins/<plugin>/`** for
+> each of the **six plugin packages** (`rfl-mailcat`,
+> `rfl-readfile`, `rfl-openai`, `rfl-openai-stub`,
+> `rfl-mockprovider`, `rafaello-fetch`), each
+> directory containing `rafaello.toml` + `openrpc.json`
+> (per row 31) + `bin/<plugin-bin>` as a real file +
+> any `schemas/` templates. The `postInstall` script
+> at `package.nix:37-63` **moves** each plugin binary
+> from `$out/bin/<name>` into the per-plugin
+> `share/rafaello/plugins/<name>/bin/` directory
+> (round-4 B-1 PP1 real-file containment). The
+> `cargoBuildFlags` `-p` list at `package.nix:16-33`
+> covers all eight packages (`rafaello`,
 > `rafaello-tui`, `rafaello-openai`,
 > `rafaello-openai-stub`, `rafaello-readfile`,
 > `rafaello-mailcat`, `rafaello-mockprovider`,
-> `rafaello-fetch`), containing
-> `rafaello.toml` + `openrpc.json` (per row 31) +
-> `bin/<plugin-bin>` as a real file + any `schemas/`
-> templates. `rafaello-bus-fixture` is test-shaped and
-> excluded. Cites m6 `rafaello/nix/package.nix`.
+> `rafaello-fetch`) — building eight Cargo packages
+> but installing **six** plugin trees plus the two
+> top-level binaries; pi-1 round-1 §B3 correction over
+> round-1's "plugin tree for each of the 8 packages"
+> claim. `rafaello-bus-fixture` is test-shaped and
+> excluded from the build set. Cites m6
+> `rafaello/nix/package.nix`.
 
 **Row 66 — Homebrew distribution model G.β
 (separate-tap + Nix-built tarballs).**
-> Distribution is via a separate
-> `luizribeiro/homebrew-rafaello` tap whose
-> `Formula/rafaello.rb` fetches per-arch tarballs
-> uploaded by `.github/workflows/rafaello-release.yml`
-> on `v*` tags. Architectures: `aarch64-darwin`,
-> `aarch64-linux`, `x86_64-linux` matching
-> `flake.nix:24-28` `systems`. `x86_64-darwin` is a v2
-> expansion (no Nix builder for that arch in the root
-> flake). The formula installs the row-65 layout
-> verbatim. Cites m6 `homebrew/rafaello.rb`,
+> m6 commits the formula source at
+> `homebrew/rafaello.rb` and the release-tag
+> automation at
+> `.github/workflows/rafaello-release.yml:47-59` that
+> runs `nix build .#rafaello` per arch
+> (`aarch64-darwin`, `aarch64-linux`, `x86_64-linux`
+> matching `flake.nix:24-28` `systems`), uploads each
+> tarball, and writes a SHA-pinned formula as a
+> release asset. **m6 does not publish the formula
+> into a live `luizribeiro/homebrew-rafaello` tap
+> repo** — creating the tap and pointing it at the
+> uploaded formula is a one-time owner action,
+> recorded in `manual-validation.md` §G as the
+> Homebrew install walkthrough (pi-1 round-1 §N2
+> correction: round-1 implied the tap was published
+> as part of m6). `x86_64-darwin` is a v2 expansion
+> (no Nix builder for that arch in the root flake).
+> The formula installs the row-65 layout verbatim.
+> Cites m6 `homebrew/rafaello.rb`,
 > `.github/workflows/rafaello-release.yml`.
 
 **Row 67 — `result_large_err` allows are ratified.**
-> Workspace-wide module-level
-> `#[allow(clippy::result_large_err)]` allows are
-> **ratified in place** — keeping them is preferred
-> over boxing `ReemitError` / `AgentLoopError` (which
-> would ripple through every `?` site at 5+ commits,
-> against negligible runtime benefit since the large
-> error variants are rare cold paths). Each allow site
-> carries a comment pin to this row. Cites m6
-> `crates/rafaello-core/src/reemit/`,
-> `crates/rafaello-core/src/agent_loop/`,
-> `crates/rafaello/src/lib.rs`.
+> Module-level `#[allow(clippy::result_large_err)]`
+> allows are **ratified in place** — keeping them is
+> preferred over boxing the large-variant error types
+> (which would ripple through every `?` site at 5+
+> commits, against negligible runtime benefit since
+> the large error variants are rare cold paths). Each
+> allow site carries a comment pin to this row. Live
+> non-test allow sites (pi-1 round-1 §M1 correction
+> over round-1's wrong cites): **`rafaello-core/src/bus.rs`,
+> `rafaello-core/src/session/mod.rs`,
+> `rafaello-core/src/supervisor.rs`,
+> `rafaello-core/src/reemit/mod.rs`, and
+> `rafaello-core/src/agent/mod.rs`** (verified via
+> `rg result_large_err rafaello/crates/`). Cites m6
+> c26 `f785165`.
 
 **Row 68 — Lazy-load runtime via `LoadPolicy::Lazy {
 command }`.**
 > Manifests carrying `[load.triggers]` with
 > `kind = "tool"` register their canonical id as a
 > **lazy candidate**: `PluginSupervisor::register_lazy(
-> canonical, plan, paths, triggers)` writes both
+> canonical, plan, paths, triggers)` writes
 > `lazy_candidates: Mutex<BTreeMap<CanonicalId,
-> LazyCandidate>>` and `tool_to_canonical:
-> Mutex<BTreeMap<String, CanonicalId>>`. On the first
-> tool dispatch whose tool name matches a trigger, the
-> gate-side dispatch-after-validation hook calls
-> `ensure_spawned(canonical)`, which idempotently
-> spawns the plugin (removing the candidate from
-> `lazy_candidates` so subsequent dispatches go through
-> the normal `managed` path). Spawn events are
-> recorded via `record_spawn_event` to the
+> LazyCandidate>>` (live shape per
+> `supervisor.rs:370-389`). The gate-side
+> dispatch-after-validation hook parses the canonical
+> dispatch target from the validated payload and calls
+> **`ensure_spawned(&dispatch_target)`** (live shape
+> per `gate/mod.rs:271-292`); `ensure_spawned`
+> idempotently spawns the plugin if it's a registered
+> lazy candidate (no-op if already managed), removing
+> the candidate from `lazy_candidates` so subsequent
+> dispatches go through the normal `managed` path.
+> Pi-1 round-1 §B3 correction: row-1's prose implied
+> `tool_to_canonical` participates in dispatch
+> routing. It does not — the live gate uses the
+> payload's canonical dispatch target directly.
+> `tool_to_canonical:
+> Mutex<BTreeMap<String, CanonicalId>>` is written by
+> `register_lazy` (`supervisor.rs:401-421`) for
+> introspection but is **not read outside tests** in
+> the live m6 surface (it's a candidate seam for v2
+> tool→plugin lookup work). Spawn events are recorded
+> via `record_spawn_event` to the
 > `RFL_SPAWN_TRACE_LOG` file path (observability seam;
 > pi-6 B-5 file-log shape over stdout). Supervisor
 > `shutdown(&self)` (round-6 redesign — `&self` over
@@ -792,6 +1015,18 @@ command }`.**
   source tree and the
   `${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/`
   materialised tree.
+- **§4.6 (reserved / well-known `RFL_*` env-var
+  index)** — append `RFL_SPAWN_TRACE_LOG` as the
+  test-observability env var for the lazy-load
+  supervisor seam: when set, the supervisor's
+  `record_spawn_event` writes one line per spawn event
+  to the named file path; unset is the production
+  no-op. Cross-references row 68. (Pi-1 round-1 §M3
+  correction: round-1 listed the glossary +
+  row-68 mention but omitted the §4.6 patch entry;
+  §4.6 at `overview.md:479-530` is the canonical
+  reserved-env index that the new var must register
+  against.)
 
 ---
 
@@ -900,26 +1135,48 @@ After the merge:
 
 ---
 
-**Open items for pi round 1.**
+**Open items for pi round 2.**
 
-1. The Phase I1 deviation (c23 startup-event ordering
-   replaces the literal
-   `core_tools_list_registered_before_provider_spawn.rs`
-   anchor) — pi to ratify the shape change or push back
-   for the literal filename. Both anchors are
-   defence-in-depth for `decisions.md` row 49; the
-   observable event ordering is, I'd argue, the cleaner
-   anchor.
-2. The §6 stream-RFC PP1 patch candidate (real-file
+1. **§5 attached-tmux render capture** — round-2 landed
+   real audit/sqlite captures + wire-event log (B1
+   wire-shape half closed); the rendered TUI screenshot
+   gate is routed to the post-merge driver sweep on an
+   attached tmux session. Pi to confirm this partial
+   closure is acceptable for ratification or push for a
+   pre-ratification render attempt.
+2. **Supervisor `env_clear` regression on
+   `CARGO_BIN_EXE_syd-pty`** (newly discovered during
+   round-2 transcript recapture; documented in
+   `transcripts/section-5/00-CONTEXT.md` open issue 1).
+   The c10 Phase-C rafaello-side smoke test still
+   passes against the shipped bundled fixtures, so this
+   doesn't regress shipped Phase C coverage; the gap
+   surfaces only on cold-start operator flows against
+   custom manifests. Pi to confirm whether this is a
+   ratification blocker for m6 or a routed-to-v0.1.1
+   follow-up. Round-2 default: route as a
+   driver-branch follow-up on the rafaello-v0.1
+   branch (lands before the ff-only merge to main, per
+   the m5a `816b273` drift-commits-before-merge
+   precedent).
+3. **Phase I1 assertion-shape deviation** — c23 keeps
+   the literal filename and changes the assertion
+   anchor to `StartupEvent::ToolSchemaCatalogBuilt`
+   ordering. Pi to ratify the shape change (M4 closure
+   reframed; round-1's "missing filename" framing was
+   wrong).
+4. **The §6 stream-RFC PP1 patch candidate** (real-file
    constraint on `bin/<plugin-bin>`) — pi to confirm
    whether this needs a stream RFC patch or is
    `overview.md`-only.
-3. The LiteLLM real-LLM §5 second transcript
-   (carryover to retro convergence per owner's
-   three-step guidance) — pi to confirm the
-   stub-alone-acceptable framing for round 1, with the
-   `mlx/qwen3.6-35b` real-LLM transcript captured if
-   the proxy is up at convergence.
-4. The `decisions.md` row 59–68 draft text — pi to
-   review each row for wording precision and
-   live-shape grounding.
+5. **The `decisions.md` rows 59–68 draft text** — round
+   2 corrected 62 / 64 / 65 / 67 / 68 per pi-1 §B3 +
+   §M1. Pi to re-review each row for wording precision
+   and live-shape grounding.
+
+Convergence trajectory after round 2: **3B → 0B**
+(blockers closed by sibling commit A + this fold);
+**4M → 0M** (M1-M4 all closed); **2N → 0N** (N1-N2
+closed). Provisional verdict request: **converged or
+near-converged**, pending pi confirmation on the
+two open routing questions (open items 1 + 2).
