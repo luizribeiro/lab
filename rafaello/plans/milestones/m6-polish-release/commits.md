@@ -1,8 +1,263 @@
 # m6 — v1 polish + release readiness — commits
 
-> **Status:** round 4 — folds `commits-pi-review-3.md`
-> (B/5 M/4 N/3, verdict blocking). Claude-authored
-> 2026-05-12; awaiting pi round 4.
+> **Status:** round 5 — folds `commits-pi-review-4.md`
+> (B/2 M/3 N/2, verdict blocking). Claude-authored
+> 2026-05-12; awaiting pi round 5.
+>
+> **Round-4 lazy-load pivot withdrawn.** Pi-4 §B-1
+> correctly rejected the parser-validation-only pivot
+> as a scope deviation. Ratified scope §I2 (line 1224)
+> explicitly names the test
+> `lazy_load_tool_trigger_spawns_on_first_call.rs` and
+> says the `load.triggers.kind = "tool"` field is
+> "never exercised end-to-end" — that wording requires
+> spawn-on-first-call observability, not deserialization
+> coverage. The owner-judgment item 6 "coverage" reading
+> I leaned on in round 4 admits the parser-only
+> interpretation textually, but scope §I2's named test
+> and end-to-end language overrides it. **Round 5
+> restores full lazy-load runtime** with concrete
+> specs for all three round-3 blockers (B-4 supervisor
+> state, B-5 cross-process observability, M-1 gate
+> dispatch hook) so c24a/c24b are implementation-ready
+> without surfacing new issues in pi round 5.
+>
+> Round-5 changelog by pi-4 finding:
+>
+> - **B-1 (lazy-load runtime restored — c24a/c24b).**
+>   Round-4 c24 parser-only replaced by **two
+>   concrete-spec rows** matching scope §I2 line 1224:
+>   - **c24a** — supervisor + gate + run_chat cutover.
+>     Pins the three load-bearing surfaces:
+>     1. **Supervisor state.** Extend live
+>        `PluginSupervisor` (verified at
+>        `rafaello/crates/rafaello-core/src/supervisor.rs:322-348`)
+>        with `lazy_candidates: Mutex<BTreeMap<
+>        CanonicalId, LazyCandidate>>` mirroring the
+>        live `managed: Mutex<BTreeMap<CanonicalId,
+>        ManagedSpawn>>` shape (live line 327; the
+>        round-5 prompt's `HashMap<.., ManagedChild>`
+>        sketch is corrected to the live `Mutex<
+>        BTreeMap<.., ManagedSpawn>>` shape). New
+>        struct `LazyCandidate { plan: CompiledPlugin,
+>        paths: SpawnPaths, triggers: Vec<String> }`
+>        (mirrors the live `spawn` signature at lines
+>        400-403: `pub async fn spawn(&self, plan:
+>        &CompiledPlugin, paths: &SpawnPaths) ->
+>        Result<SpawnHandle, SpawnError>`).
+>     2. **New method**
+>        `pub async fn spawn_on_demand(&self,
+>        tool_name: &str) -> Result<SpawnHandle,
+>        SpawnError>` on `PluginSupervisor`. Uses
+>        live `SpawnError` (verified live; no new
+>        `ToolSpawnError` invented). Algorithm:
+>        acquire `lazy_candidates` lock; find first
+>        entry whose `triggers` contains `tool_name`;
+>        clone its `plan` + `paths`; **remove the
+>        entry from `lazy_candidates`** before calling
+>        the existing `self.spawn(&plan, &paths)`
+>        (which acquires its own `in_flight` /
+>        `managed` locks); on success returns the
+>        `SpawnHandle`. Idempotent: if `tool_name`
+>        is not found in `lazy_candidates` but is
+>        already in `self.managed`, returns a fresh
+>        handle from the cached `ManagedSpawn`
+>        (mirrors the existing live "already spawned"
+>        guard at `in_flight` line 405). The lock-
+>        ordering invariant is `lazy_candidates →
+>        in_flight → managed`, matching the live
+>        spawn path's ordering.
+>     3. **Dispatch hook.** Live
+>        `gate::handle_tool_request` (verified at
+>        `rafaello/crates/rafaello-core/src/gate/mod.rs:248-275`)
+>        is a free `fn` taking
+>        `(&Arc<Broker>, &RwLock<UserGrants>,
+>        &Arc<AuditWriter>, &Arc<ConfirmState>,
+>        &TimeoutTasks, &BTreeMap<CanonicalId,
+>        CompiledPlugin>, &BusEvent)`. The function
+>        runs inside the gate's `tokio::spawn(async
+>        move { ... })` task body (live at
+>        `gate/mod.rs:175-200`). c24a's edit: change
+>        `handle_tool_request` to **`async fn`**
+>        (matching its already-on-tokio call site),
+>        thread a new
+>        `&Arc<PluginSupervisor>` parameter through,
+>        and await
+>        `supervisor.spawn_on_demand(&tool).await?`
+>        immediately after the `tool` name is parsed
+>        (live line 261-265) and **before** the
+>        dispatch-target/gate logic runs. On
+>        `SpawnError`, the handler emits the existing
+>        error-shape audit row and returns early
+>        without dispatch (matching live error-path
+>        precedent for invalid dispatch_target at
+>        line 273).
+>     4. **`ConfirmationGate::new` constructor** (live
+>        at `gate/mod.rs:133-150`) gains an
+>        `Arc<PluginSupervisor>` parameter wired
+>        through to the spawned task. `run_chat`
+>        construction site (live at
+>        `rafaello/crates/rafaello/src/lib.rs:423-465`)
+>        passes
+>        `Arc::new(plugin_supervisor)` (or wraps the
+>        existing local). The supervisor handle is
+>        held in `Arc` because it is shared between
+>        `run_chat`'s eager-spawn loop, the gate task,
+>        and the test ordering hook.
+>     5. **`run_chat` startup loop** (live at
+>        `rafaello/crates/rafaello/src/lib.rs:455-465`)
+>        switches on `entry.bindings.load`:
+>        - `LoadPolicy::Eager` (or any non-`Lazy`
+>          variant — `Boot`, `Manual`) → existing
+>          eager-spawn path, unchanged.
+>        - `LoadPolicy::Lazy { command, event: [],
+>          kind: [] }` with non-empty `command` →
+>          register a `LazyCandidate { plan, paths,
+>          triggers: command.clone() }` into
+>          `supervisor.lazy_candidates`; **skip**
+>          eager spawn.
+>        - `LoadPolicy::Lazy` with `event` or `kind`
+>          set, or empty `command` — fall through to
+>          eager spawn (m6 does not implement
+>          event/kind triggers; out-of-scope per
+>          scope §I2's "tool trigger" framing).
+>   - **c24b** — file-log integration test at
+>     `rafaello/crates/rafaello/tests/lazy_load_tool_trigger_spawns_on_first_call.rs`
+>     (path verbatim from scope §I2 line 1224).
+>     Uses an inter-process file log
+>     `RFL_SPAWN_TRACE_LOG=<tmpfile>` (mirroring the
+>     existing
+>     `RFL_STARTUP_ORDERING_LOG` pattern at
+>     `rafaello/crates/rafaello/src/chat/test_ordering_hook.rs:28-37`)
+>     to observe spawn events across the child
+>     process boundary (pi-3 B-5 closure: parent
+>     tests cannot access child supervisor internals;
+>     file-log mode is the established pattern).
+>     **Spawn-trace mechanism** (lands in c24a):
+>     ```rust
+>     fn record_spawn_event(canonical: &CanonicalId, event: &str) {
+>         if let Ok(path) = std::env::var("RFL_SPAWN_TRACE_LOG") {
+>             let _ = std::fs::OpenOptions::new()
+>                 .create(true).append(true).open(&path)
+>                 .and_then(|mut f| writeln!(f, "{event} {canonical}"));
+>         }
+>     }
+>     ```
+>     Called from: `PluginSupervisor::spawn_on_demand`
+>     emits `spawn_on_demand <canonical>` immediately
+>     before the inner `self.spawn(...)` call; the
+>     existing eager `spawn` path emits `eager_spawn
+>     <canonical>` at the same site where the
+>     existing `test_ordering_hook::record(
+>     PluginSupervisorSpawn)` lives (live at
+>     `rafaello/crates/rafaello/src/lib.rs:423` and
+>     subsequent spawn sites at lines 432-440 +
+>     447-454). c24b reads the tmpfile after the
+>     child exits and asserts:
+>     - The lazy plugin's first appearance is on a
+>       `spawn_on_demand <canonical-of-rfl-readfile>`
+>       line, **not** an `eager_spawn` line.
+>     - At least one eager plugin (the provider
+>       `builtin:openai@0.0.0`) appears on an
+>       `eager_spawn` line **before** the
+>       `spawn_on_demand` line for the lazy plugin
+>       (proves lazy plugin is not eager-spawned at
+>       startup; the lazy plugin's first spawn comes
+>       only after the tool call).
+>     - The lazy plugin is spawned exactly once in
+>       the log (idempotency check; second tool call
+>       to the same lazy plugin reuses the
+>       already-managed handle).
+>   - **Cross-crate cutover note** (m0 §4.1
+>     precedent): c24a coordinates
+>     `rafaello-core/src/supervisor.rs` +
+>     `rafaello-core/src/gate/mod.rs` +
+>     `rafaello/src/lib.rs` (run_chat). The
+>     constructor signature change to
+>     `ConfirmationGate::new` ripples through the
+>     single `run_chat` construction site. This is
+>     workspace-wide cutover #4 (joining c05, c09,
+>     c16); the c24a body cites the m0 c08 / m5b c14
+>     unsplittable-cutover precedent.
+>
+> - **B-2** c18 workflow body still had `find -printf`
+>   in round 4 (round-4 changelog claimed the fix but
+>   the code-block escaped the `replace_all`). Round 5
+>   verifies + fixes the in-block invocation to
+>   `find ./result/bin -maxdepth 1 -type f -exec
+>   basename {} \; | sort | tr '\n' ' '` — POSIX/macOS
+>   portable per pi-3 B-3 / pi-4 B-2.
+>
+> - **M-1** c28's decisions-row range returns to the
+>   nominal scope §J3 placeholders. With the lazy-load
+>   pivot withdrawn, the round-4 "row 68 = v2 deferral"
+>   placeholder is **removed**. Row 68 returns to its
+>   pre-pivot meaning: **m6 RATIFICATION closes
+>   `rafaello-v0.1 → main` merge** (the row formerly
+>   numbered 69 in rounds 3-4). Final retro-time
+>   placeholder list: rows 59–68. c28 acceptance
+>   appendix and c28 heading both updated to "rows
+>   59–68."
+>
+> - **M-2** c14 + c15 wording aligned with the
+>   `std::process::exit(1)` mechanism (not a Rust
+>   panic). c14's exhaustion arm is described as
+>   "fatal deterministic process exit with the
+>   scoped error message" (not "panic"). c15's test
+>   renamed **`exhaustion_exits_deterministically`**
+>   (was `exhaustion_panics_deterministically`);
+>   sibling case renamed
+>   `unmatched_predicate_exits_deterministically`.
+>   Scope §E2's "exhaustion panics deterministically"
+>   text is preserved at the appendix level as the
+>   ratified semantic the `process::exit(1)`
+>   mechanism implements; the row body explains the
+>   choice of `exit(1)` over `panic!()` (round-3 B-2:
+>   tokio::spawn'd handler panics don't propagate
+>   out of the listener task — `process::exit(1)` is
+>   the smallest mechanism that delivers the
+>   deterministic-fatal observable).
+>
+> - **M-3** c18 acceptance gains an explicit bullet:
+>   "the workflow contains and runs the **portable
+>   F2 layout check** (POSIX-compatible
+>   `find ./result/bin -maxdepth 1 -type f -exec
+>   basename {} \;`) asserting `$out/bin` carries
+>   exactly `rfl` + `rfl-tui` and each bundled
+>   plugin's manifest/openrpc/binary exists at
+>   `$out/share/rafaello/plugins/<plugin>/` with the
+>   binary as a regular file (not a symlink)."
+>   c17 acceptance keeps its pure-Rust
+>   `pp1_resolve_entry_against_synthetic_plugin_dir.rs`
+>   unit test (pi-3 M-4); the Nix-layout half is
+>   c18's job per pi-3 M-4 split.
+>
+> - **N-1** c24 fixture lock TOML written with the
+>   **full table path** including the plugin entry:
+>   `[plugin."local:readfile@0.0.0".bindings.load]
+>   command = ["read-file"]`. The round-4 shorthand
+>   `[bindings.load]` (without the plugin-entry
+>   prefix) was incorrect — the live `Lock` struct
+>   nests `bindings.load` under each plugin entry
+>   per `rafaello/crates/rafaello-core/src/lock/lock_file.rs:18-34`.
+>
+> - **N-2** Acceptance traceability appendix Phase F
+>   F2 row updated to the portable `find -exec
+>   basename {} \;` form (matches the c18 workflow
+>   body after B-2 fix).
+>
+> ---
+>
+> Round 4 — folded `commits-pi-review-3.md` (B/5 M/4
+> N/3, verdict blocking). **Round-4 lazy-load pivot
+> withdrawn in round 5 per pi-4 §B-1** (scope §I2
+> line 1224 names `lazy_load_tool_trigger_spawns_on_first_call.rs`
+> end-to-end test; parser-only coverage is a scope
+> miss). The round-4 changelog below is preserved
+> for traceability of mechanical fixes that survived
+> (B-1 c10 public API, B-2 c14 process::exit, B-3
+> find -printf, M-2 cfg(linux), N-1 c09 count, N-2
+> c04 shell-script):
 >
 > Round-3 → round-4 narrative: pi-2 and pi-3 both
 > returned B/5 M/4 N/3 — counts didn't narrow. The
@@ -495,21 +750,20 @@
 >   c09 → `feat(lockin): SandboxBuilder::syd_pty_path + child-env injection`;
 >   c17 → `feat(rafaello-nix): postInstall reshape to PP1 plugin-tree layout`.
 >
-> **Budget after round-4 folds.** Scope §"Internal split"
+> **Budget after round-5 folds.** Scope §"Internal split"
 > pins the m6 budget at **28 commits implementation
-> default / 30 max + 1 retrospective reservation**. Round 4
-> drops c24b per the lazy-load pivot: **27 named
-> implementation rows + 1 retro reservation = 28 total
-> slots**. Inside scope's 28-default + 1 retro = matches
-> scope's nominal budget exactly. Phase I returns to 3
-> rows (round-2's c24a+c24b split is reversed in round 4
-> because c24a alone covers parser-validation; c24b's
-> integration test is moot once spawn-on-demand is deferred
-> to v2).
+> default / 30 max + 1 retrospective reservation**.
+> Round 5 restores the round-2 c24a + c24b split for
+> the lazy-load runtime: **28 named implementation
+> rows + 1 retro reservation = 29 total slots**. Stays
+> inside scope's 30-max ceiling. Phase I has four
+> named rows (c23, c24a, c24b, c25); c25, c26, c27
+> follow c24b, c28 retro is reserved (same shape as
+> round 3).
 >
 > **Phase distribution.** A:4 · B:3 · C:3 · D:3 · E:2 · F:3 ·
-> G:2 · H:2 · I:**3** · J:2 · retro:1 = 27 named impl rows
-> + c28 retro.
+> G:2 · H:2 · I:**4** · J:2 · retro:1 = 28 named impl rows
+> + c28 retro = 29 total slots.
 >
 > **Workspace-wide cutovers explicitly called out** (m0 §4.1
 > precedent):
@@ -1849,8 +2103,9 @@ m5b §5 row 1 carryover.
   testing (~40 lines if added). Total ~180 lines.
 - **Size.** medium (body-justified by HTTP
   request-inspection fan-out + the mutual-exclusion
-  + exhaustion-panic-and-process-exit dispatcher per
-  pi-3 M-4).
+  + fatal-deterministic-process-exit dispatcher per
+  pi-4 M-2; scope §E2's panic semantic implemented
+  via `std::process::exit(1)`).
 - **Scope sections.** §E1.
 
 #### c15 — test(rafaello-openai-stub): scripted-turns HTTP integration tests
@@ -1885,7 +2140,15 @@ m5b §5 row 1 carryover.
     "send-mail"`. Second POST with the `tool` role
     reply to that `send-mail` call; assert response
     `choices[0].message.content` contains `"Done"`.
-  - `exhaustion_panics_deterministically` (pi-2 B-5
+  - `exhaustion_exits_deterministically` (pi-4 M-2:
+    name matches the `std::process::exit(1)`
+    mechanism; round-4's `panics` name was
+    inconsistent with the live mechanism. The
+    ratified scope §E2 "exhaustion panics
+    deterministically" semantic is preserved at the
+    appendix level — `process::exit(1)` is the
+    chosen implementation of that semantic per pi-3
+    B-2.) (pi-2 B-5
     fix — scope §E2 restored) — script a single turn;
     consume it via one POST; send a second matching
     request; the in-process tokio task panics; the
@@ -1901,7 +2164,8 @@ m5b §5 row 1 carryover.
     exits non-zero before binding (no port printed on
     stdout); stderr contains
     `"both scripted and response envs set"`.
-  - `unmatched_predicate_panics_deterministically`
+  - `unmatched_predicate_exits_deterministically`
+    (pi-4 M-2 rename)
     (pi-2 B-5 — exhaustion semantic applies on first
     non-matching turn lookup, same as scope §E2
     ratifies for the multi-answer hook
@@ -2117,9 +2381,9 @@ in `$out/bin/`.)
   steps:
     - uses: cachix/install-nix-action@v25
     - run: nix build .#rafaello
-    - name: F2 layout check (pi-2 M-4, macOS-portable per pi-3 B-3)
+    - name: F2 layout check (pi-2 M-4; macOS-portable per pi-3 B-3 / pi-4 B-2)
       run: |
-        test "$(find ./result/bin -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" \
+        test "$(find ./result/bin -maxdepth 1 -type f -exec basename {} \; | sort | tr '\n' ' ')" \
           = "rfl rfl-tui "
         for plugin in rfl-openai rfl-openai-stub rfl-readfile rfl-mailcat \
                       rfl-mockprovider rafaello-fetch; do
@@ -2150,11 +2414,26 @@ in `$out/bin/`.)
   - `.github/workflows/rafaello.yml` (or the live name)
     has both `ubuntu-latest` and `macos-latest` jobs;
     both run `nix build .#rafaello`.
+  - **F2 layout shell-step** (pi-4 M-3): the workflow
+    contains and runs the portable POSIX `find` form
+    asserting `$out/bin/` carries exactly `rfl` +
+    `rfl-tui` (and nothing else), and for each of the
+    six bundled plugins (`rfl-openai`,
+    `rfl-openai-stub`, `rfl-readfile`, `rfl-mailcat`,
+    `rfl-mockprovider`, `rafaello-fetch`) the
+    workflow asserts existence of
+    `$out/share/rafaello/plugins/<plugin>/rafaello.toml`,
+    `$out/share/rafaello/plugins/<plugin>/openrpc.json`,
+    `$out/share/rafaello/plugins/<plugin>/bin/<plugin>`
+    (regular file; `test -f && test ! -L`). Runs on
+    both Linux and macOS legs; macOS portability via
+    `-exec basename {} \;` per pi-3 B-3 / pi-4 B-2.
   - First push of the m6 branch triggers a CI run; both
     legs go green (manual operator confirmation; URL
     captured in J1 §4).
 - **Files touched.** `.github/workflows/rafaello.yml`
-  (job-matrix expansion, ~30 lines). Total ~30 lines.
+  (job-matrix expansion + F2 layout shell-step,
+  ~30 lines). Total ~30 lines.
 - **Size.** small.
 - **Scope sections.** §F3, §"Acceptance summary" hard
   gate.
@@ -2384,18 +2663,17 @@ J1 §G per scope row 21.
 - **Size.** small.
 - **Scope sections.** §H2.
 
-### Phase I — Coverage / regression-anchor sweep (3 commits — c24 reverts to parser-validation only per pi-3 / round-4 pivot)
+### Phase I — Coverage / regression-anchor sweep (4 commits — c24a/c24b lazy-load runtime restored per pi-4 §B-1)
 
-m4/m5a/m5b §5 carryovers. **Pi-3 round-4 lazy-load
-pivot**: c24 reverts to a single parser-validation
-regression-anchor row. Pi-1 B-6's promotion to
-implementation + test + the round-2 c24a/c24b split are
-**both reversed** in round 4. Owner item 6 "coverage"
-reads as parser+validation; the runtime spawn-on-demand
-half is deferred to v2 with a `decisions.md` row 68
-placeholder recording the rationale (gate dispatch
-sync→async refactor + cross-process supervisor
-observability exceed m6's v1-polish remit).
+m4/m5a/m5b §5 carryovers. **Round 5 restores lazy-load
+runtime** after the round-4 parser-only pivot was
+rejected by pi-4 §B-1 as a scope deviation (scope §I2
+line 1224 names the integration test
+`lazy_load_tool_trigger_spawns_on_first_call.rs` and
+says the trigger field is "never exercised end-to-end").
+c24a is the cross-crate supervisor+gate+run_chat
+cutover; c24b is the file-log integration test
+matching the scope-named path.
 
 #### c23 — feat+test(rafaello): `StartupEvent::ToolSchemaCatalogBuilt` instrumentation + regression anchor
 
@@ -2481,70 +2759,403 @@ observability exceed m6's v1-polish remit).
 - **Size.** small.
 - **Scope sections.** §I1, owner-judgment item 11.
 
-#### c24 — test(rafaello-core): `LoadPolicy::Lazy { command }` parser-validation regression anchor
+#### c24a — feat(rafaello, rafaello-core): `LoadPolicy::Lazy { command }` runtime — supervisor `lazy_candidates` + `spawn_on_demand` + gate dispatch hook + `run_chat` startup routing
 
-- **What.** Scope §I2 + owner-judgment item 6 (lazy-load
-  "coverage" reads as parser+validation per round-4
-  pivot; runtime spawn-on-demand deferred to v2 — see
-  `decisions.md` placeholder row 68 in c28). Pi-3 B-4
-  / B-5 / M-1 all collapse with this pivot: no
-  `spawn_on_demand` method, no supervisor state
-  plumbing, no gate sync→async refactor, no
-  cross-process observability.
-  Live `rafaello/crates/rafaello-core/src/lock/load_policy.rs:14-25`
-  already exposes `LoadPolicy::Lazy { event: Vec<String>,
-  command: Vec<String>, kind: Vec<String> }`; the live
-  serde `Visitor` at lines 38-95 parses both the
-  string-shorthand form (`load = "lazy"`) and the table
-  form (`[load] command = ["…"]`). m6 contributes a
-  regression-anchor that loads a fixture lock through
-  the live deserializer and asserts the parsed shape.
-  Two coordinated edits:
-  1. **Fixture lock** at
-     `rafaello/crates/rafaello-core/tests/fixtures/m6-lazy-load-policy/rafaello.lock`
-     with a single plugin entry whose `bindings.load`
-     is the table form (`[bindings.load] command =
-     ["read-file"]`).
-  2. **Regression test** at
-     `rafaello/crates/rafaello-core/tests/lazy_load_command_trigger_parses_from_lock.rs`
-     — loads the fixture lock through
-     `rafaello_core::lock::Lock::from_toml`; asserts:
-     - The deserialized `entry.bindings.load` matches
-       `LoadPolicy::Lazy { event: vec![],
-       command: vec!["read-file".into()], kind:
-       vec![] }`.
-     - The string-shorthand form `load = "lazy"`
-       still parses to `LoadPolicy::Lazy { event:
-       vec![], command: vec![], kind: vec![] }` —
-       round-trip negative-control verifying the
-       serde `Visitor`'s two-arm dispatch hasn't
-       regressed.
-     - An invalid form (e.g. `load = "tool-trigger"`)
-       fails `Lock::from_toml` with an `unknown
-       variant` error — proves the parser rejects
-       the round-2 nonexistent shape, future-proofing
-       against re-introducing it.
-- **Why.** Scope §I2 + owner-judgment item 6
-  parser-validation reading (round-4 pivot per pi-3
-  → round-4 lazy-load surface-area cap). The
-  regression anchor proves the load-bearing parser
-  surface for v2's spawn-on-demand work is already
-  exercised by m6's test suite. Cross-references
-  `decisions.md` row 42 (existing `LoadPolicy`
-  definition) and reserves row 68 in c28 for the v2
-  spawn-on-demand deferral rationale.
+- **What.** Scope §I2 + owner-judgment item 6 +
+  **pi-4 §B-1 (round-4 parser-only pivot withdrawn;
+  lazy-load runtime restored end-to-end per scope §I2
+  line 1224)**. Cross-crate cutover coordinating
+  three live surfaces; size-justified per m0 §4.1
+  workspace-cutover precedent. Six coordinated
+  edits:
+
+  1. **`PluginSupervisor` extension** in
+     `rafaello/crates/rafaello-core/src/supervisor.rs`
+     (live struct at lines 322-348). Add a new field
+     mirroring the live `managed` shape:
+     ```rust
+     pub struct PluginSupervisor {
+         broker: Broker,
+         config: SupervisorConfig,
+         in_flight: Arc<Mutex<HashSet<CanonicalId>>>,
+         managed: Mutex<BTreeMap<CanonicalId, ManagedSpawn>>,
+         lazy_candidates: Mutex<BTreeMap<CanonicalId, LazyCandidate>>,
+         tool_catalog: Arc<ToolSchemaCatalog>,
+         // ... existing cfg(test) fields
+     }
+
+     struct LazyCandidate {
+         plan: CompiledPlugin,
+         paths: SpawnPaths,
+         triggers: Vec<String>,  // tool names from LoadPolicy::Lazy.command
+     }
+     ```
+     Live `spawn` signature
+     (`pub async fn spawn(&self, plan: &CompiledPlugin,
+     paths: &SpawnPaths) -> Result<SpawnHandle,
+     SpawnError>` at lines 400-403) takes borrowed
+     `&CompiledPlugin` + `&SpawnPaths`; `LazyCandidate`
+     **owns** them so they outlive the deferred spawn.
+     Constructor (`PluginSupervisor::new`, live at
+     lines 335-348) initialises
+     `lazy_candidates: Mutex::new(BTreeMap::new())`.
+     New `pub fn register_lazy(&self, canonical:
+     CanonicalId, candidate: LazyCandidate)` writes
+     into the map under its own lock.
+
+  2. **`spawn_on_demand` method** on
+     `PluginSupervisor`:
+     ```rust
+     pub async fn spawn_on_demand(
+         &self,
+         tool_name: &str,
+     ) -> Result<SpawnHandle, SpawnError>
+     ```
+     Algorithm:
+     - Acquire `lazy_candidates` lock; find the first
+       entry whose `triggers` contains `tool_name`.
+       If found, **clone** its `plan` + `paths` and
+       **remove** the entry; drop the lock.
+     - Call `self.spawn(&plan, &paths).await`
+       (existing method; acquires `in_flight` +
+       `managed` locks itself per live ordering).
+     - Returns the `SpawnHandle` from the inner
+       `spawn`. Uses live `SpawnError`; **no new
+       `ToolSpawnError` invented** (pi-2 M-2
+       precedent: `SpawnError` is the supervisor's
+       error type, verified live).
+     - If `tool_name` matches no `lazy_candidates`
+       entry but the canonical is already in
+       `self.managed` (idempotent re-dispatch):
+       acquire `managed` lock; if the canonical is
+       present, return success (the live
+       `ManagedSpawn` does not currently expose a
+       cloneable handle, so the no-op variant
+       returns a `SpawnError::AlreadyRegistered`
+       sentinel that callers treat as
+       "already-spawned, proceed with dispatch" —
+       per-commit agent verifies whether
+       `AlreadyRegistered` already exists at
+       `supervisor.rs:289-295` SpawnError enum or
+       whether the row should add a small
+       `AlreadySpawned(CanonicalId)` variant). If
+       neither lookup succeeds, return
+       `SpawnError::NotInAcl(canonical)`-equivalent
+       — the per-commit agent picks the closest
+       live arm; if no arm fits cleanly, the row
+       documents the choice in its body.
+     - **Lock-ordering invariant**:
+       `lazy_candidates → in_flight → managed`
+       (matches live `spawn` ordering at lines
+       405-415; deadlock-free because
+       `lazy_candidates` is released before
+       `spawn` reacquires `in_flight`).
+     - On entry (after taking + dropping
+       `lazy_candidates`), emit
+       `record_spawn_event(&plan.canonical,
+       "spawn_on_demand")` to the file-log (edit
+       #6).
+
+  3. **`ConfirmationGate::new` constructor change**
+     in `rafaello/crates/rafaello-core/src/gate/mod.rs`
+     (live at lines 133-150). Add an
+     `Arc<PluginSupervisor>` parameter:
+     ```rust
+     pub fn new(
+         broker: Arc<Broker>,
+         user_grants: Arc<RwLock<UserGrants>>,
+         audit: Arc<AuditWriter>,
+         state: Arc<ConfirmState>,
+         compiled: BTreeMap<CanonicalId, CompiledPlugin>,
+         supervisor: Arc<PluginSupervisor>,
+     ) -> Self
+     ```
+     Hold the handle alongside the existing
+     `broker`/`user_grants`/`audit`/`state`/`compiled`
+     fields (struct at lines 122-131). Clone into
+     the spawned task body at the existing
+     `tokio::spawn(async move { … })` site (lines
+     175-200).
+
+  4. **`handle_tool_request` async refactor** in
+     `gate/mod.rs:248-275`. The live function is a
+     free `fn` (sync) called from a `tokio::spawn`
+     async task body; convert to `async fn`:
+     ```rust
+     async fn handle_tool_request(
+         broker: &Arc<Broker>,
+         user_grants: &RwLock<UserGrants>,
+         audit: &Arc<AuditWriter>,
+         state: &Arc<ConfirmState>,
+         timeout_tasks: &TimeoutTasks,
+         compiled: &BTreeMap<CanonicalId, CompiledPlugin>,
+         supervisor: &Arc<PluginSupervisor>,
+         event: &BusEvent,
+     )
+     ```
+     Caller (gate's tokio task body around line
+     181) adds `.await`. **First action inside the
+     function**, immediately after parsing `tool:
+     String` from the payload (live lines 261-265):
+     `let _ = supervisor.spawn_on_demand(&tool).await;`
+     — on `Err(SpawnError)`, emit the existing
+     error-log shape (`tracing::error!`, mirroring
+     the live invalid-dispatch-target error at
+     line 273-276) and return early without
+     dispatch. On `Ok(_)` or `Err` that maps to
+     "already spawned", proceed with the existing
+     dispatch-target / gate logic unchanged.
+
+  5. **`run_chat` startup routing** in
+     `rafaello/crates/rafaello/src/lib.rs:455-465`
+     (live tool-plugin eager-spawn loop). Switch on
+     `entry.bindings.load`:
+     ```rust
+     for (canonical, entry) in &lock.plugins {
+         if entry.bindings.tools.is_empty() || entry.bindings.provider {
+             continue;
+         }
+         let plan = compiled_plugins.get(canonical).expect("…");
+         let paths = plugin_spawn_paths(&project_root, &plan.topic_id);
+         match &entry.bindings.load {
+             LoadPolicy::Lazy { command, event, kind }
+                 if !command.is_empty() && event.is_empty() && kind.is_empty() => {
+                 plugin_supervisor.register_lazy(
+                     canonical.clone(),
+                     LazyCandidate {
+                         plan: plan.clone(),
+                         paths,
+                         triggers: command.clone(),
+                     },
+                 );
+             }
+             _ => {
+                 let h = plugin_supervisor.spawn(plan, &paths).await
+                     .map_err(|_| RflChatError::ToolSpawnFailed {
+                         canonical: canonical.clone(),
+                     })?;
+                 spawn_handles.push(h);
+             }
+         }
+     }
+     ```
+     `LoadPolicy::Lazy` with non-empty `event` or
+     `kind` (or empty `command`) falls through to
+     the eager-spawn arm — m6 does not implement
+     event-/kind-triggered lazy load (scope §I2
+     "tool trigger" framing). Construction site:
+     wrap the existing `plugin_supervisor` local in
+     `Arc::new(...)`; pass
+     `Arc::clone(&plugin_supervisor)` to
+     `ConfirmationGate::new` per edit #3. The eager
+     arms in `run_chat` (provider at lines
+     423-430; non-active providers at 432-440)
+     keep their existing
+     `plugin_supervisor.spawn(...)` calls — the
+     `Arc<PluginSupervisor>` wrapping is
+     deref-transparent for `.spawn`.
+
+  6. **`record_spawn_event` helper + emission
+     sites**:
+     ```rust
+     fn record_spawn_event(canonical: &CanonicalId, event: &str) {
+         use std::io::Write;
+         if let Ok(path) = std::env::var("RFL_SPAWN_TRACE_LOG") {
+             let _ = std::fs::OpenOptions::new()
+                 .create(true).append(true).open(&path)
+                 .and_then(|mut f| writeln!(f, "{event} {canonical}"));
+         }
+     }
+     ```
+     Module-private inside
+     `rafaello-core/src/supervisor.rs`. Emitted
+     from two sites:
+     - `spawn_on_demand` → emits `spawn_on_demand
+       <canonical>` **before** the inner
+       `self.spawn(...)` call.
+     - `spawn` (live at line 399 onward) → emits
+       `eager_spawn <canonical>` at the same point
+       the live `record_first_spawn_now` test-hook
+       fires (line 404), so every eager spawn
+       leaves a symmetric trace.
+     The file-log mirrors the existing
+     `RFL_STARTUP_ORDERING_LOG` pattern at
+     `rafaello/crates/rafaello/src/chat/test_ordering_hook.rs:28-37`;
+     env-driven, no production-runtime cost when
+     unset.
+
+  Unit tests in `supervisor.rs` under
+  `#[cfg(test)]`:
+  - `spawn_on_demand_dispatches_lazy_candidate_then_managed`
+    — register a lazy candidate; call
+    `spawn_on_demand(&"read-file")`; assert the
+    candidate is removed from `lazy_candidates`
+    and the plugin is now in `managed` (uses live
+    `is_in_flight` at line 395 + a new
+    `#[cfg(any(test, feature = "test-fixture"))]
+    pub fn is_lazy_candidate(&self, canonical:
+    &CanonicalId) -> bool` for the negative side
+    of the assertion).
+  - `spawn_on_demand_unknown_tool_errors`
+    — empty `lazy_candidates`; call
+    `spawn_on_demand(&"nonsense")`; assert
+    `Err(SpawnError::…)` with the chosen
+    no-candidate variant.
+  - `spawn_on_demand_idempotent_after_first_dispatch`
+    — register, dispatch, then call again with the
+    same tool name; assert no double-spawn
+    (`managed` size unchanged on the second call).
+
+- **Why.** Scope §I2 line 1224 names the test
+  `lazy_load_tool_trigger_spawns_on_first_call.rs`
+  and says the trigger field is "never exercised
+  end-to-end" — that wording requires runtime
+  spawn-on-first-call, not deserialization alone.
+  Round 4's parser-only pivot was a scope
+  deviation; round 5 withdraws it per pi-4 §B-1.
+  Cross-references existing `decisions.md` row 42
+  (`LoadPolicy` shape ratification in m3); the
+  c28 placeholder list returns to scope §J3's
+  nominal 59-68 range (round-4's v2-deferral row
+  is removed; what was row 69 returns to row 68 =
+  m6 ratification closes v0.1 → main merge).
+  Workspace-cutover #4 (joining c05, c09, c16)
+  per m0 §4.1 / m5b c14 precedent: the
+  `Arc<PluginSupervisor>` sharing decision +
+  `ConfirmationGate::new` signature + the
+  `handle_tool_request` async refactor + the
+  `run_chat` routing all ripple from one
+  decision and cannot land separately without
+  intermediate broken states.
+
 - **Depends on.** baseline.
-- **Acceptance.** Test green; the fixture lock file
-  exists; `rg "spawn_on_demand"
-  rafaello/crates/rafaello-core/` returns zero hits
-  (m6 ships no `spawn_on_demand` symbol — runtime
-  half is v2).
-- **Files touched.** One new fixture lock; one new
-  test file. Total ~90 lines.
-- **Size.** small.
+
+- **Acceptance.**
+  - `cargo build -p rafaello` + `cargo build
+    -p rafaello-core` green on Linux + macOS.
+  - Three unit tests in `supervisor.rs` green.
+  - `rg "lazy_candidates"
+    rafaello/crates/rafaello-core/src/supervisor.rs`
+    returns the field declaration + at least
+    three use sites (init, `register_lazy`,
+    `spawn_on_demand`).
+  - `rg "spawn_on_demand"
+    rafaello/crates/rafaello-core/src/` returns
+    the method definition (in `supervisor.rs`) +
+    the call site (in `gate/mod.rs`).
+  - `rg "RFL_SPAWN_TRACE_LOG"
+    rafaello/crates/rafaello-core/src/supervisor.rs`
+    returns the `record_spawn_event` helper.
+  - `handle_tool_request` is now `async fn` (live
+    at `gate/mod.rs:248`); the caller in the same
+    file awaits it.
+
+- **Files touched.** Four live source files +
+  one fixture lock:
+  - `rafaello/crates/rafaello-core/src/supervisor.rs`
+    (`lazy_candidates` + `LazyCandidate` +
+    `register_lazy` + `spawn_on_demand` +
+    `record_spawn_event` + eager-spawn trace
+    emission + three unit tests). ~180 lines.
+  - `rafaello/crates/rafaello-core/src/gate/mod.rs`
+    (constructor parameter + struct field +
+    `handle_tool_request` async refactor +
+    `spawn_on_demand` call). ~30 lines.
+  - `rafaello/crates/rafaello/src/lib.rs`
+    (`Arc::new(plugin_supervisor)` + constructor
+    call update + spawn-loop `match LoadPolicy::Lazy
+    { command }` routing). ~25 lines.
+  - `rafaello/crates/rafaello/tests/fixtures/m6-lazy-load-tool/rafaello.lock`
+    (new fixture; consumed by c24b; landed here
+    so c24b is a tests-only delta). ~30 lines.
+  Total ~265 lines.
+
+- **Size.** medium-to-large (body-justified per
+  m0 §4.1 workspace-cutover precedent: lazy-load
+  runtime requires coordinated supervisor + gate +
+  `run_chat` changes; unsplittable because the
+  `Arc<PluginSupervisor>` sharing decision
+  ripples through the gate constructor to the
+  spawned task body and back to `run_chat`'s
+  construction order; any split lands an
+  intermediate broken state per the per-commit
+  green-bar rule).
+
 - **Scope sections.** §I2, owner-judgment item 6,
-  `decisions.md` row 42 cross-ref + new row-68
-  placeholder (v2 deferral).
+  `decisions.md` row 42 cross-ref + scope §J3
+  placeholder allocation at retro.
+
+#### c24b — test(rafaello): `lazy_load_tool_trigger_spawns_on_first_call.rs` integration test via `RFL_SPAWN_TRACE_LOG` file-log
+
+- **What.** Scope §I2 line 1224 closer (test path
+  named verbatim by ratified scope). New
+  integration test at
+  `rafaello/crates/rafaello/tests/lazy_load_tool_trigger_spawns_on_first_call.rs`:
+  1. Construct a tempfile path; set
+     `RFL_SPAWN_TRACE_LOG=<tmpfile>` on the spawned
+     `rfl chat` child's environment.
+  2. Use the fixture lock landed in c24a at
+     `rafaello/crates/rafaello/tests/fixtures/m6-lazy-load-tool/rafaello.lock`,
+     which wires `rfl-readfile` with the **full
+     table path** (pi-4 N-1):
+     ```toml
+     [plugin."local:readfile@0.0.0".bindings.load]
+     command = ["read-file"]
+     ```
+     The fixture also pre-installs the eager
+     `rfl-openai` provider so there is at least
+     one `eager_spawn` event ordered before the
+     lazy plugin's `spawn_on_demand` event.
+  3. Drive `rfl chat` via the c14 scripted-stub
+     turn mechanism
+     (`RFL_OPENAI_STUB_SCRIPTED_TURNS`): turn 1
+     issues `tool_calls` for `read-file` against
+     the lazy plugin; turn 2 acknowledges the
+     `tool_result` reply; m5b
+     `RFL_TUI_TEST_CONFIRM_ANSWERS`
+     (`decisions.md` row 56) auto-approves the
+     confirmation modal so the chat-loop exits
+     cleanly after one tool round-trip.
+  4. After the child exits, read the tmpfile;
+     parse line-delimited `<event> <canonical>`
+     events; assert:
+     - The lazy plugin (`local:readfile@0.0.0`)
+       first appears on a `spawn_on_demand
+       local:readfile@0.0.0` line, **not** an
+       `eager_spawn` line.
+     - The eager provider (`builtin:openai@0.0.0`)
+       appears on an `eager_spawn` line at a
+       **strictly earlier line index** than the
+       lazy plugin's `spawn_on_demand` line.
+     - The lazy plugin appears **exactly once** in
+       the trace log (idempotency).
+
+- **Why.** Scope §I2 line 1224 closer — the named
+  test ratified scope requires. Pi-3 B-5 closure:
+  parent integration tests cannot reach into the
+  child's `PluginSupervisor` helpers (those run
+  in the child's address space). The file-log
+  mechanism mirrors `RFL_STARTUP_ORDERING_LOG`
+  (`rafaello/crates/rafaello/src/chat/test_ordering_hook.rs:28-37`)
+  and gives an inter-process observable channel
+  without leaking supervisor internals through a
+  test seam.
+
+- **Depends on.** c24a (supervisor + gate +
+  `run_chat` cutover + fixture lock), c14
+  (scripted-stub turns), c06 (`rafaello-readfile`
+  manifest promotion — the lazy plugin's source
+  tree).
+
+- **Acceptance.** Test green; the trace-log file
+  contains the three assertions above.
+
+- **Files touched.** One new integration test
+  file. Total ~150 lines.
+
+- **Size.** small-to-medium.
+
+- **Scope sections.** §I2 line 1224.
 
 #### c25 — refactor(rafaello-core): ratify `#[allow(clippy::result_large_err)]` allows + comment-pin to `decisions.md` row 67
 
@@ -2751,7 +3362,7 @@ observability exceed m6's v1-polish remit).
 
 ### Retrospective reservation (1 slot)
 
-#### c28 — docs(rafaello-m6): retrospective + `decisions.md` rows 59–69 + glossary additions (RESERVED)
+#### c28 — docs(rafaello-m6): retrospective + `decisions.md` rows 59–68 + glossary additions (RESERVED)
 
 - **What.** Scope §J3 + scope §"Glossary additions".
   Reserved budget slot for the m6 retrospective phase.
@@ -2784,21 +3395,22 @@ observability exceed m6's v1-polish remit).
       ratified default).
     - **67** `result_large_err` ratification (allows
       kept; boxing post-v1).
-    - **68** Lazy-load runtime semantic **deferred to
-      v2** (pi-3 → round-4 pivot). m6 covers
-      parser+validation only via c24; the runtime
-      spawn-on-demand half — gate-dispatch sync→async
-      refactor, supervisor lazy-candidate state
-      (`HashMap<CanonicalId, (CompiledPlugin,
-      SpawnPaths)>`), cross-process spawn-trace
-      observability — is v2 work. Cross-references
-      `decisions.md` row 42 (`LoadPolicy` definition,
-      ratified in m3) and owner-judgment item 6
-      ("coverage" reading admits both interpretations;
-      round-4 picks parser+validation to cap m6
-      surface).
-    - **69** m6 RATIFICATION closes `rafaello-v0.1
-      → main` merge.
+    - **68** m6 RATIFICATION closes `rafaello-v0.1
+      → main` merge. (Round 5: row 68 returns to its
+      pre-round-4 meaning. The round-4 "row 68 =
+      lazy-load v2 deferral" placeholder is **removed**
+      because pi-4 §B-1 rejected the parser-only
+      pivot; lazy-load runtime lands in c24a/c24b
+      per scope §I2 line 1224. Lazy-load runtime
+      semantic — `LoadPolicy::Lazy { command }`
+      entries skip eager spawn and spawn on
+      first-tool-dispatch — is captured by the
+      retrospective row body alongside the existing
+      `decisions.md` row 42 cross-reference; if the
+      retrospective phase chooses to allocate a
+      dedicated row, it becomes a +1 drift-patch in
+      line with m1/m2/m4/m5b retrospective
+      precedent.)
   - `glossary.md` additions per scope §"Glossary
     additions": `rfl init`, `rfl install <plugin>`,
     `rfl audit`, `syd-pty discovery`,
@@ -2817,15 +3429,16 @@ observability exceed m6's v1-polish remit).
   authored adversarially with pi after every
   implementation commit lands, per the m0/m1/m2/m4/m5a/m5b
   retrospective-pi-review precedent.
-- **Depends on.** c01–c27.
+- **Depends on.** c01–c27 (c27 is the last named
+  implementation row; c24a + c24b sit inside Phase I).
 - **Acceptance.** Deferred to the retrospective
   phase per `plans/README.md` Phase 3; written
   adversarially with pi after every implementation
   commit lands. The slot is reserved so the
-  **27 named impl rows + c28 retro = 28 total slots**
-  budget closes (pi-3 N-3 fix; round-4 lazy-load
-  pivot reverses round-2's B-6 split, returning to
-  the 28-slot total).
+  **28 named impl rows + c28 retro = 29 total slots**
+  budget closes (round 5 restores the c24a/c24b
+  lazy-load split per pi-4 §B-1; round-4's
+  parser-only collapse to 27 impl rows is reversed).
 - **Files touched.** TBD at retrospective time.
 - **Size.** medium (m1/m2/m4/m5a/m5b retrospective
   precedent — typically 200–400 lines plus
@@ -2912,8 +3525,8 @@ dropped.
 | Mutual exclusion with `RFL_OPENAI_STUB_RESPONSE` singular env (child exits non-zero before binding) | c14 (build); c15 (test) |
 | Stub binary builds without `test-fixture` gate (owner item 13) | c14 |
 | Two-turn happy path: first POST returns `tool_calls[0].function.name = "send-mail"`; second POST (tool-role reply) returns `assistant_message` content `"Done"` | c15 |
-| Exhaustion **panics deterministically** (child non-zero exit + stderr substring `"scripted turns exhausted"`) — pi-2 B-5 restored | c15 |
-| Non-matching predicate panics with stderr substring `"no scripted turn matched"` (pi-2 B-5) | c15 |
+| Exhaustion **exits deterministically** via `std::process::exit(1)` (child non-zero exit + stderr substring `"scripted turns exhausted"`); scope §E2 "exhaustion panics deterministically" semantic implemented via `process::exit(1)` per pi-3 B-2 / pi-4 M-2 | c15 |
+| Non-matching predicate **exits deterministically** with stderr substring `"no scripted turn matched"` (pi-4 M-2: same `process::exit(1)` mechanism as exhaustion) | c15 |
 
 ### Phase F — `nix build .#rafaello` repair
 
@@ -2922,7 +3535,7 @@ dropped.
 | `cargoBuildFlags` builds the 8-package release set (bus-fixture excluded) | c16 |
 | `postInstall` reshapes `$out` to PP1 layout: `bin/` carries `rfl` + `rfl-tui`; plugins under `share/rafaello/plugins/<plugin>/bin/<plugin-bin>` as real files | c17 |
 | `rafaello_core::compile::resolve_entry` containment unit test (PP1 against synthetic plugin dir; no `nix build` from cargo test — pi-2 M-4) | c17 |
-| CI matrix runs `nix build .#rafaello` on `ubuntu-latest` + `macos-latest`; both green; F2 layout shell-step (`find ./result/bin -maxdepth 1 -type f`) asserts PP1 layout (pi-2 M-4) | c18 |
+| CI matrix runs `nix build .#rafaello` on `ubuntu-latest` + `macos-latest`; both green; F2 layout shell-step (POSIX-portable `find ./result/bin -maxdepth 1 -type f -exec basename {} \;` per pi-3 B-3 / pi-4 B-2) asserts `$out/bin` exactly `rfl` + `rfl-tui`, plugin manifests/openrpc/binaries present and non-symlink (pi-2 M-4 + pi-4 M-3) | c18 |
 | macOS CI green is the ratification gate | c18 |
 
 ### Phase G — Homebrew (G.β default)
@@ -2950,9 +3563,9 @@ dropped.
 | Scope acceptance | Commit |
 |---|---|
 | `core_tools_list_registered_before_provider_spawn` test green + `ToolSchemaCatalogBuilt` instrumentation; test uses `RFL_STARTUP_ORDERING_LOG` file-log mode (child-process boundary; pi-2 B-3) | c23 |
-| `LoadPolicy::Lazy { command }` parser-validation regression anchor (table form parses to expected struct shape; round-4 lazy-load pivot — runtime spawn-on-demand deferred to v2 per `decisions.md` row 68) | c24 |
-| Negative-control: invalid `load` form fails `Lock::from_toml` with `unknown variant` error | c24 |
-| String-shorthand `load = "lazy"` still parses to empty-vec `LoadPolicy::Lazy` (round-trip regression anchor) | c24 |
+| `LoadPolicy::Lazy { command }` runtime: `lazy_candidates` registry + `spawn_on_demand` + gate dispatch hook + `run_chat` routing; cross-crate cutover (supervisor + gate + run_chat); `RFL_SPAWN_TRACE_LOG` file-log emits `spawn_on_demand` / `eager_spawn` events | c24a |
+| Spawn-on-first-call integration test `lazy_load_tool_trigger_spawns_on_first_call.rs` (scope §I2 line 1224 verbatim) — asserts lazy plugin first appears on `spawn_on_demand` line (not `eager_spawn`), strictly after the eager provider's `eager_spawn`, exactly once (idempotency) | c24b |
+| Three supervisor unit tests: lazy-candidate dispatch, unknown-tool error, idempotent re-dispatch | c24a |
 | `result_large_err` allows retained with comment-pin to row 67 (5 production sites: `bus.rs`, `session/mod.rs`, `supervisor.rs`, `reemit/mod.rs`, `agent/mod.rs`) | c25 |
 
 ### Phase J — Manual validation
@@ -2972,7 +3585,7 @@ dropped.
 | Scope acceptance | Commit |
 |---|---|
 | `retrospective.md` written | c28 |
-| `decisions.md` rows 59–69 appended (round 4: row 68 = lazy-load runtime **deferred to v2** per pi-3 → round-4 pivot; row 69 = v0.1 → main merge) | c28 |
+| `decisions.md` rows 59–68 appended (round 5: lazy-load runtime restored in c24a/c24b; row 68 = m6 ratification closes v0.1 → main merge — the round-4 v2-deferral row 68 is removed per pi-4 §B-1) | c28 |
 | `glossary.md` additions (`rfl init`, `rfl install <plugin>`, `rfl audit`, `syd-pty discovery`, `rfl-openai-stub scripted turns`) | c28 |
 | `rafaello-v0.1 → main` ff-merge executed | c28 |
 
@@ -2988,11 +3601,12 @@ dropped.
   c11/c12 per-commit assertions). §E1 → c14. §E2 →
   c15. §F1 → c16. §F2 → c17. §F3 → c18. §G1 → c19.
   §G2 → c20. §G3 → c26 (folded per scope row 21). §H1
-  → c21. §H2 → c22. §I1 → c23. §I2 → c24
-  (parser-validation only; round-4 pivot —
-  spawn-on-demand runtime deferred to v2 via
-  `decisions.md` row 68 placeholder). §I3 → c25.
-  §J1 → c26. §J2 → c27. §J3 → c28 (reserved).
+  → c21. §H2 → c22. §I1 → c23. §I2 → c24a +
+  c24b (round-5 lazy-load runtime restored per
+  pi-4 §B-1; scope §I2 line 1224 names
+  `lazy_load_tool_trigger_spawns_on_first_call.rs`).
+  §I3 → c25. §J1 → c26. §J2 → c27. §J3 → c28
+  (reserved).
 - **PP1 invariant (load-bearing across A2 / B1 / F2).**
   c02 lands the PP1 copy on the init side; c05 lands it
   on the install side (both fixture + positional arms);
@@ -3086,105 +3700,116 @@ dropped.
 
 ## Sizing summary
 
-Round-4 sizing (recomputed mechanically after the
-lazy-load pivot; CLAUDE.md `<100 lines / ≤5 files`
-guideline applied, with body-justified larger rows
-called out):
+Round-5 sizing (recomputed mechanically after the
+lazy-load restoration; CLAUDE.md `<100 lines / ≤5
+files` guideline applied, with body-justified larger
+rows called out):
 
-**Row count: 27 named implementation rows + c28
-retro = 28 total slots.** Round 4 reverses round-2's
-B-6 c24a+c24b split (lazy-load pivot collapses
-runtime spawn-on-demand into a v2 deferral; m6's c24
-covers parser-validation only). Phase I has three
-named rows (c23, c24, c25). Named rows in order:
-c01..c25, c26, c27, then **c28 reserved for the
-retrospective**.
+**Row count: 28 named implementation rows + c28
+retro = 29 total slots.** Round 5 restores the
+c24a + c24b split for the lazy-load runtime (round-4
+parser-only pivot withdrawn per pi-4 §B-1). Phase I
+has four named rows (c23, c24a, c24b, c25). Named
+rows in order: c01..c23, c24a, c24b, c25, c26, c27,
+then **c28 reserved for the retrospective**.
 
 Buckets:
 
-- **small** (≲50 LoC, ≤2 files): 8 — c08, c13, c16,
-  c18, c22, c23, c24, c25.
-- **small-to-medium** (50–150 LoC): 9 — c01, c03,
-  c04, c06, c10, c11, c15, c19, c20.
+- **small** (≲50 LoC, ≤2 files): 7 — c08, c13, c16,
+  c18, c22, c23, c25.
+- **small-to-medium** (50–150 LoC): 10 — c01, c03,
+  c04, c06, c10, c11, c15, c19, c20, c24b.
 - **medium** (150–300 LoC, row-local body-justified):
   8 — c02, c07, c09, c12, c14, c17, c21, c26.
 - **medium-to-large** (300–500 LoC, body-justified):
-  2 — c05, c27.
-- **large** (≥500 LoC): 0 in round-4 default.
+  3 — c05, c24a, c27.
+- **large** (≥500 LoC): 0 in round-5 default.
 
-**Total: 8 + 9 + 8 + 2 + 0 = 27 named implementation
-rows + 1 retrospective reservation (c28) = 28 total
-slots.** Matches scope §"Internal split" 28-default
-exactly; inside scope's 30-max ceiling.
+**Total: 7 + 10 + 8 + 3 + 0 = 28 named implementation
+rows + 1 retrospective reservation (c28) = 29 total
+slots.** Inside scope's 30-max ceiling (28-default
+ratified, 30 max; +1 for the c24 split per scope
+§"Internal split" "+1 if implementation surfaces a
+clean fold").
 
-**Body-justified larger rows** (round 4):
+**Body-justified larger rows** (round 5):
 
 - **c05** (B1 `InstallArgs` cutover + bundled-source
   resolver + PP1 copy + 7 tests) — scope §"Internal
   split" forced-monolithic row 5.
 - **c09** (C2 lockin `SandboxBuilder::syd_pty_path` +
   `Sandbox` field + resolver + Cargo.toml feature +
-  fake-syd `[[bin]]` source — five coordinated edits
-  per pi-3 N-1) — scope §"Internal split"
-  forced-monolithic row 9 + pi-1 B-1 fold + pi-2
-  B-2 option-A (resolve-in-`Sandbox::new`) refinement.
+  fake-syd `[[bin]]` source) — scope §"Internal
+  split" forced-monolithic row 9 + pi-1 B-1 fold +
+  pi-2 B-2 option-A (resolve-in-`Sandbox::new`)
+  refinement.
 - **c14** (E1 HTTP scripted-turns dispatcher) —
   body-justified by HTTP-reshape + mutual-exclusion
-  + **exhaustion-panic-and-process-exit dispatcher**
-  (pi-3 B-2 / M-4: `std::process::exit(1)` after
-  the deterministic stderr line; round-3's bare
-  `panic!()` does not propagate out of
-  `tokio::spawn`ed connection task).
+  + **fatal-deterministic-process-exit dispatcher**
+  (pi-3 B-2 / pi-4 M-2: `std::process::exit(1)`
+  implements scope §E2's "exhaustion panics
+  deterministically" semantic; bare `panic!()`
+  does not propagate out of `tokio::spawn`'d
+  connection task).
 - **c17** (F2 `postInstall` `$out`-reshape across
   six bundled plugins) — body-justified by
   Nix-evaluation atomicity.
+- **c24a** (I2 lazy-load runtime cross-crate
+  cutover: supervisor `lazy_candidates` +
+  `spawn_on_demand` + gate `handle_tool_request`
+  async refactor + `run_chat` startup routing) —
+  m0 §4.1 workspace-cutover precedent + pi-4 §B-1
+  restoration of the round-2 split per scope §I2
+  line 1224.
 - **c27** (J2 §5 tmux transcripts + demo-bar
   integration test) — m5a c39 / m5b c23
   EXFIL1-headline precedent.
 
-(c24 is no longer in the body-justified-larger list:
-round-4 pivot reduces it to a small parser-validation
-regression-anchor row.)
-
 **Unsplittable cutovers** (m0 c08 / m4 c07 / m5a c14
-precedent): c05, c09, c16, c17 (per the bodies).
-All four carry the inline forced-monolithic
-justification. (Round-2's c24a addition to this list
-is reverted by the round-4 lazy-load pivot.)
+precedent): c05, c09, c16, c17, **c24a** (per the
+bodies). All five carry the inline forced-monolithic
+justification. c24a is the round-5-restored
+cutover.
 
 Pi round budget on `commits.md`: **1–2 more rounds**
-is the round-4 expectation. Trajectory: round-1
-6B/5M/4N → round-2 5B/4M/3N → round-3 5B/4M/3N
-(no narrowing, all driven by lazy-load surface).
-Round-4 pivot caps the lazy-load surface explicitly;
-the remaining round-3 B/M/N items are all closed
-with live-code citations. Expect 0-2 narrow B/M/N
-items in pi round 4.
+expected. Trajectory: round-1 6B/5M/4N → round-2
+5B/4M/3N → round-3 5B/4M/3N → round-4 2B/3M/2N
+(narrowing, but the lazy-load pivot was rejected) →
+round-5 closes pi-4's B/M/N with live-code citations
+and concrete supervisor/gate/observability specs.
+Expect 0-2 narrow B/M/N in pi round 5; pi-5 may
+spot-check the live `SpawnError` enum variants the
+`spawn_on_demand` body picks.
 
 Prior-round sizing (preserved for traceability):
 
-> Round 1 claimed 27 impl + 1 retro = 28 slots;
-> round 2 split c24 → 28 impl + 1 retro = 29 slots;
-> round 3 preserved that shape; **round 4 reverses
-> the c24 split** per the lazy-load pivot and returns
-> to **27 impl + 1 retro = 28 slots**. Hash-stable:
-> no rebasing of c25–c28 numbering needed.
+> Round 1: 27 impl + 1 retro = 28 slots.
+> Round 2: c24 split → 28 impl + 1 retro = 29 slots.
+> Round 3: preserved round-2 shape.
+> Round 4: lazy-load pivot → 27 impl + 1 retro = 28
+> slots (rejected by pi-4 §B-1).
+> **Round 5**: lazy-load runtime restored with
+> concrete specs; back to **28 impl + 1 retro = 29
+> slots** (hash-stable: c25–c28 numbering
+> unchanged).
 
 ---
 
-*End of m6 commits.md round 4 — folds
-`commits-pi-review-3.md` (B/5 M/4 N/3). **Strategic
-pivot: lazy-load runtime spawn-on-demand deferred to
-v2; m6 covers parser+validation only via c24.** No
-scope.md edit — owner item 6 "coverage" reading is
-documented in this round's status block + retro row
-68 placeholder. Phase distribution: A:4 · B:3 ·
-C:3 · D:3 · E:2 · F:3 · G:2 · H:2 · I:**3** · J:2 ·
-retro:1 = 27 named implementation rows + c28 retro =
-28 total slots. Three workspace-wide cutovers
-explicitly called out: c05 (`InstallArgs` clap
-rewrite), c09 (`SandboxBuilder::syd_pty_path` +
-child-env injection), c16 (`cargoBuildFlags`
-8-package expansion). PP1 invariant load-bearing
-across c02 / c05 / c17. No items argued back; every
-B/M/N folds against live-code evidence.*
+*End of m6 commits.md round 5 — folds
+`commits-pi-review-4.md` (B/2 M/3 N/2). **Lazy-load
+runtime restored** per pi-4 §B-1; round-4
+parser-only pivot withdrawn. c24a is the cross-crate
+supervisor + gate + run_chat cutover; c24b is the
+file-log integration test at the scope §I2-named
+path. No scope.md edit. Phase distribution: A:4 ·
+B:3 · C:3 · D:3 · E:2 · F:3 · G:2 · H:2 · I:**4** ·
+J:2 · retro:1 = 28 named implementation rows + c28
+retro = 29 total slots. Four workspace-wide
+cutovers explicitly called out: c05 (`InstallArgs`
+clap rewrite), c09 (`SandboxBuilder::syd_pty_path`
++ child-env injection), c16 (`cargoBuildFlags`
+8-package expansion), **c24a (lazy-load runtime:
+supervisor + gate + run_chat coordinated
+cutover)**. PP1 invariant load-bearing across c02 /
+c05 / c17. No items argued back; every B/M/N folds
+against live-code evidence.*
