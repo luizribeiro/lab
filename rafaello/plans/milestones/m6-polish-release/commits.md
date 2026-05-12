@@ -1,8 +1,17 @@
 # m6 — v1 polish + release readiness — commits
 
-> **Status:** round 6 — folds `commits-pi-review-5.md`
-> (B/5 M/2 N/2, verdict blocking). Claude-authored
-> 2026-05-12; awaiting pi round 6.
+> **Status:** round 7 — folds `commits-pi-review-6.md`
+> (B/0 M/0 N/2, **NON-BLOCKING**). Claude-authored
+> 2026-05-12; awaiting pi round 7. Folded pi-6 N-1
+> and N-2 (documentation consistency); no mechanics
+> changes. Target: pi round 7 returns CONVERGED
+> 0/0/0.
+>
+> ---
+>
+> Round 6 — folded `commits-pi-review-5.md` (B/5 M/2
+> N/2, verdict blocking). Round-6 changelog preserved
+> for traceability:
 >
 > Round-5 → round-6 narrative: pi-5 accepted the
 > lazy-load **direction** (round-4 parser-only pivot
@@ -138,9 +147,14 @@
 >     sentinel idea is dropped.
 >
 >   **(B-5 fix) Mutually-exclusive trace emission.**
->   `record_spawn_event` stays module-private in
->   `supervisor.rs`; the `spawn` method does **not**
->   emit any trace itself. Trace is written
+>   `record_spawn_event` is exposed as
+>   `pub fn record_spawn_event(...)` in
+>   `rafaello-core/src/supervisor.rs` so the
+>   `run_chat` eager-spawn call sites in
+>   `rafaello/src/lib.rs` can emit `eager_spawn`
+>   trace lines from the caller side (pi-6 N-1
+>   fold). The internal `spawn` method itself does
+>   **not** emit any trace. Trace is written
 >   exclusively by the caller:
 >   - **Eager path** in `run_chat` startup loop:
 >     before `plugin_supervisor.spawn(plan, &paths)
@@ -3947,10 +3961,14 @@ dropped.
     test in c04 extends to the in-tree-bundled-openai
     smoke `rfl_init_then_install_against_in_tree_bundled_smoke.rs`
     in c07 — pi-2 B-1 forward-dep fix).
-  - (round-4 pivot — c24a/c24b ladder dropped:
-    spawn-on-demand runtime deferred to v2 per
-    `decisions.md` placeholder row 68; m6 covers
-    parser-validation only via c24.)
+  - c24a → c24b (supervisor unit tests in c24a —
+    `ensure_spawned` returns `Ok(false)` for managed
+    canonical, returns `Ok(false)` when no candidate,
+    dispatches lazy candidate then idempotent —
+    extend to the `lazy_load_tool_trigger_spawns_on_first_call.rs`
+    integration test in c24b via the
+    `RFL_SPAWN_TRACE_LOG` file-log; pi-5 §B-1..B-5
+    + §M-1 + §N-1 cluster-resolved supervisor API).
 - **Per-commit agent prompts must inline the row text
   + every acceptance bullet verbatim** (m1 §4.2 / m5a
   operational guardrail; `plans/README.md` "Patterns
@@ -3981,9 +3999,11 @@ dropped.
   reuses the existing `toml` workspace dep (m5a/m5b
   precedent).
 - **Workspace-wide cutover commits** (m0 §4.1
-  precedent). c05, c09, c16 are the three explicit
-  cutovers; bodies pin the forced-monolithic
-  justification.
+  precedent). c05, c09, c16, **c24a** are the four
+  explicit cutovers (pi-6 N-2: c24a added to the
+  summary — the lazy-load runtime cross-crate
+  cutover joined the list in round 5/6); bodies pin
+  the forced-monolithic justification.
 - **macOS CI green** is gated by c18 + carried through
   to retrospective ratification per scope §"Acceptance
   summary" hard gate.
