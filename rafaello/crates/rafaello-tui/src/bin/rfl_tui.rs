@@ -22,10 +22,16 @@ use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_transport::stdio::StdioTransport;
 use futures::stream::StreamExt;
 use rafaello_core::RenderNode;
+use rafaello_tui::confirm::{
+    paint_confirm_overlay, run_ttl_ticker, ConfirmQueue, CONFIRM_RESOLVED_TOPIC,
+};
 use rafaello_tui::env::{self, TestConfirmAnswer, TestGrantBeforeMessage};
 use rafaello_tui::paint::draw_with_input_bar;
 use rafaello_tui::test_confirm_queue::TestConfirmAnswerQueue;
-use rafaello_tui::{slash::SlashCommand, slash::SlashKind, InputMode, CONFIRM_ANSWER_TOPIC};
+use rafaello_tui::{
+    slash::SlashCommand, slash::SlashKind, InputMode, CONFIRM_ANSWER_TOPIC, CONFIRM_REPLY_TOPIC,
+    CONFIRM_REQUEST_TOPIC,
+};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 use serde_json::{json, Value};
@@ -337,7 +343,9 @@ async fn ui_loop(
     let mut buffer: VecDeque<RenderNode> = VecDeque::with_capacity(RENDER_BUFFER_CAP);
     let mut scroll: u16 = 0;
     let mut input_buffer: String = String::new();
-    let mode: InputMode = InputMode::default();
+    let mut mode: InputMode = InputMode::default();
+    let queue = Arc::new(Mutex::new(ConfirmQueue::new()));
+    tokio::spawn(run_ttl_ticker(queue.clone()));
     let mut events = EventStream::new();
 
     loop {
@@ -364,7 +372,10 @@ async fn ui_loop(
             }
             note = notifications.recv() => {
                 match note {
-                    Ok(n) => ingest_notification(n, &mut buffer),
+                    Ok(n) => {
+                        let mut q = queue.lock().await;
+                        ingest_notification(n, &mut buffer, &mut q, &mut mode)
+                    }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                     Err(broadcast::error::RecvError::Lagged(_)) => true,
                 }
@@ -372,7 +383,8 @@ async fn ui_loop(
         };
 
         if dirty {
-            redraw(terminal, &buffer, scroll, &input_buffer, &mode);
+            let q = queue.lock().await;
+            redraw(terminal, &buffer, scroll, &input_buffer, &mode, &q);
         }
     }
 }
@@ -438,7 +450,12 @@ fn handle_normal_key(code: KeyCode, input_buffer: &mut String) -> EventOutcome {
     }
 }
 
-fn ingest_notification(note: InboundNotification, buffer: &mut VecDeque<RenderNode>) -> bool {
+fn ingest_notification(
+    note: InboundNotification,
+    buffer: &mut VecDeque<RenderNode>,
+    queue: &mut ConfirmQueue,
+    mode: &mut InputMode,
+) -> bool {
     if note.method != "bus.event" {
         return false;
     }
@@ -446,24 +463,45 @@ fn ingest_notification(note: InboundNotification, buffer: &mut VecDeque<RenderNo
         return false;
     };
     let topic = params.get("topic").and_then(|v| v.as_str()).unwrap_or("");
-    if !topic.starts_with("core.entry.") {
-        return false;
-    }
     let Some(payload) = params.get("payload") else {
         return false;
     };
-    let Some(tree) = payload.get("tree") else {
-        return false;
-    };
-    let node: RenderNode = match serde_json::from_value(tree.clone()) {
-        Ok(n) => n,
-        Err(_) => return false,
-    };
-    if buffer.len() == RENDER_BUFFER_CAP {
-        buffer.pop_front();
+    if topic.starts_with("core.entry.") {
+        let Some(tree) = payload.get("tree") else {
+            return false;
+        };
+        let node: RenderNode = match serde_json::from_value(tree.clone()) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if buffer.len() == RENDER_BUFFER_CAP {
+            buffer.pop_front();
+        }
+        buffer.push_back(node);
+        return true;
     }
-    buffer.push_back(node);
-    true
+    match topic {
+        CONFIRM_REQUEST_TOPIC => {
+            if queue.enqueue(payload) {
+                *mode = queue.head_overlay();
+                return true;
+            }
+        }
+        CONFIRM_REPLY_TOPIC => {
+            if queue.handle_confirm_reply(payload) {
+                *mode = queue.head_overlay();
+                return true;
+            }
+        }
+        CONFIRM_RESOLVED_TOPIC => {
+            if queue.handle_confirm_resolved(payload) {
+                *mode = queue.head_overlay();
+                return true;
+            }
+        }
+        _ => {}
+    }
+    false
 }
 
 fn redraw<B: Backend>(
@@ -472,12 +510,16 @@ fn redraw<B: Backend>(
     scroll: u16,
     input_buffer: &str,
     mode: &InputMode,
+    queue: &ConfirmQueue,
 ) {
     let start = scroll as usize;
     let nodes: Vec<RenderNode> = buffer.iter().skip(start).cloned().collect();
     let frame = RenderNode::Block { children: nodes };
     let show_input_bar = !mode.input_blocked();
     let _ = draw_with_input_bar(terminal, &frame, input_buffer, show_input_bar);
+    if mode.is_overlay() {
+        let _ = paint_confirm_overlay(terminal, queue);
+    }
 }
 
 fn install_panic_hook() {
@@ -560,7 +602,8 @@ mod tests {
         let buffer: VecDeque<RenderNode> = VecDeque::new();
         let mode = InputMode::Normal;
 
-        redraw(&mut term, &buffer, 0, "hello-world", &mode);
+        let queue = ConfirmQueue::new();
+        redraw(&mut term, &buffer, 0, "hello-world", &mode, &queue);
 
         let row = last_row(&term);
         assert!(
@@ -590,7 +633,8 @@ mod tests {
         };
         assert!(mode.input_blocked());
 
-        redraw(&mut term, &buffer, 0, "should-not-appear", &mode);
+        let queue = ConfirmQueue::new();
+        redraw(&mut term, &buffer, 0, "should-not-appear", &mode, &queue);
 
         let all = terminal_text(&term);
         assert!(
@@ -651,5 +695,99 @@ mod tests {
         let (topic, payload) = submitted_line_envelope(&line);
         assert_eq!(topic, "frontend.tui.user_message");
         assert_eq!(payload, json!({ "text": "hello" }));
+    }
+
+    fn confirm_request_payload(request_id: &str, summary: &str, tool: &str) -> Value {
+        json!({
+            "request_id": request_id,
+            "summary": summary,
+            "ttl_seconds": 30,
+            "details": {
+                "tool_call_id": "tc-1",
+                "tool": tool,
+                "args": {"path": "/tmp/x"},
+                "sinks": ["fs"],
+                "always_confirm": false,
+                "taint": [],
+            },
+        })
+    }
+
+    fn bus_event(topic: &str, payload: Value) -> InboundNotification {
+        InboundNotification {
+            method: "bus.event".to_string(),
+            params: Some(json!({ "topic": topic, "payload": payload })),
+        }
+    }
+
+    #[test]
+    fn production_ui_loop_paints_overlay_when_queue_has_head() {
+        let mut buffer: VecDeque<RenderNode> = VecDeque::new();
+        let mut queue = ConfirmQueue::new();
+        let mut mode: InputMode = InputMode::default();
+
+        let summary = "delete /tmp/x";
+        let note = bus_event(
+            CONFIRM_REQUEST_TOPIC,
+            confirm_request_payload("req-1", summary, "fs.delete"),
+        );
+        let dirty = ingest_notification(note, &mut buffer, &mut queue, &mut mode);
+        assert!(dirty);
+        assert!(mode.is_overlay());
+        assert_eq!(queue.len(), 1);
+
+        let backend = TestBackend::new(80, 12);
+        let mut term = Terminal::new(backend).unwrap();
+        redraw(&mut term, &buffer, 0, "", &mode, &queue);
+
+        let all = terminal_text(&term);
+        assert!(all.contains(" confirm "), "title missing: {all:?}");
+        assert!(all.contains(summary), "summary missing: {all:?}");
+        assert!(all.contains("args:"), "args row missing: {all:?}");
+        assert!(all.contains("sinks:"), "sinks row missing: {all:?}");
+        assert!(all.contains("remaining"), "ttl row missing: {all:?}");
+    }
+
+    #[test]
+    fn production_ui_loop_clears_overlay_on_confirm_resolved() {
+        let mut buffer: VecDeque<RenderNode> = VecDeque::new();
+        let mut queue = ConfirmQueue::new();
+        let mut mode: InputMode = InputMode::default();
+
+        let req = bus_event(
+            CONFIRM_REQUEST_TOPIC,
+            confirm_request_payload("req-1", "summary", "fs.delete"),
+        );
+        assert!(ingest_notification(req, &mut buffer, &mut queue, &mut mode));
+        assert!(mode.is_overlay());
+
+        let resolved = bus_event(CONFIRM_RESOLVED_TOPIC, json!({ "request_id": "req-1" }));
+        let dirty = ingest_notification(resolved, &mut buffer, &mut queue, &mut mode);
+        assert!(dirty);
+        assert!(!mode.is_overlay(), "overlay must clear on resolved");
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn production_ui_loop_prunes_head_on_confirm_reply() {
+        let mut buffer: VecDeque<RenderNode> = VecDeque::new();
+        let mut queue = ConfirmQueue::new();
+        let mut mode: InputMode = InputMode::default();
+
+        let req = bus_event(
+            CONFIRM_REQUEST_TOPIC,
+            confirm_request_payload("req-1", "summary", "fs.delete"),
+        );
+        assert!(ingest_notification(req, &mut buffer, &mut queue, &mut mode));
+        assert_eq!(queue.len(), 1);
+
+        let reply = bus_event(
+            CONFIRM_REPLY_TOPIC,
+            json!({ "request_id": "req-1", "answer": "allow" }),
+        );
+        let dirty = ingest_notification(reply, &mut buffer, &mut queue, &mut mode);
+        assert!(dirty);
+        assert_eq!(queue.len(), 0, "head must be pruned on own-answer reply");
+        assert!(!mode.is_overlay(), "overlay must clear when queue empty");
     }
 }
