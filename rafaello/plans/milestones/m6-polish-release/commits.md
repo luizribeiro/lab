@@ -3771,12 +3771,28 @@ matching the scope-named path.
 > handles only `q`/`Up`/`Down` — no text input, no overlay
 > render — so `publish_submitted_line` is gated on
 > `cfg.test_message` at `rfl_tui.rs:83-85` and is unreachable
-> from production). Phase K wires the existing
-> `rafaello-tui/src/lib.rs` `InputMode` state machine
-> (lib.rs:30) + `overlay_from_confirm_request` (lib.rs:98) +
-> `handle_overlay_key` (lib.rs:147) + `paint_confirm_overlay`
-> (lib.rs:160) + `ConfirmQueue` (lib.rs:33) into the production
-> binary. No new library primitives — plumbing only. Phase K
+> from production). Phase K wires the existing `rafaello-tui`
+> library primitives into the production binary. Live shape:
+> - `rafaello-tui/src/lib.rs`: `InputMode` (lib.rs:30),
+>   `overlay_from_confirm_request` (lib.rs:98),
+>   `handle_overlay_key` (lib.rs:147), `Answer::from_key`
+>   (lib.rs:68; allow = `y`/`a`/`Enter`, deny = `n`/`d`/`Esc`,
+>   always-allow-session = `s` — no `t`/Toggle variant),
+>   `CONFIRM_REQUEST_TOPIC` (lib.rs:15),
+>   `CONFIRM_REPLY_TOPIC` (lib.rs:16), `CONFIRM_ANSWER_TOPIC`
+>   (lib.rs:17), `build_confirm_answer` (lib.rs:86).
+> - `rafaello-tui/src/confirm.rs`: `ConfirmQueue`
+>   (confirm.rs:33), `ConfirmQueue::enqueue` (confirm.rs:42),
+>   `head_overlay` (confirm.rs:78),
+>   `handle_confirm_resolved` (confirm.rs:102),
+>   `handle_confirm_reply` (confirm.rs:109), `run_ttl_ticker`
+>   (confirm.rs:127), `paint_confirm_overlay`
+>   (confirm.rs:160), `CONFIRM_RESOLVED_TOPIC` (confirm.rs:22).
+> - `rafaello-tui/src/paint.rs` is the plain `RenderNode`
+>   painter (`draw_with_panic_isolation` at paint.rs:23) and
+>   has **no** confirm-overlay painter — the overlay painter
+>   lives in `confirm.rs`.
+> No new library primitives — plumbing only. Phase K
 > rows cite **Scope sections** as `"owner-authorized
 > amendment per 891b93a / Route 1"` rather than a `scope.md`
 > section, because they expand the ratified scope after the
@@ -3866,27 +3882,45 @@ matching the scope-named path.
   `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
   (`handle_terminal_event` refactor + `ui_loop` Client
   threading + tests; ~120 lines net).
-- **Size.** medium.
+- **Size.** medium (body-justified: the >100-LoC estimate
+  covers the `handle_terminal_event` → `handle_normal_key`
+  refactor *plus* threading the `Client<OneShotConnector>`
+  handle through `run_production_mode` → `ui_loop` *plus*
+  three sibling unit tests for Char / Backspace / Enter;
+  splitting forces a partial-wiring window where keystrokes
+  reach the handler but cannot publish, or where publish is
+  callable but no tests cover the round-trip).
 - **Scope sections.** owner-authorized amendment per
   `891b93a` / Route 1.
 
 #### cK3 — feat(rafaello-tui): production `ui_loop` renders confirm overlay on pending `ConfirmState`
 
-- **What.** Wire a `ConfirmQueue` (lib.rs:33) into the
-  production `ui_loop` at `rfl_tui.rs:327-360`. On
-  `core.session.confirm_request` bus events (matching
-  `CONFIRM_REQUEST_TOPIC` from lib.rs:15), call
-  `ConfirmQueue::enqueue` and recompute the active
-  `InputMode` via `head_overlay()` (lib.rs:78). On
-  `core.session.confirm_resolved` (lib.rs:22), call
-  `handle_confirm_resolved`. When the active mode is
-  `InputMode::ConfirmOverlay`, the redraw pipeline calls
-  `paint_confirm_overlay` (lib.rs:160) on top of the
-  existing `RenderNode` frame so the overlay covers the
-  buffer. No key handling in cK3 — that lands in cK4.
-  Also spawn `run_ttl_ticker` (lib.rs:127) on the queue
-  so TTL expiry decrements correctly under the
-  `tokio::select!` loop.
+- **What.** Wire a `ConfirmQueue` (`confirm.rs:33`) into
+  the production `ui_loop` at `rfl_tui.rs:327-360`. Dispatch
+  three confirm topics from `ingest_notification`:
+  - `CONFIRM_REQUEST_TOPIC` (`lib.rs:15`,
+    `core.session.confirm_request`) → call
+    `ConfirmQueue::enqueue` (`confirm.rs:42`); recompute
+    active `InputMode` via `head_overlay()`
+    (`confirm.rs:78`).
+  - `CONFIRM_REPLY_TOPIC` (`lib.rs:16`,
+    `core.session.confirm_reply`) → call
+    `ConfirmQueue::handle_confirm_reply`
+    (`confirm.rs:109`) so the queue head is pruned when
+    the TUI's own answer (published by cK4) round-trips
+    back as a bus event. Mirrors m5a c26 own-answer
+    prune semantic.
+  - `CONFIRM_RESOLVED_TOPIC` (`confirm.rs:22`,
+    `core.session.confirm_resolved`) → call
+    `ConfirmQueue::handle_confirm_resolved`
+    (`confirm.rs:102`).
+  When the active mode is `InputMode::ConfirmOverlay`, the
+  redraw pipeline calls `paint_confirm_overlay`
+  (`confirm.rs:160`) on top of the existing `RenderNode`
+  frame so the overlay covers the buffer. No key handling
+  in cK3 — that lands in cK4. Also spawn `run_ttl_ticker`
+  (`confirm.rs:127`) on the queue so TTL expiry decrements
+  correctly under the `tokio::select!` loop.
 - **Why.** Owner-authorized amendment per `891b93a`
   Route 1. The library helpers
   (`overlay_from_confirm_request`, `paint_confirm_overlay`,
@@ -3907,61 +3941,106 @@ matching the scope-named path.
     the bus-event handler, asserts
     `InputMode::is_overlay()` becomes true, and asserts
     the `TestBackend` buffer contains the tool name +
-    "[a]llow / [d]eny / [s]kip / [t]oggle" overlay copy
-    rendered by `paint_confirm_overlay`.
+    the overlay copy rendered by `paint_confirm_overlay`
+    (substring set sourced from
+    `paint_confirm_overlay`'s live output at
+    `confirm.rs:160` rather than hard-coded — verify at
+    agent-prompt construction).
   - Unit test
     `production_ui_loop_clears_overlay_on_confirm_resolved`
-    feeds a resolved payload and asserts the overlay
-    disappears.
+    feeds a `CONFIRM_RESOLVED_TOPIC` payload and asserts
+    the overlay disappears.
+  - Unit test
+    `production_ui_loop_prunes_head_on_confirm_reply`
+    feeds a `CONFIRM_REPLY_TOPIC` payload whose
+    `request_id` matches the queue head and asserts the
+    head is popped (queue length decremented, overlay
+    cleared if queue is empty). Closes the own-answer
+    prune path so cK4's publish can rely on cK3's
+    subscription rather than mutating the queue
+    directly.
   - `cargo test -p rafaello-tui` green.
 - **Files touched.**
   `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
   (`ui_loop` + `ingest_notification` extended to dispatch
-  confirm topics; ~120 lines net).
-- **Size.** medium.
+  three confirm topics + `run_ttl_ticker` spawn +
+  three unit tests; ~120 lines net).
+- **Size.** medium (body-justified: the >100-LoC estimate
+  covers three distinct bus-topic handlers
+  (`CONFIRM_REQUEST_TOPIC` / `CONFIRM_REPLY_TOPIC` /
+  `CONFIRM_RESOLVED_TOPIC`) plus the `run_ttl_ticker`
+  spawn integration plus the overlay painter integration
+  into `redraw`, with one sibling unit test per topic;
+  splitting forces a partial-overlay window where, e.g.,
+  enqueue works but resolve/reply do not prune, leaving
+  stale queue heads that fail cK5's end-to-end assertion).
 - **Scope sections.** owner-authorized amendment per
   `891b93a` / Route 1.
 
-#### cK4 — feat(rafaello-tui): wire `a`/`d`/`s`/`t` overlay keys to `bus.publish` reply
+#### cK4 — feat(rafaello-tui): wire `y`/`a`/`Enter` / `n`/`d`/`Esc` / `s` overlay keys to `bus.publish` reply
 
 - **What.** Extend the production `ui_loop` event handler
   (cK2's `handle_normal_key`) so that when the active
   `InputMode` is `ConfirmOverlay`, keystrokes route
-  through `handle_overlay_key` (lib.rs:147) instead of
+  through `handle_overlay_key` (`lib.rs:147`) instead of
   the normal-mode handler. On a non-`None`
   `ConfirmAnswerEnvelope` return, publish the envelope
   on `CONFIRM_ANSWER_TOPIC` (`frontend.tui.confirm_answer`,
-  lib.rs:17) via the threaded `Client` handle (same
+  `lib.rs:17`) via the threaded `Client` handle (same
   client lifted in cK2), with the
   `request_id` / `in_reply_to` shape produced by
-  `build_confirm_answer` (lib.rs:86). After publish, set
+  `build_confirm_answer` (`lib.rs:86`). After publish, set
   the mode back to `Normal` (the handler already returns
-  `Normal` per lib.rs:158) and `Redraw`. Mirrors the
-  test-mode confirm-answer publish shape used by
-  `run_plural_auto_confirm_loop` at `rfl_tui.rs:148-200`
-  — promoted from test-mode to production. Keys other
-  than `a`/`d`/`s`/`t` (per `Answer::from_key` at
-  lib.rs:68) in overlay state remain `Ignore` so
-  text input is blocked while overlay is active
-  (matches `InputMode::input_blocked()` semantic at
-  lib.rs:47).
+  `Normal` per `lib.rs:158`) and `Redraw`. The queue head
+  is **not** popped here — cK3's `CONFIRM_REPLY_TOPIC`
+  subscription handles the prune when the answer
+  round-trips back as a bus event, matching m5a c26's
+  own-answer prune semantic. Mirrors the test-mode
+  confirm-answer publish shape used by
+  `run_plural_auto_confirm_loop` at
+  `rfl_tui.rs:148-200` — promoted from test-mode to
+  production. Per live `Answer::from_key` (`lib.rs:68`),
+  the accepted overlay keys are:
+  - `y` / `a` / `Enter` → `Answer::Allow`
+  - `n` / `d` / `Esc` → `Answer::Deny`
+  - `s` → `Answer::AlwaysAllowSession`
+  Any other key in overlay state remains `Ignore`
+  (text input is blocked while overlay is active,
+  matching `InputMode::input_blocked()` at `lib.rs:47`).
+  No `t`/Toggle path — `Answer::from_key` has no such
+  variant in the live shape, and Phase K does not add
+  new library semantics.
 - **Why.** Owner-authorized amendment per `891b93a`
   Route 1; mirrors the m5a c25 test-mode
-  `InputMode::ConfirmOverlay` shape promoted to
-  production. The library already returns the correct
-  envelope; cK4 publishes it.
+  `InputMode::ConfirmOverlay` shape (same
+  `y`/`a`/`Enter` allow, `n`/`d`/`Esc` deny, `s`
+  always-allow-session) promoted to production. The
+  library already returns the correct envelope; cK4
+  publishes it.
 - **Depends on.** cK3 (overlay rendering + queue
-  plumbing); m5a c25 (test-mode overlay shape — design
-  parent).
+  plumbing + `CONFIRM_REPLY_TOPIC` prune); m5a c25
+  (test-mode overlay shape — design parent).
 - **Acceptance.**
   - Unit test
-    `overlay_mode_a_publishes_allow_answer_and_returns_to_normal`
-    asserts `bus.publish` is called with the envelope
+    `overlay_mode_allow_keys_publish_allow_answer_and_return_to_normal`
+    drives each of `y`, `a`, `Enter` and asserts
+    `bus.publish` is called with the envelope
     `build_confirm_answer` produces for `Answer::Allow`
     and that the mode transitions back to `Normal`.
-  - Sibling tests for `d` (Deny), `s` (Skip), `t`
-    (Toggle), and one for a non-overlay key remaining
-    `Ignore` while overlay is active.
+  - Unit test
+    `overlay_mode_deny_keys_publish_deny_answer` drives
+    each of `n`, `d`, `Esc` and asserts the `Deny`
+    envelope.
+  - Unit test
+    `overlay_mode_s_publishes_always_allow_session_answer`.
+  - Unit test
+    `overlay_mode_non_answer_key_remains_ignore` drives a
+    non-answer key (e.g. `x`) and asserts no publish + no
+    mode transition.
+  - Integration assertion (delegated to cK3's
+    `production_ui_loop_prunes_head_on_confirm_reply`):
+    after cK4 publishes, the round-tripped
+    `CONFIRM_REPLY_TOPIC` event prunes the queue head.
   - `cargo test -p rafaello-tui` green.
 - **Files touched.**
   `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
@@ -3998,8 +4077,10 @@ matching the scope-named path.
        answer is keyed in via `tmux send-keys -t pane "a"`.
   5. `tmux send-keys -t pane "Please email alice@example.com a status update" Enter`
      → wait → assert overlay copy appears via
-     `tmux capture-pane -p` (substring
-     `"send-mail"` + `"[a]llow"`).
+     `tmux capture-pane -p` (substring set drawn from
+     live `paint_confirm_overlay` at `confirm.rs:160-226`:
+     ` confirm ` title, `send-mail` in the head summary,
+     `sinks: mail`, `s remaining` TTL line).
   6. `tmux send-keys -t pane "a"` → wait → assert
      overlay clears, `tool_result` row lands in `entries`,
      `confirm_allowed` row lands in `audit_events`.
@@ -4090,8 +4171,10 @@ matching the scope-named path.
     pre-Phase-K blank capture in
     `transcripts/section-5/01-after-launch.txt`.
   - `02-modal.txt` contains the
-    `paint_confirm_overlay` copy substrings
-    (`"send-mail"`, `"[a]llow"`).
+    `paint_confirm_overlay` copy substrings drawn from
+    the live painter at `confirm.rs:160-226`:
+    ` confirm ` title, `send-mail` in the head summary,
+    `sinks: mail`, `s remaining` TTL line.
   - `manual-validation.md` §5.1 references all six new
     files by relative path.
   - The c27 originals at
