@@ -531,6 +531,20 @@ others are first-class manifest config.
 
 m5a retrospective §6.3.
 
+**Test-observability (m6 addition).** One further `RFL_*`
+name is read by the supervisor at runtime but is neither
+core-injected nor manifest-declared:
+
+- `RFL_SPAWN_TRACE_LOG` — file path that receives spawn-event
+  records from `PluginSupervisor::record_spawn_event`. When
+  set, the supervisor appends one line per spawn event
+  (eager and lazy-load paths both); unset is the production
+  no-op. The m6 lazy-load integration test asserts the spawn
+  trace by grep-reading this file. Cross-references
+  `decisions.md` row 68 (lazy-load runtime).
+
+m6 retrospective §7.
+
 ## 5. Plugins: manifest, lock, policy, lifecycle
 
 > **v1 status (manifest schema):** rows 30–32 of `decisions.md`
@@ -854,6 +868,12 @@ Providers `subscribe` to `core.session.user_message` and
 Core re-emits canonical `core.*` events as in §4.4.
 
 ### 8.1 The default provider is a bundled plugin, not a core feature
+
+> **m6 status:** `rfl init` materialises `rafaello.lock` with
+> the bundled `rfl-openai` provider pre-installed and copies
+> the bundled plugin tree into the materialised package
+> directory per the PP1 invariant (see §15.7). Cross-refs:
+> `decisions.md` row 59 (PP1), row 60 (`rfl init` semantics).
 
 To preserve the "providers ship as plugins" goal (§1.1) and
 the trust model (§2), the default provider is **bundled but
@@ -1558,6 +1578,46 @@ the other v1 fittings work.
 the connection. Decision 22 in `decisions.md` is amended
 accordingly.)
 
+### 15.7 Package placement (PP1)
+
+m6 pins the on-disk layout for bundled plugin trees, both
+in the release artefact and after `rfl init` / `rfl install`
+materialisation. The invariant — labelled **PP1** —
+states:
+
+- **Source tree (release artefact).** `nix build .#rafaello`
+  produces, for each of the six plugin packages
+  (`rfl-mailcat`, `rfl-readfile`, `rfl-openai`,
+  `rfl-openai-stub`, `rfl-mockprovider`, `rafaello-fetch`),
+  a directory at
+  `<release-prefix>/share/rafaello/plugins/<plugin>/`
+  containing `rafaello.toml` + `openrpc.json` +
+  `bin/<plugin-bin>` as a real file + any `schemas/`
+  templates. Top-level `<release-prefix>/bin/` carries only
+  `rfl` and `rfl-tui`; plugin binaries are **not** symlinks
+  into the shared `bin/` (the `postInstall` step moves them
+  into the per-plugin tree).
+- **Materialised tree (project root).** `rfl init` and
+  `rfl install <plugin>` copy the source tree into
+  `${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/` where
+  `<topic-id> = topic_id::derive(canonical_id)`. The manifest
+  filename inside the materialised tree is `rafaello.toml`
+  (per `decisions.md` row 25). The entry binary lives at
+  `bin/<plugin-bin>` as a real file.
+- **Containment check.** `compile::resolve_entry`'s
+  `EntryEscape` branch canonicalises the entry path and
+  rejects any binding that resolves outside the per-plugin
+  package directory. Symlinks pointing into
+  `<release-prefix>/bin/` or anywhere outside the package
+  tree fail this check at compile time.
+
+Authoritative cites: `rafaello/nix/package.nix:postInstall`,
+`crates/rafaello/src/{init,install}.rs`,
+`crates/rafaello-core/src/compile.rs::resolve_entry`,
+`crates/rafaello-core/src/manifest/validate_with_package.rs::resolve_inside_package`.
+Cross-refs: `decisions.md` row 59 (PP1), row 65 (release
+artefact shape). m6 retrospective §7.
+
 ## 16. v1 scope cut
 
 **In v1.** Lockin sandbox; manifest+lock+policy pipeline;
@@ -1578,6 +1638,21 @@ triggers + manual; declarative config (TOML+Markdown); fittings
 v1 with `ServiceContext`, bidirectional `PeerHandle` (notify +
 call in both directions, §15.6), cancellation, two-channel
 server loop, predefined error preservation.
+
+**m6 polish/release surface.** `rfl init` (bootstrap with
+bundled provider pre-installed; `--yes` / `--force` /
+`--project-root`); `rfl install <plugin>` positional resolver
+against the bundled tree (`--fixture` retained for tests);
+`rfl audit` read CLI over the live `audit_events` table
+(`--kind` / `--since` / `--request-id` / `--full` / `--json`);
+multi-turn `rfl-openai-stub` via
+`RFL_OPENAI_STUB_SCRIPTED_TURNS`; Homebrew distribution model
+G.β (separate-tap + Nix-built tarballs); lazy-load runtime
+(`LoadPolicy::Lazy { command }` registered with
+`PluginSupervisor::register_lazy`, gate-side dispatch hook
+calls `ensure_spawned` before forwarding); package placement
+invariant PP1 (§15.7). See `decisions.md` rows 59–68 and m6
+retrospective.
 
 **Deferred to v2.**
 
