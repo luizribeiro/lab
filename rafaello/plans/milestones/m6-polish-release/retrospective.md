@@ -1,8 +1,22 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 5 draft — absorbs Phase K + Route 1
-> outcome.** Claude-authored 2026-05-12; awaiting pi
-> round 5. The round-4 pi review
+> **Status: round 6 draft — folds
+> `retrospective-pi-review-5.md` (0 B / 0 M / 1 N,
+> **NON-BLOCKING**).** Claude-authored 2026-05-12;
+> awaiting pi round 6. Round-6 changelog: folded pi-5
+> N1 (stale "§5 narrative" self-reference — retro §5
+> is the v2 follow-ups table, not the transcript
+> narrative; the pre/post evidence pair lives in §1
+> hard req #3 + `manual-validation.md` §5.1, and the
+> round-5 changelog + round-6 open-item checklist now
+> point there). All substantive Phase K absorption
+> from round 5 stands.
+>
+> ---
+>
+> **(History — round 5 draft, kept for trajectory.)**
+>
+> Round 5 absorbed Phase K + Route 1 outcome. The round-4 pi review
 > (`retrospective-pi-review-4.md`, 0 B / 0 M / 1 N,
 > **NON-BLOCKING**) flagged a single nit (the round-4
 > banner described the on-branch hashes incorrectly
@@ -60,13 +74,17 @@
 >   "◐ partial — owner question" to "✓ closed by cK6";
 >   the closure path cites the post-Phase-K transcript
 >   set + manual-validation.md §5.1 appendix.
-> - **§5 narrative** explains the pre/post evidence
->   pair: c27 transcripts at `transcripts/section-5/`
->   are the pre-Phase-K artefacts that revealed the
+> - **Pre/post evidence pair** documented in §1 hard
+>   requirement #3 (retrospective) and
+>   `manual-validation.md` §5.1 appendix: c27
+>   transcripts at `transcripts/section-5/` are the
+>   pre-Phase-K artefacts that revealed the
 >   `Stdio::null()` wedge; cK6 transcripts at
 >   `transcripts/section-5-phase-k/` are the post-fix
 >   rendered captures. Both are on disk; the pair
->   documents the trajectory honestly.
+>   documents the trajectory honestly. (Retro §5 is
+>   the v2 follow-ups table, not the transcript
+>   narrative — pi-5 N1.)
 > - **§9 merge-readiness** updated to reflect that
 >   Phase K is in the surface that will ff-merge to
 >   `rafaello-v0.1` — no out-of-band cherry-picks,
@@ -1610,7 +1628,7 @@ After the merge:
 
 ---
 
-**Open items for pi round 5.**
+**Open items for pi round 6.**
 
 1. **Phase K absorption** — §1 hard requirement #3
    flipped ✓; §2 appends Phase K (cK1..cK6) as a
@@ -1619,10 +1637,12 @@ After the merge:
    acceptance table flips the §5 cell ✓; §4.5 row
    flips ✓ with closure cites to
    `transcripts/section-5-phase-k/` + manual-validation
-   §5.1; §5 narrative below documents the pre/post
-   evidence pair; §9 updates the merge surface to name
-   Phase K explicitly. Pi to confirm the round-5
-   absorption is self-consistent.
+   §5.1; the pre/post evidence pair is documented in
+   §1 hard req #3 + `manual-validation.md` §5.1 (pi-5
+   N1 retarget — retro §5 is the v2 follow-ups
+   table, not the transcript narrative); §9 updates
+   the merge surface to name Phase K explicitly. Pi to
+   confirm the round-6 absorption is self-consistent.
 2. **Phase I1 assertion-shape deviation** — c23 keeps
    the literal filename
    `core_tools_list_registered_before_provider_spawn.rs`
@@ -1640,8 +1660,8 @@ After the merge:
    new row is needed for Phase K (the ui_loop
    surface is `rafaello-tui` internals, not a
    decisions-table primitive); the existing
-   manual-validation appendix §5.1 + retrospective §2
-   / §5 narrative carry the Phase K record.
+   manual-validation appendix §5.1 + retrospective §1
+   hard req #3 + §2 carry the Phase K record.
 
 Convergence trajectory after round 5:
 **round 4 (0B / 0M / 1N NON-BLOCKING) → round 5
