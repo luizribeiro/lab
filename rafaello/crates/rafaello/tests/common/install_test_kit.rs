@@ -143,6 +143,46 @@ pub fn fixture_tempdir() -> (tempfile::TempDir, PathBuf) {
     (td, p)
 }
 
+/// Copy an in-tree `rafaello-*` crate's bundled-plugin files
+/// (`rafaello.toml`, `openrpc.json`, `schemas/*` if present) into
+/// `<root>/<bundled_name>/`, writing a stub executable at the
+/// manifest's `entry` path. Returns the populated plugin dir.
+pub fn copy_in_tree_to_bundled_dir(
+    root: &Path,
+    bundled_name: &str,
+    crate_dir_name: &str,
+) -> PathBuf {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join(crate_dir_name);
+    let dst = root.join(bundled_name);
+    fs::create_dir_all(&dst).unwrap();
+    fs::copy(src.join("rafaello.toml"), dst.join("rafaello.toml"))
+        .unwrap_or_else(|e| panic!("copy rafaello.toml from {src:?}: {e}"));
+    fs::copy(src.join("openrpc.json"), dst.join("openrpc.json"))
+        .unwrap_or_else(|e| panic!("copy openrpc.json from {src:?}: {e}"));
+
+    let manifest_raw = fs::read_to_string(dst.join("rafaello.toml")).unwrap();
+    let manifest = rafaello_core::manifest::Manifest::parse(&manifest_raw)
+        .expect("in-tree manifest must parse");
+    let entry_dst = dst.join(manifest.entry.as_str());
+    fs::create_dir_all(entry_dst.parent().unwrap()).unwrap();
+    fs::write(&entry_dst, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&entry_dst, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let schemas_src = src.join("schemas");
+    if schemas_src.is_dir() {
+        let schemas_dst = dst.join("schemas");
+        fs::create_dir_all(&schemas_dst).unwrap();
+        for entry in fs::read_dir(&schemas_src).unwrap() {
+            let e = entry.unwrap();
+            fs::copy(e.path(), schemas_dst.join(e.file_name())).unwrap();
+        }
+    }
+    dst
+}
+
 /// Write a synthetic bundled-plugin tree at `<root>/<plugin_name>/`
 /// suitable for `RFL_BUNDLED_PLUGINS_DIR=<root>` lookup.
 pub fn write_bundled_plugin(root: &Path, plugin_name: &str, manifest_name: &str) {
