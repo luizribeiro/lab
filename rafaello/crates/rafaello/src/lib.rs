@@ -1,6 +1,7 @@
 //! `rafaello` library: CLI surface and shared types for the `rfl` binary.
 
 pub mod chat;
+pub mod init;
 pub mod install;
 pub mod status;
 
@@ -62,6 +63,8 @@ pub enum RflChatCommand {
         #[arg(long)]
         project_root: Option<PathBuf>,
     },
+    /// Initialise a new `${PROJECT_ROOT}/rafaello.lock` (scaffold).
+    Init(init::InitArgs),
     /// Install a local plugin fixture into `${PROJECT_ROOT}/rafaello.lock`.
     Install(install::InstallArgs),
     /// Print a per-plugin status summary from `${PROJECT_ROOT}/rafaello.lock`.
@@ -825,6 +828,13 @@ pub fn run_cli() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("rfl-chat: {err:?}");
+                    ExitCode::FAILURE
+                }
+            },
+            RflChatCommand::Init(args) => match init::run(args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("rfl-init: {err}");
                     ExitCode::FAILURE
                 }
             },
