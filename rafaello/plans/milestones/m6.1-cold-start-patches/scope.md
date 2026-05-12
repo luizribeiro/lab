@@ -1,9 +1,92 @@
 # m6.1 — v0.1.1 cold-start patches — scope
 
-> **Status:** round 2 — claude-authored 2026-05-12, awaiting
-> pi round 2. Folds `scope-pi-review-1.md` (2B / 5M / 4N,
-> BLOCKING) on top of round 1. Round-1 status preserved at
-> the bottom of this banner for traceability.
+> **Status:** round 3 — claude-authored 2026-05-12, awaiting
+> pi round 3. Folds `scope-pi-review-2.md` (2B / 1M / 3N,
+> BLOCKING) on top of round 2.
+>
+> **Round-3 changelog (every pi-2 finding folded):**
+>
+> - **B-1 (§A0 blanket prefix would regress `rfl install
+>   rfl-mailcat`).** Round 2 had `resolve_plugin_dir`'s
+>   release-arm blindly prefix `rfl-` to every input name.
+>   But `rfl install` already passes the prefixed name
+>   (`install.rs:96` calls `bundled::resolve_plugin_dir(plugin)`
+>   with the operator's positional string `rfl-mailcat`),
+>   which today's release-arm resolves correctly. Adding a
+>   blanket prefix would make it look for
+>   `share/rafaello/plugins/rfl-rfl-mailcat/` and regress the
+>   m6 install path. **Round-3 fix**: drop the
+>   `resolve_plugin_dir`-signature change entirely. Instead,
+>   §A0 introduces a tiny `pub struct BundledPluginNames {
+>   dev_crate: &'static str, release_dir: &'static str,
+>   runtime_bin: &'static str }` plus a new sister function
+>   `bundled::resolve_plugin_dir_for_bundled(&BundledPluginNames)`
+>   that uses `release_dir` (e.g. `"rfl-openai"`) on the
+>   release arm and `dev_crate` (e.g. `"openai"`) for the
+>   workspace-walk-up arm. `init.rs` switches to the new
+>   function with a single `OPENAI_NAMES` constant. **The
+>   existing `resolve_plugin_dir(name)` retains its current
+>   behaviour** so `rfl install` is untouched. The
+>   sister-function approach surfaces the dev-vs-release
+>   name asymmetry explicitly (a v1-design wart that m6
+>   shipped without exercising both arms) without
+>   broadening m6.1 into a `rfl install` refactor.
+>   Resolves pi-2 B-1.
+> - **B-2 (round-2 §C4 tmux harness would leave the shell
+>   alive after `rfl` exits).** Round 2 sent the command as
+>   text into an interactive shell. When `rfl chat` exits,
+>   the shell stays alive and `session_alive` returns true
+>   forever. **Round-3 fix**: §C4 rewritten to match cK5's
+>   wrapper-script-as-pane-command pattern verbatim
+>   (`rfl_chat_production_tui_input_overlay_e2e.rs:97-144`).
+>   The test writes a `rfl-chat-wrapper.sh` that exports
+>   `RFL_TUI_PATH=<workspace rfl-tui>`, `TERM=xterm-256color`,
+>   and `exec`s `workspace_bin("rfl")` with stderr redirected
+>   to a log file; passes the wrapper as the
+>   `tmux new-session` command (not as keyed text); polls
+>   the stderr log for `frontend-ready-observed`; sends
+>   `C-c`; polls `session_alive` for closure. Uses
+>   `workspace_bin("rfl")` / `workspace_bin("rfl-tui")` so
+>   no `$PATH` `rfl` can shadow the test target. Resolves
+>   pi-2 B-2.
+> - **M-1 (§C2 honors external `CARGO_TARGET_DIR`).**
+>   `workspace_bin` honors ambient `CARGO_TARGET_DIR`
+>   (`workspace_bin_path.rs:26-31`), so under an external
+>   target dir, the `<rfl-exe-parent>` walk-up cannot reach
+>   the workspace root. **Round-3 fix**: §C2 starts with an
+>   early `if std::env::var_os("CARGO_TARGET_DIR")
+>   .map(|v| !v.is_empty()).unwrap_or(false) { eprintln!("…
+>   covers default target-dir layout only — set
+>   RFL_BUNDLED_BIN_OPENAI as an override or unset
+>   CARGO_TARGET_DIR for this regression"); return; }` skip
+>   guard. The explicit-override case stays covered by C1.
+>   Resolves pi-2 M-1.
+> - **N-1.** Owner-judgment item 5 updated: `Ulid::new()` is
+>   the requirement; the PID-suffix example removed.
+> - **N-2.** Owner-judgment item 6 updated to match the
+>   round-2 C4 contract: session exits within timeout, no
+>   panic in captured pane/log, no audit-log assertions.
+>   "Exit status 0 + no zombie + terminal restored"
+>   language removed.
+> - **N-3 (§C2 digest bullet self-contradiction).** Round-2
+>   said "not the digest of the shim-as-entry, then
+>   recompute equal." Round 3 keeps only the meaningful
+>   assertion: "the lock digest equals
+>   `content_digest(target_dir)` after the swap." The "not
+>   shim" defence sits in C1's exact-bytes check + C2's
+>   size > 1024 check.
+>
+> Cumulative trajectory: round 1 → 2B/5M/4N (BLOCKING) →
+> round 2 → 2B/1M/3N (BLOCKING) → round 3 (this commit),
+> target verdict CONVERGED.
+>
+> ---
+>
+> **(History — round 2 status, preserved for traceability.)**
+>
+> Round 2 — claude-authored 2026-05-12. Folds
+> `scope-pi-review-1.md` (2B / 5M / 4N, BLOCKING) on top
+> of round 1.
 >
 > **Round-2 changelog (every pi-1 item folded):**
 >
@@ -183,54 +266,113 @@ row covering the materialisation-time runtime-binary contract.
 
 ### §A — D1: shim → real-binary at materialisation time
 
-**A0. (New in round 2 — closes pi-1 B-1 latent half.)**
-Fix `bundled::resolve_plugin_dir`'s release-arm to use the
-`rfl-<name>/` directory naming that `rafaello/nix/package.nix`
-actually writes. Today (`bundled.rs:27-36`):
+**A0. (Round 3 — closes pi-2 B-1.)** A `rfl init` against the
+nix-released layout needs the bundled-source tree resolved
+under `$out/share/rafaello/plugins/rfl-openai/`, not
+`$out/share/rafaello/plugins/openai/`. Today
+`bundled::resolve_plugin_dir("openai")` looks for the latter
+(`bundled.rs:27-36`), so a released `rfl init` would fail with
+"bundled plugin not found" before even reaching the
+runtime-binary swap. This is a latent m6 bug: m6 RATIFIED the
+release layout in `package.nix` (which writes `rfl-<name>/`)
+but no test exercised `rfl init` against that layout.
 
-```rust
-let release = parent.join("..").join("share")
-    .join("rafaello").join("plugins").join(name);
-```
+**Round-3 fix shape (does NOT touch `rfl install`):**
 
-…where `name` is `"openai"`. But `package.nix:37-63` copies the
-source tree to `$out/share/rafaello/plugins/rfl-openai/`, so
-this lookup misses. Round-2 fix: the release-arm joins
-`rfl-<name>` (e.g. `rfl-openai`), matching the live
-postInstall layout. The dev-fallback arm (workspace walk-up to
-`crates/rafaello-<name>/`) is unchanged. Tests in c01 cover
-both release and dev arms for the source-tree resolver.
+1. Introduce
+   ```rust
+   pub struct BundledPluginNames {
+       /// Crate name suffix for the dev-fallback workspace
+       /// walk-up. `crates/rafaello-<dev_crate>/`.
+       pub dev_crate: &'static str,
+       /// Release-tree plugin directory under
+       /// `$out/share/rafaello/plugins/<release_dir>/`.
+       pub release_dir: &'static str,
+       /// Release-tree runtime binary name under
+       /// `<release_dir>/bin/<runtime_bin>` and dev-target
+       /// `<workspace>/target/<profile>/<runtime_bin>`.
+       pub runtime_bin: &'static str,
+   }
 
-Why this lands in m6.1 and not as a separate hotfix: D1's
-release-installed cold-start path requires both
-`resolve_plugin_dir` and `resolve_runtime_binary` to be
-release-correct. Fixing only the latter would leave a released
-`rfl init` failing on "bundled source tree not found" instead
-of "shim not exec-able". Single milestone, single
-materialisation contract.
+   pub const OPENAI_NAMES: BundledPluginNames =
+       BundledPluginNames {
+           dev_crate: "openai",
+           release_dir: "rfl-openai",
+           runtime_bin: "rfl-openai",
+       };
+   ```
+   in `rafaello/src/bundled.rs`. The struct is `pub` so the
+   §A1 resolver can take it, and so future tests can
+   declare similar fixtures.
+2. New function
+   `bundled::resolve_plugin_dir_for_bundled(names:
+   &BundledPluginNames) -> Result<PathBuf, BundledError>`
+   that mirrors the existing `resolve_plugin_dir` layout
+   resolution but uses `names.release_dir` for the
+   release-arm join and `names.dev_crate` for the
+   workspace-walk-up arm.
+3. `init.rs::run` switches from
+   `bundled::resolve_plugin_dir(BUNDLED_OPENAI)` to
+   `bundled::resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`,
+   and `BUNDLED_OPENAI` is removed (replaced by
+   `OPENAI_NAMES`).
+4. **`bundled::resolve_plugin_dir(name)` retains its
+   current signature and behaviour**, so the `rfl install`
+   call site at `install.rs:96` continues to resolve
+   `rfl-mailcat` → `share/rafaello/plugins/rfl-mailcat/`
+   exactly as it does today. m6.1 explicitly does **not**
+   refactor `rfl install`'s name handling — that
+   dev/release naming asymmetry is a v0.1.x follow-up
+   candidate (`§Follow-ups`).
 
-**A1.** New helper `rafaello::bundled::resolve_runtime_binary(name)
--> Result<PathBuf, BundledError>`. Resolution order:
+Why a sister function rather than parameterising the
+existing one: the existing `resolve_plugin_dir(name)` takes
+a single `name` because its callers (live: `rfl install`)
+have only one name to give. Parameterising it to also take
+release-vs-dev names would force every call site (and the
+helper's caller in `install.rs`) to know the asymmetry. The
+sister function isolates the new shape to the bundled-init
+path that needs it.
+
+**c01 unit tests** cover both functions explicitly:
+- `resolve_plugin_dir("rfl-mailcat")` release-arm hit
+  (regression guard — proves m6.1 did not break install).
+- `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`
+  release-arm hit + dev-fallback hit.
+- `resolve_runtime_binary(&OPENAI_NAMES)` env-override hit,
+  release-arm hit, dev-fallback hit, not-found.
+
+**A1.** New helper
+`rafaello::bundled::resolve_runtime_binary(names:
+&BundledPluginNames) -> Result<PathBuf, BundledError>`.
+Resolution order:
 
 1. `RFL_BUNDLED_BIN_<NAME_UPPER>` env var (test override;
    explicit per CLAUDE.md "errs-toward-explicit-config").
-   `<NAME_UPPER>` is the plugin name with hyphens → underscores
-   and uppercased (e.g. `openai` → `RFL_BUNDLED_BIN_OPENAI`).
-   Value is the absolute path to the binary; resolver validates
-   it is a regular file and executable, else
-   `BundledError::NotFound`.
+   `<NAME_UPPER>` is derived from `names.dev_crate` (hyphens
+   → underscores, uppercased — e.g. `openai` →
+   `RFL_BUNDLED_BIN_OPENAI`). The dev-crate axis is used
+   because it is the stable logical identifier; the
+   `runtime_bin` axis carries the `rfl-` prefix which
+   would yield `RFL_BUNDLED_BIN_RFL_OPENAI` and is
+   noisier. Value is the absolute path to the binary;
+   resolver validates it is a regular file and executable,
+   else `BundledError::NotFound`.
 2. **Release layout.**
-   `<rfl-exe-parent>/../share/rafaello/plugins/rfl-<name>/bin/rfl-<name>`.
-   Matches the m6 RATIFIED PP1 contract (`decisions.md`
+   `<rfl-exe-parent>/../share/rafaello/plugins/<names.release_dir>/bin/<names.runtime_bin>`.
+   For `OPENAI_NAMES` this resolves to
+   `<rfl-exe-parent>/../share/rafaello/plugins/rfl-openai/bin/rfl-openai`,
+   matching the m6 RATIFIED PP1 contract (`decisions.md`
    rows 59/65; `rafaello/nix/package.nix:37-63`): top-level
    `$out/bin/` retains only `rfl` and `rfl-tui`, while every
    plugin runtime binary lives at
-   `$out/share/rafaello/plugins/rfl-<plugin>/bin/rfl-<plugin>`.
+   `$out/share/rafaello/plugins/<release_dir>/bin/<runtime_bin>`.
 3. **Dev fallback.** Walk up from `<rfl-exe-parent>` looking
    for a workspace root (`Cargo.toml` containing `[workspace]`);
-   if found, return `<workspace>/target/<profile>/rfl-<name>`
-   where `<profile>` is `debug` in `cfg!(debug_assertions)`
-   else `release`. Covers the default `cargo run --bin rfl`
+   if found, return
+   `<workspace>/target/<profile>/<names.runtime_bin>` where
+   `<profile>` is `debug` in `cfg!(debug_assertions)` else
+   `release`. Covers the default `cargo run --bin rfl`
    layout (`<workspace>/target/<profile>/rfl`). **External
    `CARGO_TARGET_DIR` is explicitly out of the dev-fallback
    contract — `RFL_BUNDLED_BIN_<NAME>` is the documented
@@ -238,12 +380,13 @@ materialisation contract.
    `cargo --target-dir`, `nix develop` with a relocated
    target). No second fallback added; the resolver stays
    simple and the escape hatch is a single env var.
-4. None of the above → `BundledError::NotFound { name }` with
-   the message `"no rfl-<name> runtime binary discoverable
-   (tried env RFL_BUNDLED_BIN_<NAME_UPPER>,
-   <rfl-exe-parent>/../share/rafaello/plugins/rfl-<name>/bin/rfl-<name>,
-   workspace target/<profile>/rfl-<name>)"`. The literal env
-   name in the message resolves at runtime via the
+4. None of the above → `BundledError::NotFound { name:
+   names.runtime_bin.to_owned() }` with the message `"no
+   <runtime_bin> runtime binary discoverable (tried env
+   RFL_BUNDLED_BIN_<NAME_UPPER>,
+   <rfl-exe-parent>/../share/rafaello/plugins/<release_dir>/bin/<runtime_bin>,
+   workspace target/<profile>/<runtime_bin>)"`. The literal
+   env name in the message resolves at runtime via the
    `<NAME_UPPER>` munge so `openai` shows
    `RFL_BUNDLED_BIN_OPENAI` (pi-1 N-1 fix).
 
@@ -251,7 +394,13 @@ materialisation contract.
 `target_dir`:
 
 1. Resolve the runtime binary via
-   `bundled::resolve_runtime_binary("openai")`.
+   `bundled::resolve_runtime_binary(&OPENAI_NAMES)`. Note
+   that `pp1::materialise` is itself called with the source
+   tree from
+   `bundled::resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`
+   (§A0), so both the source-tree and runtime-binary
+   resolutions consult the same `BundledPluginNames`
+   record.
 2. Compute `entry_absolute = target_dir.join(manifest.entry.as_str())`.
    This file already exists (the shim copied by PP1).
 3. `fs::copy(runtime, &entry_absolute)` — overwrite the shim
@@ -395,6 +544,15 @@ test); C4 asserts only that the tmux session exits cleanly.
 override, exercises the dev fallback.)** New test
 `rafaello/crates/rafaello/tests/rfl_init_runtime_binary_outside_cargo_env.rs`:
 
+- **Skip guard.** If `std::env::var_os("CARGO_TARGET_DIR")
+  .map(|v| !v.is_empty()).unwrap_or(false)`, print a
+  diagnostic ("rfl_init_runtime_binary_outside_cargo_env:
+  covers default target-dir layout only — set
+  RFL_BUNDLED_BIN_OPENAI or unset CARGO_TARGET_DIR") and
+  return. This matches §A1's resolver contract: external
+  `CARGO_TARGET_DIR` is out-of-dev-fallback. The C1
+  in-process test still covers the explicit-override path
+  on external-target hosts.
 - Build `rfl` via `workspace_bin("rfl")` and the bundled
   runtime via `workspace_bin("rfl-openai")` (the real
   workspace-target binary). Both land at
@@ -423,10 +581,13 @@ override, exercises the dev fallback.)** New test
   C1's exact-bytes assertion. Pi-1 confirmed
   `target/debug/rfl-openai-stub` is ~29 MB; release builds are
   ~hundreds of KB; both >> 1024).
-- Assert the lock's `[plugins.<canonical>] digest` field is
-  not the digest of the shim-as-entry (cheap negative check:
-  parse the lock TOML, recompute `content_digest(target_dir)`,
-  assert equality).
+- Assert the lock's `[plugins.<canonical>] digest` field
+  equals `content_digest(target_dir)` recomputed against the
+  post-swap install dir. This is the meaningful assertion:
+  it proves §A2 step 5 ran the digest *after* the binary
+  swap (a stale-shim digest would not equal the recomputed
+  one). The "not the shim" defence sits in C1's exact-bytes
+  assertion + this test's size > 1024 check.
 - **Stop here** — does not invoke `rfl chat`. Lock-correctness
   is what C2 proves; the full spawn path is exercised
   indirectly by C4. (Owner-ratified 2026-05-12.) The
@@ -445,51 +606,92 @@ covering Ctrl-C in both `InputMode::Normal` and
   scroll, &mut input_buffer, 0)` and assert the result is
   `EventOutcome::Quit`.
 
-**C4. (D2 end-to-end, tmux-driven — m6 cK5 pattern.)** New
-test `rafaello/crates/rafaello/tests/rfl_chat_ctrl_c_quits_cleanly.rs`:
+**C4. (D2 end-to-end, tmux-driven — cK5 wrapper-script
+pattern verbatim.)** New test
+`rafaello/crates/rafaello/tests/rfl_chat_ctrl_c_quits_cleanly.rs`.
+Mirrors `rfl_chat_production_tui_input_overlay_e2e.rs` lines
+47–275 closely:
 
-- Reuse the m6 `install_demo_layout(InstallOptions { real_binaries:
-  true, .. })` helper to materialise a fully-valid lock with
-  the mockprovider + readfile pair under a tmp project root.
-- Skip with a message if the `tmux` binary is not on PATH
-  (mirrors cK5's
-  `rfl_chat_production_tui_input_overlay_e2e.rs:47-48`).
-- Open a fresh tmux session via
-  `tmux new-session -d -s <name> -x 100 -y 30`, where
-  `<name>` is `format!("rfl-c05-ctrlc-{}", Ulid::new())` —
-  Ulid nonce (not PID) to survive stale-session cleanup and
-  parallel test runs. Install a Drop guard around the
-  session handle that runs `tmux kill-session -t <name>` on
-  drop (cK5 pattern,
-  `rfl_chat_production_tui_input_overlay_e2e.rs:267-275`).
-- Send `tmux send-keys -t <name> 'rfl chat --project-root <tmp>' C-m`
-  into the pane (tmux's `C-m` passes the literal LF that the
-  shell needs; m6 cK5 line 150 confirms LF / `Enter` keyname
-  semantics).
-- Poll `tmux capture-pane` (m6 cK5
-  `poll_pane_for_all` pattern) for the parent's
-  frontend-ready sentinel `"rfl-chat: frontend-ready-observed"`
-  with a bounded timeout (e.g. 120s; cK5 uses 120s for the
-  similar wait).
-- `tmux send-keys -t <name> C-c` — sends the raw Ctrl-C
-  byte. **NB**: this is the byte that the kernel TTY layer
-  would have converted to SIGINT *if* raw mode were
-  disabled; in raw mode, the byte arrives as a `KeyEvent`.
-- Poll `session_alive(&session)` with a bounded timeout
-  (e.g. 5s — cK5's post-`q` wait is similarly small). The
-  m6 cK5 helper at
-  `rfl_chat_production_tui_input_overlay_e2e.rs:228-244`
-  is the exact precedent.
-- Assert the tmux session exits within the timeout: the
-  shell-exec'd `rfl` finished and the pane closed. **Do
-  NOT** attempt `waitpid` on the `rfl` process — it is not
-  a child of the test process (tmux's shell is its parent).
-  The session-exit assertion is the regression-anchor.
-- Capture the pane post-exit and assert no Rust panic /
-  `thread 'main' panicked` appears in the buffer (defensive).
-- Optional: snapshot the audit log + session SQLite if
-  present, but **do not assert their contents** — m6 does
-  not specify Ctrl-C-during-confirm audit semantics.
+- **Tmux availability.** Skip with a printed message if
+  `tmux -V` fails (cK5 lines 47–48). No setup happens
+  otherwise.
+- **Project setup.** Reuse the m6
+  `install_demo_layout(InstallOptions { provider_executable:
+  true, tool_executable: true, real_binaries: true })`
+  helper (`tests/common/m4_install.rs:36-83`) under a
+  `tempfile::tempdir()` project root.
+- **Workspace binaries.** Build
+  `rfl = workspace_bin("rfl")` and
+  `tui = workspace_bin("rfl-tui")`. These resolve via the
+  existing helper so the test always exercises the
+  workspace-target binary, not any `$PATH` `rfl` that
+  could shadow it.
+- **Wrapper script.** Write a `rfl-chat-wrapper.sh` into
+  the temp dir with content (verbatim adapt of cK5
+  lines 102–121):
+  ```sh
+  #!/bin/sh
+  export RFL_TUI_PATH='<tui-path>'
+  export TERM='xterm-256color'
+  exec '<rfl-path>' chat --project-root '<project-root>' 2>'<stderr-log>'
+  ```
+  chmod `0o755`. The `exec` is load-bearing: when `rfl
+  chat` exits, the wrapper's PID is `rfl`'s PID (no
+  intermediate shell), so the tmux pane closes with `rfl`'s
+  exit and `session_alive` flips to false. **Without
+  `exec`**, the wrapper shell stays alive after `rfl chat`
+  exits, and the session-liveness regression check would
+  fail forever.
+- **Tmux session name.** `format!("rfl-c05-ctrlc-{}",
+  Ulid::new())`. Ulid nonce (not PID) to survive
+  stale-session cleanup and concurrent test runs.
+- **Drop guard.** A `TmuxSessionGuard` struct holding the
+  session name, with a `Drop` impl that runs
+  `tmux kill-session -t <name>` (cK5 lines 267–275). The
+  test creates the guard immediately after `tmux new-session`
+  so any panic between session creation and clean teardown
+  still cleans up.
+- **Session start.**
+  ```text
+  tmux new-session -d -s <name> -x 100 -y 30 <wrapper-script>
+  ```
+  Passing the wrapper as the pane command — **not** as
+  text typed into an interactive shell — so the pane's
+  child is the wrapper (and after `exec`, `rfl` itself),
+  not a long-lived `bash`.
+- **Wait for ready.** Poll the `<stderr-log>` file for the
+  literal `frontend-ready-observed` substring with a 30s
+  timeout. cK5 calls this pattern `poll_for_stderr_line`
+  (lines 142–148). The parent rafaello binary writes this
+  sentinel to its own stderr at
+  `lib.rs:661` (`write_parent_sentinel(..,
+  "rfl-chat: frontend-ready-observed")`); the wrapper's
+  `2><stderr-log>` redirect captures it.
+- **Send Ctrl-C.** `tmux send-keys -t <name> C-c` — sends
+  the raw Ctrl-C byte. **NB**: this is the byte the kernel
+  TTY layer would convert to SIGINT *if* raw mode were
+  disabled; in raw mode, the byte arrives as a `KeyEvent`
+  with `KeyModifiers::CONTROL + KeyCode::Char('c')`. The
+  §B1 fix converts it to `EventOutcome::Quit`.
+- **Wait for exit.** Poll `session_alive(&name)` with a
+  5s bounded timeout (cK5's post-`q` wait is similarly
+  small). `session_alive` shells out to `tmux has-session
+  -t <name>` and returns true iff exit status is 0 (cK5
+  pattern).
+- **Assert.** The session exited within the timeout (i.e.
+  `session_alive` returned false). If it did not, capture
+  the pane and the stderr log and emit a diagnostic with
+  both included so failures are debuggable (cK5
+  lines 240–245 precedent).
+- **Defensive checks.** Read the captured stderr log and
+  assert no `thread '<name>' panicked` appears (catches
+  panics in the parent rafaello process during shutdown).
+  Capture-pane the post-exit screenful (best-effort —
+  the pane may already be gone) and check the same.
+- **No audit-log assertions.** §B4 explicitly carves
+  audit-row semantics for Ctrl-C-during-confirm out of
+  m6.1. The test ignores audit-log contents and the
+  session-SQLite contents.
 
 This is the load-bearing regression anchor for D2. The C3
 unit test would fail pre-fix and pass post-fix (proves the
@@ -601,18 +803,19 @@ sees a flaw.)
    in the source tree is a structural invariant of
    `rafaello-openai/`, and adding a "maybe-it's-already-real"
    branch obscures it. Pi can push back.
-5. **Does C4's tmux session name need a per-test nonce?**
-   Round-1 lean: yes (e.g. PID-suffix or `Ulid`-suffix), per
-   the m1–m6 "never reuse a name" guardrail and the m6 cK5
-   precedent of `rafaello-m6-cK5-<nonce>` naming. Pi can
-   push back if a simpler scheme works.
-6. **Does the test in C4 need to assert any audit-log
-   contents** (e.g. that the Ctrl-C quit produces a graceful
-   shutdown audit row)? Round-1 lean: **no**. Audit-log
-   contents on graceful shutdown are not specified anywhere
-   in m6's RATIFIED contract; asserting them here would be
-   speculative coverage. Limit C4 to "exit status 0 + no
-   zombie + terminal restored".
+5. **C4 tmux session name nonce.** **Resolved round 3**:
+   `Ulid::new()` (per pi-2 M-4 / N-1). PID is not
+   sufficient under stale-session cleanup or parallel test
+   runs; cK5's PID-suffix worked because cK5 is the only
+   `#[test]` in its binary, but m6.1 takes the defensive
+   nonce.
+6. **C4 assertion surface.** **Resolved round 3 (per
+   pi-2 N-2)**: limit C4 to "tmux session exits within
+   bounded timeout, no Rust panic in captured pane/stderr
+   log, no audit-log or session-SQLite assertions". The
+   round-1 "exit status 0 + no zombie + terminal restored"
+   language is dropped because §C4 no longer attempts a
+   `waitpid` reap (pi-1 M-3, resolved round 2).
 7. **Defensive `set_permissions(0o755)` in A2 step 4 — paranoia
    or required?** Round-1 lean: required as belt-and-braces;
    on Linux/macOS the swap-by-`fs::copy` preserves source
@@ -637,19 +840,23 @@ sweep beyond D1/D2.
 
 Proposed commit order, 6 commits:
 
-1. **c01** — `feat(rafaello): bundled::resolve_runtime_binary
-   + release-arm fix for resolve_plugin_dir`. Two changes in
-   `rafaello/src/bundled.rs`: (a) new
-   `resolve_runtime_binary` per §A1 (env-override /
-   release-layout / dev-fallback / not-found); (b)
-   `resolve_plugin_dir` release-arm join changed from
-   `name` to `rfl-<name>` per §A0 (PP1 layout fix). Unit
-   tests cover both functions across both release and dev
-   arms — six total cases (runtime: env / release / dev /
-   not-found; plugin-dir: release / dev). One commit because
-   the two changes are cohesive (both implement the m6 PP1
-   release contract for `rfl init` materialisation) and
-   together are well under the 100-line / 3–5-file limit.
+1. **c01** — `feat(rafaello): BundledPluginNames +
+   resolve_plugin_dir_for_bundled + resolve_runtime_binary`.
+   Three additions in `rafaello/src/bundled.rs`:
+   (a) `BundledPluginNames` struct + `OPENAI_NAMES` const
+   per §A0;
+   (b) `resolve_plugin_dir_for_bundled(&BundledPluginNames)`
+   sister function that mirrors `resolve_plugin_dir` but
+   uses `release_dir` for the release-arm join and
+   `dev_crate` for the workspace walk-up (§A0);
+   (c) `resolve_runtime_binary(&BundledPluginNames)` per §A1.
+   The existing `resolve_plugin_dir(name)` is **not** modified;
+   `rfl install`'s call site remains untouched. Unit tests in
+   the same file cover: `resolve_plugin_dir("rfl-mailcat")`
+   release-arm regression guard; `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`
+   release + dev arms; `resolve_runtime_binary(&OPENAI_NAMES)`
+   env-override / release / dev-fallback / not-found. Under
+   the 100-line / 3–5-file commit limit.
 2. **c02** — `fix(rafaello): rfl init swaps shim for runtime
    binary at materialisation time`. Edits `init::run` per
    §A2; adds C1 acceptance test
@@ -681,6 +888,18 @@ swap" lands as a load-bearing term).
   Today only `rfl-openai` ships bundled with a shim; the m6
   `rfl-mailcat` demo tool ships its real binary directly, so
   no second instance exists.
+- **v0.1.x candidate:** rationalise the dev-crate vs
+  release-dir vs runtime-bin naming asymmetry across the
+  bundled-plugin set. Today: `rafaello-fetch` ships *without*
+  the `rfl-` prefix in both its bin name and release dir
+  (`package.nix:25` line `"rafaello-fetch:rafaello-fetch"`),
+  while every other bundled plugin uses `rfl-<x>`. m6.1 does
+  not touch this — `resolve_plugin_dir(name)` stays as-is,
+  and `BundledPluginNames` records the asymmetry per plugin
+  if any future `rfl init`-style bundled-init grows for
+  another plugin. A v0.2 cleanup could unify the naming
+  schema and shrink the `BundledPluginNames` struct to a
+  single name field.
 - **v0.1.x candidate:** Ctrl-D / Esc / modal-cancel as
   additional quit gestures, per their own UX scoping.
 - **v0.2 candidate:** `bundled.rs` resolver layer
@@ -727,7 +946,7 @@ swap" lands as a load-bearing term).
 
 ## Disagreements with pi (cumulative)
 
-None. Round 1's two blockers and five majors were all
-substantive and accurate; round 2 folds every one. The four
-nits are all wording fixes folded verbatim. No standing
-disagreement.
+None across rounds 1 and 2. All four blockers across the
+two rounds (pi-1 B-1, pi-1 B-2, pi-2 B-1, pi-2 B-2), all six
+majors, and all seven nits were substantive and accurate;
+every one is folded. No standing disagreement.
