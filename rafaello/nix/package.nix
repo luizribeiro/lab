@@ -13,7 +13,24 @@ pkgs.rustPlatform.buildRustPackage {
     lockFile = src + "/rafaello/Cargo.lock";
   };
 
-  cargoBuildFlags = [ "-p" "rafaello" ];
+  cargoBuildFlags = [
+    "-p"
+    "rafaello"
+    "-p"
+    "rafaello-tui"
+    "-p"
+    "rafaello-openai"
+    "-p"
+    "rafaello-openai-stub"
+    "-p"
+    "rafaello-readfile"
+    "-p"
+    "rafaello-mailcat"
+    "-p"
+    "rafaello-mockprovider"
+    "-p"
+    "rafaello-fetch"
+  ];
 
   doCheck = false;
 }
