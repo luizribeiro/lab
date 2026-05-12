@@ -1,31 +1,171 @@
 # m6 — v1 polish + release readiness — commits
 
-> **Status:** round 1 draft — claude-authored 2026-05-11,
-> awaiting pi adversarial review. Built against the RATIFIED
-> `scope.md` (round 5, owner sign-off at commit `a0764b3`).
+> **Status:** round 2 — folds `commits-pi-review-1.md`
+> (B/6 M/5 N/4, verdict blocking). Claude-authored
+> 2026-05-12; awaiting pi round 2.
 >
-> **Budget.** Scope §"Internal split" pins the m6 budget at
-> **28 commits implementation default / 30 max + 1
-> retrospective reservation**. This draft lands **27
-> implementation commits + 1 retrospective reservation = 28
-> slots** matching scope's row-1–28 table verbatim under the
-> default-selected positions (G.β wins owner-judgment item 5;
-> G3 install-smoke folded into J1 per scope's row 21 disposition;
-> I1 in scope per item 11). The owner-judgment item-5 G.β
-> default is locked per the ratification commit; if any future
-> owner override flips item 5 to G.α (-1) or G.γ (-1), the
-> retrospective reservation absorbs the slack and the implementation
-> count stays inside the 28 ceiling.
+> Round-1 pi-review pattern: row-local "test against
+> nonexistent live surface." Closed by spot-checking the live
+> code first, then editing rows to match. Round-2 changelog
+> by pi-1 finding:
 >
-> If pi-1 demands the literal 28-implementation interpretation
-> from the driver prompt (rather than the scope-table reading
-> of 27 + 1 retro), round 2 splits c05 (B1) into argparse-cutover
-> + bundled-source-resolver per scope's "+1 if implementation
-> surfaces a clean fold" escape hatch. The round-1 default
-> matches the scope table.
+> - **B-1** c09 promoted: fake-syd binary source moves into
+>   c09 (alongside the `[[bin]]` registration), so c09 is
+>   row-local green. Live package is `lockin` (not
+>   `lockin-sandbox`); every build invocation in c09 / c10
+>   uses `cargo build --manifest-path lockin/Cargo.toml -p
+>   lockin --features test-fixture --bin fake-syd`.
+> - **B-2** c09 adds the **public** testable surface
+>   `SandboxBuilder::syd_pty_path(path)` (mirroring the
+>   live `SandboxBuilder::syd_path` at
+>   `lockin/crates/sandbox/src/lib.rs:373-388`). Live
+>   `SandboxSpec` stays `pub(crate)`; tests drive the
+>   builder API, not the spec directly. Error channel stays
+>   `anyhow::Result` (matching live `resolve_syd_path`'s
+>   `anyhow::bail!` at lines 209-232); the hard-error arm
+>   matches a documented error-message substring rather
+>   than a typed `SydPtyNotFound` variant. The
+>   `SandboxError` enum from round 1 is dropped — adding
+>   it ripples into every existing `anyhow::Result` site
+>   for negligible m6 win.
+> - **B-3** Phase E reshaped: live
+>   `rafaello-openai-stub` is an **HTTP Chat Completions
+>   server** (binds `127.0.0.1:0`, serves
+>   `POST /v1/chat/completions`, returns JSON from
+>   `--response` / `RFL_OPENAI_STUB_RESPONSE`; see
+>   `rafaello/crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs:53-85`).
+>   c14 / c15 rewritten to extend the HTTP server: a new
+>   `RFL_OPENAI_STUB_SCRIPTED_TURNS=<path.toml>` env var
+>   parses scripted turns that inspect the incoming
+>   Chat-Completions request `messages` / `tool_calls`
+>   and return the next scripted `ChatCompletionResponse`.
+>   Tests POST to the HTTP server with `reqwest` (or
+>   `hyper::Client`) and assert the response body — no
+>   bus events involved.
+> - **B-4** c14 also removes `required-features =
+>   ["test-fixture"]` from the
+>   `rafaello-openai-stub` `[[bin]]` (live at
+>   `rafaello/crates/rafaello-openai-stub/Cargo.toml:14-17`)
+>   so c16's `cargoBuildFlags` produces `$out/bin/rfl-openai-stub`
+>   under owner-judgment item 13 (stub in release). The
+>   feature itself stays declared (other crates may
+>   depend on it later) but the stub binary no longer
+>   gates on it. c06 adds the stub's `rafaello.toml`/
+>   `openrpc.json` source-tree work so c17 has a plugin
+>   tree to install.
+> - **B-5** c23 promoted from test-only to
+>   test+instrumentation. Adds
+>   `StartupEvent::ToolSchemaCatalogBuilt` to
+>   `rafaello/crates/rafaello/src/chat/test_ordering_hook.rs:17-20`
+>   (live enum has only `SetAuditWriter` +
+>   `PluginSupervisorSpawn`). Records the new event at
+>   the `ToolSchemaCatalog::build(...)` call site in
+>   `rafaello/crates/rafaello/src/lib.rs:348` (verified
+>   live). Test asserts the recorded event sequence
+>   has `ToolSchemaCatalogBuilt` strictly before the
+>   first `PluginSupervisorSpawn`.
+> - **B-6** c24 promoted from test-only to
+>   **implementation + test**. Live `run_chat`
+>   (`rafaello/crates/rafaello/src/lib.rs:455-465`)
+>   unconditionally spawns every non-provider plugin
+>   carrying tools; c24 gates that spawn on the entry's
+>   `bindings.load.triggers` (currently parsed but
+>   unused) and adds first-tool-call lazy spawn via a
+>   new `PluginSupervisor::spawn_on_demand` arm. To stay
+>   under the per-commit-size guideline, **c24 splits
+>   into c24a (gate parsing + supervisor plumbing) +
+>   c24b (spawn-on-first-call + integration test)**.
+>   Net delta: implementation count rises from 27 to
+>   **28 + 1 retro = 29 slots**; justified explicitly
+>   in the sizing summary per scope §"Internal split"
+>   30-max ceiling.
+> - **M-1** c02 exposes `compile::resolve_entry` as a
+>   public function (one-line `pub` + crate-root
+>   re-export). Live live shape is private at
+>   `rafaello/crates/rafaello-core/src/compile.rs:440-465`.
+>   PP1 acceptance in c02 / c05 / c17 calls
+>   `rafaello_core::compile::resolve_entry` directly.
+>   Digest helpers normalised to the live names
+>   `rafaello_core::digest::content_digest` and
+>   `rafaello_core::digest::manifest_digest` (live at
+>   `rafaello/crates/rafaello-core/src/digest.rs:26,31`);
+>   the round-1 `recompute` name is dropped.
+> - **M-2** Dependency lines walked mechanically. c07
+>   adds c02, c03. c11 lists c02 (for the
+>   `rfl_audit_empty_db.rs` test's `rfl init` baseline).
+>   c27 adds c26 explicitly.
+> - **M-3** Each load-bearing row body now cites the
+>   placeholder `decisions.md` row it will append at
+>   retrospective: c02/c03 → row 60; c05 → row 61;
+>   c09/c10 → row 62; c11/c12 → row 63; c14/c15 → row 64;
+>   c16/c17 → row 65; c19/c20 → row 66; c25 → row 67;
+>   c24 → row 60 / row 42 cross-reference (lazy-load
+>   ratification refines decisions row 42's manifest
+>   `load.triggers` field). c03's spurious "owner-judgment
+>   item 8" reference dropped (item 8 is
+>   `result_large_err`; the empty-lock-on-decline default
+>   is a scope §A3 default, not an owner-judgment item).
+> - **M-4** Live paths normalised:
+>   - `rfl-bus-fixture` lives at
+>     `rafaello/crates/rafaello-core/src/bin/rfl_bus_fixture.rs`
+>     (a binary inside the `rafaello-core` crate; no
+>     standalone `rafaello-bus-fixture` crate). c10's
+>     `--record-env` extension lands inside
+>     `rafaello-core`'s bin module.
+>   - Rafaello integration tests sit under
+>     `rafaello/crates/rafaello/tests/`. Every row's
+>     `Files touched` list and the traceability appendix
+>     normalised. (Round 1's `rafaello/crates/rafaello/tests/` shorthand
+>     dropped.)
+>   - Homebrew formula path is `homebrew/rafaello.rb`
+>     (matches c19's row body; the traceability
+>     appendix `Formula/rafaello.rb` typo fixed).
+> - **M-5** c25 inventory updated to **five** live
+>   non-test module-level allows:
+>   `rafaello/crates/rafaello-core/src/bus.rs:1`,
+>   `rafaello/crates/rafaello-core/src/session/mod.rs:1`,
+>   `rafaello/crates/rafaello-core/src/supervisor.rs:1`,
+>   `rafaello/crates/rafaello-core/src/reemit/mod.rs:1`,
+>   `rafaello/crates/rafaello-core/src/agent/mod.rs:1`.
+>   The test-file allow at
+>   `rafaello/crates/rafaello-core/tests/broker_plugin_tool_result_race_two_concurrent_publishes.rs:1`
+>   is **explicitly excluded** (m5a/m5b retro precedent:
+>   test-file allows aren't part of the production
+>   ratification surface). Sizing summary recomputed
+>   from the final row list (see §"Sizing summary").
+> - **N-1** c04's `rafaello/fixtures/m6-bundled-plugins/`
+>   mirror **dropped**. c04's tests now run against the
+>   in-tree `rafaello/crates/rafaello-openai/` source
+>   tree (after c06 promotes it with `rafaello.toml`
+>   + `openrpc.json`), with the `rfl-openai` binary
+>   resolved via `env!("CARGO_BIN_EXE_rfl-openai")`
+>   at test time. F2 is the single source of truth for
+>   the bundled tree shape.
+> - **N-2** c10 wording fixed: "**four tests** plus the
+>   fake-syd binary moved into c09" (the binary is now
+>   in c09 per B-1 fold, so c10 carries only the four
+>   test files + the rfl-bus-fixture `--record-env`
+>   extension).
+> - **N-3** c16's `nix-store --query --references`
+>   replaced with
+>   `find ./result/bin -maxdepth 1 -type f -printf '%f\n'`
+>   (the correct shape for listing flat `$out/bin/`
+>   contents).
+> - **N-4** Subjects tightened on c05, c09, c17 —
+>   bundle rationale moved into the body. c05 →
+>   `feat(rafaello): rfl install positional plugin arg + bundled-source resolver`;
+>   c09 → `feat(lockin): SandboxBuilder::syd_pty_path + child-env injection`;
+>   c17 → `feat(rafaello-nix): postInstall reshape to PP1 plugin-tree layout`.
+>
+> **Budget after round-2 folds.** Scope §"Internal split"
+> pins the m6 budget at **28 commits implementation
+> default / 30 max + 1 retrospective reservation**. Round 2
+> lands **28 implementation commits + 1 retro reservation
+> = 29 slots** (B-6 fold splits c24 into c24a + c24b;
+> total = 27 → 28). Stays inside scope's 30-max ceiling.
 >
 > **Phase distribution.** A:4 · B:3 · C:3 · D:3 · E:2 · F:3 ·
-> G:2 · H:2 · I:3 · J:2 · retro:1 = 27 + 1 = 28.
+> G:2 · H:2 · I:**4** · J:2 · retro:1 = 28 + 1 = 29.
 >
 > **Workspace-wide cutovers explicitly called out** (m0 §4.1
 > precedent):
@@ -47,13 +187,11 @@
 >   `rfl-mailcat`, `rfl-mockprovider`, `rafaello-fetch`). Nix
 >   evaluation is whole-flake so this lands as one commit;
 >   scope §"Internal split" forced-monolithic list pins it.
-> - **c09 (C2)** — lockin sandbox `resolve_syd_pty_path` +
->   `Command::env` plumbing + hard-error rejection of the
->   `pty:off` fallback path. Scope §"Internal split" pins this
->   as forced-monolithic (function + call site + negative
->   coupled at the child-command construction site).
->
-> Round-1 changelog: this is the first round; nothing to fold.
+> - **c09 (C2)** — lockin sandbox `SandboxBuilder::syd_pty_path`
+>   public method + child-env injection + hard-error rejection
+>   of the `pty:off` fallback path. Scope §"Internal split"
+>   pins this as forced-monolithic (builder API + call site +
+>   negative coupled at the child-command construction site).
 >
 > ---
 
@@ -194,7 +332,9 @@ directory. Without that copy, the lock validates but
   CLI-shape invariant (operators invoking `rfl init` twice
   from a script must not corrupt their lock). m4 c01 / m5a
   c02 precedent of "scaffold the subcommand, write logic
-  next commit."
+  next commit." Decisions row placeholder **60** (`rfl init`
+  semantics) appended at retro time consumes this row's
+  surface contract.
 - **Depends on.** baseline (a0764b3, scope ratified).
 - **Acceptance.** Tests in `rafaello/crates/rafaello/tests/`:
   - `rfl_init_help_lists_init.rs` — `rfl init --help` exits 0
@@ -215,12 +355,22 @@ directory. Without that copy, the lock validates but
 - **Size.** small-to-medium.
 - **Scope sections.** §A1.
 
-#### c02 — feat(rafaello-core, rafaello): `rfl init` materialises default lock + PP1 bundled-plugin copy
+#### c02 — feat(rafaello-core, rafaello): `rfl init` materialises default lock + PP1 bundled-plugin copy + `compile::resolve_entry` made public
 
-- **What.** Scope §A2 + PP1 invariant. Implements
-  `run_init`'s lock-emission body and the PP1 package-tree
-  copy step. The default lock content is the TOML literal
-  pinned by scope §A2 — single `[plugin."builtin:openai@0.0.0"]`
+- **What.** Scope §A2 + PP1 invariant + pi-1 M-1 fold.
+  Implements `run_init`'s lock-emission body and the PP1
+  package-tree copy step, **and** lifts
+  `rafaello_core::compile::resolve_entry` from private
+  (live at `rafaello/crates/rafaello-core/src/compile.rs:440-465`)
+  to `pub fn` (one-line attribute change + re-export
+  through `crates/rafaello-core/src/lib.rs`'s public
+  `compile` module surface). The PP1 acceptance tests in
+  c02 / c05 / c17 then call
+  `rafaello_core::compile::resolve_entry(&plugin_dir,
+  rel)` directly without reaching into private surface
+  (pi-1 M-1 acceptance requirement).
+  The default lock content is the TOML literal pinned by
+  scope §A2 — single `[plugin."builtin:openai@0.0.0"]`
   table with `entry = "bin/rfl-openai"`, the
   `[plugin."…".grant.bundles.default.{network,env,env.set}]`
   subtables, `[plugin."…".bindings]` (`provider = true`,
@@ -246,11 +396,13 @@ directory. Without that copy, the lock validates but
      `rafaello.toml` (per `decisions.md` row 25); sibling
      `openrpc.json` and any `schemas/` directory carried
      verbatim.
-  4. Compute `digest` (recursive content hash over the copied
-     plugin directory) and `manifest_digest` (hash of the
-     copied `rafaello.toml`) using
-     `rafaello_core::digest::recompute` (the existing helper
-     `install.rs` uses).
+  4. Compute `digest` via `rafaello_core::digest::content_digest(
+     &plugin_dir)` and `manifest_digest` via
+     `rafaello_core::digest::manifest_digest(&canonical_manifest_bytes)`
+     (live names per
+     `rafaello/crates/rafaello-core/src/digest.rs:26,31` —
+     pi-1 M-1 dropped the round-1 `recompute` symbol that
+     does not exist).
   5. Render the lock TOML with the computed digests + an
      `RFC3339`-formatted `granted_at = chrono::Utc::now()`,
      write to `${PROJECT_ROOT}/rafaello.lock`.
@@ -262,7 +414,10 @@ directory. Without that copy, the lock validates but
   PP1's `actual-file-not-symlink` half is enforced by the
   copy implementation choosing `fs::copy` semantics (or
   `cp -L` for directories with sub-symlinks) — never
-  `symlink_metadata`-preserving traversal.
+  `symlink_metadata`-preserving traversal. Decisions row
+  placeholder **60** (`rfl init` materialises bundled
+  `rfl-openai` lock entry + PP1 copy semantics) appended
+  at retro time.
 - **Depends on.** c01.
 - **Acceptance.** Tests in `rafaello/crates/rafaello/tests/`:
   - `rfl_init_writes_default_lock.rs` (scope §A4 happy path)
@@ -277,12 +432,18 @@ directory. Without that copy, the lock validates but
     exists and parses via `Manifest::parse`; assert
     `bin/rfl-openai` exists as a regular file
     (`fs::metadata(...).file_type().is_file()` true,
-    `is_symlink()` false); assert the lock's `digest` /
-    `manifest_digest` fields match
-    `rafaello_core::digest::recompute(&plugin_dir)`; assert
-    `compile::resolve_entry(&plugin_dir, "bin/rfl-openai")`
+    `is_symlink()` false); assert the lock's `digest` field
+    matches `rafaello_core::digest::content_digest(&plugin_dir)`
+    and `manifest_digest` matches
+    `rafaello_core::digest::manifest_digest(&canonical_manifest_bytes)`
+    (live signatures at
+    `rafaello/crates/rafaello-core/src/digest.rs:26,31`);
+    assert `rafaello_core::compile::resolve_entry(&plugin_dir,
+    "bin/rfl-openai")` (newly public per pi-1 M-1 fold)
     returns `Ok(<canonical-path>)` with the canonical path
-    inside `plugin_dir` (no `EntryEscape`).
+    inside `plugin_dir` (no `EntryEscape`; live error
+    variant at
+    `rafaello/crates/rafaello-core/src/compile.rs:465`).
   - `rfl_init_idempotent_no_overwrite.rs` (scope §A4) —
     `rfl init --yes` twice in succession leaves both the
     lock bytes and the package-dir tree unchanged on the
@@ -298,11 +459,16 @@ directory. Without that copy, the lock validates but
     in this commit to assert success on the previously-failing
     invocation (two-stage ladder per m0 §4.3).
 - **Files touched.** `rafaello/crates/rafaello/src/init.rs`
-  (body fill, ~120 lines); `rafaello/crates/rafaello/src/
-  bundled.rs` (new helper, ~40 lines); four new test files
-  in `rafaello/crates/rafaello/tests/`; the c01 stub-error
+  (body fill, ~120 lines);
+  `rafaello/crates/rafaello/src/bundled.rs` (new helper,
+  ~40 lines);
+  `rafaello/crates/rafaello-core/src/compile.rs` (one-line
+  `pub fn` change on `resolve_entry` at line 440 +
+  re-export note in `lib.rs`'s `compile` module surface,
+  ~3 lines net); four new test files in
+  `rafaello/crates/rafaello/tests/`; the c01 stub-error
   assertion amended in `rfl_init_with_existing_lock_idempotent.rs`.
-  Total ~280 lines.
+  Total ~285 lines.
 - **Size.** medium (body-justified: the lock-rendering
   algorithm + the PP1 copy implementation are coupled at
   `run_init`'s top-level body; splitting would land a
@@ -315,8 +481,10 @@ directory. Without that copy, the lock validates but
 
 #### c03 — feat(rafaello): `rfl init` install-time review prompt + decline-empty-lock path
 
-- **What.** Scope §A3 + owner-judgment item 8 (declining
-  the prompt writes an empty lock + no PP1 copy). Wraps c02's
+- **What.** Scope §A3 (declining the prompt writes an empty
+  lock + no PP1 copy; this is a scope §A3 default, **not** an
+  owner-judgment item — round-1 cited "item 8" but item 8
+  ratifies `result_large_err`; pi-1 M-3 fold). Wraps c02's
   unconditional lock-write with a TTY prompt:
   1. After resolving the bundled source but **before**
      writing anything, print the default grant content (one
@@ -334,13 +502,14 @@ directory. Without that copy, the lock validates but
      parses through `Lock::from_toml` to an empty
      plugin map. **No PP1 copy** runs. Print `"declined;
      wrote empty lock at <path>"` to stderr; exit 0.
-- **Why.** Scope §A3 + owner item 8 ratification (default:
-  empty-lock on decline). The empty-lock path is the safety
+- **Why.** Scope §A3 default (empty-lock on decline; not
+  an owner-judgment item — pi-1 M-3 fix). The empty-lock path is the safety
   valve for operators who want to hand-author a lock against
   a non-LiteLLM endpoint; m6 ships no `rfl init --endpoint
   <url>` (scope §"Out of scope" item 11). The TTY prompt
   follows the live `install`-time prompt convention from
-  m5a's `trifecta` flow.
+  m5a's `trifecta` flow. Decisions row placeholder **60** also
+  captures the empty-lock-on-decline default at retro time.
 - **Depends on.** c02.
 - **Acceptance.** Tests in `rafaello/crates/rafaello/tests/`:
   - `rfl_init_yes_skips_prompt.rs` — `rfl init --yes
@@ -359,50 +528,47 @@ directory. Without that copy, the lock validates but
   (prompt wrapper + decline-path branch, ~50 lines); three
   new test files. Total ~150 lines.
 - **Size.** small-to-medium.
-- **Scope sections.** §A3, §A4 (decline test), owner-judgment
-  item 8.
+- **Scope sections.** §A3, §A4 (decline test).
 
 #### c04 — test(rafaello): `rfl init` consolidated integration tests against PP1 + live lock schema
 
-- **What.** Scope §A4 (closing assertion). Adds the two
-  remaining A-phase integration tests that bind c01–c03 to
-  the demo-bar surface contract:
+- **What.** Scope §A4 (closing assertion) + pi-1 N-1 fold
+  (the round-1 fixture-mirror under
+  `rafaello/fixtures/m6-bundled-plugins/` is **dropped**;
+  F2 is the single source of truth for the bundled-tree
+  shape). Adds the two remaining A-phase integration tests
+  that bind c01–c03 to the demo-bar surface contract:
   - `rfl_init_round_trip_byte_stable.rs` — generate the
     default lock, parse via `Lock::from_toml`, render via
     `Lock::to_toml`, compare bytes; second-pass also asserts
     the canonical id ordering (`BTreeMap` invariant) and
     grant-subtable ordering match the literal in scope §A2.
-  - `rfl_init_against_live_bundled_openai_tree.rs` — invokes
+  - `rfl_init_against_in_tree_bundled_openai.rs` — invokes
     `rfl init --yes --project-root <tmpdir>` with
-    `RFL_BUNDLED_PLUGINS_DIR` pointing at the **live**
-    `rafaello/crates/rafaello-openai/` directory (or its
-    fixture-mirror at
-    `rafaello/fixtures/m6-bundled-plugins/rfl-openai/` —
-    introduced by this commit as a one-time fixture pin so
-    A4 doesn't depend on the live in-tree manifest's exact
-    bytes). Asserts the post-init `.rafaello/plugins/<topic>/
-    rafaello.toml` parses + the lock's `manifest_digest`
-    field matches the fixture-mirror's `rafaello.toml` digest.
+    `RFL_BUNDLED_PLUGINS_DIR` pointing at a tempdir
+    constructed by the test from the **in-tree**
+    `rafaello/crates/rafaello-openai/` source (the
+    `rafaello.toml` + `openrpc.json` promoted in c06,
+    plus `bin/rfl-openai` resolved via
+    `env!("CARGO_BIN_EXE_rfl-openai")`). Asserts the
+    post-init `.rafaello/plugins/<topic>/rafaello.toml`
+    parses via `Manifest::parse` (live signature at
+    `rafaello/crates/rafaello-core/src/manifest/mod.rs`)
+    and the lock's `manifest_digest` field matches
+    `rafaello_core::digest::manifest_digest(&canonical_bytes)`
+    over the copied tree.
 - **Why.** Scope §A4 closes Phase A's acceptance by binding
   the default-lock TOML literal in scope §A2 to byte-stable
-  round-trip + to a real bundled-source tree. The fixture
-  mirror under `rafaello/fixtures/m6-bundled-plugins/`
-  insulates A4 from in-tree manifest drift; Phase F's tests
-  use the live in-tree shape independently.
-- **Depends on.** c02, c03.
-- **Acceptance.** Both tests green; the fixture mirror
-  directory exists and contains the same files Phase F2's
-  `postInstall` step copies (sanity-checked by F3 against
-  this fixture).
+  round-trip + to a real bundled-source tree. Pi-1 N-1 fold
+  removed the fixture-mirror duplication; the in-tree
+  manifests (c06) are the canonical source.
+- **Depends on.** c02, c03, c06 (the in-tree
+  `rfl-openai/rafaello.toml` + `openrpc.json` promotion).
+- **Acceptance.** Both tests green; no
+  `rafaello/fixtures/m6-bundled-plugins/` directory exists
+  in the repo.
 - **Files touched.** Two new test files in
-  `rafaello/crates/rafaello/tests/`;
-  `rafaello/fixtures/m6-bundled-plugins/rfl-openai/`
-  (fixture mirror: `rafaello.toml`, `openrpc.json`, `bin/`
-  with a placeholder shell-script `rfl-openai` that
-  `exec`s `true` and the real `rfl-openai` binary used at
-  test time via `env!("CARGO_BIN_EXE_rfl-openai")` when
-  the test runs under `cargo test`). Total ~120 lines + ~3
-  fixture files.
+  `rafaello/crates/rafaello/tests/`. Total ~120 lines.
 - **Size.** small.
 - **Scope sections.** §A4.
 
@@ -412,7 +578,12 @@ Lands the install-time ergonomics polish so the README
 5-line bootstrap and the J2 tmux script can run
 `rfl install rfl-mailcat --project-root "$PROJECT"`.
 
-#### c05 — feat(rafaello): `rfl install` positional plugin + `--fixture: Option<PathBuf>` + `--project-root` clap cutover + bundled-source resolver + PP1 copy
+#### c05 — feat(rafaello): `rfl install` positional plugin arg + bundled-source resolver
+
+(N-4 tighten: body covers the clap cutover bundle —
+`--fixture: Option<PathBuf>`, positional `plugin`,
+`--project-root`, the new bundled-source resolver, and the
+PP1 package-tree copy.)
 
 - **What.** Scope §B1 — the **clap cutover + resolver**
   combined commit (scope §"Internal split" forced-monolithic).
@@ -476,6 +647,9 @@ Lands the install-time ergonomics polish so the README
   positional argument). Round-3 M-5 and round-3 B-1 folds
   add the clap conflicts/required_unless wiring and the
   PP1 copy step. Round-4 B-2 fold adds `--project-root`.
+  Decisions row placeholder **61** (`rfl install <plugin>`
+  positional argument resolves against bundled tree;
+  refines decisions row 31) appended at retro time.
 - **Depends on.** baseline (no Phase A dependency: c05 only
   reads the install-side; `rfl install` is independent of
   `rfl init`).
@@ -510,7 +684,10 @@ Lands the install-time ergonomics polish so the README
     (scope §B3 round-4 B-1) — after `rfl install
     rfl-mailcat` against a fixture release tree whose
     `bin/rfl-mailcat` is a real file, asserts
-    `compile::resolve_entry(&plugin_dir, &manifest.entry)`
+    `rafaello_core::compile::resolve_entry(&plugin_dir,
+    &manifest.entry)` (public per pi-1 M-1 fold; live
+    function body at
+    `rafaello/crates/rafaello-core/src/compile.rs:440-465`)
     returns `Ok(<canonical-path>)` inside
     `.rafaello/plugins/<topic-id>/`.
 - **Files touched.** `rafaello/crates/rafaello/src/install.rs`
@@ -525,10 +702,10 @@ Lands the install-time ergonomics polish so the README
 
 #### c06 — feat(rafaello-{mailcat,readfile,openai,mockprovider,fetch}): promote bundled plugin manifest trees + sidecar `openrpc.json`
 
-- **What.** Scope §B2. Each bundled plugin crate ships its
-  source tree with the manifest renamed to `rafaello.toml`
-  (per `decisions.md` row 25) and a sibling `openrpc.json`
-  (per `decisions.md` row 31). Inventory:
+- **What.** Scope §B2 + pi-1 B-4 fold. Each bundled plugin
+  crate ships its source tree with the manifest renamed to
+  `rafaello.toml` (per `decisions.md` row 25) and a sibling
+  `openrpc.json` (per `decisions.md` row 31). Inventory:
   - `rafaello/crates/rafaello-mailcat/rafaello.toml`
   - `rafaello/crates/rafaello-mailcat/openrpc.json`
   - `rafaello/crates/rafaello-readfile/rafaello.toml`
@@ -539,6 +716,12 @@ Lands the install-time ergonomics polish so the README
   - `rafaello/crates/rafaello-mockprovider/openrpc.json`
   - `rafaello/crates/rafaello-fetch/rafaello.toml`
   - `rafaello/crates/rafaello-fetch/openrpc.json`
+  - `rafaello/crates/rafaello-openai-stub/rafaello.toml`
+    (pi-1 B-4 fold — owner item 13 ships the stub in the
+    release tree, so c17 needs a plugin-tree to install)
+  - `rafaello/crates/rafaello-openai-stub/openrpc.json`
+    (declares empty `[provides.tool]`; the stub
+    declares only provider-shape, no tools)
   Each `rafaello.toml` matches the live
   `bindings.tool_meta.<tool>.*` lock-side projection
   convention (m5b c20 precedent: package-side manifest
@@ -550,8 +733,7 @@ Lands the install-time ergonomics polish so the README
   directory and points the fixture lock at the in-tree
   path. The `openrpc.json` sidecar lists the plugin's RPC
   methods (live `openrpc.json` shape per m4 c15 / m5a c30 /
-  m5b c20). For `rfl-openai-stub` (test-fixture crate),
-  the same layout lands but the manifest declares
+  m5b c20). For `rfl-openai-stub`, the manifest declares
   `[provides.tool]` empty (the stub doesn't declare tools,
   only provider-shape).
 - **Why.** Scope §B2 — Phase B1's positional resolver
@@ -565,10 +747,12 @@ Lands the install-time ergonomics polish so the README
 - **Depends on.** c05.
 - **Acceptance.** Tests:
   - `rafaello/crates/rafaello-mailcat/tests/bundled_manifest_parses.rs`
-    + sibling tests for each of the five bundled plugin
-    crates — asserts the in-tree `rafaello.toml` parses
-    via `Manifest::parse` and the in-tree `openrpc.json`
-    deserialises via the existing m5b openrpc helper.
+    + sibling tests for each of the **six** bundled plugin
+    crates (the five plugin crates above plus
+    `rafaello-openai-stub` per pi-1 B-4) — asserts the
+    in-tree `rafaello.toml` parses via `Manifest::parse`
+    and the in-tree `openrpc.json` deserialises via the
+    existing m5b openrpc helper.
   - The c05
     `rfl_install_positional_resolves_to_bundled_plugin.rs`
     test from c05 is **amended** in this commit to point
@@ -577,11 +761,11 @@ Lands the install-time ergonomics polish so the README
     copies the in-tree files; the amend pins the
     happy-path resolver to the canonical in-tree shape
     (two-stage ladder).
-- **Files touched.** Ten new manifest + sidecar files
-  (one pair per plugin crate); five new
-  `tests/bundled_manifest_parses.rs` files (one per
-  plugin crate). Total ~80 LoC of manifests +
-  ~10 LoC × 5 tests.
+- **Files touched.** Twelve new manifest + sidecar files
+  (one pair per plugin crate; six pairs);
+  **six** new `tests/bundled_manifest_parses.rs` files
+  (one per plugin crate). Total ~100 LoC of manifests +
+  ~10 LoC × 6 tests.
 - **Size.** small-to-medium (file count is high but each
   is a small declarative manifest; m5b c20 fixture-package
   atomicity precedent justifies the bundled landing).
@@ -612,8 +796,8 @@ Lands the install-time ergonomics polish so the README
   integration test require this pair to compose cleanly.
   Two-stage ladder closer for c05 (the smoke covers the
   end-to-end shape c05 stubbed out).
-- **Depends on.** c05, c06; baselining on c02 / c03 for
-  the init half.
+- **Depends on.** c02, c03, c05, c06 (pi-1 M-2 fix: c07's
+  init-then-install smoke invokes `rfl init` from c02/c03).
 - **Acceptance.** Both tests green; `cargo test
   -p rafaello --test rfl_install_init_then_install_smoke`
   green on Linux.
@@ -664,16 +848,38 @@ default — no `pty:off` fallback at the lockin layer.
 - **Size.** small.
 - **Scope sections.** §C1, owner-judgment item 3.
 
-#### c09 — feat(lockin-sandbox): `resolve_syd_pty_path` + `Command::env` on syd child + hard-error rejection + fake-syd `[[bin]]` registration
+#### c09 — feat(lockin): `SandboxBuilder::syd_pty_path` + child-env injection
+
+(N-4 tighten: body covers the bundle — public builder method,
+private `resolve_syd_pty_path` helper, `Command::env`
+injection on the syd child, hard-error rejection of the
+`pty:off` fallback, `test-fixture` feature + `[[bin]]
+fake-syd` registration, **and** the `fake_syd.rs` source —
+per pi-1 B-1 the binary source moves into c09 so the row is
+row-local green.)
 
 - **What.** Scope §C2 + scope §"Internal split"
-  forced-monolithic row 9. **Lands upstream in
-  `lockin/crates/sandbox/`** (per owner-judgment item 2
-  default). Three coordinated edits in
-  `lockin/crates/sandbox/src/lib.rs` (and Linux-specific
-  surface in `linux.rs`):
-  1. New function (Linux-gated) mirroring the live
-     `resolve_syd_path` at lines 209-232:
+  forced-monolithic row 9 + pi-1 B-1/B-2/N-2 fold. **Lands
+  upstream in `lockin/crates/sandbox/`** (per
+  owner-judgment item 2 default; live package name is
+  **`lockin`**, not `lockin-sandbox` — pi-1 B-1). Five
+  coordinated edits in `lockin/crates/sandbox/`:
+  1. **New public builder method**
+     `SandboxBuilder::syd_pty_path(path: impl Into<PathBuf>)`
+     in `lockin/crates/sandbox/src/lib.rs`, mirroring the
+     live `SandboxBuilder::syd_path` at
+     `lockin/crates/sandbox/src/lib.rs:373-388` (pi-1
+     B-2 — tests drive the builder API; live
+     `SandboxSpec` stays `pub(crate)` at lines 113-130).
+     The method writes through to a new
+     `pub(crate) syd_pty_path: Option<PathBuf>` field on
+     `SandboxSpec`.
+  2. **Private resolver function** (Linux-gated) mirroring
+     the live `resolve_syd_path` at lines 209-232 in shape
+     and `anyhow::Result<PathBuf>` channel (pi-1 B-2 —
+     no typed `SandboxError` enum is introduced; the live
+     surface uses `anyhow` end-to-end and m6 stays on
+     that channel):
      ```rust
      #[cfg(target_os = "linux")]
      fn resolve_syd_pty_path(
@@ -687,7 +893,9 @@ default — no `pty:off` fallback at the lockin layer.
              "CARGO_BIN_EXE_syd-pty"
          ) {
              let path = PathBuf::from(val);
-             anyhow::ensure!(path.is_absolute(), …);
+             anyhow::ensure!(path.is_absolute(),
+                 "CARGO_BIN_EXE_syd-pty must be absolute, got: {}",
+                 path.display());
              return Ok(path);
          }
          if let Some(parent) = resolved_syd.parent() {
@@ -699,27 +907,26 @@ default — no `pty:off` fallback at the lockin layer.
          if let Some(p) = find_in_path("syd-pty") {
              return Ok(p);
          }
-         Err(SandboxError::SydPtyNotFound { … }.into())
+         anyhow::bail!(
+             "Linux sandbox requires syd-pty but could not \
+              find it. Set CARGO_BIN_EXE_syd-pty, place \
+              syd-pty next to syd, add syd-pty to PATH, or \
+              call .syd_pty_path() explicitly."
+         )
      }
      ```
      **No `pty:off` fallback** (owner-judgment item 4
      default — hard requirement #2 demands the right-layer
      fix; a silent fallback would re-introduce the m5a
-     wall).
-  2. `SandboxSpec` extended with `syd_pty_path:
-     Option<PathBuf>` (mirroring the existing `syd_path`).
+     wall). The hard-error path uses `anyhow::bail!` with
+     a documented error-message substring (`"requires
+     syd-pty"`) that c10's negative test matches against.
   3. In the syd child-command construction site (live
      `linux.rs` near `build_command`), call
-     `resolve_syd_pty_path(spec, &resolved_syd)?` and
-     set `CARGO_BIN_EXE_syd-pty=<resolved-path>` on the
-     `Command::env` of the syd child.
-  4. New typed error variant `SandboxError::SydPtyNotFound
-     { searched_dirs: Vec<PathBuf>, last_error: String }`
-     (or equivalent; matches the existing
-     `SandboxError`/`anyhow::Error` shape — m6 keeps the
-     surface tight by emitting through the existing error
-     channel).
-  5. **Fake-syd `[[bin]]` registration** in
+     `resolve_syd_pty_path(&self.spec, &resolved_syd)?`
+     and set `CARGO_BIN_EXE_syd-pty=<resolved-path>` on
+     the `Command::env` of the syd child.
+  4. **Cargo.toml features + `[[bin]]` registration** in
      `lockin/crates/sandbox/Cargo.toml`:
      ```toml
      [features]
@@ -732,13 +939,16 @@ default — no `pty:off` fallback at the lockin layer.
      path = "tests/bin/fake_syd.rs"
      required-features = ["test-fixture"]
      ```
-     The `tests/bin/fake_syd.rs` source itself ships in
-     c10 (the test that consumes it); landing the
-     `[[bin]]` entry here keeps c10's diff a tests-only
-     delta. (Alternatively, the binary source ships in
-     c09 if pi-1 prefers atomicity; round-1 default
-     splits to keep c09's lib-side diff coherent and
-     c10's test-side fan-out separate.)
+  5. **`lockin/crates/sandbox/tests/bin/fake_syd.rs`
+     source** (pi-1 B-1 — moved from c10 to c09 so the
+     `[[bin]]` registration and the source land in the
+     same commit and c09's build acceptance is row-local
+     green). ~30 lines: reads
+     `RFL_FAKE_SYD_RECORD_PATH` from env; writes a JSON
+     blob `{ "argv": [...], "environ": [...] }` to that
+     path; `std::process::exit(0)`. No actual sandboxing
+     — fake-syd is a child-process inspection harness
+     for c10's tests.
 - **Why.** Scope §C2 + hard requirement #2's right-layer
   framing. The env var is set on the **syd child**, not
   on rafaello's own process, so `direnv` / `nix develop`
@@ -751,78 +961,99 @@ default — no `pty:off` fallback at the lockin layer.
   Hard requirement #4 from m5a (no manual
   `CARGO_BIN_EXE_syd-pty=$(which syd-pty)`) holds because
   the lockin layer always sets the env on the child.
-  Forced-monolithic per scope row 9 — function + spec
-  field + call site + negative are coupled at the
-  child-command construction site.
+  Forced-monolithic per scope row 9 — builder method +
+  spec field + resolver + call site + negative + fake-syd
+  binary are coupled at the child-command construction
+  site. Decisions row placeholder **62** (syd-pty
+  discovery belt-and-braces; no `pty:off` fallback at
+  the lockin layer) appended at retro time.
 - **Depends on.** baseline.
 - **Acceptance.**
-  - `cargo build -p lockin-sandbox --all-features` green
-    on Linux; `cargo doc` warning-free.
-  - `cargo build -p lockin-sandbox --features test-fixture
-    --bin fake-syd` produces a binary at
-    `target/debug/fake-syd` (the test-fixture feature gate
-    keeps it out of default release builds).
-  - Compile-only assertion: the `Err` arm of
-    `resolve_syd_pty_path` returns a `SydPtyNotFound`
-    variant (any-error fallthrough is rejected at code
-    review).
+  - `cargo build --manifest-path lockin/Cargo.toml
+    -p lockin --all-features` green on Linux (live
+    package name is `lockin` per
+    `lockin/crates/sandbox/Cargo.toml:2`; pi-1 B-1
+    correction); `cargo doc` warning-free.
+  - `cargo build --manifest-path lockin/Cargo.toml
+    -p lockin --features test-fixture --bin fake-syd`
+    produces a binary at `lockin/target/debug/fake-syd`
+    (the test-fixture feature gate keeps it out of
+    default release builds; the binary source landed
+    in this same commit per pi-1 B-1 fold).
+  - Code-review assertion: the `Err` arm of
+    `resolve_syd_pty_path` exits via `anyhow::bail!` with
+    the documented error-message prefix `"Linux sandbox
+    requires syd-pty"` (any silent-fallback path is
+    rejected at code review).
   - The `Cargo.toml` `[features]` block now contains
     `default = []`, `tokio = ["dep:tokio"]`, and
-    `test-fixture = []`.
+    `test-fixture = []` (live
+    `lockin/crates/sandbox/Cargo.toml:9-11` already has
+    the first two; this row adds `test-fixture`).
 - **Files touched.** `lockin/crates/sandbox/src/lib.rs`
-  (`resolve_syd_pty_path` + `SandboxSpec` field + error
-  variant, ~60 lines); `lockin/crates/sandbox/src/linux.rs`
-  (the `Command::env` call site, ~5 lines);
+  (`SandboxBuilder::syd_pty_path` public method +
+  `SandboxSpec::syd_pty_path` field +
+  `resolve_syd_pty_path` private fn, ~70 lines);
+  `lockin/crates/sandbox/src/linux.rs` (the
+  `Command::env` call site, ~5 lines);
   `lockin/crates/sandbox/Cargo.toml` (`test-fixture`
-  feature + `[[bin]] fake-syd` entry, ~6 lines). Total
-  ~80 lines.
+  feature + `[[bin]] fake-syd` entry, ~6 lines);
+  `lockin/crates/sandbox/tests/bin/fake_syd.rs` (new
+  binary source per pi-1 B-1 fold, ~30 lines). Total
+  ~110 lines.
 - **Size.** small-to-medium (forced-monolithic by scope's
   row 9; matches m4 c07 / m5a c14 cutover precedent).
 - **Scope sections.** §C2, owner-judgment items 2/3/4.
 
-#### c10 — test(lockin-sandbox, rafaello): fake-syd records `CARGO_BIN_EXE_syd-pty` on child + rafaello-side devshell smoke
+#### c10 — test(lockin, rafaello-core): fake-syd records `CARGO_BIN_EXE_syd-pty` on child + rafaello-side devshell smoke
 
 - **What.** Scope §C3 (round-3 M-4 + round-4 M-1 + round-5
-  M-1 closure). Four tests landing the syd-pty discovery
-  acceptance:
-  1. `lockin/crates/sandbox/tests/bin/fake_syd.rs` — the
-     fake-syd binary itself (~30 lines). Reads
-     `RFL_FAKE_SYD_RECORD_PATH` from env; writes a JSON
-     blob to that path with `{ "argv": [...],
-     "environ": [...] }`; then `execvp("true", &[])` (or
-     just `std::process::exit(0)`). Registered as a
-     `[[bin]]` in c09.
-  2. `lockin/crates/sandbox/tests/fake_syd_records_cargo_bin_exe_env_when_set_explicitly.rs`
-     — constructs a `SandboxSpec` with `syd_path =
-     Some(env!("CARGO_BIN_EXE_fake-syd"))` and
-     `syd_pty_path = Some(<fixture-syd-pty-path>)`. Builds
-     the sandbox; spawns; asserts the fake-syd's sentinel
-     file contains
-     `CARGO_BIN_EXE_syd-pty=<fixture-syd-pty-path>`.
-  3. `lockin/crates/sandbox/tests/fake_syd_records_cargo_bin_exe_env_from_sibling.rs`
+  M-1 closure) + pi-1 N-2 fix (this row carries **four
+  tests** — the fake-syd binary itself landed in c09 per
+  pi-1 B-1) + pi-1 M-4 fix (rfl-bus-fixture lives at
+  `rafaello/crates/rafaello-core/src/bin/rfl_bus_fixture.rs`,
+  not under a separate `rafaello-bus-fixture` crate).
+  Four tests + one extension to the live
+  `rfl_bus_fixture` binary:
+  1. `lockin/crates/sandbox/tests/fake_syd_records_cargo_bin_exe_env_when_set_explicitly.rs`
+     — drives the **public** builder:
+     `SandboxBuilder::new()
+        .syd_path(env!("CARGO_BIN_EXE_fake-syd"))
+        .syd_pty_path(<fixture-syd-pty-path>)
+        .build()?` (the public `syd_path` method lives at
+     `lockin/crates/sandbox/src/lib.rs:373`; the new
+     `syd_pty_path` method ships in c09). Spawns; asserts
+     the fake-syd's sentinel JSON file contains
+     `CARGO_BIN_EXE_syd-pty=<fixture-syd-pty-path>` in
+     the `environ` array.
+  2. `lockin/crates/sandbox/tests/fake_syd_records_cargo_bin_exe_env_from_sibling.rs`
      — tempdir with `fake-syd` and a fixture `syd-pty`
-     binary placed side-by-side; `syd_path` points at the
-     tempdir's `fake-syd`, no `syd_pty_path`,
-     `CARGO_BIN_EXE_syd-pty` unset in process env;
-     asserts the sentinel records the tempdir's
-     `syd-pty` (sibling-discovery arm).
-  4. `lockin/crates/sandbox/tests/fake_syd_resolution_fails_hard_when_pty_missing.rs`
+     binary placed side-by-side; builder uses only
+     `.syd_path(<tempdir>/fake-syd)`, no `syd_pty_path`,
+     `CARGO_BIN_EXE_syd-pty` unset in process env via a
+     `temp-env`-style scoped clearing; asserts the
+     sentinel records the tempdir's `syd-pty`
+     (sibling-discovery arm).
+  3. `lockin/crates/sandbox/tests/fake_syd_resolution_fails_hard_when_pty_missing.rs`
      — tempdir with only `fake-syd`, no `syd-pty`,
-     env unset, no `syd_pty_path`. Asserts
-     `Sandbox::build(...)` returns
-     `Err(SandboxError::SydPtyNotFound { … })`; **no**
-     `pty:off` fallback path runs.
-  5. `rafaello/crates/rafaello/tests/rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`
+     env scope-cleared, no `syd_pty_path`. Asserts
+     `SandboxBuilder::new().syd_path(...).build()`
+     returns `Err(e)` where `format!("{e}")` contains
+     the substring `"Linux sandbox requires syd-pty"`
+     (anyhow message channel per pi-1 B-2 — no typed
+     enum); **no** `pty:off` fallback path runs.
+  4. `rafaello/crates/rafaello/tests/rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`
      (Linux + devshell-gated, scope §C3 closer) — spawns
      `rfl chat` inside `nix develop .#rafaello --impure
-     --command` against an extended `rafaello-bus-fixture`
-     plugin running in `--record-env <path>` mode. Asserts
-     the plugin's recorded env contains
-     `CARGO_BIN_EXE_syd-pty=<absolute-path>`. The plugin's
-     `--record-env <path>` mode is added in this commit
-     to `rafaello/crates/rafaello-bus-fixture/src/bin/`
-     (small, test-only — dumps `std::env::vars()` to a
-     file at startup, then resumes normal fixture work).
+     --command` against the live `rfl-bus-fixture` binary
+     running in a new `--record-env <path>` mode (the
+     binary lives at
+     `rafaello/crates/rafaello-core/src/bin/rfl_bus_fixture.rs`
+     per pi-1 M-4 — the live arg-parsing loop already
+     handles `--probe-fd <N>` at lines 326-333, so
+     `--record-env <path>` adds one more arm to the
+     same loop). Asserts the recorded env contains
+     `CARGO_BIN_EXE_syd-pty=<absolute-path>`.
 - **Why.** Scope §C3 + hard requirement #2 verification.
   The fake-syd mechanism gives a mechanical proof of the
   env-on-child invariant without depending on a real PTY's
@@ -837,14 +1068,16 @@ default — no `pty:off` fallback at the lockin layer.
   `nix develop .#rafaello --impure --command` itself via
   `std::process::Command` — needs `--impure` per the m0
   retrospective §4.6 gotcha).
-- **Files touched.** `lockin/crates/sandbox/tests/bin/
-  fake_syd.rs` (new, ~30 lines); three new test files
-  in `lockin/crates/sandbox/tests/`;
-  `rafaello/crates/rafaello-bus-fixture/src/bin/` extended
-  with `--record-env <path>` mode (~15 lines); one new
-  rafaello-side smoke test file. Total ~200 lines + the
-  bus-fixture extension.
-- **Size.** medium (5 test files + 1 fixture binary + 1
+- **Files touched.** Three new test files in
+  `lockin/crates/sandbox/tests/`;
+  `rafaello/crates/rafaello-core/src/bin/rfl_bus_fixture.rs`
+  extended with `--record-env <path>` mode (~15 lines —
+  one new arm in the live arg-parsing loop at
+  `rafaello/crates/rafaello-core/src/bin/rfl_bus_fixture.rs:326-333`);
+  one new rafaello-side smoke test file in
+  `rafaello/crates/rafaello/tests/`. Total ~180 lines
+  (fake-syd binary now lives in c09 per pi-1 B-1).
+- **Size.** small-to-medium (4 test files + 1
   fixture-mode extension; body-justified by syd-pty
   acceptance fan-out).
 - **Scope sections.** §C3, owner-judgment item 4.
@@ -897,8 +1130,12 @@ payload`); round-3 adds `--project-root` for J2 wiring.
   give J2 its `rfl audit --project-root "$PROJECT"`
   invocation. Filter flags split into c12 to keep the
   scaffold diff coherent (different test surfaces per
-  scope §"Internal split" row 11 vs row 12).
-- **Depends on.** baseline.
+  scope §"Internal split" row 11 vs row 12). Decisions
+  row placeholder **63** (`rfl audit` read-CLI semantics)
+  appended at retro time.
+- **Depends on.** c02 (pi-1 M-2: the
+  `rfl_audit_empty_db.rs` test invokes `rfl init` for
+  the fresh-lock baseline).
 - **Acceptance.** Tests in `rafaello/crates/rafaello/tests/`:
   - `rfl_audit_help_lists_project_root.rs` — `rfl audit
     --help` exits 0; usage prints `--project-root <PATH>`.
@@ -968,7 +1205,9 @@ payload`); round-3 adds `--project-root` for J2 wiring.
   shape J1 §6 documents. Scope §"Internal split" splits
   D1 from D2 because the two exercise different test
   surfaces (scaffold + default render in c11;
-  filter-logic + SQL parameter binding in c12).
+  filter-logic + SQL parameter binding in c12). Decisions
+  row placeholder **63** also covers the filter-flag
+  surface (no-join-against-`entries` ratification).
 - **Depends on.** c11.
 - **Acceptance.** Tests in `rafaello/crates/rafaello/tests/`:
   - `rfl_audit_filters_by_kind.rs` (scope §D3) —
@@ -1035,105 +1274,178 @@ payload`); round-3 adds `--project-root` for J2 wiring.
 
 m5b §5 row 1 carryover.
 
-#### c14 — feat(rafaello-openai-stub): `RFL_OPENAI_STUB_SCRIPTED_TURNS` parser + TOML schema + dispatcher
+#### c14 — feat(rafaello-openai-stub): `RFL_OPENAI_STUB_SCRIPTED_TURNS` HTTP-response selector + drop `test-fixture` gate on `[[bin]]`
 
-- **What.** Scope §E1. Extend
+- **What.** Scope §E1 + pi-1 B-3 + pi-1 B-4 fold. Live
   `rafaello/crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`
-  (the live binary — round-2 M-2 confirmed crate path)
-  with a new env var
-  `RFL_OPENAI_STUB_SCRIPTED_TURNS=<path-to-toml>`. TOML
-  schema:
-  ```toml
-  [[turn]]
-  match_user_message = "send <recipient> a hello note"
-  emit = "tool_call"
-  tool_name = "send-mail"
-  tool_args = { to = "<recipient>", subject = "hello", body = "hi" }
+  is an **HTTP Chat Completions server**, not a bus
+  dispatcher: it binds `127.0.0.1:0` (line 53), prints
+  the port (line 54), serves `POST /v1/chat/completions`
+  (verified at lines 137-141), and returns successive
+  `ChatCompletionResponse` JSON values from a `Vec`
+  read via `--response <path>` /
+  `RFL_OPENAI_STUB_RESPONSE` (lines 76-85). Round-1
+  reshape was wrong; round 2 extends the live HTTP
+  surface:
+  1. **New env var**
+     `RFL_OPENAI_STUB_SCRIPTED_TURNS=<path-to-toml>`.
+     When set (mutually exclusive with
+     `RFL_OPENAI_STUB_RESPONSE` /
+     `--response` — both set is a startup error per
+     scope §E1), parses a TOML script:
+     ```toml
+     [[turn]]
+     match_last_user_message = "send <recipient> a hello note"
+     response = """{ "id": "...",
+                     "object": "chat.completion",
+                     "choices": [{ "message":
+                       { "tool_calls": [{ "function":
+                         { "name": "send-mail",
+                           "arguments": "{\"to\":\"<recipient>\"}" }
+                         }] } }] }"""
 
-  [[turn]]
-  match_in_reply_to = "<previous tool_request id>"
-  emit = "assistant_message"
-  content = "Done — mail to <recipient> sent."
-  ```
-  Dispatcher:
-  1. On startup, if the env var is set, load + parse the
-     TOML into a `Vec<Turn>`. **Mutually exclusive** with
-     the existing singular env (m5a/m5b
-     `RFL_OPENAI_STUB_*` shape — match the live env name);
-     if both are set, exit non-zero with `"both scripted
-     and singular envs set; exactly one allowed"`.
-  2. On each incoming `user_message` / `tool_result`
-     event, walk `turns` in order; first turn whose
-     `match_user_message` / `match_in_reply_to`
-     predicate matches the event fires; the turn is
-     **marked consumed** (an `AtomicUsize` cursor or a
-     `Mutex<Vec<bool>>`).
-  3. Exhaustion (event arrives with no remaining turn
-     matches) is a **hard panic** with a deterministic
-     message including the unmatched event payload
-     (mirrors m5b multi-answer-hook semantics per
-     `decisions.md` row 56).
-  4. Emit dispatch: `emit = "tool_call"` shapes a canonical
-     `tool_request` event via the existing m5a wire
-     helpers; `emit = "assistant_message"` shapes a
-     canonical `assistant_message`.
-- **Why.** Scope §E1 + m5b §5 row 1 carryover + load-bearing
-  for the J2 §5 transcript's deterministic walkthrough
-  variant. Round-3 §"Internal split" splits E1 (parser +
-  dispatcher) from E2 (tests) because the dispatcher's
-  surface is well-defined enough to test independently
-  of the parser; round-1 default keeps them together
-  because they share the same file's source and pi
-  hasn't yet reviewed the split. If pi-1 prefers further
-  splitting, round-2 lifts the parser into a sibling
-  `scripted_turns.rs` module.
+     [[turn]]
+     match_last_tool_call_function = "send-mail"
+     response = """{ "id": "...",
+                     "choices": [{ "message":
+                       { "content": "Done — mail sent." } }] }"""
+     ```
+     Each `turn.response` is a literal
+     `ChatCompletionResponse` JSON value.
+  2. **HTTP request inspection.** Inside `handle()`
+     (live at lines 107-167), after parsing the request
+     body into the existing
+     `ChatCompletionRequestShape` struct (live at lines
+     30-39 — already has `messages: Vec<Value>` and
+     `tools: Option<Vec<Value>>`), inspect:
+     - `match_last_user_message`: walk `messages` from
+       the end; first message whose `role == "user"`
+       must have a `content` that matches (substring,
+       case-insensitive).
+     - `match_last_tool_call_function`: walk
+       `messages` from the end; first message whose
+       `role == "tool"` (i.e. a tool_result reply in
+       OpenAI shape) must reference a prior assistant
+       `tool_calls` entry whose `function.name`
+       matches.
+  3. **Turn-walking + exhaustion.** Walk `turns` in
+     order; first match fires; turn is marked consumed
+     via `AtomicUsize` cursor; **exhaustion is a hard
+     400 response with a deterministic error body**
+     containing the unmatched request shape (HTTP-domain
+     analogue of the m5b multi-answer-hook
+     deterministic-panic at `decisions.md` row 56 — the
+     stub cannot panic the process because that would
+     leak past the HTTP request; instead the response
+     is a non-200 with a logged error line on stderr
+     mirroring lines 153-156).
+  4. **Drop `required-features = ["test-fixture"]`** on
+     the `[[bin]]` entry in
+     `rafaello/crates/rafaello-openai-stub/Cargo.toml:14-17`
+     (pi-1 B-4 fold for owner item 13). The
+     `test-fixture` feature itself stays declared at
+     line 8 (other crates may depend on it later) but
+     the stub binary no longer gates on it, so c16's
+     `cargoBuildFlags` produces `$out/bin/rfl-openai-stub`
+     under a normal `nix build`.
+- **Why.** Scope §E1 + pi-1 B-3 (live stub is HTTP, not
+  bus; round-1 misread the live shape) + pi-1 B-4
+  (owner item 13's release-tree inclusion needs the
+  feature gate dropped). Decisions row placeholder
+  **64** (`rfl-openai-stub` scripted turns + HTTP shape
+  + exhaustion semantics + mutual exclusion) appended
+  at retro time.
 - **Depends on.** baseline.
-- **Acceptance.** Build-green only; behavioural tests in c15.
-  - `cargo build -p rafaello-openai-stub` green.
-  - `cargo build -p rafaello-openai-stub --tests` green.
+- **Acceptance.** Build-green + parser-only checks; HTTP
+  behavioural tests in c15.
+  - `cargo build --manifest-path rafaello/Cargo.toml
+    -p rafaello-openai-stub` green (no `--features`
+    flag — owner item 13 fold means the binary builds
+    by default).
+  - `cargo build --manifest-path rafaello/Cargo.toml
+    -p rafaello-openai-stub --tests` green.
+  - Compile-only assertion in
+    `rafaello/crates/rafaello-openai-stub/Cargo.toml`:
+    the `[[bin]] rfl-openai-stub` entry no longer has
+    `required-features`.
 - **Files touched.**
   `rafaello/crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`
-  (parser + dispatcher additions, ~120 lines). Total
-  ~120 lines.
-- **Size.** small-to-medium.
+  (parser + per-request dispatcher, ~140 lines);
+  `rafaello/crates/rafaello-openai-stub/Cargo.toml`
+  (drop `required-features`, 1-line delete);
+  optionally `rafaello/crates/rafaello-openai-stub/src/lib.rs`
+  for the TOML parser if a library split simplifies
+  testing (~40 lines if added). Total ~180 lines.
+- **Size.** medium (body-justified by HTTP
+  request-inspection fan-out + the mutual-exclusion
+  + exhaustion-as-400 dispatcher).
 - **Scope sections.** §E1.
 
-#### c15 — test(rafaello-openai-stub): scripted-turns happy path + exhaustion-panic + mutual-exclusion
+#### c15 — test(rafaello-openai-stub): scripted-turns HTTP integration tests
 
-- **What.** Scope §E2. Unit tests in
+- **What.** Scope §E2 + pi-1 B-3 fold. Integration tests
+  in
   `rafaello/crates/rafaello-openai-stub/tests/rfl_openai_stub_scripted_turns.rs`
-  (single test file with multiple `#[test]` functions
-  per scope §E2 list):
-  - `two_turn_happy_path_send_mail_flow` — write the
-    scope §E1 TOML to a tempdir; invoke the stub binary
-    with `RFL_OPENAI_STUB_SCRIPTED_TURNS=<path>`; feed
-    a fixture `user_message` matching the first
-    `match_user_message`; assert the stub emits a
-    `tool_request` with `tool_name = "send-mail"` and
-    `args.to = "<recipient>"`; feed a fixture
-    `tool_result` whose `in_reply_to` matches the
-    first turn's emitted id; assert the stub emits an
-    `assistant_message` with `content = "Done — …"`.
-  - `exhaustion_panics_deterministically` — script a
-    single turn; consume it; send a second matching
-    event; assert the stub process exits with a panic
-    (non-zero exit, stderr contains the deterministic
-    panic message).
-  - `match_in_reply_to_plumbs_correlation_id` — assert
-    the second turn's `match_in_reply_to` matches the
-    canonical id of the first turn's emitted
-    `tool_request` (the dispatcher must use the same
-    id on emit and on subsequent match).
-  - `mutual_exclusion_with_singular_env` — set both
-    `RFL_OPENAI_STUB_SCRIPTED_TURNS` and the singular
-    env; assert the stub exits non-zero with the
-    mutual-exclusion error.
+  drive the live HTTP server via direct TCP / `reqwest`
+  calls — no bus events. Each test:
+  1. Writes a scope-§E1-shaped TOML to a tempdir.
+  2. Spawns the stub binary
+     (`env!("CARGO_BIN_EXE_rfl-openai-stub")`) with
+     `RFL_OPENAI_STUB_SCRIPTED_TURNS=<path>`,
+     `RFL_FIXTURE_MAX_LIFETIME` overridden if needed
+     (live stub has a 5s self-timeout at line 16); reads
+     the port from the child's stdout (the live stub
+     prints it at line 54).
+  3. Issues `POST http://127.0.0.1:<port>/v1/chat/completions`
+     with a constructed Chat Completions request body
+     whose `messages[-1]` matches the first turn's
+     predicate.
+  4. Asserts the HTTP response body parses as JSON and
+     equals the first turn's `response`.
+  Cases:
+  - `two_turn_happy_path_send_mail_flow` — POST with
+    `messages = [{role: "user", content: "send alice@example.com
+    a hello note"}]`; assert response carries
+    `choices[0].message.tool_calls[0].function.name ==
+    "send-mail"`. Second POST with the `tool` role
+    reply to that `send-mail` call; assert response
+    `choices[0].message.content` contains `"Done"`.
+  - `exhaustion_returns_400_with_deterministic_body` —
+    script a single turn; consume it; send a second
+    matching request; assert the second response is
+    HTTP 400 with a body line containing
+    `"scripted turns exhausted"` plus the unmatched
+    request shape.
+  - `mutual_exclusion_with_response_env` — spawn the
+    stub with both `RFL_OPENAI_STUB_SCRIPTED_TURNS` and
+    `RFL_OPENAI_STUB_RESPONSE` set; assert the child
+    exits non-zero before binding (no port printed on
+    stdout); stderr contains
+    `"both scripted and response envs set"`.
+  - `unmatched_predicate_returns_400` — send a request
+    whose `messages[-1]` does not match the first turn's
+    predicate; assert HTTP 400 (the turn is **not**
+    consumed because the predicate didn't match; a
+    follow-up matching POST then succeeds against turn 1).
 - **Why.** Scope §E2. Closes Phase E acceptance and
-  pre-validates the J2 stub-mode invocation.
+  pre-validates the J2 stub-mode invocation. Tests
+  drive the live HTTP surface — no synthetic bus
+  dispatcher.
 - **Depends on.** c14.
 - **Acceptance.** All four `#[test]` cases green.
-- **Files touched.** One new test file. Total ~180 lines.
-- **Size.** small-to-medium.
+- **Files touched.** One new test file (~220 lines —
+  HTTP-driving boilerplate, fixture TOML generation,
+  child-process management). One small dev-dep
+  addition to
+  `rafaello/crates/rafaello-openai-stub/Cargo.toml`
+  (`reqwest = { workspace = true, features =
+  ["json", "rustls-tls"] }` or equivalent — if
+  `reqwest` is already a workspace dep elsewhere, just
+  ref it; otherwise use direct `tokio::net::TcpStream`
+  to avoid adding a new workspace dep). Total ~230
+  lines.
+- **Size.** medium (body-justified by HTTP-integration
+  fan-out + four scenarios).
 - **Scope sections.** §E2.
 
 ### Phase F — `nix build .#rafaello` package repair (3 commits)
@@ -1174,15 +1486,27 @@ m5b §5 row 1 carryover.
   (Nix evaluation is whole-flake; the package list is
   one expression). Splitting into "rafaello + rafaello-tui"
   then "the rest" buys nothing — the build either
-  expands fully or stays single-package.
-- **Depends on.** baseline.
+  expands fully or stays single-package. Decisions row
+  placeholder **65** (`nix build .#rafaello` ships the
+  release binary set excluding fixtures + bundled
+  plugin trees with real binaries) appended at retro
+  time.
+- **Depends on.** c14 (pi-1 B-4 fold: c14 drops
+  `required-features = ["test-fixture"]` on the stub
+  binary, so the `-p rafaello-openai-stub` flag in this
+  row actually produces `$out/bin/rfl-openai-stub`).
 - **Acceptance.**
   - `nix build .#rafaello` succeeds on Linux + macOS
     (manual run inside the agent worktree; CI gate in
     c18).
-  - `nix-store --query --references
-    /nix/store/<rafaello-out>/bin` lists all eight
-    binaries flat in `$out/bin/` (pre-c17 layout).
+  - `find ./result/bin -maxdepth 1 -type f -printf '%f\n'`
+    (pi-1 N-3 fix — `nix-store --query --references`
+    reports store-path references, not `$out/bin/`
+    contents) lists all eight installed binaries flat in
+    `$out/bin/` (pre-c17 layout). The eight names:
+    `rfl`, `rfl-tui`, `rfl-openai`, `rfl-openai-stub`,
+    `rfl-readfile`, `rfl-mailcat`, `rfl-mockprovider`,
+    `rafaello-fetch`.
   - No tests in this commit — F1 is a Nix-evaluation
     delta; integration validation lands in c17 / c18.
 - **Files touched.** `rafaello/nix/package.nix` (~10 line
@@ -1190,7 +1514,13 @@ m5b §5 row 1 carryover.
 - **Size.** small.
 - **Scope sections.** §F1, owner-judgment items 9 + 13.
 
-#### c17 — feat(rafaello-nix): bundled plugin trees in `postInstall` + plugin binaries moved into `share/rafaello/plugins/<plugin>/bin/`
+#### c17 — feat(rafaello-nix): postInstall reshape to PP1 plugin-tree layout
+
+(N-4 tighten: body covers the `postInstall` work — copying
+bundled plugin manifest trees to
+`$out/share/rafaello/plugins/<plugin>/`, moving each plugin
+binary into `<plugin>/bin/`, leaving only `rfl` + `rfl-tui`
+in `$out/bin/`.)
 
 - **What.** Scope §F2 + PP1 invariant (round-4 B-1
   closure). Extend `rafaello/nix/package.nix`'s
@@ -1226,10 +1556,13 @@ m5b §5 row 1 carryover.
   `compile::resolve_entry` canonicalises the entry path
   and rejects anything escaping `package_dir`. A symlink
   into `$out/bin/` would canonicalise out, so F2 stores
-  the real binary inside the plugin dir.
+  the real binary inside the plugin dir. Decisions row
+  placeholder **65** also covers the
+  `share/rafaello/plugins/<plugin>/` PP1 source layout
+  with real plugin binaries.
 - **Depends on.** c16, c06 (the in-tree manifests).
 - **Acceptance.** Tests:
-  - `rafaello/tests/nix_build_layout.rs` (gated
+  - `rafaello/crates/rafaello/tests/nix_build_layout.rs` (gated
     `#[cfg(target_os = "linux")]`, runs the
     `nix build .#rafaello` invocation) — asserts:
     - `$out/bin/` contains exactly `rfl` and `rfl-tui`.
@@ -1239,10 +1572,11 @@ m5b §5 row 1 carryover.
     - `$out/share/rafaello/plugins/<plugin>/bin/<plugin-bin>`
       exists and `fs::metadata(...)
       .file_type().is_file()` is true.
-    - `compile::resolve_entry(
+    - `rafaello_core::compile::resolve_entry(
       $out/share/rafaello/plugins/<plugin>/,
-      &manifest.entry)` returns `Ok(<canonical>)` inside
-      the plugin dir.
+      &manifest.entry)` (public per pi-1 M-1; live body at
+      `rafaello/crates/rafaello-core/src/compile.rs:440-465`)
+      returns `Ok(<canonical>)` inside the plugin dir.
   - Manual verification step recorded in the per-commit
     prompt: `nix build .#rafaello && ls -la
     ./result/bin/ ./result/share/rafaello/plugins/`.
@@ -1305,7 +1639,7 @@ Owner-judgment item 5 default locked at G.β (separate tap
 fetching Nix-built tarballs). G3 install-smoke folded into
 J1 §G per scope row 21.
 
-#### c19 — feat(homebrew): `Formula/rafaello.rb` formula + tap-pointer in `homebrew/`
+#### c19 — feat(homebrew): `homebrew/rafaello.rb` formula + tap-pointer fixture
 
 - **What.** Scope §G1 + round-5 N-2 layout fold. New file
   `homebrew/rafaello.rb` (committed in-repo as a
@@ -1357,7 +1691,9 @@ J1 §G per scope row 21.
 - **Why.** Scope §G1 — actionable G.β default per
   owner-judgment item 5. The in-repo fixture-copy gives
   m6 an artifact to test + version; the tap-repo is an
-  owner-action follow-up captured in J1 §G.
+  owner-action follow-up captured in J1 §G. Decisions row
+  placeholder **66** (Homebrew distribution model
+  ratification — G.β default) appended at retro time.
 - **Depends on.** c16, c17 (the tarball-source layout
   the formula installs).
 - **Acceptance.**
@@ -1415,7 +1751,8 @@ J1 §G per scope row 21.
   automation" deliverable. Three arches matching
   `flake.nix:24-28` (round-3 M-3 narrowing).
   `x86_64-darwin` deferred to v2 per scope §"Out of
-  scope" item 15.
+  scope" item 15. Decisions row placeholder **66** also
+  covers the release-automation half of the G.β model.
 - **Depends on.** c16, c17, c19.
 - **Acceptance.**
   - `.github/workflows/rafaello-release.yml` exists and
@@ -1521,70 +1858,183 @@ J1 §G per scope row 21.
 - **Size.** small.
 - **Scope sections.** §H2.
 
-### Phase I — Coverage / regression-anchor sweep (3 commits)
+### Phase I — Coverage / regression-anchor sweep (4 commits — c24 split per pi-1 B-6)
 
-m4/m5a/m5b §5 carryovers.
+m4/m5a/m5b §5 carryovers. Pi-1 B-6 promoted c24 from
+test-only to implementation + test; the implementation
+delta + the integration test split into c24a + c24b for
+size hygiene.
 
-#### c23 — test(rafaello-core): `core_tools_list_registered_before_provider_spawn.rs` regression anchor
+#### c23 — feat+test(rafaello): `StartupEvent::ToolSchemaCatalogBuilt` instrumentation + regression anchor
 
 - **What.** Scope §I1 + m5a §5 row 14 / m5b §5 row 12
-  carryover (owner-judgment item 11 default: in scope).
-  New integration test at
-  `rafaello/crates/rafaello-core/tests/core_tools_list_registered_before_provider_spawn.rs`.
-  Asserts the m4-ratified invariant that
-  `core.tools_list` RPC is registered on the broker
-  **before** any provider plugin spawns. Uses the
-  existing m5b broker test-ordering hook (or a sibling
-  shape if the m5b hook is broker-private) to record
-  the sequence of broker calls during a fixture
-  `run_chat`; assert
-  `Broker::register_rpc("core.tools_list", _)` precedes
-  `PluginSupervisor::spawn(<provider-plugin>)`.
+  carryover (owner-judgment item 11 default: in scope) +
+  pi-1 B-5 fold (promote from test-only to
+  test+instrumentation; live broker has no
+  `register_rpc("core.tools_list", _)` symbol —
+  `core.tools_list` is served by per-connection
+  `CoreService` at
+  `rafaello/crates/rafaello-core/src/supervisor/core_service.rs:25`,
+  and the load-bearing ordering invariant is
+  `ToolSchemaCatalog::build` precedes the first
+  `PluginSupervisor::spawn`). Two coordinated edits:
+  1. **Instrumentation.** Extend the live
+     `StartupEvent` enum at
+     `rafaello/crates/rafaello/src/chat/test_ordering_hook.rs:17-20`
+     (live variants `SetAuditWriter`,
+     `PluginSupervisorSpawn`) with
+     `ToolSchemaCatalogBuilt`; extend the `as_str()`
+     match arm at lines 39-44 with the new
+     `"tool_schema_catalog_built"` string. Add one
+     `chat::test_ordering_hook::record(
+     chat::test_ordering_hook::StartupEvent::ToolSchemaCatalogBuilt)`
+     call at the live `ToolSchemaCatalog::build(...)`
+     site in
+     `rafaello/crates/rafaello/src/lib.rs:348` (verified
+     live — the catalog construction is immediately
+     before the existing `PluginSupervisorSpawn` record
+     at line ~420). The hook is process-global +
+     append-only; production cost is one enum value.
+  2. **Test.** New integration test at
+     `rafaello/crates/rafaello-core/tests/core_tools_list_registered_before_provider_spawn.rs`
+     (path retained from round 1; this is the file
+     name owner-judgment item 11 references). Spawns
+     `rfl chat` against a minimal m5a fixture lock
+     using the m5b startup hook + the live `drain()`
+     helper at line 49 of the ordering-hook module;
+     asserts the recorded sequence has
+     `ToolSchemaCatalogBuilt` strictly **before** the
+     first `PluginSupervisorSpawn`. Failure mode
+     reproduces by temporarily swapping the
+     `record` call to land after the spawn loop in a
+     local diff.
 - **Why.** Scope §I1 + `decisions.md` row 49 — the
   invariant is load-bearing for the m4/m5a tool-catalog
-  design. Defence-in-depth regression anchor; closes
-  the m5a/m5b carryover unconditionally per
-  owner-judgment item 11.
+  design. Round-1's "Broker::register_rpc" assertion was
+  against a nonexistent live symbol; pi-1 B-5 redirects
+  to the live ordering anchor (`ToolSchemaCatalog::build`
+  precedes provider spawn). Decisions row 49 cross-ref
+  retained at retro time.
 - **Depends on.** baseline (m5b retro merged).
-- **Acceptance.** Test green; failure mode (regressing
-  the order) reproduces deterministically (manually
-  verified by temporarily swapping the
-  `register_rpc` / `spawn` ordering in a local diff
-  and re-running the test).
-- **Files touched.** One new test file. Total ~80
-  lines.
+- **Acceptance.** Test green; the instrumented
+  `record(ToolSchemaCatalogBuilt)` call is present in
+  `rafaello/crates/rafaello/src/lib.rs` adjacent to the
+  `ToolSchemaCatalog::build(...)` call site (verifiable
+  by `grep`).
+- **Files touched.**
+  `rafaello/crates/rafaello/src/chat/test_ordering_hook.rs`
+  (enum variant + `as_str` arm, ~4 lines);
+  `rafaello/crates/rafaello/src/lib.rs` (one
+  `record(...)` call adjacent to line 348, ~2 lines);
+  one new test file. Total ~90 lines.
 - **Size.** small.
 - **Scope sections.** §I1, owner-judgment item 11.
 
-#### c24 — feat(rafaello): `load.triggers.kind = "tool"` lazy-load fixture + integration test
+#### c24a — feat(rafaello, rafaello-core): gate `run_chat` tool-plugin spawn on `bindings.load.triggers` + `PluginSupervisor::spawn_on_demand` plumbing
 
-- **What.** Scope §I2 + m4 §5.8 / m5a §5 row 8
-  carryover (owner-judgment item 6 default: in scope).
-  New fixture lock under
-  `rafaello/fixtures/m6-lazy-load-tool/rafaello.lock`
-  that wires a plugin with
+- **What.** Scope §I2 + pi-1 B-6 fold (promote
+  test-only to implementation + test; pi-1 says split
+  is reasonable if >100 LoC across multiple files —
+  pi-1 affirmed the split). Live `run_chat`
+  (`rafaello/crates/rafaello/src/lib.rs:455-465`)
+  eager-spawns every non-provider plugin whose
+  `entry.bindings.tools` is non-empty, regardless of
+  `bindings.load.triggers`. c24a lands the
+  implementation half:
+  1. Read the entry's `bindings.load.triggers` field
+     during the spawn loop. If any trigger has
+     `kind = "tool"`, **skip the eager spawn** for
+     this entry; record the (canonical_id, trigger
+     tool-name) pair in a new lazy-spawn registry held
+     by the supervisor.
+  2. Add
+     `PluginSupervisor::spawn_on_demand(canonical_id)
+     -> Result<&SpawnHandle, ToolSpawnError>` that
+     spawns the plugin if not yet spawned and returns
+     the (possibly cached) handle.
+  3. Plumb the registry into the dispatch path so the
+     first `tool_request` whose `tool_name` matches a
+     pending lazy-trigger fires `spawn_on_demand` on
+     the registry's entry, blocking until the spawn
+     completes; subsequent tool calls reuse the
+     handle.
+  4. **No test in this commit** (per scope §"Internal
+     split" two-stage ladder: c24a lands implementation
+     under unit-test coverage of the registry; c24b
+     lands the end-to-end integration test). Unit
+     tests in
+     `rafaello/crates/rafaello/src/supervisor.rs` (or
+     wherever the registry lives) cover:
+     `spawn_on_demand_spawns_once`,
+     `spawn_on_demand_returns_cached_after_first_spawn`,
+     `spawn_on_demand_unknown_canonical_errors`.
+- **Why.** Scope §I2 + owner-judgment item 6 ratifies
+  lazy-load coverage in scope. Live `run_chat` does
+  not honour `load.triggers` (verified at
+  `rafaello/crates/rafaello/src/lib.rs:455-465`);
+  c24a closes the production-behaviour gap. Decisions
+  row placeholder **60** + a cross-reference to
+  `decisions.md` row 42 (manifest `load.triggers`
+  field) captures the lazy-load ratification at retro
+  time.
+- **Depends on.** baseline.
+- **Acceptance.**
+  - `cargo build -p rafaello` + `cargo build
+    -p rafaello-core` green.
+  - Three unit tests in the supervisor module green.
+  - `rg "bindings\.load\.triggers"
+    rafaello/crates/rafaello/src/` returns at least one
+    site (the new gate).
+- **Files touched.**
+  `rafaello/crates/rafaello/src/lib.rs` (spawn-loop
+  gate, ~20 lines);
+  `rafaello/crates/rafaello/src/supervisor.rs` (or
+  `rafaello/crates/rafaello-core/src/supervisor.rs` —
+  whichever owns `PluginSupervisor`; live live shape
+  verified at scope-prompt-time) — new
+  `spawn_on_demand` method + lazy-spawn registry,
+  ~80 lines; one new test file or test module
+  (~60 lines). Total ~160 lines.
+- **Size.** medium (body-justified per pi-1 B-6:
+  the spawn-loop gate + supervisor plumbing + lazy
+  registry compose as one unsplittable cutover at the
+  supervisor-API layer; m5b c14 forced-monolithic
+  cutover precedent).
+- **Scope sections.** §I2, owner-judgment item 6.
+
+#### c24b — test(rafaello): lazy-load fixture + spawn-on-first-call integration test
+
+- **What.** Scope §I2 closer. New fixture lock under
+  `rafaello/crates/rafaello/tests/fixtures/m6-lazy-load-tool/rafaello.lock`
+  (pi-1 M-4 path) that wires a plugin with
   `bindings.load.triggers = [{ kind = "tool",
-  tool = "<name>" }]` (the live manifest field per
-  `streams/c-manifest/rfc-manifest.md` §"load triggers"
-  / `decisions.md` row 42 lazy-load). New integration
+  tool = "<name>" }]` (live manifest field per
+  `streams/c-manifest/rfc-manifest.md` §"load
+  triggers" / `decisions.md` row 42). New integration
   test at
   `rafaello/crates/rafaello/tests/lazy_load_tool_trigger_spawns_on_first_call.rs`
   — spawns `rfl chat` against the fixture lock;
   asserts the trigger-bound plugin is **not spawned**
   at session startup (verified via a process-list
-  check or a supervisor test seam); the
+  check or via the c24a registry's introspection
+  helper exposed under `#[cfg(any(test,
+  feature = "test-fixture"))]`); the
   test-confirm-answers hook (`decisions.md` row 56)
-  drives a tool call to the trigger tool; asserts the
-  plugin **then** spawns and serves the call.
-- **Why.** Scope §I2 — the `load.triggers.kind =
-  "tool"` field is plumbed but never exercised
-  end-to-end. Closes the m4-since carryover.
-- **Depends on.** baseline.
-- **Acceptance.** Test green.
+  drives a tool call to the trigger tool; asserts
+  the plugin **then** spawns and serves the call.
+- **Why.** Scope §I2 closer. c24a lands the runtime
+  behaviour; c24b proves end-to-end through `rfl chat`
+  that the lazy gate fires on first tool call. m0 §4.3
+  two-stage ladder precedent.
+- **Depends on.** c24a; baseline m5a hook (`decisions.md`
+  row 56).
+- **Acceptance.** Test green; the fixture lock + plugin
+  manifest exist; the c24a `spawn_on_demand` path is
+  exercised end-to-end.
 - **Files touched.** One new fixture lock + sidecar
-  plugin manifest + one new test file. Total ~180
-  lines (fixture-package atomicity per m5b c20
-  precedent).
+  plugin manifest tree + one new integration test
+  file. Total ~140 lines (fixture-package atomicity
+  per m5b c20 precedent).
 - **Size.** small-to-medium (body-justified by
   fixture-package atomicity).
 - **Scope sections.** §I2, owner-judgment item 6.
@@ -1593,13 +2043,24 @@ m4/m5a/m5b §5 carryovers.
 
 - **What.** Scope §I3 + owner-judgment item 8 default
   (ratify-by-keeping). m4 §5.5 / m5a §5 row 6 / m5b §5
-  row 13 carryover. Identify every module-level
-  `#![allow(clippy::result_large_err)]` site in the
-  workspace (initial inventory:
+  row 13 carryover. Pi-1 M-5 fold: the live non-test
+  module-level allows are **five** sites (verified by
+  `rg "#!\[allow\(clippy::result_large_err\)\]"
+  rafaello/crates/rafaello-core/src/`):
+  `rafaello/crates/rafaello-core/src/bus.rs:1`,
+  `rafaello/crates/rafaello-core/src/session/mod.rs:1`,
+  `rafaello/crates/rafaello-core/src/supervisor.rs:1`,
   `rafaello/crates/rafaello-core/src/reemit/mod.rs:1`,
-  `rafaello/crates/rafaello-core/src/agent/mod.rs:1`,
-  any m5b additions); **keep** the allows and add a
-  single-line comment immediately adjacent:
+  `rafaello/crates/rafaello-core/src/agent/mod.rs:1`.
+  The test-file allow at
+  `rafaello/crates/rafaello-core/tests/broker_plugin_tool_result_race_two_concurrent_publishes.rs:1`
+  is **explicitly excluded** from the ratification
+  surface (test-file allows are not part of the
+  production error-shape choice; m5a/m5b retro
+  precedent — m5a retro §5 row 6 records the test
+  allow without action). **Keep** the five production
+  allows and add a single-line comment immediately
+  adjacent:
   ```rust
   // Module-level result_large_err allow ratified by
   // m6 per decisions.md row 67 — boxing the error
@@ -1615,16 +2076,20 @@ m4/m5a/m5b §5 carryovers.
   negligible win (m4 retro §5.5 estimate).
 - **Depends on.** baseline.
 - **Acceptance.**
-  - `rg "allow\(clippy::result_large_err\)"` enumerates
-    the same site set both before and after this
-    commit (no allows added or removed).
-  - Each allowed site has the new comment-pin line
-    immediately above the `#![allow]` attribute.
+  - `rg "#!\[allow\(clippy::result_large_err\)\]"
+    rafaello/crates/rafaello-core/src/` enumerates the
+    same five production sites (`bus.rs`,
+    `session/mod.rs`, `supervisor.rs`, `reemit/mod.rs`,
+    `agent/mod.rs`) both before and after this commit
+    (no allows added or removed).
+  - Each of the five production sites has the new
+    comment-pin line immediately above the
+    `#![allow]` attribute.
   - `cargo clippy --workspace --all-features
     -- -D warnings` green.
-- **Files touched.** 2–4 source files (per the
-  inventory). Total ~5 lines per file × ≤4 = ~20
-  lines net.
+- **Files touched.** Five source files in
+  `rafaello/crates/rafaello-core/src/`. Total
+  ~3 lines per file × 5 = ~15 lines net.
 - **Size.** small.
 - **Scope sections.** §I3, owner-judgment item 8.
 
@@ -1743,7 +2208,10 @@ m4/m5a/m5b §5 carryovers.
   is the regression-grade companion that runs in CI.
   Both share the same `rfl-mailcat` / `send-mail`
   demo tool (round-2 B-3 lock-in).
-- **Depends on.** c01–c25 (every flow J2 exercises).
+- **Depends on.** c01–c26 (pi-1 M-2: c26 lands the
+  `manual-validation.md` §5 placeholder that c27 fills;
+  every flow J2 exercises across c01–c25 + the
+  skeleton from c26).
 - **Acceptance.**
   - Six transcript files exist under
     `rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`.
@@ -1857,7 +2325,7 @@ dropped.
 | `rfl init` materialises `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/rafaello.toml` (PP1) | c02 |
 | `bin/rfl-openai` inside the PP1 dir is a regular file (not symlink) | c02 |
 | Lock's `digest`/`manifest_digest` match the copied tree | c02 |
-| `compile::resolve_entry(plugin_dir, "bin/rfl-openai")` returns Ok inside `plugin_dir` (no `EntryEscape`) | c02 |
+| `rafaello_core::compile::resolve_entry(plugin_dir, "bin/rfl-openai")` (public per pi-1 M-1) returns Ok inside `plugin_dir` (no `EntryEscape`) | c02 |
 | `rfl init --force` rewrites lock + package dir byte-for-byte from defaults | c02 |
 | `rfl init` declining the prompt writes an empty lock + no PP1 copy | c03 |
 | Lock TOML round-trips byte-stably (`from_toml → to_toml → from_toml`) | c04 |
@@ -1873,7 +2341,7 @@ dropped.
 | `rfl install nonsense` exits non-zero with `BundledPluginNotFound` | c05 |
 | `rfl install` with neither/both args is a clap error | c05 |
 | `rfl install rfl-mailcat --project-root <tmpdir>` writes lock + PP1 under `<tmpdir>` | c05 |
-| `compile::resolve_entry` containment passes for installed plugin | c05 |
+| `rafaello_core::compile::resolve_entry` containment passes for installed plugin | c05 |
 | Each bundled plugin crate (`rfl-mailcat`, `rfl-readfile`, `rfl-openai`, `rfl-mockprovider`, `rafaello-fetch`) ships `rafaello.toml` + `openrpc.json` | c06 |
 | `rfl install` writes a valid lock entry for each of the four non-openai bundled plugins | c07 |
 | `rfl init → rfl install` composes without conflict (PP1 dirs coexist) | c07 |
@@ -1925,7 +2393,7 @@ dropped.
 |---|---|
 | `cargoBuildFlags` builds the 8-package release set (bus-fixture excluded) | c16 |
 | `postInstall` reshapes `$out` to PP1 layout: `bin/` carries `rfl` + `rfl-tui`; plugins under `share/rafaello/plugins/<plugin>/bin/<plugin-bin>` as real files | c17 |
-| `compile::resolve_entry` containment holds against the F-built plugin dirs | c17 |
+| `rafaello_core::compile::resolve_entry` containment holds against the F-built plugin dirs | c17 |
 | CI matrix runs `nix build .#rafaello` on `ubuntu-latest` + `macos-latest`; both green | c18 |
 | macOS CI green is the ratification gate | c18 |
 
@@ -1933,7 +2401,7 @@ dropped.
 
 | Scope acceptance | Commit |
 |---|---|
-| `Formula/rafaello.rb` installs `rfl` + `rfl-tui` under `<prefix>/bin/`; bundled plugin trees under `<prefix>/share/rafaello/plugins/<plugin>/bin/<plugin-bin>` (round-5 N-2) | c19 |
+| `homebrew/rafaello.rb` installs `rfl` + `rfl-tui` under `<prefix>/bin/`; bundled plugin trees under `<prefix>/share/rafaello/plugins/<plugin>/bin/<plugin-bin>` (round-5 N-2) | c19 |
 | Three arches: `aarch64-darwin`, `aarch64-linux`, `x86_64-linux` | c19 + c20 |
 | Release-tag automation builds + uploads tarballs per arch | c20 |
 | Formula-SHA update step idempotent | c20 |
@@ -1953,9 +2421,10 @@ dropped.
 
 | Scope acceptance | Commit |
 |---|---|
-| `core_tools_list_registered_before_provider_spawn` test green | c23 |
-| `load.triggers.kind = "tool"` lazy-load fixture + spawn-on-first-call test | c24 |
-| `result_large_err` allows retained with comment-pin to row 67 | c25 |
+| `core_tools_list_registered_before_provider_spawn` test green + `ToolSchemaCatalogBuilt` instrumentation | c23 |
+| `load.triggers.kind = "tool"` lazy-load runtime gate + `spawn_on_demand` plumbing | c24a |
+| `load.triggers.kind = "tool"` spawn-on-first-call integration test | c24b |
+| `result_large_err` allows retained with comment-pin to row 67 (5 production sites) | c25 |
 
 ### Phase J — Manual validation
 
@@ -1990,16 +2459,18 @@ dropped.
   c11/c12 per-commit assertions). §E1 → c14. §E2 →
   c15. §F1 → c16. §F2 → c17. §F3 → c18. §G1 → c19.
   §G2 → c20. §G3 → c26 (folded per scope row 21). §H1
-  → c21. §H2 → c22. §I1 → c23. §I2 → c24. §I3 → c25.
-  §J1 → c26. §J2 → c27. §J3 → c28 (reserved).
+  → c21. §H2 → c22. §I1 → c23. §I2 → c24a + c24b
+  (pi-1 B-6 split). §I3 → c25. §J1 → c26. §J2 → c27.
+  §J3 → c28 (reserved).
 - **PP1 invariant (load-bearing across A2 / B1 / F2).**
   c02 lands the PP1 copy on the init side; c05 lands it
   on the install side (both fixture + positional arms);
   c17 lands the matching `postInstall` source layout
   with real plugin binaries inside the plugin dir.
   Every PP1-consuming row asserts
-  `compile::resolve_entry` returns Ok inside
-  `package_dir` (no `EntryEscape`).
+  `rafaello_core::compile::resolve_entry` (public per
+  pi-1 M-1) returns Ok inside `package_dir` (no
+  `EntryEscape`).
 - **Forced-monolithic rows justified inline.** c05
   (B1 `InstallArgs` cutover — scope §"Internal split"
   forced-monolithic row 5), c09 (C2 lockin sandbox —
@@ -2076,86 +2547,150 @@ dropped.
 
 ## Sizing summary
 
-Round-1 sizing (CLAUDE.md `<100 lines / ≤5 files`
-guideline applied, with body-justified larger rows
-called out):
+Round-2 sizing (recomputed mechanically from the
+final row list after pi-1 M-5 fold; CLAUDE.md
+`<100 lines / ≤5 files` guideline applied, with
+body-justified larger rows called out):
 
-- **small** (≲50 LoC): 6 commits — c08, c13, c18,
-  c22, c23, c25.
+Row count after pi-1 B-6 fold: **c01–c28** with
+c24 split into **c24a + c24b** = **28 implementation
+commits + 1 retro reservation (c29 — round-1's c28
+renamed; see below for renaming note) = 29 slots.**
+
+Renaming note: round 1 had retro at `c28`; round 2's
+B-6 split inserts `c24a` + `c24b` in Phase I, so the
+retrospective slot remains structurally at "after every
+implementation commit" but is re-counted as **29th
+slot** (c01 … c24a, c24b, c25 … c28, plus c29 retro).
+For continuity with round 1's body and the per-commit
+agent prompt convention, the retro row keeps the body
+heading `c28 — docs(rafaello-m6): retrospective` and
+the numbering convention used downstream is:
+**c24a / c24b for the I-phase split, retro keeps the
+"reserved" subject line independent of strict
+numbering.** This is hash-stable (no rebasing of
+c25–c27 needed) and matches scope §"Internal split"'s
+"+1 if implementation surfaces a clean fold"
+guidance.
+
+Buckets (28 implementation rows):
+
+- **small** (≲50 LoC, ≤2 files): 7 commits — c08
+  (devenv export), c13 (audit consolidated tests),
+  c18 (CI matrix), c22 (CONTRIBUTING rewrite), c23
+  (instrumentation + test), c24b (lazy-load fixture
+  + test), c25 (5-file allow comment-pin).
 - **small-to-medium** (50–150 LoC): 8 commits — c01,
-  c03, c06, c11 (NB borderline), c14, c15, c20, c24.
+  c03, c04, c11, c15, c19, c20, c24b is in the
+  smaller bucket above so c10 (4 tests +
+  bus-fixture extension) sits here, alongside
+  c06 (12 manifest + sidecar files + 6 tests; small
+  per-file but file count justifies medium).
 - **medium** (150–300 LoC, row-local body-justified):
-  10 commits — c02, c05, c07, c09, c10, c12, c17, c19,
-  c21, c26. Each carries an inline body justification
-  pointing at the relevant scope §"Internal split"
-  forced-monolithic clause or fixture-package-
-  atomicity precedent.
+  9 commits — c02 (PP1 + lock writer + public
+  `resolve_entry` lift), c07 (init-then-install
+  smoke), c09 (lockin builder + child-env +
+  fake-syd binary), c12 (audit filter flags), c14
+  (HTTP scripted-turns dispatcher), c17 (postInstall
+  reshape), c21 (README rewrite), c24a (lazy-load
+  gate + supervisor plumbing), c26
+  (manual-validation §1–§7 + §G skeleton).
 - **medium-to-large** (300–500 LoC, body-justified):
-  2 commits — c05 (B1 `InstallArgs` cutover), c27
-  (J2 transcripts + demo-bar integration test).
-- **large** (~500+ LoC, body-justified): 0 commits in
-  round 1 default; if c05 or c27 grows past 500 LoC
+  2 commits — c05 (B1 `InstallArgs` cutover + 7
+  tests; scope §"Internal split" row 5
+  forced-monolithic), c27 (J2 transcripts +
+  demo-bar integration test; m5a c39 / m5b c23
+  EXFIL1-headline precedent).
+- **large** (≥500 LoC, body-justified): 0 commits in
+  round 2 default; if c05 or c27 grows past 500 LoC
   in implementation, the per-commit body retains the
   m5a c39 / m5b c23 precedent justification.
 
-Total: 6 + 8 + 10 + 2 + 0 = **26 implementation
-commits + 1 retrospective reservation**. Wait —
-recount: c01–c25 are 25 commits, plus c26 + c27 = 27
-implementation, plus c28 retro = 28 total. Sizing
-buckets re-tallied:
+Total: 7 + 8 + 9 + 2 + 0 = 26 in the named buckets
+above; **two rows missing from the bucket tally —
+c05 and c27 are in medium-to-large; c24b is in
+small. Re-checking the named lists: small bucket
+has 7 (c08, c13, c18, c22, c23, c24b, c25). The
+small-to-medium bucket has c01, c03, c04, c06, c10,
+c11, c15, c19, c20 = 9. Medium = c02, c07, c09, c12,
+c14, c17, c21, c24a, c26 = 9. Medium-to-large = c05,
+c27 = 2. 7 + 9 + 9 + 2 = 27** implementation commits
+named. Missing one: **c16** (F1 `cargoBuildFlags`
+expansion — Nix-only delta, ≤10 lines of Nix; sits
+in the **small** bucket).
 
-- **small** (6): c08, c13, c18, c22, c23, c25.
-- **small-to-medium** (8): c01, c03, c04, c06, c14,
-  c15, c20, c24. (c04 added.)
-- **medium** (11): c02, c05, c07, c09, c10, c11, c12,
-  c17, c19, c21, c26.
-- **medium-to-large** (2): not-named; c05 + c27 may
-  drift here at implementation time.
-- Plus c27 (medium-to-large body-justified) and c28
-  (retrospective, sized at retrospective time).
+Final tally:
+- small (8): c08, c13, c16, c18, c22, c23, c24b, c25.
+- small-to-medium (9): c01, c03, c04, c06, c10, c11,
+  c15, c19, c20.
+- medium (9): c02, c07, c09, c12, c14, c17, c21,
+  c24a, c26.
+- medium-to-large (2): c05, c27.
+- large (0).
 
-Re-tallied total: 6 + 8 + 11 + 1 (c27) + 1 (c28
-reserved) = **27 implementation + 1 retrospective =
-28 slots**. ✓ matches scope row 1–29 with row 21
-folded into J1 (=c26).
+**Total: 8 + 9 + 9 + 2 + 0 = 28 implementation
+commits + 1 retrospective reservation = 29 slots.**
+Matches scope §"Internal split" 28-default ceiling
+exactly; +1 slot over round 1 absorbed by the c24
+split per pi-1 B-6. Stays inside scope's 30-max.
 
-**Body-justified larger rows** (round 1 candidate
-list; pi may push for further compression in round
-2):
+**Body-justified larger rows** (round 2; pi may push
+for further compression in round 3):
 
 - **c05** (B1 `InstallArgs` cutover + bundled-source
   resolver + PP1 copy + 7 tests) — scope §"Internal
   split" forced-monolithic row 5.
-- **c09** (C2 lockin sandbox `resolve_syd_pty_path` +
-  spec field + call site + error variant + fake-syd
-  `[[bin]]` registration) — scope §"Internal split"
-  forced-monolithic row 9.
-- **c17** (F2 `postInstall` `$out`-reshape across six
-  bundled plugins) — body-justified by Nix-evaluation
-  atomicity.
+- **c09** (C2 lockin `SandboxBuilder::syd_pty_path` +
+  spec field + resolver + call site + Cargo.toml
+  feature + fake-syd `[[bin]]` source) — scope
+  §"Internal split" forced-monolithic row 9 + pi-1
+  B-1 fold (binary source landed in c09).
+- **c14** (E1 HTTP scripted-turns dispatcher) —
+  body-justified by pi-1 B-3 HTTP-reshape +
+  mutual-exclusion + exhaustion-as-400 fan-out.
+- **c17** (F2 `postInstall` `$out`-reshape across
+  six bundled plugins) — body-justified by
+  Nix-evaluation atomicity.
+- **c24a** (I2 lazy-load gate + supervisor
+  `spawn_on_demand` plumbing) — pi-1 B-6 fold:
+  forced-monolithic at the supervisor-API layer
+  (gate + registry + dispatch coupled).
 - **c27** (J2 §5 tmux transcripts + demo-bar
   integration test) — m5a c39 / m5b c23
   EXFIL1-headline precedent.
 
 **Unsplittable cutovers** (m0 c08 / m4 c07 / m5a c14
-precedent): c05, c09, c16, c17 (per the bodies). All
-four carry the inline forced-monolithic justification.
+precedent): c05, c09, c16, c17, c24a (per the
+bodies). All five carry the inline forced-monolithic
+justification.
 
-Pi round budget on `commits.md`: **3–5 rounds** is the
-round-1 expectation. m5b took 6; m6 has fewer
-load-bearing invariants (no taint primitives, no §A9
-fallback), so 3–5 is reasonable. Round 1 fold sentinel:
-this commit lands the round-1 artifact and pings pi.
+Pi round budget on `commits.md`: **3–4 more rounds**
+is the round-2 expectation after pi-1's
+B/6 M/5 N/4. Most of pi-1's blockers were row-local
+"test against nonexistent surface" fixes; round 2
+folds every B/M/N item with live-code evidence and
+no items argued back.
+
+Round-1 sizing (preserved for traceability):
+
+> Round 1 claimed 27 implementation + 1 retro = 28
+> slots. Pi-1 M-5 flagged the internal contradiction
+> in the bucket math. Round 2 recomputes mechanically
+> and lands at 28 implementation + 1 retro = 29 slots
+> after the pi-1 B-6 split.
 
 ---
 
-*End of m6 commits.md round 1 — claude-authored,
-awaiting pi adversarial review. Phase distribution:
-A:4 · B:3 · C:3 · D:3 · E:2 · F:3 · G:2 · H:2 · I:3 ·
-J:2 · retro:1 = 27 implementation + 1 retro = 28
-slots, matching scope row 1–29 with row 21 folded.
-Three workspace-wide cutovers explicitly called out:
-c05 (`InstallArgs` clap rewrite), c09 (lockin sandbox
-syd-pty plumbing), c16 (`cargoBuildFlags` 8-package
-expansion). PP1 invariant load-bearing across c02 /
-c05 / c17.*
+*End of m6 commits.md round 2 — folds
+`commits-pi-review-1.md` (B/6 M/5 N/4). Phase
+distribution: A:4 · B:3 · C:3 · D:3 · E:2 · F:3 ·
+G:2 · H:2 · I:**4** · J:2 · retro:1 = 28
+implementation + 1 retro = 29 slots after the c24
+split per pi-1 B-6. Stays inside scope §"Internal
+split" 30-max ceiling. Three workspace-wide cutovers
+explicitly called out: c05 (`InstallArgs` clap
+rewrite), c09 (`SandboxBuilder::syd_pty_path` +
+child-env injection), c16 (`cargoBuildFlags`
+8-package expansion). PP1 invariant load-bearing
+across c02 / c05 / c17. No items argued back; every
+B/M/N folds against live-code evidence.*
