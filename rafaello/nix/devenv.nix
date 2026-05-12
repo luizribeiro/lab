@@ -6,5 +6,6 @@
   # which needs the syd enforcer on Linux. Mirror lockin/nix/devenv.nix.
   env = lib.optionalAttrs pkgs.stdenv.isLinux {
     LOCKIN_SYD_PATH = "${pkgs.sydbox}/bin/syd";
+    "CARGO_BIN_EXE_syd-pty" = "${pkgs.sydbox}/bin/syd-pty";
   };
 }
