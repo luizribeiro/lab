@@ -23,6 +23,7 @@ use rafaello_core::lock::canonical_id::CanonicalId;
 use rafaello_core::lock::load_policy::LoadPolicy;
 use rafaello_core::renderer::{RenderPipeline, RendererRegistry};
 use rafaello_core::session::{SessionController, SessionStore};
+use rafaello_core::supervisor::{PluginSupervisor, SupervisorConfig, ToolSchemaCatalog};
 use rafaello_core::user_grants::UserGrants;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
@@ -112,12 +113,21 @@ pub fn build_gate_rig() -> GateRig {
     let state = Arc::new(ConfirmState::new());
     let user_grants = Arc::new(RwLock::new(UserGrants::new()));
 
+    let supervisor = Arc::new(PluginSupervisor::new(
+        broker.clone(),
+        SupervisorConfig::default(),
+        Arc::new(
+            ToolSchemaCatalog::build(&BrokerAcl::default(), &BTreeMap::new(), &BTreeMap::new())
+                .expect("empty catalog builds"),
+        ),
+    ));
     let gate = ConfirmationGate::new(
         Arc::new(broker.clone()),
         Arc::clone(&user_grants),
         Arc::clone(&audit),
         Arc::clone(&state),
         compiled,
+        supervisor,
     );
     let gate_handle = gate.spawn();
 

@@ -325,12 +325,22 @@ pub struct PluginSupervisor {
     in_flight: Arc<Mutex<HashSet<CanonicalId>>>,
     #[allow(dead_code)]
     managed: Mutex<BTreeMap<CanonicalId, ManagedSpawn>>,
+    lazy_candidates: Mutex<BTreeMap<CanonicalId, LazyCandidate>>,
+    #[allow(dead_code)]
+    tool_to_canonical: Mutex<BTreeMap<String, CanonicalId>>,
     tool_catalog: Arc<ToolSchemaCatalog>,
     #[cfg(any(test, feature = "test-fixture"))]
     test_hooks: Arc<TestHooks>,
     #[cfg(any(test, feature = "test-fixture"))]
     #[allow(dead_code)]
     extra_service_factory: Option<ExtraServiceFactory>,
+}
+
+struct LazyCandidate {
+    plan: CompiledPlugin,
+    paths: SpawnPaths,
+    #[allow(dead_code)]
+    triggers: Vec<String>,
 }
 
 impl PluginSupervisor {
@@ -344,11 +354,67 @@ impl PluginSupervisor {
             config,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             managed: Mutex::new(BTreeMap::new()),
+            lazy_candidates: Mutex::new(BTreeMap::new()),
+            tool_to_canonical: Mutex::new(BTreeMap::new()),
             tool_catalog,
             #[cfg(any(test, feature = "test-fixture"))]
             test_hooks: Arc::new(TestHooks::default()),
             #[cfg(any(test, feature = "test-fixture"))]
             extra_service_factory: None,
+        }
+    }
+
+    pub fn register_lazy(
+        &self,
+        canonical: CanonicalId,
+        plan: CompiledPlugin,
+        paths: SpawnPaths,
+        triggers: Vec<String>,
+    ) {
+        let candidate = LazyCandidate {
+            plan,
+            paths,
+            triggers: triggers.clone(),
+        };
+        self.lazy_candidates
+            .lock()
+            .insert(canonical.clone(), candidate);
+        let mut t2c = self.tool_to_canonical.lock();
+        for tool in triggers {
+            t2c.insert(tool, canonical.clone());
+        }
+    }
+
+    /// Ensure the plugin for `canonical` is spawned.
+    ///
+    /// - `Ok(false)`: already in `managed` (idempotent re-dispatch
+    ///   — pi-5 B-4) OR no lazy candidate registered for this
+    ///   canonical (eager-tool no-op — pi-5 B-3). Caller proceeds
+    ///   with normal dispatch.
+    /// - `Ok(true)`: was a lazy candidate, just spawned now.
+    /// - `Err(SpawnError)`: candidate exists but `spawn` failed.
+    ///   Candidate is restored to `lazy_candidates` so a retry can
+    ///   find it.
+    pub async fn ensure_spawned(&self, canonical: &CanonicalId) -> Result<bool, SpawnError> {
+        if self.managed.lock().contains_key(canonical) {
+            return Ok(false);
+        }
+        let candidate = {
+            let mut lazy = self.lazy_candidates.lock();
+            lazy.remove(canonical)
+        };
+        let Some(candidate) = candidate else {
+            return Ok(false);
+        };
+        record_spawn_event(canonical, "spawn_on_demand");
+        match self.spawn(&candidate.plan, &candidate.paths).await {
+            Ok(_handle) => Ok(true),
+            Err(e) => {
+                self.lazy_candidates
+                    .lock()
+                    .insert(canonical.clone(), candidate);
+                Err(e)
+            }
         }
     }
 
@@ -930,7 +996,7 @@ impl PluginSupervisor {
         }
     }
 
-    pub async fn shutdown(self) -> ShutdownReport {
+    pub async fn shutdown(&self) -> ShutdownReport {
         let drained: Vec<(CanonicalId, ManagedSpawn)> = {
             let mut guard = self.managed.lock();
             std::mem::take(&mut *guard).into_iter().collect()
@@ -1023,6 +1089,23 @@ impl PluginSupervisor {
         }
 
         report
+    }
+}
+
+/// Append a single trace line `"<event> <canonical>\n"` to the file
+/// named by `RFL_SPAWN_TRACE_LOG` if set. Caller-side emission only
+/// (pi-5 B-5 exclusive): `run_chat`'s eager spawn sites emit
+/// `eager_spawn`, [`PluginSupervisor::ensure_spawned`]'s lazy arm
+/// emits `spawn_on_demand`, and the inner `spawn` method writes no
+/// trace itself.
+pub fn record_spawn_event(canonical: &CanonicalId, event: &str) {
+    use std::io::Write;
+    if let Ok(path) = std::env::var("RFL_SPAWN_TRACE_LOG") {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| writeln!(f, "{event} {canonical}"));
     }
 }
 
@@ -1179,5 +1262,151 @@ impl Service for SupervisorConnectionService {
             return extra.call(req, ctx).await;
         }
         Err(FittingsError::method_not_found(req.method))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::broker_acl::BrokerAcl;
+    use fittings_core::context::{DroppedNotifications, PeerHandle};
+    use tokio::sync::watch;
+    use tokio_util::sync::CancellationToken;
+
+    fn synth_supervisor() -> PluginSupervisor {
+        let broker = Broker::new(BrokerAcl::default()).expect("Broker::new");
+        PluginSupervisor::new(
+            broker,
+            SupervisorConfig::default(),
+            ToolSchemaCatalog::empty_for_tests(),
+        )
+    }
+
+    fn synth_canonical(s: &str) -> CanonicalId {
+        CanonicalId::parse(s).expect("canonical parses")
+    }
+
+    fn synth_managed(canonical: CanonicalId) -> ManagedSpawn {
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel(1);
+        let dropped = DroppedNotifications::new();
+        let token = CancellationToken::new();
+        let peer = PeerHandle::new(notify_tx, dropped, token);
+        let (_w_tx, w_rx) = watch::channel::<Option<Arc<ReaperOutcome>>>(None);
+        let observation = Arc::new(SpawnObservation {
+            canonical: canonical.clone(),
+            topic_id: "test-topic".to_string(),
+            cached_pid: None,
+            peer,
+            outcome: w_rx,
+        });
+        ManagedSpawn {
+            observation,
+            registered: None,
+            proxy: None,
+            serve_join: None,
+            watcher_join: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_spawned_returns_ok_false_for_managed_canonical() {
+        let sup = synth_supervisor();
+        let canonical = synth_canonical("local/test:already@0.1.0");
+        sup.managed
+            .lock()
+            .insert(canonical.clone(), synth_managed(canonical.clone()));
+        let before = sup.managed.lock().len();
+
+        let out = sup.ensure_spawned(&canonical).await.expect("ok");
+        assert!(!out, "managed canonical → Ok(false)");
+        assert_eq!(sup.managed.lock().len(), before);
+    }
+
+    #[tokio::test]
+    async fn ensure_spawned_returns_ok_false_when_no_candidate() {
+        let sup = synth_supervisor();
+        let canonical = synth_canonical("local/test:eager@0.1.0");
+        let out = sup.ensure_spawned(&canonical).await.expect("ok");
+        assert!(!out, "no candidate → Ok(false) (pi-5 B-3 eager-tool no-op)");
+        assert!(sup.managed.lock().is_empty());
+        assert!(sup.lazy_candidates.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_spawned_dispatches_lazy_candidate_then_idempotent() {
+        // The lazy-spawn happy-path (`Ok(true)` + `managed` populated)
+        // requires a real lockin sandbox + child process, which lives
+        // in the m2 integration-test harness. Here we cover the
+        // adjacent invariants the prompt names:
+        //   * registration installs the candidate + tool→canonical
+        //     entry,
+        //   * a spawn that fails restores the candidate to
+        //     `lazy_candidates` (so a retry can still find it — pi-5
+        //     B-4 idempotent recovery),
+        //   * once `managed` is populated, the second call returns
+        //     `Ok(false)` and leaves `managed` unchanged (pi-5 B-4
+        //     idempotent re-dispatch).
+        let sup = synth_supervisor();
+        let canonical = synth_canonical("local/test:lazy@0.1.0");
+        let plan = synth_plan(&canonical);
+        let paths = SpawnPaths {
+            project_root: PathBuf::from("/tmp"),
+            private_state_dir: PathBuf::from("/tmp/rfl-test-state"),
+        };
+        sup.register_lazy(canonical.clone(), plan, paths, vec!["t1".to_string()]);
+        assert!(sup.lazy_candidates.lock().contains_key(&canonical));
+        assert_eq!(
+            sup.tool_to_canonical.lock().get("t1"),
+            Some(&canonical),
+            "trigger registered in tool→canonical map",
+        );
+
+        // First call: candidate exists but broker has no ACL for this
+        // canonical, so `spawn` returns `NotInAcl`; the candidate must
+        // be restored.
+        let err = sup
+            .ensure_spawned(&canonical)
+            .await
+            .expect_err("spawn fails — broker has empty ACL");
+        assert!(matches!(err, SpawnError::NotInAcl(_)));
+        assert!(
+            sup.lazy_candidates.lock().contains_key(&canonical),
+            "candidate restored after spawn Err (pi-5 B-4 retry path)",
+        );
+
+        // Simulate a successful spawn by inserting into `managed`
+        // directly, then assert the next call short-circuits with
+        // `Ok(false)` and `managed` is unchanged.
+        sup.lazy_candidates.lock().remove(&canonical);
+        sup.managed
+            .lock()
+            .insert(canonical.clone(), synth_managed(canonical.clone()));
+        let again = sup.ensure_spawned(&canonical).await.expect("ok");
+        assert!(!again, "second call → Ok(false) (pi-5 B-4 idempotent)");
+        assert_eq!(sup.managed.lock().len(), 1, "managed unchanged");
+    }
+
+    fn synth_plan(canonical: &CanonicalId) -> CompiledPlugin {
+        use crate::compile::{CompiledFlags, EnvPlan, FilesystemPlan, LimitsPlan, NetworkPlan};
+        CompiledPlugin {
+            canonical: canonical.clone(),
+            topic_id: "test-topic".to_string(),
+            entry_absolute: PathBuf::from("/bin/true"),
+            filesystem: FilesystemPlan::default(),
+            network: NetworkPlan::Deny,
+            env: EnvPlan::default(),
+            limits: LimitsPlan::default(),
+            subscribe_patterns: Vec::new(),
+            publish_topics: Vec::new(),
+            auto_subscribes: Vec::new(),
+            tool_meta: std::collections::BTreeMap::new(),
+            provider_id: None,
+            load: crate::lock::LoadPolicy::Lazy {
+                event: Vec::new(),
+                command: vec!["t1".to_string()],
+                kind: Vec::new(),
+            },
+            flags: CompiledFlags::default(),
+        }
     }
 }

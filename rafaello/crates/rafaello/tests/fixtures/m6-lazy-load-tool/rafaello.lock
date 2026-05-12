@@ -1,0 +1,34 @@
+[plugin."builtin:mockprovider@0.0.0"]
+entry = "bin/rfl-mockprovider"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."builtin:mockprovider@0.0.0".grant]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.mock.tool_request", "provider.mock.assistant_message"]
+
+[plugin."builtin:mockprovider@0.0.0".grant.bundles.default.network]
+mode = "deny"
+
+[plugin."builtin:mockprovider@0.0.0".bindings]
+provider = true
+provider_id = "mock"
+load = "eager"
+
+[plugin."local:lazytool@0.0.0"]
+entry = "bin/rfl-lazytool"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:lazytool@0.0.0".bindings]
+tools = ["lazy-tool"]
+load = { command = ["lazy-tool"] }
+
+[plugin."local:lazytool@0.0.0".bindings.tool_meta.lazy-tool]
+sinks = []
+always_confirm = false
+
+[session]
+provider_active = "builtin:mockprovider@0.0.0"

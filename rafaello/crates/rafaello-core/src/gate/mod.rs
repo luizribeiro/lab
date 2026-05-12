@@ -47,6 +47,7 @@ use crate::audit::{AuditKind, AuditWriter};
 use crate::bus::{Broker, BusEvent, JsonRpcId, TaintEntry, CORE_SESSION_CONFIRM_RESOLVED};
 use crate::compile::CompiledPlugin;
 use crate::lock::canonical_id::CanonicalId;
+use crate::supervisor::PluginSupervisor;
 use crate::user_grants::{GrantMatcher, GrantSource, UserGrant, UserGrants};
 
 pub use confirm_state::{ConfirmState, HeldConfirmation, MarkError, PriorOutcome};
@@ -125,6 +126,7 @@ pub struct ConfirmationGate {
     audit: Arc<AuditWriter>,
     state: Arc<ConfirmState>,
     compiled: BTreeMap<CanonicalId, CompiledPlugin>,
+    supervisor: Arc<PluginSupervisor>,
     events_seen: Arc<AtomicUsize>,
     timeout_tasks: TimeoutTasks,
 }
@@ -136,6 +138,7 @@ impl ConfirmationGate {
         audit: Arc<AuditWriter>,
         state: Arc<ConfirmState>,
         compiled: BTreeMap<CanonicalId, CompiledPlugin>,
+        supervisor: Arc<PluginSupervisor>,
     ) -> Self {
         Self {
             broker,
@@ -143,6 +146,7 @@ impl ConfirmationGate {
             audit,
             state,
             compiled,
+            supervisor,
             events_seen: Arc::new(AtomicUsize::new(0)),
             timeout_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -169,6 +173,7 @@ impl ConfirmationGate {
         let audit = Arc::clone(&self.audit);
         let state = Arc::clone(&self.state);
         let compiled = self.compiled;
+        let supervisor = Arc::clone(&self.supervisor);
         let events_seen = Arc::clone(&self.events_seen);
         let timeout_tasks = Arc::clone(&self.timeout_tasks);
 
@@ -178,15 +183,19 @@ impl ConfirmationGate {
             while let Some(event) = rx.recv().await {
                 events_seen.fetch_add(1, Ordering::SeqCst);
                 match event.topic.as_str() {
-                    TOOL_REQUEST_TOPIC => handle_tool_request(
-                        &broker,
-                        &user_grants,
-                        &audit,
-                        &state,
-                        &timeout_tasks,
-                        &compiled,
-                        &event,
-                    ),
+                    TOOL_REQUEST_TOPIC => {
+                        handle_tool_request(
+                            &broker,
+                            &user_grants,
+                            &audit,
+                            &state,
+                            &timeout_tasks,
+                            &compiled,
+                            &supervisor,
+                            &event,
+                        )
+                        .await
+                    }
                     CONFIRM_REPLY_TOPIC => {
                         handle_confirm_reply(&broker, &user_grants, &audit, &state, &event)
                     }
@@ -245,13 +254,14 @@ impl ConfirmationGate {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_tool_request(
+async fn handle_tool_request(
     broker: &Arc<Broker>,
     user_grants: &RwLock<UserGrants>,
     audit: &Arc<AuditWriter>,
     state: &Arc<ConfirmState>,
     timeout_tasks: &TimeoutTasks,
     compiled: &BTreeMap<CanonicalId, CompiledPlugin>,
+    supervisor: &Arc<PluginSupervisor>,
     event: &BusEvent,
 ) {
     let Some(obj) = event.payload.as_object() else {
@@ -275,6 +285,20 @@ fn handle_tool_request(
             return;
         }
     };
+    // pi-5 M-1: `ensure_spawned` runs AFTER `dispatch_target` is
+    // parsed + validated so eager-tool no-ops still apply. Eager
+    // plugins (no lazy candidate) get `Ok(false)` and continue;
+    // lazy plugins are spawned just-in-time on first dispatch.
+    match supervisor.ensure_spawned(&dispatch_target).await {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(
+                error = ?e,
+                "gate: ensure_spawned failed; dropping tool_request",
+            );
+            return;
+        }
+    }
     let Some(plugin) = compiled.get(&dispatch_target) else {
         tracing::error!(target = %dispatch_target, "gate: dispatch_target not in compiled map");
         return;

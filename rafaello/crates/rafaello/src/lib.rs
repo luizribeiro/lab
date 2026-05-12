@@ -366,11 +366,11 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
     let acl_for_routing = acl.clone();
     let acl_arc = Arc::new(acl.clone());
     let broker = Broker::new(acl).map_err(|e| RflChatError::Broker(Box::new(e)))?;
-    let plugin_supervisor = PluginSupervisor::new(
+    let plugin_supervisor = Arc::new(PluginSupervisor::new(
         broker.clone(),
         SupervisorConfig::default(),
         tool_catalog.clone(),
-    );
+    ));
 
     // c38 / scope §CHAT1: pre-spawn wiring of confirmation + slash
     // surfaces. The gate must be subscribed BEFORE any plugin spawns
@@ -422,6 +422,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         audit.clone(),
         confirm_state.clone(),
         compiled_plugins.clone(),
+        Arc::clone(&plugin_supervisor),
     );
     let gate_join = gate.spawn();
 
@@ -434,6 +435,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         .expect("active provider validated above");
     let provider_paths = plugin_spawn_paths(&project_root, &provider_plan.topic_id);
     chat::test_ordering_hook::record(chat::test_ordering_hook::StartupEvent::PluginSupervisorSpawn);
+    rafaello_core::supervisor::record_spawn_event(&provider_canonical, "eager_spawn");
     let provider_handle = plugin_supervisor
         .spawn(provider_plan, &provider_paths)
         .await
@@ -455,6 +457,7 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             .get(canonical)
             .expect("compiled_plugins covers every lock entry");
         let paths = plugin_spawn_paths(&project_root, &plan.topic_id);
+        rafaello_core::supervisor::record_spawn_event(canonical, "eager_spawn");
         let h = plugin_supervisor.spawn(plan, &paths).await.map_err(|_| {
             RflChatError::ProviderSpawnFailed {
                 canonical: canonical.clone(),
@@ -471,12 +474,35 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
             .get(canonical)
             .expect("compiled_plugins covers every lock entry");
         let paths = plugin_spawn_paths(&project_root, &plan.topic_id);
-        let h = plugin_supervisor.spawn(plan, &paths).await.map_err(|_| {
-            RflChatError::ToolSpawnFailed {
-                canonical: canonical.clone(),
+        // pi-5 B-1: tool plugins routed by `bindings.load`. Lazy
+        // bindings with a non-empty `command` trigger list register
+        // a `LazyCandidate` with the supervisor — first dispatch
+        // through the gate spawns them on demand. All other variants
+        // (Eager / Boot / Manual / Lazy without a command trigger)
+        // fall through to the eager spawn path.
+        match &entry.bindings.load {
+            rafaello_core::lock::LoadPolicy::Lazy {
+                command,
+                event,
+                kind,
+            } if !command.is_empty() && event.is_empty() && kind.is_empty() => {
+                plugin_supervisor.register_lazy(
+                    canonical.clone(),
+                    plan.clone(),
+                    paths,
+                    command.clone(),
+                );
             }
-        })?;
-        spawn_handles.push(h);
+            _ => {
+                rafaello_core::supervisor::record_spawn_event(canonical, "eager_spawn");
+                let h = plugin_supervisor.spawn(plan, &paths).await.map_err(|_| {
+                    RflChatError::ToolSpawnFailed {
+                        canonical: canonical.clone(),
+                    }
+                })?;
+                spawn_handles.push(h);
+            }
+        }
     }
 
     // Steps C9–C10: ReemitRouter + AgentLoop spawned BEFORE the TUI

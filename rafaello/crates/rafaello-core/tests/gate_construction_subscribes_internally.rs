@@ -36,6 +36,18 @@ async fn gate_construction_subscribes_internally() {
         Arc::clone(&audit),
         Arc::new(ConfirmState::new()),
         BTreeMap::new(),
+        std::sync::Arc::new(rafaello_core::supervisor::PluginSupervisor::new(
+            broker.clone(),
+            rafaello_core::supervisor::SupervisorConfig::default(),
+            std::sync::Arc::new(
+                rafaello_core::supervisor::ToolSchemaCatalog::build(
+                    &rafaello_core::broker_acl::BrokerAcl::default(),
+                    &std::collections::BTreeMap::new(),
+                    &std::collections::BTreeMap::new(),
+                )
+                .expect("empty catalog"),
+            ),
+        )),
     );
     let events_seen = gate.events_seen_handle();
     let _handle = gate.spawn();

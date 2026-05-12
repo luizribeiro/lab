@@ -101,6 +101,18 @@ async fn gate_passes_through_user_grant_match() {
         Arc::clone(&audit),
         Arc::new(ConfirmState::new()),
         compiled,
+        std::sync::Arc::new(rafaello_core::supervisor::PluginSupervisor::new(
+            broker.clone(),
+            rafaello_core::supervisor::SupervisorConfig::default(),
+            std::sync::Arc::new(
+                rafaello_core::supervisor::ToolSchemaCatalog::build(
+                    &rafaello_core::broker_acl::BrokerAcl::default(),
+                    &std::collections::BTreeMap::new(),
+                    &std::collections::BTreeMap::new(),
+                )
+                .expect("empty catalog"),
+            ),
+        )),
     );
     let _handle = gate.spawn();
 

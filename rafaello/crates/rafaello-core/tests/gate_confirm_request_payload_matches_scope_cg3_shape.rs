@@ -105,6 +105,18 @@ async fn gate_confirm_request_payload_matches_scope_cg3_shape() {
         Arc::clone(&audit),
         Arc::clone(&state),
         compiled,
+        std::sync::Arc::new(rafaello_core::supervisor::PluginSupervisor::new(
+            broker.clone(),
+            rafaello_core::supervisor::SupervisorConfig::default(),
+            std::sync::Arc::new(
+                rafaello_core::supervisor::ToolSchemaCatalog::build(
+                    &rafaello_core::broker_acl::BrokerAcl::default(),
+                    &std::collections::BTreeMap::new(),
+                    &std::collections::BTreeMap::new(),
+                )
+                .expect("empty catalog"),
+            ),
+        )),
     );
     let _handle = gate.spawn();
 
