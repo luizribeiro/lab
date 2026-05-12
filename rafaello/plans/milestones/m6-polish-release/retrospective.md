@@ -1,25 +1,109 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 4 draft — folds
-> `retrospective-pi-review-3.md` (0 B / 0 M / 3 N,
-> **NON-BLOCKING**).** Claude-authored 2026-05-12;
-> awaiting pi round 4. Round-4 changelog: folded pi-3
-> N-1 (verified on-branch commit hashes
-> `6f1fe4b` / `de8e187` per the local `git log` —
-> pi-3 was working from cherry-picked hashes
-> `7c3c18d` / `c61cc0b` on its own worktree, so no
-> text change needed for the on-branch references),
-> N-2 (§6 Stream F line corrected from
-> `load.triggers.kind = "tool"` to `load.command` /
-> `LoadPolicy::Lazy { command }` per Stream F live
-> shape), N-3 (final verdict sentence tightened — the
-> retro is ready to RATIFY **after** the §4.5
-> pre-merge ratification-candidate sweep fills the
-> witnessed gates, not "now"). The `Stdio::null()`
-> owner-routing question for §5 disposition remains
-> open by design and resolves at retrospective
-> ratification. Target: pi round 4 returns
-> CONVERGED 0/0/0.
+> **Status: round 5 draft — absorbs Phase K + Route 1
+> outcome.** Claude-authored 2026-05-12; awaiting pi
+> round 5. The round-4 pi review
+> (`retrospective-pi-review-4.md`, 0 B / 0 M / 1 N,
+> **NON-BLOCKING**) flagged a single nit (the round-4
+> banner described the on-branch hashes incorrectly
+> from its sibling-worktree vantage). Round 5 supersedes
+> the banner trail entirely: the open `Stdio::null()`
+> owner-routing question that round 4 left dangling is
+> **resolved** — owner ratified **Route 1** in `891b93a`
+> (extend the production `rfl-tui` ui_loop rather than
+> amend the frontend supervisor's stdio shape; the
+> supervisor-side `Stdio::null()` → `inherit` fix landed
+> earlier at `9ec398a` and Phase K then rebuilt the
+> production ui_loop on top of it). Phase K (cK1..cK6,
+> post-RATIFIED scope amendment) landed the production
+> input + confirm-overlay surface that the rendered
+> capture demanded, the cK5 tmux-driven e2e integration
+> test pinned it as a regression anchor, and cK6
+> recaptured `manual-validation.md` §5 against the
+> rewired binary under
+> `transcripts/section-5-phase-k/`. The c27 originals
+> under `transcripts/section-5/` are preserved untouched
+> so the pre/post evidence pair is on disk.
+>
+> **Round-5 changelog.**
+>
+> - **§1 hard requirement #3 flipped to ✓.** cK6's
+>   `section-5-phase-k/` transcripts are the authentic
+>   rendered captures hard requirement #3 demanded:
+>   `01-after-launch.txt` shows the cK1 input row with
+>   the `>` glyph and the typed prompt; `02-modal.txt`
+>   shows the cK3 confirm overlay rendered by
+>   `paint_confirm_overlay` with all four scope §J2
+>   substring greps firing (` confirm `, `send-mail`,
+>   `sinks: mail`, `s remaining`); `04-audit.txt`,
+>   `05-sqlite-audit.txt`, `06-sqlite-entries.txt`
+>   show live `AuditKind` rows + the `text` entry
+>   landed by cK2's `publish_submitted_line`. All five
+>   hard requirements now ✓ honestly.
+> - **§2 What shipped** appends Phase K (cK1..cK6) to
+>   the phase narrative, flagged as **post-RATIFIED
+>   scope amendment** per owner `891b93a` — not a
+>   pre-RATIFIED phase.
+> - **§3 Adversarial review** appends the Phase K
+>   commits.md amendment trail: 2 rounds to converge at
+>   `commits-pi-review-10.md` CONVERGED 0/0/0
+>   (B1/B2/M1/N1 all closed); the retrospective round 5
+>   is the first retro round after Phase K.
+> - **§4 coverage table**: the §5 rendered-TUI
+>   witnessed-evidence gate is now ✓ closed by cK6.
+>   The remaining pre-merge witnessed gates — macOS CI
+>   run URL, clean-host Homebrew install smoke,
+>   real-LiteLLM transcript if the proxy returns —
+>   stay as separate pre-merge ratification-candidate
+>   sweep items.
+> - **§4.5 residual-gates table**: §5 row flips from
+>   "◐ partial — owner question" to "✓ closed by cK6";
+>   the closure path cites the post-Phase-K transcript
+>   set + manual-validation.md §5.1 appendix.
+> - **§5 narrative** explains the pre/post evidence
+>   pair: c27 transcripts at `transcripts/section-5/`
+>   are the pre-Phase-K artefacts that revealed the
+>   `Stdio::null()` wedge; cK6 transcripts at
+>   `transcripts/section-5-phase-k/` are the post-fix
+>   rendered captures. Both are on disk; the pair
+>   documents the trajectory honestly.
+> - **§9 merge-readiness** updated to reflect that
+>   Phase K is in the surface that will ff-merge to
+>   `rafaello-v0.1` — no out-of-band cherry-picks,
+>   no separate branch. All round-4 hash-trail nits
+>   are moot on this worktree (`6f1fe4b`, `de8e187`,
+>   `9ec398a`, `891b93a`, and the cK1..cK6 hashes are
+>   all real ancestors of HEAD per `git log`).
+>
+> Target: pi round 5 returns CONVERGED 0/0/0 and the
+> retro is ready to RATIFY immediately after the §4.5
+> pre-merge sweep fills the remaining witnessed gates
+> (macOS CI URL, Homebrew install smoke,
+> §1/§2/§6/§7 operator runs, optional real-LiteLLM
+> §5 transcript per the carveout).
+>
+> ---
+>
+> **(History — round 4 draft, kept for trajectory.)**
+>
+> Round 4 folded `retrospective-pi-review-3.md` (0 B /
+> 0 M / 3 N, NON-BLOCKING). Round-4 changelog: pi-3
+> N-1 (the on-branch hashes were verified;
+> `7c3c18d` / `c61cc0b` were cherry-picks on the pi
+> worktree — pi-4's own N1 noted the banner relationship
+> still read backwards from its sibling worktree, but
+> on `agents/m6/drift` the canonical hashes
+> `6f1fe4b` / `de8e187` are real ancestors of HEAD and
+> round 5 supersedes the banner anyway), N-2 (§6
+> Stream F line corrected from `load.triggers.kind =
+> "tool"` to `load.command` / `LoadPolicy::Lazy {
+> command }`), N-3 (final verdict sentence tightened —
+> "ready to RATIFY after the §4.5 pre-merge sweep",
+> not "now"). The `Stdio::null()` owner-routing
+> question for §5 disposition was deliberately left
+> open at round 4 close; owner ratified Route 1 on
+> `891b93a` and Phase K (cK1..cK6) closed the surface,
+> all rolled into round 5 above.
 >
 > ---
 >
@@ -352,33 +436,51 @@ verbatim from driver prompt):
    `fake_syd_records_cargo_bin_exe_env_after_env_clear`
    in `6f1fe4b`.
 3. **`manual-validation.md` §5 captures a real
-   tmux-driven interactive `rfl chat` recording.** ◐
-   partial — closure depends on pi-3 / owner routing
-   per the §4.5 / `transcripts/section-5/00-CONTEXT.md`
-   open question. Wire-shape + audit + integration-test
-   evidence is on disk and real:
-   `04-audit.txt` / `05-sqlite-audit.txt` /
-   `06-sqlite-entries.txt` are live `rfl audit` +
-   sqlite dumps with live `AuditKind` variants,
-   `wire-events.txt` records the real
-   `user_message → tool_request → confirm_request →
-   confirm_reply → tool_result` bus sequence, and the
-   integration test
-   `rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`
-   is the deterministic regression anchor. The
-   rendered modal/response captures (01/02/03) remain
-   blank because `frontend/mod.rs:202-205` spawns
-   `rfl-tui` with null stdin/stdout — the TUI's
-   ratatui render output goes to /dev/null rather than
-   to the parent's pty. **Owner question (per §4.5
-   / `00-CONTEXT.md`):** ratify §5 on wire-shape +
-   audit evidence (option A — keeps the rendered
-   modal route as a v2 follow-up), or apply the
-   one-line frontend-supervisor stdio amendment pre-
-   merge (option B — drop `Stdio::null()` at
-   `frontend/mod.rs:204-205` so TUI inherits the
-   parent's pty) and re-capture? Both routes fit
-   inside the ratification-candidate window.
+   tmux-driven interactive `rfl chat` recording.** ✓ —
+   closed end-to-end at round 5 via Route 1 + Phase K.
+   The c27 captures under `transcripts/section-5/`
+   were the pre-Phase-K artefacts that surfaced the
+   wedge: wire-shape + audit + integration evidence
+   was real, but the rendered modal/response captures
+   (01/02/03) came back blank because
+   `frontend/mod.rs:202-205` spawned `rfl-tui` with
+   null stdin/stdout *and* the production ui_loop
+   didn't draw an input row or paint the confirm
+   overlay (only the alt-screen smoke harness did).
+   Owner ratified **Route 1** in `891b93a`: keep the
+   stdio fix at `9ec398a` (`Stdio::null()` →
+   `inherit` for the TUI subprocess) and **extend the
+   production `rfl-tui` ui_loop** to render input +
+   confirm overlay against the live bus. Phase K
+   (cK1..cK6) shipped this — cK1 input row, cK2
+   keystroke → `publish_submitted_line`, cK3 confirm
+   overlay via `paint_confirm_overlay`, cK4 overlay
+   keys (`y`/`a`/`Enter` = Allow, `n`/`d`/`Esc` =
+   Deny, `s` = always-allow-session) → `bus.publish`
+   on `core.session.confirm_reply`, cK5 tmux-driven
+   e2e integration test
+   (`rfl_chat_production_tui_input_overlay_e2e.rs`)
+   as the regression anchor, cK6 §5 recapture against
+   the rewired binary. cK6's transcripts under
+   `transcripts/section-5-phase-k/` are the authentic
+   rendered captures: `01-after-launch.txt` shows the
+   cK1 input row with the `>` glyph + typed prompt;
+   `02-modal.txt` shows the cK3 overlay with all four
+   §J2 substring greps firing (` confirm `,
+   `send-mail`, `sinks: mail`, `s remaining`);
+   `04-audit.txt` + `05-sqlite-audit.txt` show live
+   `install_accepted` / `confirm_request` /
+   `confirm_request_taint_attached` / `confirm_allowed`
+   rows with a real ULID; `06-sqlite-entries.txt`
+   shows the `text` / `tool_call` / `tool_result`
+   entry sequence (the `text` row is end-to-end
+   evidence that cK2's keystroke→publish path lands
+   user input in the session store). The c27
+   transcripts at `transcripts/section-5/` remain
+   on disk as the pre-Phase-K trajectory record;
+   manual-validation §5.1 (`d59765e`) is the cK6
+   appendix that walks the post-Phase-K captures
+   inline.
 4. **Bootstrap UX fits ≤5 shell lines.** ✓ — c21
    `85ce87b` lands the verbatim 5-line snippet in
    `rafaello/README.md` (one `cd`, one `nix develop …
@@ -637,6 +739,70 @@ RATIFIED.
   gate-built summary
   (`crates/rafaello-core/src/gate/mod.rs:374-378`).
 
+### Phase K — production `rfl-tui` ui_loop + §5 recapture (cK1–cK6, post-RATIFIED scope amendment)
+
+**Provenance.** Phase K is a **post-RATIFIED scope
+amendment**, not a pre-RATIFIED phase: owner ratified
+Route 1 in `docs(rafaello-m6): ROUTE 1 — extend
+production rfl_tui (scope amendment authorized)`
+(`891b93a`) after the round-4 retro left the
+`Stdio::null()` routing question open, and the prior
+supervisor-side stdio fix landed at
+`fix(rafaello-core::frontend): inherit stdin/stdout for
+rfl-tui spawn — restore rendered output` (`9ec398a`).
+The Phase K commits.md amendment converged at round 2
+(`commits-pi-review-10.md` CONVERGED 0/0/0; cite trail
+9 → 10).
+
+- **cK1 `f5e526b`** — production `ui_loop` renders the
+  input field below the scrollback buffer in
+  `rafaello-tui/src/rfl_tui.rs` (the `>` glyph at the
+  bottom row per `paint.rs:45-63` `INPUT_PROMPT`).
+  Pre-cK1 the production binary drew only the
+  scrollback, which is why c28's
+  `transcripts/section-5/01-after-launch.txt` came
+  back blank under the headless tmux harness even
+  though the alt-screen smoke harness rendered fine.
+- **cK2 `806ad38`** — keystrokes route through the
+  production ui_loop: `crossterm::EventStream` →
+  `handle_normal_key` → `input_buffer.push`; `Enter`
+  triggers `EventOutcome::Submit` →
+  `publish_submitted_line` → `bus.publish` on the
+  user-message topic.
+- **cK3 `a9aece7`** — the production ui_loop paints
+  the confirm overlay when a `ConfirmState` pends:
+  `ConfirmQueue` (`confirm.rs`) drives
+  `paint_confirm_overlay` (`confirm.rs:160-226`) and
+  `run_ttl_ticker`; `CONFIRM_RESOLVED_TOPIC` /
+  `CONFIRM_REPLY_TOPIC` prune the head on round-trip.
+  (`paint.rs` retains its plain `RenderNode` painter
+  role only — pi-9 B1 correction over the round-1
+  amendment's overload.)
+- **cK4 `fd21ba6`** — overlay keys mapped via the live
+  `Answer::from_key` shape: `y` / `a` / `Enter` = Allow,
+  `n` / `d` / `Esc` = Deny, `s` = always-allow-session.
+  `publish_confirm_answer` writes
+  `core.session.confirm_reply` on the bus; the
+  round-trip from the gate prunes the queue head
+  (acceptance:
+  `production_ui_loop_prunes_head_on_confirm_reply`).
+  Pi-9 B2 correction over the round-1 amendment's
+  invented `t` / Toggle key.
+- **cK5 `ddef09a`** — `rfl_chat_production_tui_input_overlay_e2e.rs`,
+  the tmux-driven end-to-end integration test that
+  exercises the production binary inside a real
+  tmux session and asserts the rendered input row +
+  overlay substrings. This is the regression anchor:
+  no future TUI refactor can silently strip the
+  production renderer without tripping this test.
+- **cK6 `d59765e`** — `manual-validation.md` §5
+  recapture against the post-cK1..cK5 binary. New
+  appendix §5.1 walks the six transcripts under
+  `transcripts/section-5-phase-k/` (sibling
+  directory; the c27 originals at
+  `transcripts/section-5/` are preserved). cK6 is the
+  closure artefact for hard requirement #3.
+
 ---
 
 ## 3. Adversarial review during drafting
@@ -705,12 +871,55 @@ load-bearing invariants left after m3's broker work; m6
 is on the m5b end of the spectrum, not the m4 end.
 
 **Pi rounds budget.** Scope predicted "4–5" pi rounds
-(scope §"Internal split"). Actual: 5 scope + 8 commits =
-**13**, vs m5b's 7 + 6 = 13. m6 met the m5b precedent;
-the slight redistribution (more commits rounds, fewer
-scope rounds) reflects that m6's hot surface was
-implementation-side (lazy-load API) rather than
-scope-side (taint invariants).
+(scope §"Internal split"). Actual pre-Phase-K: 5 scope
++ 8 commits = **13**, vs m5b's 7 + 6 = 13. m6 met the
+m5b precedent; the slight redistribution (more commits
+rounds, fewer scope rounds) reflects that m6's hot
+surface was implementation-side (lazy-load API)
+rather than scope-side (taint invariants).
+
+### Phase K commits.md amendment — 2 rounds
+
+Post-RATIFIED scope amendment per owner `891b93a`. The
+amendment plan reused the commits.md adversarial-review
+shape; convergence trail:
+
+| Round | B/M/N | Notable carries |
+|---|---|---|
+| 1 → 2 (`commits-pi-review-9.md`) | 2 B / 1 M / 1 N | B1 confirm-overlay citations split between `lib.rs` (`InputMode` / answer helpers) and `confirm.rs` (`ConfirmQueue`, `run_ttl_ticker`, `paint_confirm_overlay`, `CONFIRM_RESOLVED_TOPIC`); `paint.rs` is the plain `RenderNode` painter only. B2 cK4 keys aligned to live `Answer::from_key` (`y`/`a`/`Enter`/`n`/`d`/`Esc`/`s`; no `t`/Toggle). M1 own-answer queue prune via `CONFIRM_REPLY_TOPIC` + `ConfirmQueue::handle_confirm_reply`. N1 cK2/cK3 size justifications. |
+| 2 → CONVERGED (`commits-pi-review-10.md`) | 0 B / 0 M / 0 N | All four prior findings closed. |
+
+The amendment closed cleanly in 2 rounds against a
+narrow surface (one production ui_loop module + one
+integration test + one manual-validation appendix);
+the cluster-fix lesson from the lazy-load runtime
+(commits.md rounds 5–6) carried over — pi-9's four
+findings landed as one round-2 fold rather than four
+sequential patches.
+
+### Retrospective — 5 rounds (and counting)
+
+| Round | B/M/N | Notable carries |
+|---|---|---|
+| 1 → 2 | 3 B / 4 M / 2 N | B1 c27 schematic transcripts → authentic stub-driven captures; B2 §4 split into implementation / witnessed; B3 four row corrections; M1 row 67 allow sites; M2 row 63 `--since` grammar; M3 `RFL_SPAWN_TRACE_LOG` §4.6 patch; M4 I1 deviation reframe |
+| 2 → 3 | 4 B / 3 M / 2 N | B1 env_clear regression fix `6f1fe4b`; B2 rendered-TUI capture partial closure + `Stdio::null()` finding; B3 ratification-state inconsistency reframe; B4 row 68 + row 64 narrowings; M1..M3 phase-summary corrections |
+| 3 → 4 | 0 B / 0 M / 3 N (NON-BLOCKING) | N1 on-branch hashes; N2 §6 Stream F wording; N3 final verdict tightened |
+| 4 → 5 | 0 B / 0 M / 1 N (NON-BLOCKING) | N1 hash-trail nit (worktree-relative); resolved out-of-band by Route 1 ratification + Phase K |
+| 5 → ? | (pending pi round 5) | Phase K absorption + hard requirement #3 ✓ flip |
+
+Total pi rounds m6: 5 scope + 8 commits + 2 commits
+amendment + 5 (and counting) retro = **20**.
+Post-Phase-K, m6 sits at the upper end of the
+multi-phase-amendment spectrum — closer to m5a's
+6+drift-tail shape than m5b's 13, reflecting that the
+RATIFIED-scope-then-amend dance for hard requirement
+#3 added a full sub-bracket the original scope didn't
+contemplate. The lesson is in §5 follow-ups: the
+amendment was the right call (the rendered modal is
+load-bearing for hard requirement #3) but a tighter
+"is the production binary actually rendering?" check
+during scope/commits review would have surfaced it
+pre-RATIFY.
 
 ---
 
@@ -745,7 +954,7 @@ pending witnessed items.
 | Post-`rfl init --yes` PP1 invariants hold | ✓ c02 + c04 (`rfl_init_materialises_package_dir.rs`) | ✓ + this round's stub-driven capture confirmed |
 | `brew install` works in a clean macOS shell | ✓ c19 + c20 formula + automation | ◐ owner-run on clean macOS **pending** (manual-validation.md §G; owner-judgment item 10 manual-only) |
 | 5-line bootstrap in `README.md` verbatim + works against LiteLLM | ✓ c21 README copy | ◐ LiteLLM-live run **pending** (manual-validation.md §1 placeholder; LiteLLM partial-outage carveout 1 below) |
-| `manual-validation.md` §3 wire-shape note + §5 transcripts | ✓ c27 §1–§7 + §G skeleton; ✓ c28 transcript filenames; ✓ round 2 transcript-recapture | ◐ §5 attached-tmux render **pending** (transcripts' `00-CONTEXT.md`; B1 closure); §1 / §2 / §4 / §6 / §7 / §G witnessed-fill **pending** (§4.5 below) |
+| `manual-validation.md` §3 wire-shape note + §5 transcripts | ✓ c27 §1–§7 + §G skeleton; ✓ c28 transcript filenames; ✓ round-2 transcript-recapture; ✓ cK6 §5.1 recapture against rewired binary | ✓ **§5 rendered-TUI render closed by cK6** (transcripts under `section-5-phase-k/`); §1 / §2 / §4 / §6 / §7 / §G witnessed-fill **pending** (§4.5 below) |
 | Retrospective + decisions rows + glossary + v0.1 → main merge plan | ✓ this document + drift commits in §7 | ✓ retro round-2 |
 
 ### Defensive negatives landed
@@ -784,12 +993,12 @@ contradicts row 33 / scope acceptance; round 3
 drops the wedge and routes the work as a pre-merge
 ratification-candidate sweep.
 
-| `manual-validation.md` section | Live status (round 3) | Closure path |
+| `manual-validation.md` section | Live status (round 5) | Closure path |
 |---|---|---|
 | §1 cold-start LiteLLM walkthrough (`manual-validation.md:52-53`) | ⏳ pending | Driver runs the 5-line bootstrap on a clean lab worktree against the dev LiteLLM endpoint (using `mlx/qwen3.6-35b` per the 03:10 owner note if the default `vllm/qwen3.6-27b` is still down). Pre-merge sweep. |
 | §2 install walkthrough (`manual-validation.md:82`) | ⏳ pending | Driver runs `rfl install rfl-mailcat --project-root "$PROJECT"` after §1 and pastes the post-install lock+plugin-dir state. Pre-merge sweep. |
 | §4 macOS CI run URL (`manual-validation.md:96-109`) | ⏳ pending | Driver pastes the green `m6 / macOS` workflow URL from the first ratification-candidate push. Hard gate per scope §"Acceptance summary" + the m3/m4/m5a/m5b precedent. Pre-merge. |
-| §5 rendered TUI capture (`transcripts/section-5/00-CONTEXT.md` open issue) | ◐ partial — wire + audit captures real & landed; render capture blocked on frontend-supervisor `Stdio::null()` stdio shape (not a tmux-harness limitation). | **Owner question** (per §1 hard req #3 disposition + `00-CONTEXT.md`): option A — ratify §5 on wire-shape + audit + integration-test evidence (route rendered modal capture to v2 with the TUI rework); option B — one-line frontend-supervisor amendment pre-merge to inherit parent stdio for TUI subprocess, then re-capture rendered modal. Either route lands inside the ratification-candidate window. |
+| §5 rendered TUI capture | ✓ **closed** — owner ratified **Route 1** in `891b93a`; stdio fix at `9ec398a` (`Stdio::null()` → `inherit`); Phase K cK1..cK6 rebuilt the production ui_loop (input row + confirm overlay + overlay-key wiring + tmux-driven e2e test) and recaptured §5 against the rewired binary. | Closure artefacts: `transcripts/section-5-phase-k/01-after-launch.txt` (rendered input row), `02-modal.txt` (rendered confirm overlay; all four §J2 substring greps fire), `04-audit.txt` + `05-sqlite-audit.txt` + `06-sqlite-entries.txt` (live `AuditKind` rows + the `text` entry from cK2's keystroke publish); manual-validation.md §5.1 walks them inline. |
 | §6 audit-log inspection (`manual-validation.md:334-335`) | ⏳ pending | Driver runs `rfl audit --project-root "$PROJECT" --kind confirm_request --kind confirm_allowed` against the §5 project after the live LiteLLM walkthrough and pastes the rows. Round-3's `04-audit.txt` is the stub-driven companion. Pre-merge. |
 | §7 syd-pty failure-mode + fix verification (`manual-validation.md:383-385`) | ⏳ pending | Driver runs the pre-m6 build against a clean shell (records the `setup_pty` failure) + the m6 build inside `nix develop` (records the clean entry). Pre-merge. |
 | §G Homebrew install smoke (`manual-validation.md:387-420+`) | ⏳ pending (expected steps only) | Owner runs the post-tap-publication `brew install` on a clean macOS arm64 host; owner-judgment item 10 default is manual-only (no CI workflow runs `brew install`). Pre-merge. |
@@ -1372,10 +1581,26 @@ per the m5a `816b273` / m5b precedent — they're on the
 v0.1 branch when the merge fires, so `main` receives
 them in the same fast-forward).
 
+**Post-Phase-K merge surface.** Phase K (cK1..cK6) +
+the stdio fix at `9ec398a` + the Route 1 ratification
+at `891b93a` are all on `agents/m6/drift` ahead of the
+ratification-candidate cut, ancestors of HEAD per
+`git log`. They will travel into `rafaello-v0.1` in the
+same ff sequence as the rest of the m6 surface — no
+cherry-pick, no out-of-band amendment branch, no
+separate fast-forward. The drift commits in §7 land on
+top of the Phase K tip; `main` receives the whole
+m0..m6 + Phase K + drift sequence in one
+fast-forward. (Round-4's hash-trail nit was specific to
+pi's sibling worktree; on `agents/m6/drift` the
+on-branch hashes are self-consistent.)
+
 After the merge:
 
-- `main` HEAD includes every m0..m6 commit + the §7
-  drift commits.
+- `main` HEAD includes every m0..m6 commit, the Phase
+  K cK1..cK6 commits, the Route 1 / stdio amendment
+  commits (`9ec398a`, `891b93a`), and the §7 drift
+  commits.
 - `rafaello-v0.1` is preserved as the v1 release tag
   (G2's `.github/workflows/rafaello-release.yml` is
   triggered by `v*` tags; the owner cuts `v0.1.0`
@@ -1385,65 +1610,57 @@ After the merge:
 
 ---
 
-**Open items for pi round 3.**
+**Open items for pi round 5.**
 
-1. **§5 rendered TUI capture — owner routing**.
-   Wire-shape evidence (audit + sqlite + bus-event
-   log) is real and on disk; the rendered modal
-   captures (01/02/03) remain blank. The structural
-   cause is the frontend supervisor spawning rfl-tui
-   with `Stdio::null()` stdin/stdout
-   (`frontend/mod.rs:202-205`) — not a tmux-harness
-   limitation. Pi/owner to route:
-   - **Option A**: ratify §5 on wire-shape + audit
-     + integration-test evidence; route the rendered
-     modal capture to v2 alongside a TUI-render
-     rework.
-   - **Option B**: apply the one-line
-     frontend-supervisor amendment pre-merge (drop
-     `Stdio::null()` for the TUI subprocess) and
-     re-capture during the pre-merge sweep.
+1. **Phase K absorption** — §1 hard requirement #3
+   flipped ✓; §2 appends Phase K (cK1..cK6) as a
+   post-RATIFIED amendment; §3 appends the 2-round
+   commits.md amendment + the retro-rounds trail; §4
+   acceptance table flips the §5 cell ✓; §4.5 row
+   flips ✓ with closure cites to
+   `transcripts/section-5-phase-k/` + manual-validation
+   §5.1; §5 narrative below documents the pre/post
+   evidence pair; §9 updates the merge surface to name
+   Phase K explicitly. Pi to confirm the round-5
+   absorption is self-consistent.
 2. **Phase I1 assertion-shape deviation** — c23 keeps
    the literal filename
    `core_tools_list_registered_before_provider_spawn.rs`
    and changes the assertion anchor to
    `StartupEvent::ToolSchemaCatalogBuilt` ordering.
-   Pi to ratify the shape change.
+   Pi to ratify the shape change (carried from
+   round 3 / round 4; no new movement).
 3. **§6 stream-RFC PP1 patch candidate** (real-file
    constraint on `bin/<plugin-bin>`) — pi to confirm
    whether this needs a stream RFC patch or is
-   `overview.md`-only.
-4. **`decisions.md` rows 59–68 draft text** — round 3
-   corrected 62 (anyhow + env_clear footnote), 63
-   (dropped redundant `--since` enum), 64 (narrowed
-   manual-validation overclaim), 67 (correct allow
-   site cites), 68 (`LoadPolicy::Lazy { command }`
-   shape + correct `register_lazy` line cite). Pi to
-   re-review each row for wording precision and live-
-   shape grounding.
+   `overview.md`-only (carried from round 3 / 4).
+4. **`decisions.md` rows 59–68 draft text** — text
+   unchanged at round 5; pi to re-confirm wording
+   precision is still load-bearing post-Phase-K. No
+   new row is needed for Phase K (the ui_loop
+   surface is `rafaello-tui` internals, not a
+   decisions-table primitive); the existing
+   manual-validation appendix §5.1 + retrospective §2
+   / §5 narrative carry the Phase K record.
 
-Convergence trajectory after round 3:
-**round 2 (4B / 3M / 2N) → round 3 (0B / 0M / 0N
-+ 1 owner-routing question — open item 1)**.
-- B1 closed via lockin `env_clear` preservation fix.
-- B2 → narrowed to the owner-routing question above.
-- B3, B4 closed by row-text fixes.
-- M1, M2, M3 closed by phase-summary +
-  defensive-negatives + glossary corrections + the
-  new c10-bypass-explanation + the
-  `fake_syd_records_cargo_bin_exe_env_after_env_clear`
-  test that closes the regression-test gap.
-- N1, N2 closed by global rename + row-63 trim.
+Convergence trajectory after round 5:
+**round 4 (0B / 0M / 1N NON-BLOCKING) → round 5
+(0B / 0M / 0N target)**. Round 4's lone N (worktree-
+relative hash trail) is moot on `agents/m6/drift`,
+and the open `Stdio::null()` routing question that
+round 4 deliberately left open is resolved by Route 1
++ Phase K.
 
-Provisional verdict request: **converged on
-implementation-side blockers; one owner-routing
-question remains for §5 disposition**. Either route
-(option A wire-shape ratification, or option B
-one-line frontend stdio amendment + recapture) lands
-inside the ratification-candidate window; retro is
-ready to RATIFY **after** the §4.5 pre-merge
-ratification-candidate sweep fills the witnessed
-gates (macOS CI URL, §1/§2/§6/§7 operator runs, §G
-Homebrew smoke, and — if option B — the §5 rendered
-recapture). (Pi-3 round-3 N-3 correction over the
-round-3 "ready now" framing.)
+Provisional verdict request: **converged on all
+implementation-side blockers and all retrospective
+content; ready to RATIFY after the §4.5 pre-merge
+ratification-candidate sweep fills the remaining
+witnessed gates** (macOS CI URL, §1/§2/§6/§7 operator
+runs, §G Homebrew smoke, optional real-LiteLLM §5
+transcript per the carveout). Phase K's rendered
+recapture closes the §5 witness gate inside the
+retrospective itself; the merge fires immediately
+after pi's final pass + the driver's witnessed-gate
+fill.
+
+RETRO READY
