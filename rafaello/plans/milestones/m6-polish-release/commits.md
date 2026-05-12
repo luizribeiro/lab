@@ -1,10 +1,12 @@
 # m6 — v1 polish + release readiness — commits
 
-> **Status:** round 7 — folds `commits-pi-review-6.md`
-> (B/0 M/0 N/2, **NON-BLOCKING**). Claude-authored
-> 2026-05-12; awaiting pi round 7. Folded pi-6 N-1
-> and N-2 (documentation consistency); no mechanics
-> changes. Target: pi round 7 returns CONVERGED
+> **Status:** round 8 — folds `commits-pi-review-7.md`
+> (B/0 M/0 N/1, **NON-BLOCKING**). Claude-authored
+> 2026-05-12; awaiting pi round 8. One-word typo
+> fold: "Three pairs:" → "Four pairs:" in the
+> two-stage-tests appendix (the heading now lists
+> four bullets after round-7's c24a→c24b ladder
+> addition). Target: pi round 8 returns CONVERGED
 > 0/0/0.
 >
 > ---
@@ -3949,7 +3951,7 @@ dropped.
   is amended in c06 to point at the in-tree
   bundled-plugin manifests (two-stage ladder).
 - **Two-stage tests called out explicitly** (m0 retro
-  §4.3). Three pairs:
+  §4.3). Four pairs:
   - c01 → c02 (`rfl_init_with_existing_lock_idempotent.rs`
     + the `NotYetImplemented` arm extended into success
     on the previously-failing invocation when c02
