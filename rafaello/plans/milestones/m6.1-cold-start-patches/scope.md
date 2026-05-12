@@ -1,9 +1,9 @@
 # m6.1 — v0.1.1 cold-start patches — scope
 
-> **Status:** round 5 — claude-authored 2026-05-12, awaiting
-> pi round 5. Folds `scope-pi-review-4.md` (0B / 0M / 1N,
-> NON-BLOCKING) on top of round 4. Target verdict: CONVERGED
-> (0/0/0).
+> **Status:** round 5 — **CONVERGED** (`scope-pi-review-5.md`
+> verdict 0B / 0M / 0N, claude-authored 2026-05-12). Pinging
+> owner for ratification. Folds `scope-pi-review-4.md`
+> (0B / 0M / 1N, NON-BLOCKING) on top of round 4.
 >
 > **Round-5 changelog (single pi-4 nit folded):**
 >
