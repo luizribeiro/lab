@@ -1,10 +1,34 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 3 draft — folds
+> **Status: round 4 draft — folds
+> `retrospective-pi-review-3.md` (0 B / 0 M / 3 N,
+> **NON-BLOCKING**).** Claude-authored 2026-05-12;
+> awaiting pi round 4. Round-4 changelog: folded pi-3
+> N-1 (verified on-branch commit hashes
+> `6f1fe4b` / `de8e187` per the local `git log` —
+> pi-3 was working from cherry-picked hashes
+> `7c3c18d` / `c61cc0b` on its own worktree, so no
+> text change needed for the on-branch references),
+> N-2 (§6 Stream F line corrected from
+> `load.triggers.kind = "tool"` to `load.command` /
+> `LoadPolicy::Lazy { command }` per Stream F live
+> shape), N-3 (final verdict sentence tightened — the
+> retro is ready to RATIFY **after** the §4.5
+> pre-merge ratification-candidate sweep fills the
+> witnessed gates, not "now"). The `Stdio::null()`
+> owner-routing question for §5 disposition remains
+> open by design and resolves at retrospective
+> ratification. Target: pi round 4 returns
+> CONVERGED 0/0/0.
+>
+> ---
+>
+> **(History — round 3 draft, kept for trajectory.)**
+>
+> Round 3 folded
 > `retrospective-pi-review-2.md` (4 B / 3 M / 2 N,
-> blocking).** Claude-authored 2026-05-12; awaiting pi
-> round 3. Round 3 closed both blocker implementation
-> gaps via sibling fix commits before this fold:
+> blocking). Round 3 closed both blocker implementation
+> gaps via sibling fix commits before its fold:
 >
 > - **B1 (env_clear regression)** — closed by
 >   `fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty
@@ -919,9 +943,14 @@ require stream patches:
   `rfl init` matches the live `Lock` shape; no schema
   drift.
 - **Stream E (renderer):** unchanged.
-- **Stream F (manifest):** `load.triggers.kind = "tool"`
-  is the existing manifest field; the runtime is new but
-  the field shape is not.
+- **Stream F (manifest):** `load.command = [...]` /
+  table-form `command` is the existing manifest field
+  (per `streams/f-manifest/rfc-manifest-schema.md:272-280,
+  :318-325`); the compiled
+  `LoadPolicy::Lazy { command }` runtime is new but the
+  manifest field shape is not. (Pi-2 round-2 §B4 / pi-3
+  round-3 N-2 correction over the round-2
+  `load.triggers.kind = "tool"` framing.)
 
 **One narrow candidate for pi to assess:** the
 **`bin/<plugin-bin>` real-file PP1 layout** (round-4
@@ -1408,8 +1437,13 @@ Convergence trajectory after round 3:
 
 Provisional verdict request: **converged on
 implementation-side blockers; one owner-routing
-question remains for §5 disposition**. If owner picks
-option A (wire-shape ratification), retro is ready to
-RATIFY now. If owner picks option B (frontend stdio
-amendment), one more code commit + transcript
-recapture lands before retro RATIFIED.
+question remains for §5 disposition**. Either route
+(option A wire-shape ratification, or option B
+one-line frontend stdio amendment + recapture) lands
+inside the ratification-candidate window; retro is
+ready to RATIFY **after** the §4.5 pre-merge
+ratification-candidate sweep fills the witnessed
+gates (macOS CI URL, §1/§2/§6/§7 operator runs, §G
+Homebrew smoke, and — if option B — the §5 rendered
+recapture). (Pi-3 round-3 N-3 correction over the
+round-3 "ready now" framing.)
