@@ -1,8 +1,39 @@
 # m6.1 — v0.1.1 cold-start patches — scope
 
-> **Status:** round 3 — claude-authored 2026-05-12, awaiting
-> pi round 3. Folds `scope-pi-review-2.md` (2B / 1M / 3N,
-> BLOCKING) on top of round 2.
+> **Status:** round 4 — claude-authored 2026-05-12, awaiting
+> pi round 4. Folds `scope-pi-review-3.md` (0B / 0M / 2N,
+> NON-BLOCKING) on top of round 3. Target verdict: CONVERGED.
+>
+> **Round-4 changelog (both pi-3 nits folded):**
+>
+> - **N-1.** §A0 step 2 now explicitly names the
+>   `RFL_BUNDLED_PLUGINS_DIR` env-arm join used by
+>   `resolve_plugin_dir_for_bundled`:
+>   `<RFL_BUNDLED_PLUGINS_DIR>/<names.dev_crate>` (e.g.
+>   `<env-root>/openai/`). c01 unit tests add the env-arm
+>   case for `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`.
+> - **N-2.** §C2's `CARGO_TARGET_DIR` guard wording aligned
+>   with the actual guard predicate. The guard is
+>   conservative (skip on any non-empty `CARGO_TARGET_DIR`,
+>   not only external paths) — round-4 wording now says
+>   "when `CARGO_TARGET_DIR` is set" consistently and the
+>   round-3 "external" phrasing is removed. Tightening the
+>   guard to test externality is deferred (filed as a
+>   follow-up): not worth the path-canonicalisation
+>   complexity for a regression test.
+>
+> Cumulative trajectory: round 1 → 2B/5M/4N (BLOCKING) →
+> round 2 → 2B/1M/3N (BLOCKING) → round 3 → 0B/0M/2N
+> (NON-BLOCKING) → round 4 (this commit), target verdict
+> CONVERGED.
+>
+> ---
+>
+> **(History — round 3 status, preserved for traceability.)**
+>
+> Round 3 — claude-authored 2026-05-12. Folds
+> `scope-pi-review-2.md` (2B / 1M / 3N, BLOCKING) on top of
+> round 2.
 >
 > **Round-3 changelog (every pi-2 finding folded):**
 >
@@ -307,10 +338,22 @@ but no test exercised `rfl init` against that layout.
 2. New function
    `bundled::resolve_plugin_dir_for_bundled(names:
    &BundledPluginNames) -> Result<PathBuf, BundledError>`
-   that mirrors the existing `resolve_plugin_dir` layout
-   resolution but uses `names.release_dir` for the
-   release-arm join and `names.dev_crate` for the
-   workspace-walk-up arm.
+   that mirrors the existing `resolve_plugin_dir` three-arm
+   resolution:
+   - **env arm**:
+     `<RFL_BUNDLED_PLUGINS_DIR>/<names.dev_crate>` (e.g.
+     `<env-root>/openai/`). The dev-crate axis is the
+     stable logical identifier — same axis the §A1
+     `RFL_BUNDLED_BIN_<NAME_UPPER>` munge derives from —
+     and lets C1's in-process test mirror the in-tree
+     `rafaello/crates/rafaello-openai/` fixture under a
+     temp `<env-root>/openai/` directory.
+   - **release arm**: joins `names.release_dir`
+     (e.g. `rfl-openai`) under
+     `<rfl-exe-parent>/../share/rafaello/plugins/`.
+   - **dev fallback**: walks up from `<rfl-exe-parent>`
+     looking for a workspace `Cargo.toml`; if found,
+     returns `<workspace>/crates/rafaello-<names.dev_crate>/`.
 3. `init.rs::run` switches from
    `bundled::resolve_plugin_dir(BUNDLED_OPENAI)` to
    `bundled::resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`,
@@ -338,6 +381,7 @@ path that needs it.
 - `resolve_plugin_dir("rfl-mailcat")` release-arm hit
   (regression guard — proves m6.1 did not break install).
 - `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`
+  env-arm hit (via `RFL_BUNDLED_PLUGINS_DIR`) +
   release-arm hit + dev-fallback hit.
 - `resolve_runtime_binary(&OPENAI_NAMES)` env-override hit,
   release-arm hit, dev-fallback hit, not-found.
@@ -544,15 +588,22 @@ test); C4 asserts only that the tmux session exits cleanly.
 override, exercises the dev fallback.)** New test
 `rafaello/crates/rafaello/tests/rfl_init_runtime_binary_outside_cargo_env.rs`:
 
-- **Skip guard.** If `std::env::var_os("CARGO_TARGET_DIR")
+- **Skip guard.** If
+  `std::env::var_os("CARGO_TARGET_DIR")
   .map(|v| !v.is_empty()).unwrap_or(false)`, print a
   diagnostic ("rfl_init_runtime_binary_outside_cargo_env:
   covers default target-dir layout only — set
   RFL_BUNDLED_BIN_OPENAI or unset CARGO_TARGET_DIR") and
-  return. This matches §A1's resolver contract: external
-  `CARGO_TARGET_DIR` is out-of-dev-fallback. The C1
-  in-process test still covers the explicit-override path
-  on external-target hosts.
+  return. The guard is **conservative**: it skips whenever
+  `CARGO_TARGET_DIR` is set, even if the value happens to
+  point at the workspace-default `<workspace>/target`. The
+  alternative (canonicalise the env value and compare
+  against the workspace root) buys a small coverage edge
+  case at the cost of path-canonicalisation complexity in
+  a regression test, which is not worth it. The C1
+  in-process test covers the explicit-override path on
+  external-target hosts; the no-override dev-fallback is
+  the only path C2 cares about.
 - Build `rfl` via `workspace_bin("rfl")` and the bundled
   runtime via `workspace_bin("rfl-openai")` (the real
   workspace-target binary). Both land at
@@ -946,7 +997,7 @@ swap" lands as a load-bearing term).
 
 ## Disagreements with pi (cumulative)
 
-None across rounds 1 and 2. All four blockers across the
-two rounds (pi-1 B-1, pi-1 B-2, pi-2 B-1, pi-2 B-2), all six
-majors, and all seven nits were substantive and accurate;
-every one is folded. No standing disagreement.
+None across rounds 1–3. All four blockers (pi-1 B-1/B-2,
+pi-2 B-1/B-2), all six majors, and all nine nits across the
+three review rounds were substantive and accurate; every
+one is folded. No standing disagreement.
