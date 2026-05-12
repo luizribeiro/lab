@@ -690,6 +690,14 @@ impl PluginSupervisor {
         // SandboxedCommand does not expose private_tmp pre-spawn (pi-2 §5), so m2 cannot
         // re-inject those vars. Plugins use RFL_PRIVATE_STATE_DIR for scratch (NOT a
         // plugin ABI guarantee per pi runtime-extensibility — m2 retrospective records).
+        //
+        // m6 retro round-3 fix (pi-2 §B1): the sandbox-internal env
+        // `CARGO_BIN_EXE_syd-pty` that lockin set on the syd command is preserved
+        // across this `env_clear` by lockin itself — `SandboxedCommand::spawn` /
+        // `status` / `output` re-apply sandbox-internal env right before spawn (see
+        // `lockin/crates/sandbox/src/lib.rs` `apply_sandbox_internal_env`). The
+        // supervisor does not need to know about syd-pty discovery — the sandbox
+        // owns it, end-to-end.
         cmd.env_clear();
         for key in &plan.env.pass {
             if let Some(val) = std::env::var_os(key) {

@@ -103,11 +103,13 @@ impl SandboxedCommand {
 
     pub async fn status(&mut self) -> std::io::Result<ExitStatus> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         self.command.status().await
     }
 
     pub async fn output(&mut self) -> std::io::Result<Output> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         self.command.output().await
     }
 
@@ -117,10 +119,22 @@ impl SandboxedCommand {
         }
     }
 
+    /// Re-applies sandbox-internal env that callers may have wiped
+    /// via `env_clear`. Mirrors the sync sibling in
+    /// `crate::SandboxedCommand::apply_sandbox_internal_env`. See
+    /// m6 retro round-3 fix (pi-2 §B1).
+    fn apply_sandbox_internal_env(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(pty) = self.sandbox.syd_pty.as_deref() {
+            self.command.env("CARGO_BIN_EXE_syd-pty", pty);
+        }
+    }
+
     /// Spawns the sandboxed child, transferring sandbox ownership to
     /// the returned [`SandboxedChild`].
     pub fn spawn(mut self) -> std::io::Result<SandboxedChild> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         let child = self.command.spawn()?;
         Ok(SandboxedChild {
             child,

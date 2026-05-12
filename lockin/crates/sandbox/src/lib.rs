@@ -765,7 +765,10 @@ impl SandboxedCommand {
     }
 
     /// Clears the inherited parent environment. The dynamic-linker
-    /// blocklist is re-applied right before spawn as defense in depth.
+    /// blocklist and sandbox-internal env (currently
+    /// `CARGO_BIN_EXE_syd-pty`, needed by syd to find its `syd-pty`
+    /// helper) are re-applied right before spawn as defense in
+    /// depth.
     ///
     /// Note: the sandbox injects `TMPDIR`, `TMP`, and `TEMP` pointing
     /// at the per-sandbox private tmp directory so that programs that
@@ -781,6 +784,23 @@ impl SandboxedCommand {
     pub fn env_clear(&mut self) -> &mut Self {
         self.command.env_clear();
         self
+    }
+
+    /// Re-applies sandbox-internal env that callers may have wiped
+    /// via `env_clear`. Currently a single key:
+    /// `CARGO_BIN_EXE_syd-pty`, which `syd` reads at startup to
+    /// locate its PTY helper. Without this re-application, callers
+    /// that clear the env (the canonical pattern for plugin
+    /// supervisors that build env from a declared manifest policy)
+    /// would silently break `syd`'s PTY setup — the failure mode
+    /// surfaces as a `setup_pty` error and the sandboxed child
+    /// never runs. Called automatically by `spawn` / `status` /
+    /// `output`.
+    fn apply_sandbox_internal_env(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(pty) = self.sandbox.syd_pty.as_deref() {
+            self.command.env("CARGO_BIN_EXE_syd-pty", pty);
+        }
     }
 
     pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
@@ -805,11 +825,13 @@ impl SandboxedCommand {
 
     pub fn status(&mut self) -> std::io::Result<ExitStatus> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         self.command.status()
     }
 
     pub fn output(&mut self) -> std::io::Result<Output> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         self.command.output()
     }
 
@@ -823,6 +845,7 @@ impl SandboxedCommand {
     /// the returned [`SandboxedChild`].
     pub fn spawn(mut self) -> std::io::Result<SandboxedChild> {
         self.strip_dynamic_linker_env();
+        self.apply_sandbox_internal_env();
         let child = self.command.spawn()?;
         Ok(SandboxedChild {
             child,

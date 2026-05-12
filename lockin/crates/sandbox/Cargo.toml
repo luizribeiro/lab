@@ -42,3 +42,7 @@ required-features = ["test-fixture"]
 [[test]]
 name = "fake_syd_resolution_fails_hard_when_pty_missing"
 required-features = ["test-fixture"]
+
+[[test]]
+name = "fake_syd_records_cargo_bin_exe_env_after_env_clear"
+required-features = ["test-fixture"]
