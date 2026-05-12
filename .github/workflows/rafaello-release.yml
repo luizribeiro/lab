@@ -1,0 +1,59 @@
+name: rafaello-release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  build-and-upload:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: ubuntu-latest
+            system: aarch64-linux
+          - os: macos-14
+            system: aarch64-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+        with:
+          determinate: true
+          extra-conf: |
+            extra-platforms = aarch64-linux
+
+      - uses: DeterminateSystems/magic-nix-cache-action@c6a5746789488c8753af0d61fc6b5d79a80391f3
+        with:
+          use-flakehub: false
+
+      - name: nix build .#packages.${{ matrix.system }}.rafaello
+        run: nix build .#packages.${{ matrix.system }}.rafaello -L
+
+      - name: Create tarball
+        run: tar czf rafaello-${{ github.ref_name }}-${{ matrix.system }}.tar.gz -C result .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: rafaello-${{ github.ref_name }}-${{ matrix.system }}.tar.gz
+
+  update-formula:
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rewrite homebrew formula with release artifact SHAs
+        run: ruby homebrew/update-shas.rb homebrew/rafaello.rb "${{ github.ref_name }}"
+
+      - name: Upload rewritten formula as release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: homebrew/rafaello.rb
