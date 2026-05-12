@@ -1,8 +1,55 @@
 # m6 — v1 polish + release readiness — scope
 
-> **Status:** round 2 — claude-authored 2026-05-12, awaiting pi
-> round 2. Folds `scope-pi-review-1.md` (B/7 M/6 N/4, verdict:
-> blocking). Round 1 was BLOCKING on live-code contradictions:
+> **Status:** round 3 — claude-authored 2026-05-12, awaiting pi
+> round 3. Folds `scope-pi-review-2.md` (B/2 M/5 N/3, verdict:
+> blocking-but-narrowing) on top of round 2's full
+> `scope-pi-review-1.md` fold. Round 2's residual issues were
+> all about lining the new install/release-tree story up with
+> the **live** `rfl chat` package resolver
+> (`${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/rafaello.toml`,
+> `decisions.md` row 25), making the J2 tmux script executable
+> against the **live** confirm overlay copy
+> (`rafaello-tui/src/confirm.rs:160-211` — title `confirm`,
+> body `args:` / `sinks:` / `taint:` lines), and tidying small
+> contradictions (Homebrew default not actionable; macOS x86_64
+> promised but unsupported; bus-fixture inclusion contradicted
+> between owner item 9 and acceptance). Round 3 folds:
+>
+> - **Phase A + Phase B now copy the bundled package tree into
+>   `${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/`** with the
+>   manifest named `rafaello.toml` (per `decisions.md` row 25)
+>   so the live `rfl chat` resolver finds it (B-1). New
+>   acceptance assertion: post-`rfl init`,
+>   `.rafaello/plugins/<topic-id-of-openai>/rafaello.toml`
+>   exists and digests match the lock.
+> - **Phase D `rfl audit` gains `--project-root`** mirroring
+>   `rfl chat` + `rfl init`; J2 calls it with `--project-root
+>   "$PROJECT"`. **J2 expected substrings rewritten** against
+>   live `confirm.rs` overlay copy: ` confirm ` (title border),
+>   `sinks: mail` (overlay sinks line), `alice@example.com`
+>   (echoed `args:` JSON) (B-2).
+> - **Phase G G.β default made actionable** absent owner reply
+>   — `commits.md` can proceed on G.β; owner can still override
+>   at ratification (M-1).
+> - **Acceptance + decisions row 65 use "every release binary"**
+>   listed explicitly; `rafaello-bus-fixture` excluded per
+>   owner-judgment item 9 default (M-2).
+> - **macOS Homebrew promise narrowed to `aarch64-darwin`
+>   only**, matching the flake's `systems = [aarch64-darwin,
+>   aarch64-linux, x86_64-linux]` (M-3). `x86_64-darwin` listed
+>   in §"Out of scope" as a v2 expansion if demand surfaces.
+> - **Phase C C3 swapped for a fake-`syd` wrapper test** that
+>   records `argv` + environment and asserts
+>   `CARGO_BIN_EXE_syd-pty` was set on the child, plus a
+>   sibling-discovery tempdir test (M-4).
+> - **Phase B1 makes `--fixture: Option<PathBuf>` explicit**
+>   with clap `required_unless_present = "plugin"` and a
+>   `conflicts_with` clause (M-5).
+> - **Owner-judgment item count corrected** to 13 (N-1);
+>   `--no` mention reworded (N-2); §5 path component
+>   replaced with `transcripts/section-5/` (N-3).
+>
+> Round 1 was BLOCKING on live-code contradictions:
 > the `nix build .#rafaello` package output already exists but
 > is single-bin; the advertised `rfl install <tool>` is not the
 > live install shape; the audit-CLI SQL targeted non-existent
@@ -52,23 +99,45 @@
 >   (tmux transcript files are the only required evidence)
 >   (N-4).
 >
-> Live-code spot-checks performed before round 2:
+> Live-code spot-checks (cumulative round 2 + round 3):
+> - `flake.nix:24-28` — `systems = [aarch64-darwin,
+>   aarch64-linux, x86_64-linux]`; no `x86_64-darwin` (round-3
+>   M-3).
 > - `flake.nix:71-73` + `rafaello/nix/default.nix:10-12` +
->   `rafaello/nix/package.nix:16` — confirms B-1.
+>   `rafaello/nix/package.nix:16` — confirms round-2 B-1.
 > - `rafaello/crates/rafaello/src/install.rs:32-43` — confirms
->   B-2.
+>   round-2 B-2 (`fixture: PathBuf` required).
+> - `rafaello/crates/rafaello/src/install.rs:155-176` and
+>   `rafaello/crates/rafaello/src/lib.rs:235-276` — confirms
+>   round-3 B-1: both `install` (other plugins' validation) and
+>   `chat` resolve plugin directories via
+>   `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-derive(canonical_id)>/`
+>   and read `rafaello.toml` (per `decisions.md` row 25).
+> - `rafaello/crates/rafaello-tui/src/confirm.rs:160-211` —
+>   confirms round-3 B-2: live overlay renders title `confirm`,
+>   then lines `<summary>` (gate-built
+>   `"<tool> via <plugin> — sinks: [<classes>]"`), `args:
+>   <json>`, `sinks: <comma-list>`, `taint:` / `provenance:`,
+>   `<ttl>s remaining`. No "Allow this call?" prompt string
+>   exists.
+> - `rafaello/crates/rafaello-tui/src/lib.rs:70-72` — confirms
+>   `KeyCode::Char('a')` (with `'y'` and Enter) maps to
+>   `Answer::Allow`; `'q'` is not listed there but is the chat-
+>   loop quit key from m3.
+> - `rafaello/crates/rafaello-core/src/gate/mod.rs:374-378` —
+>   confirms summary format
+>   `"{tool} via {plugin} — sinks: [{classes}]"`.
 > - `rafaello/crates/rafaello-core/src/audit/mod.rs:114-123` —
->   confirms B-4 column list `seq, at, kind, request_id,
->   payload`.
+>   confirms round-2 B-4 column list.
 > - `rafaello/crates/rafaello-core/src/session/mod.rs:99-128` —
->   confirms B-4 `entries` shape (no `call_id` column).
+>   confirms round-2 B-4 `entries` shape (no `call_id`).
 > - `rafaello/crates/rafaello-core/src/lock/lock_file.rs:18-34`
 >   + `rafaello/fixtures/m5b-locks/rafaello.lock` — confirms
->   B-5 lock schema and gives a live-shape template.
-> - `lockin/crates/sandbox/src/lib.rs:209-232` — confirms B-6:
->   live lockin only resolves `syd`; no `syd-pty` plumbing
->   anywhere.
-> - `rafaello/crates/rafaello/src/lib.rs:57-69` — confirms M-1.
+>   round-2 B-5 lock schema.
+> - `lockin/crates/sandbox/src/lib.rs:209-232` — confirms
+>   round-2 B-6.
+> - `rafaello/crates/rafaello/src/lib.rs:57-69` — confirms M-1
+>   (only `Chat`, `Install`, `Status`).
 > - `rafaello/crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`
 >   — confirms M-2 crate path.
 
@@ -287,6 +356,44 @@ I coverage / regression anchors, J manual validation.
 
 Commit-count estimate per phase feeds the `commits.md` budget.
 
+### Package-placement invariant (referenced by Phase A + Phase B + Phase F)
+
+**Invariant PP1 (round-3 B-1 fold).** Both `rfl init` and `rfl
+install <plugin>` materialise the bundled package tree into
+`${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/` where
+`<topic-id> = topic_id::derive(canonical_id.to_string())` per
+the live `rfl chat` resolver
+(`crates/rafaello/src/lib.rs:235-244`) and `rfl install`
+already-installed-plugin resolver
+(`crates/rafaello/src/install.rs:160-169`). The manifest file
+inside that directory is named **`rafaello.toml`** (canonical
+name per `decisions.md` row 25) — not `manifest.toml`. The
+directory layout is:
+
+```
+${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/
+├── rafaello.toml           # bundled plugin manifest
+├── openrpc.json            # sibling per decisions.md row 31
+├── bin/
+│   └── rfl-openai          # entry binary
+└── schemas/                # grant-match templates (if any)
+    └── …
+```
+
+The bundled package **source** lives in the release tree at
+`<release-prefix>/share/rafaello/plugins/<plugin-name>/`
+(Phase F lays this out). Cold-start (Phase A) and explicit
+install (Phase B) **copy** that tree into the project's
+`.rafaello/plugins/<topic-id>/` so the live runtime resolver
+finds it. The lock's `entry = "bin/rfl-openai"` is relative to
+the copied package directory; `digest` and `manifest_digest`
+are computed over the **copied** tree so subsequent
+`rfl chat` revalidation passes.
+
+This invariant ties the entire install/runtime story together:
+without it, Phase A writes a valid-looking lock but `rfl chat`
+fails to find the manifest. Pi round-2 B-1 caught the gap.
+
 ### Phase A — `rfl init` (≈4 commits)
 
 Lands the cold-start command per hard requirement #1.
@@ -343,11 +450,20 @@ load = "eager"
 provider_active = "builtin:openai@0.0.0"
 ```
 
+**A2 also materialises the bundled package tree** per
+invariant PP1: copies `<release-prefix>/share/rafaello/plugins/rfl-openai/`
+to `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/`
+with the manifest as `rafaello.toml`. `<topic-id-of-openai> =
+topic_id::derive("builtin:openai@0.0.0")`. The `digest` /
+`manifest_digest` fields written into the lock are the digests
+of the **copied** tree (so subsequent `rfl chat` validation
+matches).
+
 The canonical id `builtin:openai@0.0.0` follows the live
 `CanonicalId` `<source>:<name>@<version>` shape (lockin's m5b
 fixture uses `builtin:` for the bundled provider). The
 `digest` and `manifest_digest` are computed at `rfl init` time
-from the shipped binary + manifest sidecar — not pinned in
+from the copied tree — not pinned in
 source (this mirrors how `rfl install --fixture` computes
 digests today; see `install.rs`).
 
@@ -358,9 +474,10 @@ byte-stable.
 
 **A3 — install-time review prompt.** Prints the default grant
 to stdout (one section per `grant.bundles.default.*` subtable)
-and prompts "Proceed? [y/N]" unless `--yes`. Decline (or `--no`
-TTY answer) writes a lock **without** the `rfl-openai` entry
-(empty `[plugin.…]` map, no `[session].provider_active`), so
+and prompts "Proceed? [y/N]" unless `--yes`. Answering no at
+the TTY prompt writes a lock **without** the `rfl-openai`
+entry (empty `[plugin.…]` map, no
+`[session].provider_active`) and skips the PP1 copy step, so
 the user must later `rfl install` an alternate provider.
 (Owner-judgment item 8 — default: empty-lock on decline.)
 
@@ -370,13 +487,21 @@ the user must later `rfl install` an alternate provider.
 - `rfl_init_writes_default_lock.rs` — `--yes` happy path;
   asserts the generated TOML deserialises via `Lock::from_toml`
   and the round-trip is byte-stable.
+- `rfl_init_materialises_package_dir.rs` (**round-3 B-1**) —
+  after `rfl init --yes`, asserts
+  `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/rafaello.toml`
+  exists, `bin/rfl-openai` is present, and the lock's
+  `digest` / `manifest_digest` fields match the digests of
+  the copied tree (per PP1).
 - `rfl_init_idempotent_no_overwrite.rs` — second run leaves the
-  lock byte-identical and exits 0.
-- `rfl_init_force_rewrites.rs` — `--force` rewrites from
-  defaults.
+  lock byte-identical and exits 0; the materialised package
+  dir is also unchanged.
+- `rfl_init_force_rewrites.rs` — `--force` rewrites lock + the
+  package dir from defaults.
 - `rfl_init_decline_writes_empty_lock.rs` — declining the prompt
   writes an empty lock (no `[plugin.…]` entries, no
-  `[session].provider_active`).
+  `[session].provider_active`) and creates no
+  `.rafaello/plugins/…` entries.
 
 Glossary candidate: `rfl init`.
 
@@ -387,45 +512,92 @@ the README cannot ship a fixture-only command as the user
 bootstrap, and the m6 demo's `rfl install rfl-mailcat` does not
 work against live `InstallArgs`.
 
-**B1 — positional plugin-id argument.** Extends `InstallArgs`
-(live `crates/rafaello/src/install.rs:32-43`) with a positional
-`plugin: Option<String>`. Resolution order:
+**B1 — positional plugin-id argument + optional `--fixture`.**
+Extends `InstallArgs` (live
+`crates/rafaello/src/install.rs:32-43`) with:
 
-1. If `--fixture <path>` is set, current behaviour (m5a-ratified
-   path, kept unchanged for fixture tests).
-2. Else if `plugin` positional is set, resolve to the bundled
-   plugin manifest under the rafaello release tree — same
-   layout the `flake.nix`/`package.nix` output produces in
-   Phase F (i.e. `<release-prefix>/share/rafaello/plugins/<plugin>/manifest.toml`).
-   The resolution path is owner-judgment item 1 below.
-3. Else error with usage.
+- `plugin: Option<String>` — positional plugin name (e.g.
+  `rfl-mailcat`).
+- `fixture: Option<PathBuf>` — **changed from required to
+  Option** (round-3 M-5 fold). Clap semantics:
+  `#[arg(long, conflicts_with = "plugin",
+  required_unless_present = "plugin")]`. The positional
+  `plugin` carries
+  `#[arg(required_unless_present = "fixture",
+  conflicts_with = "fixture")]`. Exactly one of the two must
+  be supplied; setting both is a clap error before `run()`
+  executes.
+
+Resolution order:
+
+1. If `--fixture <path>` is set, current behaviour (m5a-
+   ratified path, unchanged for fixture tests; the
+   `package_dir` is the user-supplied directory and the
+   manifest filename is `rafaello.toml` per
+   `decisions.md` row 25 — same as live).
+2. Else if `plugin` positional is set, resolve the **bundled
+   source tree** at
+   `<release-prefix>/share/rafaello/plugins/<plugin>/`
+   (Phase F lays this out). The manifest filename inside that
+   tree is **`rafaello.toml`** (canonical per `decisions.md`
+   row 25). The resolution path is owner-judgment item 1 below.
+
+In both arms, after the source `package_dir` is identified,
+B1 **also copies the package tree** into
+`${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/` per invariant
+PP1 (round-3 B-1 fold); `digest` / `manifest_digest` are
+computed over the copied tree. This unifies fixture-install
+and positional-install runtime behaviour: in both cases
+`rfl chat` resolves the plugin from `.rafaello/plugins/…/rafaello.toml`.
 
 The release-layout resolution **requires** Phase F (the
 expanded package output) — B1 lands the resolver but cites
-the F-expanded layout it consumes; the integration test in B3
-runs against a fixture release tree until F lands.
+the F-expanded layout it consumes; the B3 positional-install
+integration test runs against a fixture release tree until F
+lands.
 
-**B2 — bundled-plugin manifest discovery.** Each bundled plugin
+**B2 — bundled-plugin source tree layout.** Each bundled plugin
 (`rfl-mailcat`, `rfl-readfile`, `rafaello-fetch`,
-`rfl-mockprovider`, `rfl-openai`) needs a discoverable manifest
-+ sidecar `openrpc.json` (per `decisions.md` row 31). m5b
-shipped these inside the test fixture tree only; B2 promotes
-them to the release tree under `share/rafaello/plugins/<name>/`.
-The package output in Phase F installs both `bin/` and `share/
-rafaello/plugins/` as a single layout.
+`rfl-mockprovider`, `rfl-openai`) needs a discoverable
+manifest + sidecar `openrpc.json` (per `decisions.md` row 31).
+m5b shipped these inside the test fixture tree only; B2
+promotes them to the release tree under
+`<release-prefix>/share/rafaello/plugins/<name>/` with the
+manifest named **`rafaello.toml`** (not `manifest.toml`) per
+`decisions.md` row 25. Each plugin directory ships:
+
+```
+<release-prefix>/share/rafaello/plugins/<plugin>/
+├── rafaello.toml
+├── openrpc.json
+├── bin/<plugin-bin>        # symlink to ../../../bin/<plugin-bin> for compactness
+└── schemas/                # grant-match templates (if any)
+```
+
+The Phase F package output installs both `bin/` (resolved
+binaries) and `share/rafaello/plugins/` as a single layout.
 
 **B3 — tests.** Integration tests in
 `rafaello/tests/rfl_install_positional_*.rs`:
 
 - `rfl_install_positional_resolves_to_bundled_plugin.rs` —
   `rfl install rfl-mailcat` against a fixture release tree
-  finds `share/rafaello/plugins/rfl-mailcat/manifest.toml` and
-  writes the lock entry.
+  finds `share/rafaello/plugins/rfl-mailcat/rafaello.toml`,
+  copies the package tree into
+  `.rafaello/plugins/<topic-id>/` (PP1), and writes the lock
+  entry. Asserts the post-install package dir exists.
 - `rfl_install_fixture_flag_still_works.rs` — `--fixture <path>`
-  path remains unchanged (m5a regression anchor).
+  path remains functional (m5a regression anchor); the
+  package tree is also copied to `.rafaello/plugins/<topic-id>/`
+  in the fixture arm.
 - `rfl_install_positional_unknown_plugin_errors.rs` —
   `rfl install nonsense` exits non-zero with a "no bundled
-  plugin named 'nonsense'" message; lock is unchanged.
+  plugin named 'nonsense'" message; lock + package dir are
+  unchanged.
+- `rfl_install_requires_one_of_fixture_or_plugin.rs` (round-3
+  M-5) — invoking `rfl install` with neither argument is a
+  clap error; invoking with both is a clap error; both cases
+  exit non-zero before `run()`.
 
 Glossary candidate: `rfl install <plugin>` (positional argument
 resolves against the bundled plugin tree).
@@ -476,31 +648,50 @@ fix and a silent fallback would re-introduce the m5a wall.
 The patch lands in **upstream lockin** (owner-judgment item 2
 below — default: upstream lockin).
 
-**C3 — regression test.** Two tests, both in
-`rafaello/tests/`:
+**C3 — regression tests.** Round-3 M-4 fold: instead of
+asserting stderr-absence (weak proxy), introduce a **fake
+`syd` wrapper** test binary at
+`lockin/crates/sandbox/tests/fixtures/fake_syd.rs` that
+prints its `argv` and `environ` to a sentinel file (path
+passed via `RFL_FAKE_SYD_RECORD_PATH`) then `exec`s `true`.
+Tests instantiate a `SandboxSpec` whose `syd_path` points at
+the compiled fake-syd binary, run a no-op child command, and
+read the sentinel file. Three tests in
+`lockin/crates/sandbox/tests/`:
 
-- `rfl_chat_spawns_plugin_with_syd_pty_discovered_from_path.rs` —
-  spawns `syd`/plugin with `CARGO_BIN_EXE_syd-pty` **unset** but
-  with `syd-pty` adjacent to the resolved `syd` in the nix
-  store. Asserts:
-  - The plugin process starts (no `setup_pty` error in stderr
-    capture).
-  - The plugin's PTY is active (capture-pane outputs ANSI
-    sequences that the `pty:off` fallback would not emit — or
-    use a sentinel `plugin_pty_active` audit row if the bus-
-    fixture exposes one; the round-2 default is the
-    stderr-absence assertion).
-  - No "pty:off" warning fired on stderr (negative match).
-- `rfl_chat_spawns_plugin_with_syd_pty_via_cargo_bin_exe_env.rs` —
-  same flow but with `CARGO_BIN_EXE_syd-pty` set explicitly,
-  and the adjacent-sibling path **unavailable** (simulated by
-  spawning from a temp directory). Asserts the env-var
-  resolution arm works.
+- `fake_syd_records_cargo_bin_exe_env_when_set_explicitly.rs` —
+  `spec.syd_pty_path = Some(<fixture-syd-pty-path>)`. Asserts
+  the sentinel file contains
+  `CARGO_BIN_EXE_syd-pty=<fixture-syd-pty-path>`.
+- `fake_syd_records_cargo_bin_exe_env_from_sibling.rs` —
+  spawning from a tempdir with `syd` and `syd-pty` placed
+  side-by-side; `CARGO_BIN_EXE_syd-pty` env unset; no
+  `spec.syd_pty_path`. Asserts the sentinel records
+  `CARGO_BIN_EXE_syd-pty=<tempdir>/syd-pty` (sibling
+  discovery arm).
+- `fake_syd_resolution_fails_hard_when_pty_missing.rs` —
+  spawning with `syd-pty` deliberately absent from all
+  resolution paths. Asserts the sandbox build returns a
+  typed `Err(SandboxError::SydPtyNotFound { … })`; no fallback
+  to `pty:off`.
 
-Round-2 framing: the test asserts `syd-pty` was **discovered**
-(env-var or sibling), not that the spawn merely succeeded. A
-test that passes because the fallback ran would not catch
-regressions to the discovery path, which is the m5a wall.
+Plus one rafaello-side smoke test at
+`rafaello/tests/rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`
+(Linux + devshell-gated) — spawns `rfl chat` inside
+`nix develop .#rafaello --impure --command` against the
+`rfl-bus-fixture` plugin (real syd, real syd-pty) and asserts
+the child plugin's recorded env contains
+`CARGO_BIN_EXE_syd-pty=<absolute-path>`. The plugin's
+recording mechanism: extend `rafaello-bus-fixture` with an
+optional `--record-env <path>` mode (small, test-only) that
+dumps `std::env::vars()` to a file before doing its normal
+fixture work.
+
+Round-3 framing: the tests assert `CARGO_BIN_EXE_syd-pty` was
+**set on the syd child's environment with a specific value**,
+not that the spawn succeeded silently. The fake-syd path
+gives a mechanical proof without depending on a real PTY's
+ANSI output or stderr-pattern absence.
 
 Glossary candidate: `syd-pty discovery`.
 
@@ -511,7 +702,10 @@ m5b §5 row 8 routed this to m6. Round-2 rewrite against the
 
 **D1 — `rfl audit` subcommand against live schema.** Extends
 `RflChatCommand` with `Audit(AuditArgs)`. New
-`crates/rafaello/src/audit_cli.rs` module. Reads
+`crates/rafaello/src/audit_cli.rs` module. `AuditArgs`
+includes `--project-root <path>` (round-3 B-2 fold) mirroring
+the `rfl chat --project-root` + `rfl init --project-root`
+ergonomics; defaults to `std::env::current_dir()`. Reads
 `<project_root>/.rafaello/state/session.sqlite` `audit_events`
 table whose live columns are `seq INTEGER PRIMARY KEY
 AUTOINCREMENT, at TEXT NOT NULL, kind TEXT NOT NULL, request_id
@@ -561,6 +755,12 @@ columns; `--full` disables truncation.
   column order matches the spec.
 - `rfl_audit_filters_by_kind.rs` — exercises `--kind`
   (repeatable).
+- `rfl_audit_project_root_flag.rs` (round-3 B-2) — exercises
+  `--project-root <path>`: populates an audit DB under
+  `<tmpdir>/.rafaello/state/session.sqlite`, runs
+  `rfl audit --project-root <tmpdir>` from a different cwd,
+  asserts the output is the same as running with cwd set to
+  `<tmpdir>`.
 - `rfl_audit_filters_by_request_id_no_join.rs` — exercises
   `--request-id` and explicitly asserts the query path does
   NOT touch the `entries` table.
@@ -622,22 +822,39 @@ Per roadmap row + pi B-1 reframe. The output already exists
 binary, so consumers like the Homebrew formula (Phase G) have
 nothing to install for `rfl-openai`, `rfl-tui`, etc.
 
-**F1 — expand `cargoBuildFlags` to every workspace binary.**
-Replace the `[ "-p" "rafaello" ]` line with a `-p`-per-binary
-list covering: `rafaello` (the `rfl` binary), `rafaello-tui`,
-`rafaello-openai`, `rafaello-openai-stub`, `rafaello-readfile`,
-`rafaello-mailcat`, `rafaello-mockprovider`, `rafaello-fetch`,
-plus `rafaello-bus-fixture` if it ships in the release tree
-(owner-judgment item 9 below — bus-fixture is test-shaped, may
-not belong in the release).
+**F1 — expand `cargoBuildFlags` to every release binary.**
+Replace the `[ "-p" "rafaello" ]` line with the **release-binary
+list** (round-3 M-2 reconciliation; `rafaello-bus-fixture` is
+test-shaped and **excluded** per owner-judgment item 9
+default):
 
-**F2 — bundled plugin manifests in the package output.** Phase
-B2 promotes the bundled plugin manifests to `share/rafaello/
-plugins/<plugin>/manifest.toml`. F2 plumbs them through
-`package.nix`: an additional `postInstall` step copies the
-manifest tree from the source under `rafaello/crates/<plugin>/
-manifest.toml` (and the sibling `openrpc.json` per
-`decisions.md` row 31) to `$out/share/rafaello/plugins/<plugin>/`.
+- `rafaello` (the `rfl` binary)
+- `rafaello-tui`
+- `rafaello-openai`
+- `rafaello-openai-stub` *(included for `manual-validation.md`
+  scripted demo + integration tests; owner may move to
+  test-only if v1-demo doesn't need a runnable stub on a
+  user machine — owner-judgment item 13 below)*
+- `rafaello-readfile`
+- `rafaello-mailcat`
+- `rafaello-mockprovider`
+- `rafaello-fetch`
+
+The acceptance summary lists this same set. The bus-fixture
+crate stays inside the test tree and never ships to end users.
+
+**F2 — bundled plugin tree in the package output.** Phase B2
+promotes the bundled plugin source trees to
+`<release-prefix>/share/rafaello/plugins/<plugin>/` with the
+manifest named **`rafaello.toml`** (per `decisions.md` row 25
+— round-3 B-1 / B-2 fold). F2 plumbs them through
+`package.nix`: a `postInstall` step copies each plugin's
+manifest tree (`rafaello/crates/<plugin>/rafaello.toml`, the
+sibling `openrpc.json` per `decisions.md` row 31, and any
+`schemas/` directory) to
+`$out/share/rafaello/plugins/<plugin>/`. The `bin/<plugin-bin>`
+inside each plugin dir is a relative symlink into `$out/bin/`
+so the layout matches PP1's expected tree shape.
 
 **F3 — CI matrix coverage.** GitHub Actions extends with a
 `nix build .#rafaello` job on `ubuntu-latest` and
@@ -646,15 +863,14 @@ ratification gate. Per the m2 §5.7 lesson, the Phase C
 syd-pty fix exercises against this CI matrix during m6
 implementation, not at retrospective time.
 
-### Phase G — Homebrew distribution (≈3 commits — model TBD)
+### Phase G — Homebrew distribution (≈3 commits; default G.β is actionable)
 
-Per roadmap row. Round-2 reshape per pi B-7: round 1 conflated
-three distribution stories ("homebrew/rafaello.rb installs
-under /usr/local/bin" + "separate tap repo" + "brew install nix
-+ nix build under the hood"). Round 2 elevates the choice to
-owner-judgment **item 5** (the highest-impact m6 owner
-question; may need to wait for owner sign-off before
-`commits.md` finalises Phase G).
+Per roadmap row. Round-3 M-1 fold: **G.β is the actionable
+default**; `commits.md` proceeds on the G.β shape without
+waiting for owner reply. The owner may still pick G.α or G.γ
+at ratification, in which case `commits.md` for Phase G
+re-shapes accordingly (model-specific commit counts noted
+below). Owner-judgment item 5 records the alternatives.
 
 **Three distribution-model alternatives** (each owner-pickable
 at item 5):
@@ -671,15 +887,20 @@ at item 5):
 
 - **G.β — separate `homebrew-rafaello` tap fetching Nix-built
   release tarballs.** Phase F output is packaged as a `.tar.gz`
-  release artefact per arch (Linux x64, macOS arm64, macOS
-  x64); the tap's formula `url`-fetches the matching artefact
-  and untars into the prefix.
+  release artefact per arch; the tap's formula `url`-fetches
+  the matching artefact and untars into the prefix.
+  Architectures (round-3 M-3 narrowing): **`aarch64-darwin`,
+  `aarch64-linux`, `x86_64-linux`** matching `flake.nix:24-28`'s
+  `systems`. `x86_64-darwin` is **out of scope for m6** (no
+  Nix builder for that arch in the root flake); see §"Out of
+  scope" + the v2-expansion note in owner-judgment item 5.
   - Pros: zero-build install for users; reuses Phase F output;
     one canonical build path; matches typical pre-built
     formula model.
   - Cons: requires a release-tag automation step (CI job that
     runs `nix build` per arch + uploads to a GitHub release);
-    separate tap repo to maintain.
+    separate tap repo to maintain; intel Mac users have no
+    `brew install` path until v2 adds `x86_64-darwin`.
 
 - **G.γ — Nix-based install script, NOT a Homebrew formula.**
   `scripts/install.sh` invokes `nix run github:luizribeiro/lab#rafaello`
@@ -692,33 +913,51 @@ at item 5):
     duplication. Pi B-7 flags this as a valid option but
     requires the roadmap text to acknowledge the trade.
 
-Round-2 **default position**: G.β (separate-tap fetching Nix-
-built tarballs). Rationale: it minimises duplication with the
-Phase F Nix build (the tap consumes the same artefacts), and
-still feels like a Homebrew formula to the user (no `nix`
-toolchain required on the user's machine; clean `brew install`
-UX). The cost is the release-tag automation (one CI job).
+**Default — G.β** (separate-tap fetching Nix-built tarballs).
+Rationale: minimises duplication with the Phase F Nix build
+(the tap consumes the same artefacts); feels like a Homebrew
+formula to the user (no `nix` toolchain required on the user's
+machine; clean `brew install` UX). The cost is the release-tag
+automation (one CI job). `commits.md` drafts against this
+default; owner can flip to G.α/G.γ at ratification.
 
-Whichever model wins, Phase G ships:
+**G.β commits** (the actionable default):
 
-**G1 — formula scaffold matching the chosen model.** File path
-varies (`homebrew/rafaello.rb` for G.α; a new repo for G.β;
-`scripts/install.sh` + README banner for G.γ).
+**G1 — `homebrew-rafaello` tap scaffold.** A new repo
+`luizribeiro/homebrew-rafaello` with `Formula/rafaello.rb`.
+The formula declares `url` and `sha256` for the per-arch
+tarballs produced by G2, installs every release binary (the
+F1 list) under `<prefix>/bin/`, and the bundled plugin tree
+under `<prefix>/share/rafaello/plugins/<plugin>/` matching the
+`rfl install <plugin>` discovery path (B1 resolution arm 2).
+The tap creation itself is a one-time owner action recorded in
+`manual-validation.md` §G; the formula file is committed in
+the m6 branch as a fixture under `homebrew/rafaello.rb`
+(symlinked into the tap repo after owner creates it).
 
-**G2 — release-tag automation (G.β only).** A GitHub Action
-triggered on `v*` tags that runs `nix build .#rafaello` per
-arch and uploads the resulting tarballs to the release. Lives
-at `.github/workflows/rafaello-release.yml`.
+**G2 — release-tag automation.** A GitHub Action triggered on
+`v*` tags that runs `nix build .#rafaello` for each of the
+three arches in `flake.nix:24-28`'s `systems`
+(`aarch64-darwin`, `aarch64-linux`, `x86_64-linux`), packages
+each output as `rafaello-<version>-<arch>.tar.gz`, and uploads
+to the GitHub release. Lives at
+`.github/workflows/rafaello-release.yml`. The aarch64-darwin
+build runs on the `macos-14` (Apple-silicon) runner per
+GitHub Actions' available macOS runners.
 
 **G3 — install smoke test.** A manual-validation entry in
-Phase J §G documents the clean macOS shell flow:
-`brew install rafaello/tap/rafaello && rfl init && rfl install
-rfl-mailcat && rfl chat`. Owner-judgment item 10 below asks
-whether a macOS-CI workflow exercises `brew install` itself
-(default: manual validation only).
+Phase J §G documents the clean macOS arm64 shell flow:
+`brew tap luizribeiro/rafaello && brew install rafaello &&
+rfl init && rfl install rfl-mailcat && rfl chat`.
+Owner-judgment item 10 below asks whether a macOS-CI workflow
+exercises `brew install` itself (default: manual validation
+only).
 
-The commit count for Phase G varies by model (G.α: 2 commits;
-G.β: 3 commits; G.γ: 1 commit). Default G.β → 3 commits.
+**Model-specific commit counts** (for `commits.md` re-shaping
+if owner flips item 5): G.α → 2 commits (no release
+automation; in-repo formula + Cargo build flags doc);
+G.β → 3 commits (the default above); G.γ → 1 commit
+(`scripts/install.sh` + README banner).
 
 ### Phase H — README + CONTRIBUTING pass (≈2 commits)
 
@@ -815,7 +1054,10 @@ existing 9-line m5b c15 file with seven sections:
   copy).
 
 **J2 — the tmux-driven §5 recording.** Concrete tmux steps
-(pi B-3 fix; replaces round 1's prose):
+(round-3 B-2 rewrite against live TUI overlay copy at
+`rafaello-tui/src/confirm.rs:160-211` and gate-built summary
+`<tool> via <plugin> — sinks: [<classes>]` at
+`crates/rafaello-core/src/gate/mod.rs:374-378`):
 
 ```sh
 # Setup.
@@ -829,57 +1071,78 @@ nix develop .#rafaello --impure --command rfl install rfl-mailcat
 tmux new-session -d -s rafaello-m6-demo \
   "cd '$PROJECT' && nix develop .#rafaello --impure --command rfl chat"
 
-# Wait for the TUI to render.
+# Wait for the TUI to render the initial pane.
 sleep 2
-tmux capture-pane -t rafaello-m6-demo -p > /tmp/m6-§5-after-launch.txt
-grep "rafaello chat" /tmp/m6-§5-after-launch.txt        # banner check
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$PROJECT/transcripts/section-5/01-after-launch.txt"
 
 # Send a prompt that triggers the send-mail tool.
 tmux send-keys -t rafaello-m6-demo \
   "Please email alice@example.com a one-line hello note." Enter
 sleep 3
-tmux capture-pane -t rafaello-m6-demo -p > /tmp/m6-§5-modal.txt
-grep "send-mail" /tmp/m6-§5-modal.txt                   # tool name in modal
-grep "Allow this call?" /tmp/m6-§5-modal.txt            # confirm prompt
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$PROJECT/transcripts/section-5/02-modal.txt"
+# Live overlay copy (confirm.rs:160-211):
+#   - title border:  " confirm "
+#   - summary line:  "send-mail via local:mailcat@0.0.0 — sinks: [mail]"
+#   - args line:     "args: { … "alice@example.com" … }"
+#   - sinks line:    "sinks: mail"
+grep " confirm "          "$PROJECT/transcripts/section-5/02-modal.txt"
+grep "send-mail via"      "$PROJECT/transcripts/section-5/02-modal.txt"
+grep "sinks: mail"        "$PROJECT/transcripts/section-5/02-modal.txt"
+grep "alice@example.com"  "$PROJECT/transcripts/section-5/02-modal.txt"
 
-# Allow the call.
-tmux send-keys -t rafaello-m6-demo "a"                  # m5a allow key (lowercase 'a')
+# Allow the call. Live binding (rafaello-tui/src/lib.rs:70):
+#   KeyCode::Char('y') | KeyCode::Char('a') | KeyCode::Enter => Allow.
+tmux send-keys -t rafaello-m6-demo "a"
 sleep 3
-tmux capture-pane -t rafaello-m6-demo -p > /tmp/m6-§5-response.txt
-grep -i "sent\|delivered\|email" /tmp/m6-§5-response.txt # assistant ack
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$PROJECT/transcripts/section-5/03-response.txt"
+# The assistant-message line from the live LiteLLM model (or the
+# multi-turn stub if running deterministically) acknowledges the
+# send. Operator pastes the rendered line; no fixed substring
+# asserted because real-model wording is non-deterministic.
 
-# Quit cleanly.
-tmux send-keys -t rafaello-m6-demo "q"                  # m3 quit key
+# Quit cleanly. The m3 chat loop's quit binding is Ctrl-C
+# (the TUI's input-mode loop doesn't bind 'q' as quit — see
+# rafaello-tui/src/lib.rs input handling). Owner-judgment item
+# 12 confirms the live binding at implementation time.
+tmux send-keys -t rafaello-m6-demo "C-c"
 sleep 1
 tmux kill-session -t rafaello-m6-demo
 
-# Audit + SQLite dump.
+# Audit + SQLite dumps.
 nix develop .#rafaello --impure --command rfl audit \
-  --project-root "$PROJECT" > /tmp/m6-§5-audit.txt
-grep "confirm_request" /tmp/m6-§5-audit.txt
-grep "confirm_allowed" /tmp/m6-§5-audit.txt
+  --project-root "$PROJECT" \
+  > "$PROJECT/transcripts/section-5/04-audit.txt"
+grep "confirm_request"   "$PROJECT/transcripts/section-5/04-audit.txt"
+grep "confirm_allowed"   "$PROJECT/transcripts/section-5/04-audit.txt"
 
 sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
   "SELECT seq, kind, request_id FROM audit_events ORDER BY seq" \
-  > /tmp/m6-§5-sqlite-audit.txt
+  > "$PROJECT/transcripts/section-5/05-sqlite-audit.txt"
 sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
   "SELECT seq, kind FROM entries ORDER BY seq" \
-  > /tmp/m6-§5-sqlite-entries.txt
+  > "$PROJECT/transcripts/section-5/06-sqlite-entries.txt"
 ```
 
-Allow key (`a`) and quit key (`q`) are the live m3/m5a TUI
-bindings; J2 verifies these are correct at implementation time
-(round-2 owner-judgment item 12 below asks for confirmation).
+Allow key (`a`) matches the live binding at
+`rafaello-tui/src/lib.rs:70`. The quit binding for the TUI's
+chat loop is `Ctrl-C` (round-3 correction — round 2's `q`
+assumption was incorrect; `q` is not bound as quit in the
+input-mode handler). Owner-judgment item 12 records the
+implementation-time verification gate.
 
-The eight captured files
-(`/tmp/m6-§5-after-launch.txt`, `…-modal.txt`, `…-response.txt`,
-`…-audit.txt`, `…-sqlite-audit.txt`, `…-sqlite-entries.txt`,
-plus the two assertion-grep outputs the operator pastes inline)
-land under `milestones/m6-polish-release/transcripts/§5/` and
-are referenced from `manual-validation.md` §5. The transcript
-files are the only required evidence (N-4 fix — round 1
-mentioned asciinema; round 2 drops asciinema; only tmux
-capture-pane outputs are required).
+The six captured files
+(`01-after-launch.txt`, `02-modal.txt`, `03-response.txt`,
+`04-audit.txt`, `05-sqlite-audit.txt`, `06-sqlite-entries.txt`)
+land under
+`milestones/m6-polish-release/transcripts/section-5/`
+(round-3 N-3 — replaces the Unicode `§5` path component with
+ASCII-safe `section-5` for shell-quoting safety) and are
+referenced from `manual-validation.md` §5. The transcript
+files are the only required evidence (N-4: no asciinema; tmux
+capture-pane outputs only).
 
 **J3 — retrospective + decisions row appends + glossary
 additions** (≈1 commit, **reserved in the budget** per N-3
@@ -903,7 +1166,7 @@ m6 retro begins at row 59):
   writes an empty lock.
 - row **61** — `rfl install <plugin>` positional argument
   resolves against the bundled plugin tree at
-  `share/rafaello/plugins/<plugin>/manifest.toml` (refines
+  `share/rafaello/plugins/<plugin>/rafaello.toml` (refines
   `decisions.md` row 31 by pinning the discovery path).
 - row **62** — Syd-pty discovery belt-and-braces: devshell
   exports `CARGO_BIN_EXE_syd-pty`; lockin sandbox resolves
@@ -973,6 +1236,12 @@ m6 retro begins at row 59):
 14. **macOS-CI Homebrew install workflow.** Owner-judgment
     item 10 defaults to manual validation only; CI coverage
     of `brew install` itself is post-v1.
+15. **`x86_64-darwin` Homebrew artefacts.** The root flake's
+    `systems = [aarch64-darwin, aarch64-linux, x86_64-linux]`
+    has no `x86_64-darwin` builder. m6 ships Homebrew tarballs
+    for `aarch64-darwin` only; intel Mac users have no
+    `brew install` path until v2 adds the arch. Round-3 M-3
+    fold.
 
 ---
 
@@ -1004,7 +1273,7 @@ confirm modal → response → persist. **Single canonical tool:
     `tool_call` + `tool_result` + assistant-message rows;
     the `audit_events` table has the `confirm_request` +
     `confirm_allowed` rows; the chat process exits cleanly on
-    `q`.
+    `Ctrl-C` (round-3 J2 correction).
 - **The §5 tmux-driven recording** in `manual-validation.md`
   (Phase J2 — concrete tmux steps above). Same flow, run by
   hand against the LiteLLM proxy with the real `rfl-openai`
@@ -1015,9 +1284,13 @@ confirm modal → response → persist. **Single canonical tool:
 - `rfl_init_idempotent_no_overwrite.rs` (Phase A4).
 - `rfl_init_decline_writes_empty_lock.rs` (Phase A4).
 - `rfl_install_positional_unknown_plugin_errors.rs` (Phase B3).
-- `rfl_chat_spawns_plugin_with_syd_pty_discovered_from_path.rs`
-  + `…_via_cargo_bin_exe_env.rs` (Phase C3) — assert actual
-  `syd-pty` discovery, **not** `pty:off` fallback.
+- `fake_syd_records_cargo_bin_exe_env_when_set_explicitly.rs`
+  + `fake_syd_records_cargo_bin_exe_env_from_sibling.rs`
+  + `fake_syd_resolution_fails_hard_when_pty_missing.rs`
+  (Phase C3, round-3 M-4) — assert the syd child got
+  `CARGO_BIN_EXE_syd-pty` set, **not** `pty:off` fallback.
+  Plus the rafaello-side smoke test
+  `rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`.
 - `rfl_audit_empty_db.rs` (Phase D3).
 - `rfl_audit_filters_by_request_id_no_join.rs` (Phase D3) —
   asserts the query path does not touch `entries`.
@@ -1060,22 +1333,22 @@ Fallback fold-line if pi pushes back at round 3+:
 ## Owner-judgment items
 
 Numbered list — each item has a default-selected position; the
-owner may override at convergence-round cost. Round 2 has 12
-items (round 1 had 13; round-2 collapsed item 4 + 5 about
-Homebrew dependency shape + install CI into one
-distribution-model question — new item 5 — and added two new
-items B-related: bundled-plugin manifest discovery path and
-the `pty:off` fallback policy).
+owner may override at convergence-round cost. **Round 3: 14
+items, numbered 0–13** (round 2 had 13; round-3 N-1 corrected
+the off-by-one count, and added new item 13 for the
+`rafaello-openai-stub` release-bin inclusion question — see
+F1).
 
 0. **Single milestone vs m6a/m6b split.** Default: **single
    milestone**.
 
 1. **`rfl install <plugin>` discovery path for bundled
    plugins** (B1 / B2). Default:
-   `<release-prefix>/share/rafaello/plugins/<plugin>/manifest.toml`
-   under the Phase-F-expanded layout. Alternative:
+   `<release-prefix>/share/rafaello/plugins/<plugin>/rafaello.toml`
+   (manifest filename per `decisions.md` row 25; round-3 B-1
+   fold corrects round-2's `manifest.toml`). Alternative:
    `$out/libexec/rafaello/plugins/<plugin>/` (FHS-style).
-   Round-2 default matches Homebrew + Nix convention for
+   Round-3 default matches Homebrew + Nix convention for
    shared data.
 
 2. **B2 lockin sandbox patch landing layer.** Default:
@@ -1103,14 +1376,17 @@ the `pty:off` fallback policy).
 
 5. **Homebrew distribution model** (Phase G). Default: **G.β —
    separate `homebrew-rafaello` tap that fetches Nix-built
-   release tarballs.** Alternative A: G.α — in-repo formula
-   that builds from source via Cargo (no Nix dependency for
-   users, but duplicates the Phase F build). Alternative B:
-   G.γ — Nix-based install script not labelled as a Homebrew
-   formula (trades roadmap-row literalness for less
-   duplication). **This is the highest-impact owner question**
-   per pi B-7 framing — `commits.md` for Phase G cannot
-   finalise until this resolves.
+   release tarballs**, arches `aarch64-darwin / aarch64-linux /
+   x86_64-linux` (round-3 M-3 narrowing). Alternative A: G.α
+   — in-repo formula that builds from source via Cargo (no
+   Nix dependency for users, but duplicates the Phase F build).
+   Alternative B: G.γ — Nix-based install script not labelled
+   as a Homebrew formula (trades roadmap-row literalness for
+   less duplication). Round-3 M-1 fold: `commits.md` proceeds
+   on G.β without waiting for owner reply; owner may flip at
+   ratification. **`x86_64-darwin` is a v2 expansion** if intel
+   Mac demand surfaces — adding it requires a new flake system
+   + a macOS-13 CI builder; the v1 budget excludes it.
 
 6. **`load.triggers.kind = "tool"` lazy-load coverage**
    (Phase I2). Default: **in scope** (closes the m4-since
@@ -1143,13 +1419,27 @@ the `pty:off` fallback policy).
     verify against m5b commits list during round 3 if
     available; round-2 default is "we owe it").
 
-12. **TUI key bindings for confirm-allow + quit** (Phase J2).
-    The J2 transcript uses `a` for allow and `q` for quit. If
-    the live m3/m5a TUI uses different bindings (e.g. `y`/`n`
-    for confirm, `Ctrl-C` for quit), J2's send-keys script
-    must update. Default: assume `a` + `q` per round-2 read of
-    the m5a TUI overlay; verify at implementation time and
-    correct in J2 if wrong (small ripple).
+12. **TUI quit binding for the chat loop** (Phase J2). Round-3
+    correction: round 2 assumed `q`; the live TUI input-mode
+    handler (`rafaello-tui/src/lib.rs`) does not bind `q` as
+    quit — `Ctrl-C` is the m3-era chat-loop terminator. J2
+    uses `Ctrl-C`. Owner-judgment recorded so the
+    implementation-time verification gate is explicit: if a
+    proper `q`-quit binding is desired for v1 polish, scope
+    it as a tiny TUI patch + a unit test; otherwise leave the
+    binding as-is. Default: leave as-is, use `Ctrl-C` in J2.
+    (The confirm-allow binding `a` is confirmed correct at
+    `rafaello-tui/src/lib.rs:70`.)
+
+13. **`rafaello-openai-stub` in the release package** (F1).
+    Default: **include** — the `manual-validation.md` §5
+    deterministic-stub demo + the headline integration test
+    both need a runnable stub binary inside the F-built tree.
+    Alternative: exclude — keep `rafaello-openai-stub` as a
+    test-only crate built only under `cargo test`; the
+    integration test then builds the stub via `cargo build`
+    before invoking it. Round-3 default: include (small
+    binary, large ergonomic win for the scripted demo).
 
 ---
 
@@ -1163,7 +1453,7 @@ inline.
 | m4 §5.5 / m5a §5 row 6 / m5b §5 row 13 | `#[allow(clippy::result_large_err)]` sweep | `crates/rafaello-core/src/{reemit,agent}/mod.rs:1` + any m5b sites | I3 | in scope (default: ratify-by-keeping) |
 | m4 §5.8 / m5a §5 row 8 | `load.triggers.kind = "tool"` lazy-load exercise | `rafaello/tests/lazy_load_tool_trigger_spawns_on_first_call.rs` (new) | I2 | in scope (owner-judgment item 6) |
 | m5a §5 row 9 / m5b §5 row 9 | macOS CI green hard gate | `manual-validation.md` §4 (URL) | F3 + J1 §4 | in scope |
-| m5a §5 row 10 / m5b §5 row 10 | Interactive `rfl chat` recording | `manual-validation.md` §5 + `transcripts/§5/` | J2 | in scope (hard requirement #3) |
+| m5a §5 row 10 / m5b §5 row 10 | Interactive `rfl chat` recording | `manual-validation.md` §5 + `transcripts/section-5/` | J2 | in scope (hard requirement #3) |
 | m5a §5 row 11 / m5b §5 row 11 | `manual-validation.md` skeleton fill | `manual-validation.md` §1–§7 + §G | J1 | in scope |
 | m5a §5 row 14 / m5b §5 row 12 | `core_tools_list_registered_before_provider_spawn.rs` | `crates/rafaello-core/tests/core_tools_list_registered_before_provider_spawn.rs` | I1 | in scope (default; owner-judgment item 11) |
 | m5b §5 row 1 | Multi-turn `rfl-openai-stub` shape | `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs` (M-2 fix) | E1 + E2 | in scope |
@@ -1195,7 +1485,7 @@ convention):
   rows 59–60.
 - **`rfl install <plugin>`** — positional argument resolves
   against the bundled plugin tree at
-  `share/rafaello/plugins/<plugin>/manifest.toml`. The
+  `share/rafaello/plugins/<plugin>/rafaello.toml`. The
   existing `--fixture <path>` shape remains for fixture tests.
   Cites `crates/rafaello/src/install.rs` + `decisions.md` row
   61.
@@ -1228,11 +1518,13 @@ The m6 retrospective is also expected to extend the existing
 
 ## Internal split (driver guidance for `commits.md`)
 
-Round-2 sizing target per pi M-3: **28 commits default, 30
-max**. Round 1 was 22; round 2 adds Phase B (install UX, +3),
-Phase G commits per chosen Homebrew model (+1 vs round-1
-+2-commit estimate; default G.β stays at +3 net), plus one
-retro-phase reservation per pi N-3 (+1).
+Round-3 sizing: **28 commits implementation default, 30 max
++ 1 retro reservation**. Round 1 was 22; round 2 added
+Phase B (install UX, +3) + G.β release automation (+1) + the
+retro reservation (+1); round 3 keeps the same headline
+total — the round-3 folds (PP1 package copy in A2/B1,
+`--project-root` in D1, fake-syd fixture in C3) extend
+existing rows rather than adding new commits.
 
 | # | Section | Subject sketch | ~commits |
 |---|---------|----------------|----------|
@@ -1240,19 +1532,19 @@ retro-phase reservation per pi N-3 (+1).
 | 2 | A2 | `rfl-openai` default-entry materialisation against live lock schema | 1 |
 | 3 | A3 | install-time review prompt (TTY + `--yes` + decline paths) | 1 |
 | 4 | A4 | `rfl init` integration tests (4 tests) | 1 |
-| 5 | B1 | `rfl install` positional plugin-id resolution | 1 |
-| 6 | B2 | bundled plugin manifests under `share/rafaello/plugins/` | 1 |
-| 7 | B3 | `rfl install <plugin>` integration tests (3 tests) | 1 |
+| 5 | B1 | `rfl install` positional plugin-id resolution + `--fixture: Option` (clap conflicts/required-unless) + PP1 package-tree copy | 1 |
+| 6 | B2 | bundled plugin source tree under `share/rafaello/plugins/<plugin>/` with manifest `rafaello.toml` | 1 |
+| 7 | B3 | `rfl install <plugin>` integration tests (4 tests incl. clap-error case) | 1 |
 | 8 | C1 | devshell `CARGO_BIN_EXE_syd-pty` export | 1 |
-| 9 | C2 | lockin sandbox `resolve_syd_pty_path` + env on syd child | 1 |
-| 10 | C3 | syd-pty discovery tests (2 tests, both assert actual discovery) | 1 |
-| 11 | D1 | `rfl audit` CLI scaffold against live `audit_events` schema | 1 |
+| 9 | C2 | lockin sandbox `resolve_syd_pty_path` + env on syd child + fake-syd test fixture | 1 |
+| 10 | C3 | syd-pty discovery tests (3 fake-syd lockin tests + 1 rafaello-side smoke test) | 1 |
+| 11 | D1 | `rfl audit` CLI scaffold against live `audit_events` schema + `--project-root` flag | 1 |
 | 12 | D2 | filter flags (`--kind`, `--since`, `--request-id` no-join, `--json`, `--full`) | 1 |
-| 13 | D3 | `rfl_audit_*` integration tests (6 tests) | 1 |
+| 13 | D3 | `rfl_audit_*` integration tests (7 tests incl. `--project-root`) | 1 |
 | 14 | E1 | `RFL_OPENAI_STUB_SCRIPTED_TURNS` parser + dispatcher (correct crate path) | 1 |
 | 15 | E2 | stub scripted-turns unit tests (incl. mutual-exclusion + exhaustion) | 1 |
-| 16 | F1 | `cargoBuildFlags` expansion to every workspace binary | 1 |
-| 17 | F2 | bundled plugin manifests in package output (`share/rafaello/plugins/`) | 1 |
+| 16 | F1 | `cargoBuildFlags` expansion to every **release binary** (8-binary list; bus-fixture excluded per item 9) | 1 |
+| 17 | F2 | bundled plugin source trees in package output (`share/rafaello/plugins/<plugin>/rafaello.toml` + openrpc + schemas) | 1 |
 | 18 | F3 | CI matrix `nix build` on Linux + macOS | 1 |
 | 19 | G1 | Homebrew formula scaffold per chosen model (default G.β separate tap) | 1 |
 | 20 | G2 | release-tag automation (G.β only — vacates if G.α or G.γ wins item 5) | 0-1 |
@@ -1263,7 +1555,7 @@ retro-phase reservation per pi N-3 (+1).
 | 25 | I2 | `load.triggers.kind = "tool"` lazy-load fixture + test | 1 |
 | 26 | I3 | `result_large_err` ratify (keep allows + decisions row 67) | 1 |
 | 27 | J1 | `manual-validation.md` §1–§7 + §G skeleton + audit dump shape | 1 |
-| 28 | J2 | tmux-driven §5 recording (transcripts under `transcripts/§5/`) | 1 |
+| 28 | J2 | tmux-driven §5 recording (transcripts under `transcripts/section-5/`; greps against live overlay copy) | 1 |
 | 29 | J3 | retrospective + `decisions.md` rows 59–68 + glossary additions | 1 (reserved) |
 
 Realistic total at default-selected positions:
@@ -1329,8 +1621,18 @@ m6 is done when:
   --manifest-path rafaello/Cargo.toml --workspace --bins`
   green.
 - `nix build .#rafaello` produces a binary tree on both Linux
-  + macOS containing every workspace binary + the bundled
-  plugin manifest tree under `share/rafaello/plugins/`.
+  + macOS containing the **release-binary set** (Phase F1's
+  8-binary list: `rfl`, `rfl-tui`, `rfl-openai`,
+  `rfl-openai-stub`, `rfl-readfile`, `rfl-mailcat`,
+  `rfl-mockprovider`, `rafaello-fetch` — `rafaello-bus-fixture`
+  excluded per owner-judgment item 9 default) plus the
+  bundled plugin tree under
+  `share/rafaello/plugins/<plugin>/rafaello.toml`.
+- Post-`rfl init --yes`,
+  `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/rafaello.toml`
+  exists, `bin/rfl-openai` is present, and the lock's
+  `digest` / `manifest_digest` match the copied tree (PP1
+  acceptance, round-3 B-1 fold).
 - `brew install <tap>/rafaello` (or the chosen-model
   equivalent per owner-judgment item 5) works in a clean
   macOS shell (manual validation per Phase J §G).
@@ -1342,7 +1644,7 @@ m6 is done when:
 - `manual-validation.md` records §1–§7 + §G with
   operator-witnessed evidence, including the §5 tmux-driven
   recording (hard requirement #3). The §5 transcript files
-  live under `milestones/m6-polish-release/transcripts/§5/`.
+  live under `milestones/m6-polish-release/transcripts/section-5/`.
 - `retrospective.md` written with the syd-pty narrative
   captured for posterity (hard requirement #5) + the
   `decisions.md` row appends (rows 59–68 placeholders) + the
@@ -1388,31 +1690,28 @@ immediately after per `decisions.md` row 33 ⇒ v1 demo-ready.
 
 ---
 
-## Disagreements with pi round 1
+## Disagreements with pi (cumulative)
 
-None. Every B/M/N item is folded — most as direct text changes,
-B-7 as an elevated owner-judgment item with three named
-alternatives + a defended default. The round-2 status block
-notes one judgement-call within B-6: round 2 reads "make
-success require actual `syd-pty` discovery" as **forbidding
-the `pty:off` fallback at the lockin layer entirely**, not as
-"allow the fallback but assert it didn't fire" — pi's
-recommendation language allowed either interpretation. Round 2
-defaults to the stricter no-fallback policy (Phase C2 +
-owner-judgment item 4) because the looser interpretation
-keeps the m5a wall reachable through a configuration mistake.
-Pi may push back at round 3; if so, item 4 flips to the
-graceful-degradation default and C3's success criterion
-softens to "no `pty:off` warning fired on stderr."
+**Round 1**: none. **Round 2**: none — round-1 pi closed
+B-6's no-fallback interpretation in round-2 review ("closed
+on policy. Round 2 chooses no lockin-layer fallback"). **Round
+3**: none. Every round-2 B/M/N item is folded as a direct text
+change; no items are being argued back. The G.β model is
+made actionable (M-1 fold) but remains owner-overridable at
+ratification — that's a clarification of default semantics,
+not a disagreement.
 
 ---
 
 ## Changelog
 
 - Round 1 → `scope-pi-review-1.md` (B/7 M/6 N/4, BLOCKING).
-- Round 2 → this commit. Folds every B/M/N. Awaiting pi round 2.
+- Round 2 → `scope-pi-review-2.md` (B/2 M/5 N/3,
+  BLOCKING-but-narrowing).
+- Round 3 → this commit. Folds every round-2 B/M/N. Awaiting
+  pi round 3; target verdict is 0/0/0 or nits-only.
 
 ---
 
-*End of m6 scope round 2 draft. Claude-authored; awaiting pi
+*End of m6 scope round 3 draft. Claude-authored; awaiting pi
 adversarial review per `plans/README.md` Phase 2.*
