@@ -14,12 +14,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "rfl-openai-stub"
 path = "src/bin/rfl_openai_stub.rs"
-required-features = ["test-fixture"]
 
 [dependencies]
 tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "io-util", "signal", "time", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 
