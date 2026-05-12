@@ -1,7 +1,39 @@
 # m6 — v1 polish + release readiness — scope
 
-> **Status:** round 4 — claude-authored 2026-05-12, awaiting pi
-> round 4. Folds `scope-pi-review-3.md` (B/2 M/1 N/1, verdict:
+> **Status:** round 5 — claude-authored 2026-05-12, awaiting pi
+> round 5. Folds `scope-pi-review-4.md` (B/0 M/1 N/2, verdict:
+> blocking-but-very-narrow) on top of round 4. Round-4
+> residuals: (a) the `[[bin]] fake-syd`
+> `required-features = ["test-fixture"]` gate references a
+> feature that doesn't exist in `lockin/crates/sandbox/Cargo.toml`
+> (verified: live `[features]` block has only `default = []`
+> and `tokio = ["dep:tokio"]`), so the round-4 fix needs to
+> also add the feature to `[features]`; (b) two stale
+> "workspace/release binary" references survived the round-4
+> F1 rename; (c) G1's Homebrew prefix layout still said "every
+> release binary under `<prefix>/bin/`", which contradicts the
+> round-4 B-1 plugin-tree fix. Round 5 folds:
+>
+> - **`test-fixture` feature added to
+>   `lockin/crates/sandbox/Cargo.toml`** (M-1). Net-new
+>   feature; lives alongside the live `default` + `tokio`
+>   entries. The `[[bin]] fake-syd`'s `required-features` gate
+>   now refers to a real feature.
+> - **Two stale binary-list references reworded** (N-1):
+>   J3 row 65 → "release binary set excluding fixtures";
+>   internal-split table row 16 → "package build set".
+> - **G1 Homebrew prefix layout corrected** (N-2): formula
+>   installs `rfl` + `rfl-tui` under `<prefix>/bin/` and
+>   preserves bundled plugin trees under
+>   `<prefix>/share/rafaello/plugins/<plugin>/bin/<plugin-bin>`.
+>
+> Cumulative trajectory: round 1 → 7B/6M/4N (BLOCKING) →
+> round 2 → 2B/5M/3N → round 3 → 2B/1M/1N → round 4 →
+> 0B/1M/2N → round 5 (this commit), target verdict CONVERGED.
+>
+> Prior-round status text (preserved for traceability):
+>
+> Round 4 folded `scope-pi-review-3.md` (B/2 M/1 N/1, verdict:
 > blocking-but-very-narrow) on top of rounds 2–3. Round-3
 > residuals: (a) round-3's `bin/<plugin-bin>` symlinks in the
 > release plugin tree would canonicalise outside `package_dir`
@@ -773,17 +805,27 @@ introduce a **fake `syd` wrapper** Cargo binary at
 test-only `[[bin]]` in `lockin/crates/sandbox/Cargo.toml`:
 
 ```toml
+[features]
+default = []
+tokio = ["dep:tokio"]
+test-fixture = []           # round-5 M-1: net-new feature
+
 [[bin]]
 name = "fake-syd"
 path = "tests/bin/fake_syd.rs"
 required-features = ["test-fixture"]
 ```
 
-The `required-features = ["test-fixture"]` gate keeps the
-fixture binary out of the default release build per the
-project-wide `test-fixture` feature convention. Tests opt in
-via `--features test-fixture` (already standard for the
-rafaello test suite). The binary prints its `argv` and
+The `test-fixture` feature is **net-new in
+`lockin/crates/sandbox/Cargo.toml`** (round-5 M-1 fold — the
+live `[features]` block today contains only `default = []`
+and `tokio = ["dep:tokio"]`; verified at
+`lockin/crates/sandbox/Cargo.toml:9-11`). The
+`required-features = ["test-fixture"]` gate keeps the fixture
+binary out of the default release build per the project-wide
+test-fixture feature convention. Tests opt in via
+`--features test-fixture` (already standard for the rafaello
+test suite — m5b uses the same flag at the workspace level). The binary prints its `argv` and
 `environ` to a sentinel file (path passed via
 `RFL_FAKE_SYD_RECORD_PATH`), then `exec`s `true`. Integration
 tests locate it via `env!("CARGO_BIN_EXE_fake-syd")` — the
@@ -1082,10 +1124,20 @@ default; owner can flip to G.α/G.γ at ratification.
 **G1 — `homebrew-rafaello` tap scaffold.** A new repo
 `luizribeiro/homebrew-rafaello` with `Formula/rafaello.rb`.
 The formula declares `url` and `sha256` for the per-arch
-tarballs produced by G2, installs every release binary (the
-F1 list) under `<prefix>/bin/`, and the bundled plugin tree
-under `<prefix>/share/rafaello/plugins/<plugin>/` matching the
-`rfl install <plugin>` discovery path (B1 resolution arm 2).
+tarballs produced by G2 and installs the Phase F layout
+verbatim (round-5 N-2 fold):
+
+- **`<prefix>/bin/rfl`** and **`<prefix>/bin/rfl-tui`** — the
+  two user-facing entry points only.
+- **`<prefix>/share/rafaello/plugins/<plugin>/`** — each
+  bundled plugin's package directory, including its
+  `bin/<plugin-bin>` as a real file inside that directory
+  (round-4 B-1 layout). Plugin binaries do **not** appear
+  under `<prefix>/bin/`.
+
+This matches the `rfl install <plugin>` discovery path
+(B1 resolution arm 2) which reads
+`<release-prefix>/share/rafaello/plugins/<plugin>/rafaello.toml`.
 The tap creation itself is a one-time owner action recorded in
 `manual-validation.md` §G; the formula file is committed in
 the m6 branch as a fixture under `homebrew/rafaello.rb`
@@ -1358,9 +1410,12 @@ m6 retro begins at row 59):
   exhaustion-panics-deterministically + mutual-exclusion with
   the singular env.
 - row **65** — `nix build .#rafaello` package output ships
-  every workspace binary + the bundled plugin manifest tree;
-  macOS CI green is the ratification gate (formalises the
-  m3/m4/m5a/m5b precedent).
+  the **release binary set excluding fixtures** (Phase F1's
+  eight Cargo packages; `rafaello-bus-fixture` excluded per
+  owner-judgment item 9) plus the bundled plugin manifest
+  tree with real plugin binaries inside each plugin
+  directory; macOS CI green is the ratification gate
+  (formalises the m3/m4/m5a/m5b precedent).
 - row **66** — Homebrew distribution model (G.α / G.β / G.γ
   per owner-judgment item 5 final call).
 - row **67** — `result_large_err` ratification: module-level
@@ -1720,7 +1775,7 @@ existing rows rather than adding new commits.
 | 13 | D3 | `rfl_audit_*` integration tests (7 tests incl. `--project-root`) | 1 |
 | 14 | E1 | `RFL_OPENAI_STUB_SCRIPTED_TURNS` parser + dispatcher (correct crate path) | 1 |
 | 15 | E2 | stub scripted-turns unit tests (incl. mutual-exclusion + exhaustion) | 1 |
-| 16 | F1 | `cargoBuildFlags` expansion to every **release binary** (8-binary list; bus-fixture excluded per item 9) | 1 |
+| 16 | F1 | `cargoBuildFlags` expansion to the **package build set** (8 Cargo packages; bus-fixture excluded per item 9) | 1 |
 | 17 | F2 | bundled plugin source trees in package output (real binaries inside each plugin dir; `bin/` top-level retains only `rfl` + `rfl-tui`) | 1 |
 | 18 | F3 | CI matrix `nix build` on Linux + macOS | 1 |
 | 19 | G1 | Homebrew formula scaffold per chosen model (default G.β separate tap) | 1 |
@@ -1870,9 +1925,9 @@ immediately after per `decisions.md` row 33 ⇒ v1 demo-ready.
 ## Disagreements with pi (cumulative)
 
 **Round 1**: none. **Round 2**: none. **Round 3**: none.
-**Round 4**: none. Every B/M/N item across all four rounds is
-folded as a direct text change; no items are being argued
-back. The G.β model is made actionable (round-3 M-1 fold)
+**Round 4**: none. **Round 5**: none. Every B/M/N item across
+all five rounds is folded as a direct text change; no items
+are being argued back. The G.β model is made actionable (round-3 M-1 fold)
 but remains owner-overridable at ratification — that's a
 clarification of default semantics, not a disagreement.
 
@@ -1885,10 +1940,12 @@ clarification of default semantics, not a disagreement.
   BLOCKING-but-narrowing).
 - Round 3 → `scope-pi-review-3.md` (B/2 M/1 N/1,
   BLOCKING-but-very-narrow).
-- Round 4 → this commit. Folds every round-3 B/M/N. Awaiting
-  pi round 4; target verdict CONVERGED.
+- Round 4 → `scope-pi-review-4.md` (B/0 M/1 N/2,
+  BLOCKING-but-very-narrow).
+- Round 5 → this commit. Folds round-4 M-1 + N-1 + N-2.
+  Awaiting pi round 5; target verdict CONVERGED.
 
 ---
 
-*End of m6 scope round 4 draft. Claude-authored; awaiting pi
+*End of m6 scope round 5 draft. Claude-authored; awaiting pi
 adversarial review per `plans/README.md` Phase 2.*
