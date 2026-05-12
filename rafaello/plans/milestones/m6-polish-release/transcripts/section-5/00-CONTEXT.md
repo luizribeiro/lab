@@ -1,39 +1,38 @@
-# §5 transcript capture context — m6 retrospective round 2
+# §5 transcript capture context — m6 retrospective round 3
 
-These six files replace the c27 schematic transcripts that pi-1 §B1
-correctly flagged as fabricated (the live `AuditKind::as_str()`
-table at `rafaello-core/src/audit/mod.rs:64-91` has no
-`tool_call_started` / `tool_call_completed` variants; the c27
-files invented those).
+Round-3 update: re-captured against the m6 tip plus the
+`fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty after caller
+env_clear` commit. The retro round-2 open issue "supervisor
+`env_clear` regression on `CARGO_BIN_EXE_syd-pty`" is now
+**closed**; the canonical cold-start path no longer requires
+the operator-side workaround that the round-2 capture had to
+apply.
 
-**Capture environment** (2026-05-12, retro round 2):
+## Capture environment
 
-- Binaries: `nix build .#rafaello` against the m6 tip
+- Binaries: `nix build .#rafaello` against the round-3 tip
   (`result/bin/rfl`, `result/bin/rfl-tui`, plus the bundled
   plugin trees under `result/share/rafaello/plugins/`).
-- Backend: a long-lived Python `http.server`-based stub at
+- Backend: long-lived Python `http.server`-based stub at
   `127.0.0.1:<ephemeral>` mirroring the in-process OpenAI stub
   used by the headline integration test
   (`rafaello/crates/rafaello/tests/rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`).
   The on-disk `rfl-openai-stub` binary's 5 s self-timeout
-  (`rfl_openai_stub.rs:40`) is shorter than the `rfl init` +
-  `rfl install` + `rfl chat` plugin-spawn-and-validate sequence,
-  so a real-binary stub is impractical for an out-of-test
-  interactive run; the long-lived Python stub is the same
-  shape with no timeout. LiteLLM proxy was unavailable per
-  §J / `/tmp/m6-phase-j-litellm-note.txt` (owner 2026-05-12;
-  stub-only acceptable).
+  (`rfl_openai_stub.rs:40`) is shorter than the full
+  `rfl init` + `rfl install` + `rfl chat` plugin-spawn-and-
+  validate sequence, so a real-binary stub is impractical for
+  an out-of-test interactive run; the long-lived Python stub
+  is the same shape with no timeout. LiteLLM proxy remains
+  unavailable per §J / `/tmp/m6-phase-j-litellm-note.txt`
+  (owner 2026-05-12; stub-only acceptable).
 - Project root: `/tmp/m6-stub-capture/project` (throwaway).
-- syd-pty discovery: the live supervisor calls
-  `cmd.env_clear()` on the sandboxed plugin command
-  (`rafaello-core/src/supervisor.rs:693`), which strips the
-  `CARGO_BIN_EXE_syd-pty` that `lockin::Sandbox` set on the
-  syd child command. To make the live `rfl chat` flow reach
-  the stub during this capture, the bundled `rfl-openai` and
-  `rfl-mailcat` manifests had `CARGO_BIN_EXE_syd-pty` added to
-  `[capabilities.default.env].pass`; with that workaround syd
-  spawns its `syd-pty` helper and the plugin subprocesses come
-  up. See **Open issue 1** below.
+- syd-pty discovery: **closed** — the cold-start path now
+  works against the **shipped vanilla** bundled `rfl-openai`
+  and `rfl-mailcat` manifests. No manual `env.pass`
+  workaround needed. The fix lives at the lockin layer
+  (`SandboxedCommand::apply_sandbox_internal_env` runs before
+  every spawn in both the sync and tokio variants), so it
+  honours hard requirement #2 ("right layer").
 
 ## File-by-file
 
@@ -41,112 +40,102 @@ files invented those).
   output after spawning `rfl chat …` in a detached tmux
   session sized 100×30 with `TERM=xterm-256color`. **Blank.**
   The chat process is alive (stderr shows
-  `rfl-chat: frontend-ready-observed`) and the
-  `rfl-tui` subprocess is running, but `tmux capture-pane`
-  in the cloud-agent harness's headless tmux does not surface
-  ratatui's alternate-screen render. See **Open issue 2**.
+  `rfl-chat: frontend-ready-observed`). See **Open issue 1**
+  for the structural reason and the route to closure.
 - **`02-modal.txt`** — real `capture-pane` after
-  `tmux send-keys "Please email …" Enter`. **Blank.** Same
-  reason as 01. The wire-level evidence that the modal fires
-  is in `wire-events.txt` below + in row 2 of `04-audit.txt`
-  / `05-sqlite-audit.txt` (`confirm_request`).
+  `tmux send-keys "Please email …" Enter`. **Blank** for the
+  same reason as 01.
 - **`03-response.txt`** — real `capture-pane` after
   `tmux send-keys "a"` (the Allow keybinding per
-  `rafaello-tui/src/lib.rs:70` — `KeyCode::Char('a') |
-  KeyCode::Enter | KeyCode::Char('y')`). **Blank.** Same
-  reason. Wire-level evidence of the allow path is in row 4
-  of `04-audit.txt` / `05-sqlite-audit.txt`
-  (`confirm_allowed`).
+  `rafaello-tui/src/lib.rs:70` —
+  `KeyCode::Char('a') | KeyCode::Enter | KeyCode::Char('y')`).
+  **Blank** for the same reason as 01.
 - **`04-audit.txt`** — real `rfl audit --project-root
   <project>` output against the populated `audit_events`
   table. Four rows, all live `AuditKind` variants:
-  `install_accepted` (the `rfl install rfl-mailcat` install),
+  `install_accepted` (from `rfl install rfl-mailcat`),
   `confirm_request`, `confirm_request_taint_attached`,
-  `confirm_allowed`. Request id `01KRDW85BVC348Y5XS50RR6D77`
+  `confirm_allowed`. Request id `01KRDY09Q3C7440DPWM0MM8KBJ`
   is a real ULID generated by the live core. The bracketed
   `[<rid>|-]` rendering matches
-  `crates/rafaello/src/audit_cli.rs:232-233` (pi-1 §B1
-  observation).
+  `crates/rafaello/src/audit_cli.rs:232-233`.
 - **`05-sqlite-audit.txt`** — real `sqlite3` dump of
   `SELECT seq, kind, request_id FROM audit_events ORDER BY
   seq`. Same four rows as 04.
 - **`06-sqlite-entries.txt`** — real `sqlite3` dump of
   `SELECT seq, kind FROM entries ORDER BY seq`. Three rows:
-  `text` (the user-message entry), `tool_call`, `tool_result`.
+  `text`, `tool_call`, `tool_result`.
+- **`wire-events.txt`** — real `rfl-tui` stderr (the chat
+  process's redirect of the spawned TUI's stderr) from the
+  same chat run. Each `bus.event topic=…` line is a real
+  bus broadcast observed by the TUI's frontend bridge;
+  the eight-event sequence is end-to-end proof that the
+  wire shape ran against the real binaries.
 
-## Supplementary evidence
+## Open issue: rendered TUI capture remains blank
 
-`wire-events.txt` (sibling, also real) captures the
-`rfl-tui` process's stderr during the same chat run.
-Each `bus.event topic=…` line is a real bus broadcast
-observed by the TUI's frontend bridge:
+The retro round-2 framing of "headless `tmux capture-pane`
+doesn't surface ratatui's alternate-screen render" is too
+narrow. The deeper structural finding from round 3:
 
-    rfl-tui: project-root=/tmp/m6-stub-capture/project
-    rfl-chat: frontend-ready-observed
-    rfl-tui: bus.event topic=core.session.user_message seq=1
-    rfl-tui: bus.event topic=core.session.entry.finalized seq=2
-    rfl-tui: bus.event topic=core.session.tool_request seq=3
-    rfl-tui: bus.event topic=core.session.confirm_request seq=4
-    rfl-tui: bus.event topic=core.session.entry.finalized seq=5
-    rfl-tui: bus.event topic=core.session.confirm_reply seq=6
-    rfl-tui: bus.event topic=core.session.tool_result seq=7
-    rfl-tui: bus.event topic=core.session.entry.finalized seq=8
+`rafaello-core/src/frontend/mod.rs:202-205` spawns
+`rfl-tui` with:
 
-This is wire-level proof that the same flow scope §5
-describes (`user_message → tool_request → confirm_request →
-confirm_reply → tool_result`) executed end-to-end against
-the real binaries.
+```rust
+command.stderr(std::process::Stdio::piped());
+command.stdin(std::process::Stdio::null());
+command.stdout(std::process::Stdio::null());
+```
 
-The deterministic CI companion (always-green, regression
-anchor) is
-`rafaello/crates/rafaello/tests/rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`
-which exercises the same flow with `RFL_TUI_TEST_MODE=1`
-and asserts the same `tool_call`/`tool_result`/`text`
-entries and `confirm_request`/`confirm_allowed` audit kinds
-seen in 04-06 here.
+The TUI subprocess inherits **null stdin and null stdout**.
+`rfl-tui`'s production-mode entry (`rfl_tui.rs:309-325`)
+calls `enable_raw_mode()` + `execute!(stdout,
+EnterAlternateScreen, …)` against this null stdout. The
+TUI's render output goes to `/dev/null`, not to the
+parent process's terminal pty (the tmux pane).
 
-## Open issues surfaced by this capture (route to follow-ups)
+Two ways the rendered modal/response transcript can be
+captured for §5:
 
-1. **Supervisor `env_clear` strips `CARGO_BIN_EXE_syd-pty`
-   set by `lockin::Sandbox`.**
-   `rafaello-core/src/supervisor.rs:693` calls
-   `cmd.env_clear()` on the sandboxed plugin command after
-   `lockin::Sandbox::builder().tokio_command(...)` has set
-   `CARGO_BIN_EXE_syd-pty` on the syd child via
-   `lockin/crates/sandbox/src/linux.rs:30-31`. After
-   `env_clear`, only the keys in `plan.env.pass` +
-   `plan.env.set` survive — `CARGO_BIN_EXE_syd-pty` is not
-   among them, so syd's `setup_pty` resolution fires the
-   `syd-pty spawn error: No such file or directory` path
-   from `sydbox-3.49.1`. The c10 rafaello-side smoke test
-   (`rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`)
-   does not exercise this code path because the bundled
-   bus-fixture plugin's `plan.env.pass` includes the env var
-   (or the test uses cargo-test's own `CARGO_BIN_EXE_syd-pty`
-   propagation through a different path; investigation
-   pending). The workaround used in this capture (adding
-   `CARGO_BIN_EXE_syd-pty` to each plugin's manifest
-   `[capabilities.default.env].pass`) is operator-hostile;
-   the right fix is either re-injecting the env post-clear
-   in the supervisor or stopping the env_clear call. **Route
-   to a post-retrospective driver-branch follow-up commit
-   (Phase C strengthening) — not blocking m6 ratification
-   because the Phase C smoke test still passes against the
-   shipped bundled fixtures; the gap surfaces only in
-   cold-start operator flows against custom manifests, which
-   is precisely the m6 use case.**
-2. **Headless `tmux capture-pane` doesn't surface ratatui's
-   alternate-screen render.** The TUI process is alive and
-   the wire-level events fire correctly (see
-   `wire-events.txt`), but ratatui's `enter_alternate_screen`
-   /`leave_alternate_screen` sequence isn't captured by
-   `tmux capture-pane -p` in the cloud-agent harness's
-   detached tmux. This is a harness limitation, not a
-   rafaello bug — an operator attached to a real terminal
-   tmux session sees the rendered modal. **Route to a
-   post-merge driver-branch sweep: an operator runs the same
-   tmux script against an attached session and replaces
-   01-03 with the live-rendered captures. The wire-level
-   evidence + the integration test together satisfy hard
-   requirement #3's "real proof of life" intent in the
-   interim.**
+1. **Operator-attached terminal flow with `/dev/tty`
+   handoff.** If `rfl-tui` is reworked to render against
+   `/dev/tty` directly rather than its (null) stdout, the
+   render reaches the parent's controlling terminal —
+   which is what attached operator runs would see. This
+   is a code change of moderate scope.
+2. **Frontend supervisor inherits parent stdio for the
+   TUI process.** Drop the `Stdio::null()` calls in
+   `frontend/mod.rs:204-205` so the TUI shares the parent
+   `rfl chat`'s stdin / stdout (which are the operator's
+   tmux pane's pty). This is a one-line scope change but
+   needs scope-side ratification (the original null-stdio
+   choice may have been deliberate, e.g. to keep
+   `rfl chat` non-interactive for scripted CI).
+
+**This is the gate-blocking question for owner
+ratification of m6's §5 hard requirement #3.** The
+round-3 capture attempt against the vanilla cold-start
+flow (Fix A applied; no `env.pass` workaround) confirms
+the TUI process runs and the wire-shape events fire end
+to end (see `wire-events.txt` + `04-audit.txt`), but the
+operator-visible render is not surfaced by the current
+frontend-supervisor stdio shape.
+
+If the owner accepts the wire-shape + audit + integration-
+test proof as satisfying hard requirement #3 for v1, the
+§5 gate is **closed at round 3** and the rendered-modal
+substring grep set (`" confirm "`, `"send-mail via"`,
+`"sinks: mail"`, `"alice@example.com"`) routes to v2
+along with the TUI-render rework.
+
+If the owner requires a literal rendered modal screenshot
+before merge, **option 2 above is the smallest pre-merge
+code change** — drop the `Stdio::null()` calls in
+`frontend/mod.rs:204-205` and re-capture. The integration
+test still uses `RFL_TUI_TEST_MODE=1` and is unaffected.
+
+(The earlier round-2 "operator-attached re-capture" plan
+is now superseded by this finding: an attached operator
+session would also see a blank rendering against the
+current frontend stdio shape, unless the operator stops
+the supervisor from nulling stdio.)
