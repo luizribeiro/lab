@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
+    KeyModifiers,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -414,6 +415,9 @@ fn handle_terminal_event(
     if key.kind == KeyEventKind::Release {
         return EventOutcome::Ignore;
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        return EventOutcome::Quit;
+    }
     match key.code {
         KeyCode::Char('q') if matches!(mode, InputMode::Normal) => EventOutcome::Quit,
         KeyCode::Up => {
@@ -592,7 +596,7 @@ impl Connector for OneShotConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyEvent, KeyEventState, KeyModifiers};
     use rafaello_tui::ConfirmDetails;
     use ratatui::backend::TestBackend;
     use serde_json::json;
@@ -894,6 +898,44 @@ mod tests {
         );
         assert_publish(out, "req-aas", "always_allow_session");
         assert!(matches!(mode, InputMode::Normal));
+    }
+
+    #[test]
+    fn handle_terminal_event_ctrl_c_quits_in_all_modes() {
+        let key = KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        for mut mode in [InputMode::Normal, overlay_mode_for("req-ctrlc")] {
+            let mut input = String::new();
+            let mut scroll: u16 = 0;
+            let out = handle_terminal_event(Event::Key(key), &mut mode, &mut scroll, &mut input, 0);
+            assert!(
+                matches!(out, EventOutcome::Quit),
+                "Ctrl-C must Quit in mode {mode:?}, got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_terminal_event_plain_c_does_not_quit() {
+        let key = KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let mut input = String::new();
+        let mut scroll: u16 = 0;
+        let mut mode = InputMode::Normal;
+        let out = handle_terminal_event(Event::Key(key), &mut mode, &mut scroll, &mut input, 0);
+        assert!(
+            !matches!(out, EventOutcome::Quit),
+            "plain 'c' must not Quit, got {out:?}"
+        );
+        assert_eq!(input, "c");
     }
 
     #[test]
