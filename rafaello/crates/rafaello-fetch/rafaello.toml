@@ -1,0 +1,29 @@
+schema = 1
+name = "rafaello-fetch"
+version = "0.0.0"
+entry = "bin/rafaello-fetch"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+tools = ["web-fetch"]
+
+[provides.tool.web-fetch]
+sinks = ["network"]
+grant_match = "schemas/web-fetch-grant.json"
+always_confirm = false
+
+[bus]
+subscribes = []
+publishes = []
+
+[capabilities.default.filesystem]
+read_dirs = []
+write_dirs = []
+
+[capabilities.default.network]
+mode = "deny"
+
+[capabilities.default.env]
+pass = ["RFL_FETCH_TEST_BODY_PATH"]
+allow_secrets = []

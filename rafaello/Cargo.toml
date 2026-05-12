@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rafaello", "crates/rafaello-core", "crates/rafaello-tui", "crates/rafaello-mockprovider", "crates/rafaello-readfile", "crates/rafaello-openai", "crates/rafaello-openai-stub", "crates/rafaello-mailcat"]
+members = ["crates/rafaello", "crates/rafaello-core", "crates/rafaello-tui", "crates/rafaello-mockprovider", "crates/rafaello-readfile", "crates/rafaello-openai", "crates/rafaello-openai-stub", "crates/rafaello-mailcat", "crates/rafaello-fetch"]
 resolver = "2"
 
 [workspace.dependencies]

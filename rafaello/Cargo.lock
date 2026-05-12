@@ -1573,6 +1573,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rafaello-fetch"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fittings-client",
+ "fittings-core",
+ "fittings-transport",
+ "rafaello-core",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "ulid",
+]
+
+[[package]]
 name = "rafaello-mailcat"
 version = "0.0.0"
 dependencies = [

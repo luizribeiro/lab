@@ -1,0 +1,34 @@
+[package]
+name = "rafaello-fetch"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rafaello-fetch"
+path = "src/bin/rafaello_fetch.rs"
+
+[features]
+default = []
+
+[dependencies]
+rafaello-core = { path = "../rafaello-core" }
+tokio = { workspace = true, features = ["net", "macros", "rt-multi-thread", "io-util"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+fittings-core = { workspace = true }
+fittings-client = { workspace = true }
+fittings-transport = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+tracing-test = { workspace = true }
