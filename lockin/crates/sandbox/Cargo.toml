@@ -30,3 +30,15 @@ tokio = { version = "1", features = ["macros", "process", "rt"] }
 [[test]]
 name = "tokio"
 required-features = ["tokio"]
+
+[[test]]
+name = "fake_syd_records_cargo_bin_exe_env_when_set_explicitly"
+required-features = ["test-fixture"]
+
+[[test]]
+name = "fake_syd_records_cargo_bin_exe_env_from_sibling"
+required-features = ["test-fixture"]
+
+[[test]]
+name = "fake_syd_resolution_fails_hard_when_pty_missing"
+required-features = ["test-fixture"]

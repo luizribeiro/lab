@@ -151,6 +151,11 @@ const REAL_BUS_MODES: &[&str] = &[
 ];
 
 fn main() {
+    if let Some(path) = std::env::var_os("RFL_BUS_FIXTURE_RECORD_ENV") {
+        let env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        let blob = serde_json::to_string(&env).expect("serialize fixture env");
+        std::fs::write(&path, blob).expect("write fixture env record");
+    }
     let mode = std::env::var("RFL_FIXTURE_MODE").unwrap_or_default();
     if mode == "scaffold_only" {
         return;
