@@ -431,6 +431,17 @@ fn hold_for_confirmation(
         CONFIRM_TTL.as_secs(),
     );
 
+    // §AL1 / pi-1 B-3 predicate: canonical taint contains at least
+    // one entry whose `source` is not "provider".
+    let canonical_taint = payload["details"]["taint"].clone();
+    let has_non_provider = canonical_taint
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|e| e.get("source").and_then(|s| s.as_str()) != Some("provider"))
+        })
+        .unwrap_or(false);
+
     if let Err(err) = broker.publish_core_with_taint(
         "core.session.confirm_request",
         payload,
@@ -455,6 +466,17 @@ fn hold_for_confirmation(
             "sinks": sinks,
         }),
     );
+
+    if has_non_provider {
+        let _ = audit.record(
+            AuditKind::ConfirmRequestTaintAttached,
+            Some(&confirm_id),
+            &serde_json::json!({
+                "request_id": confirm_id.to_string(),
+                "taint": canonical_taint,
+            }),
+        );
+    }
 
     let broker_for_timer = Arc::clone(broker);
     let audit_for_timer = Arc::clone(audit);
