@@ -26,6 +26,7 @@ fn rfl_init_yes_skips_prompt() {
         .arg("--project-root")
         .arg(project.path())
         .env("RFL_BUNDLED_PLUGINS_DIR", bundled.path())
+        .env("RFL_BUNDLED_BIN_OPENAI", workspace_bin("rfl-openai-stub"))
         .stdin(Stdio::null())
         .output()
         .expect("spawn rfl init");

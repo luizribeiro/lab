@@ -31,6 +31,7 @@ fn rfl_init_then_install_against_in_tree_bundled_smoke() {
         .args(["init", "--yes", "--project-root"])
         .arg(project.path())
         .env("RFL_BUNDLED_PLUGINS_DIR", bundled.path())
+        .env("RFL_BUNDLED_BIN_OPENAI", workspace_bin("rfl-openai-stub"))
         .output()
         .expect("spawn rfl init");
     assert!(

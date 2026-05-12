@@ -30,6 +30,7 @@ fn rfl_init_materialises_package_dir() {
         .arg("--project-root")
         .arg(project.path())
         .env("RFL_BUNDLED_PLUGINS_DIR", bundled.path())
+        .env("RFL_BUNDLED_BIN_OPENAI", workspace_bin("rfl-openai-stub"))
         .output()
         .expect("spawn rfl init");
     assert!(

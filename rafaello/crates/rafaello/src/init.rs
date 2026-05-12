@@ -24,10 +24,9 @@ use rafaello_core::manifest::capabilities::{
 use rafaello_core::manifest::Manifest;
 use rafaello_core::topic_id;
 
-use crate::bundled::{self, BundledError};
+use crate::bundled::{self, BundledError, OPENAI_NAMES};
 use crate::pp1;
 
-const BUNDLED_OPENAI: &str = "openai";
 const OPENAI_CANONICAL: &str = "builtin:openai@0.0.0";
 
 #[derive(Debug, clap::Args)]
@@ -74,7 +73,7 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
         return Ok(());
     }
 
-    let source_dir = bundled::resolve_plugin_dir(BUNDLED_OPENAI)?;
+    let source_dir = bundled::resolve_plugin_dir_for_bundled(&OPENAI_NAMES)?;
     let canonical =
         CanonicalId::parse(OPENAI_CANONICAL).map_err(|e| InitError::Canonical(Box::new(e)))?;
 
@@ -107,6 +106,29 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
             path: e.path,
             source: e.source,
         })?;
+
+    let runtime = match bundled::resolve_runtime_binary(&OPENAI_NAMES) {
+        Ok(p) => p,
+        Err(e) => {
+            std::fs::remove_dir_all(&target_dir).ok();
+            return Err(InitError::Bundled(e));
+        }
+    };
+    let entry_absolute = target_dir.join(manifest.entry.as_str());
+    std::fs::copy(&runtime, &entry_absolute).map_err(|source| InitError::Io {
+        path: entry_absolute.clone(),
+        source,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&entry_absolute, std::fs::Permissions::from_mode(0o755)).map_err(
+            |source| InitError::Io {
+                path: entry_absolute.clone(),
+                source,
+            },
+        )?;
+    }
 
     let content_digest = digest::content_digest(&target_dir)?;
     let manifest_digest = digest::manifest_digest(&manifest.canonical_bytes());
