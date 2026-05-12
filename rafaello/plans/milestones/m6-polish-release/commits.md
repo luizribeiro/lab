@@ -3762,6 +3762,365 @@ matching the scope-named path.
   decisions/glossary appends).
 - **Scope sections.** §J3, §"Glossary additions".
 
+### Phase K — production TUI input + confirm overlay (6 commits — owner-authorized amendment per `891b93a` / Route 1)
+
+> Phase K is a **post-RATIFIED scope amendment** authorized by
+> owner commit `891b93a` ("ROUTE 1 — extend production rfl_tui").
+> It closes the rendered-TUI gap surfaced by retrospective §5
+> recapture (the production `ui_loop` at `rfl_tui.rs:309-360`
+> handles only `q`/`Up`/`Down` — no text input, no overlay
+> render — so `publish_submitted_line` is gated on
+> `cfg.test_message` at `rfl_tui.rs:83-85` and is unreachable
+> from production). Phase K wires the existing
+> `rafaello-tui/src/lib.rs` `InputMode` state machine
+> (lib.rs:30) + `overlay_from_confirm_request` (lib.rs:98) +
+> `handle_overlay_key` (lib.rs:147) + `paint_confirm_overlay`
+> (lib.rs:160) + `ConfirmQueue` (lib.rs:33) into the production
+> binary. No new library primitives — plumbing only. Phase K
+> rows cite **Scope sections** as `"owner-authorized
+> amendment per 891b93a / Route 1"` rather than a `scope.md`
+> section, because they expand the ratified scope after the
+> commits.md round-6 close.
+
+#### cK1 — feat(rafaello-tui): production `ui_loop` renders input field below buffer
+
+- **What.** Add a one-line text-input area below the
+  `RenderNode` buffer painted by `redraw` at
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs:420-429`.
+  Introduce a `ui_loop`-local `input_buffer: String` plus
+  layout split (existing buffer area + 1-row input bar at
+  the bottom). The redraw path renders `input_buffer` with
+  a leading prompt glyph (e.g. `"> "`) on the dedicated
+  input row. Render-only — no keystroke wiring yet
+  (lands in cK2). `InputMode::Normal` is the default; the
+  input bar is always drawn under `Normal` and hidden
+  (or visually muted) when `InputMode::input_blocked()`
+  returns true (lib.rs:47).
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1. The production binary's `ui_loop` currently has
+  no input surface — keystrokes are dropped by the
+  `_ => EventOutcome::Ignore` arm at `rfl_tui.rs:388`. cK1
+  lays the rendering scaffold so cK2 can wire keystrokes
+  into a visible field. Render-first keeps the diff
+  bounded and lets cK2 be a pure event-handling change.
+- **Depends on.** c27 (Phase J §5 recapture establishes
+  the production-mode flow Phase K extends); `9ec398a`
+  (Stdio::inherit fix — precondition for any visible
+  rendering on the spawned PTY).
+- **Acceptance.**
+  - Unit test `production_ui_loop_renders_input_bar_with_prompt`
+    drives `redraw` with an empty buffer + a non-empty
+    `input_buffer` against a `ratatui::backend::TestBackend`
+    and asserts the prompt glyph + buffer contents appear on
+    the final row.
+  - Unit test `production_ui_loop_hides_input_bar_when_blocked`
+    asserts the input bar is hidden (or muted) when
+    `InputMode::input_blocked()` returns true.
+  - `cargo test -p rafaello-tui` green.
+- **Files touched.**
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
+  (`ui_loop` + `redraw` + new helper; ~60 lines net).
+- **Size.** small-to-medium.
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+#### cK2 — feat(rafaello-tui): wire keystrokes to `publish_submitted_line` in production `ui_loop`
+
+- **What.** Extend `handle_terminal_event` at
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs:368-390`
+  (or refactor into an `InputMode`-aware
+  `handle_normal_key`) so that under `InputMode::Normal`:
+  - `KeyCode::Char(c)` → push into the `ui_loop`-local
+    `input_buffer` (cK1) → `EventOutcome::Redraw`.
+  - `KeyCode::Backspace` → pop one char → `Redraw`.
+  - `KeyCode::Enter` → invoke `publish_submitted_line`
+    (already defined at `rfl_tui.rs:235`) on the client
+    handle threaded down from `run_production_mode`, then
+    clear `input_buffer` → `Redraw`.
+  - `KeyCode::Char('q')` / scroll keys preserved (existing
+    semantics).
+  Lift the `Client<OneShotConnector>` handle into
+  `ui_loop` so `publish_submitted_line` can be called
+  outside the `test_message`-gated branch at
+  `rfl_tui.rs:83-85` (which stays unchanged — Phase K does
+  not delete the test hook).
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1. The frontend ACL grant for
+  `frontend.tui.user_message` already lands in m5a c15,
+  so `publish_submitted_line` is authorized — the only
+  gap is the production `ui_loop` never calls it. cK2
+  closes that gap; combined with cK1 the user can type
+  and submit in production mode.
+- **Depends on.** cK1 (input rendering); m5a c15
+  (`frontend.tui.user_message` ACL grant — preexisting).
+- **Acceptance.**
+  - Unit test
+    `normal_mode_enter_invokes_publish_submitted_line`
+    asserts the published topic + payload shape match
+    the existing test-message path (i.e. parity with
+    `publish_submitted_line` at `rfl_tui.rs:235`).
+  - Unit test `normal_mode_backspace_pops_last_char`.
+  - Unit test `normal_mode_char_appends_to_input_buffer`.
+  - `cargo test -p rafaello-tui` green.
+- **Files touched.**
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
+  (`handle_terminal_event` refactor + `ui_loop` Client
+  threading + tests; ~120 lines net).
+- **Size.** medium.
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+#### cK3 — feat(rafaello-tui): production `ui_loop` renders confirm overlay on pending `ConfirmState`
+
+- **What.** Wire a `ConfirmQueue` (lib.rs:33) into the
+  production `ui_loop` at `rfl_tui.rs:327-360`. On
+  `core.session.confirm_request` bus events (matching
+  `CONFIRM_REQUEST_TOPIC` from lib.rs:15), call
+  `ConfirmQueue::enqueue` and recompute the active
+  `InputMode` via `head_overlay()` (lib.rs:78). On
+  `core.session.confirm_resolved` (lib.rs:22), call
+  `handle_confirm_resolved`. When the active mode is
+  `InputMode::ConfirmOverlay`, the redraw pipeline calls
+  `paint_confirm_overlay` (lib.rs:160) on top of the
+  existing `RenderNode` frame so the overlay covers the
+  buffer. No key handling in cK3 — that lands in cK4.
+  Also spawn `run_ttl_ticker` (lib.rs:127) on the queue
+  so TTL expiry decrements correctly under the
+  `tokio::select!` loop.
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1. The library helpers
+  (`overlay_from_confirm_request`, `paint_confirm_overlay`,
+  `ConfirmQueue`) already exist and are unit-tested under
+  `rafaello-tui`; the production binary simply never
+  consults them. cK3 plumbs the data flow; cK4 plumbs the
+  reply flow. Splitting keeps each row's surface
+  inspectable.
+- **Depends on.** cK1, cK2 (input scaffolding the overlay
+  shares the same `ui_loop` arc); c27 (Phase J §5
+  recapture established that confirm-request events
+  reach the supervisor in production mode — Phase K
+  consumes them on the TUI side).
+- **Acceptance.**
+  - Unit test
+    `production_ui_loop_paints_overlay_when_queue_has_head`
+    feeds a synthetic `confirm_request` payload through
+    the bus-event handler, asserts
+    `InputMode::is_overlay()` becomes true, and asserts
+    the `TestBackend` buffer contains the tool name +
+    "[a]llow / [d]eny / [s]kip / [t]oggle" overlay copy
+    rendered by `paint_confirm_overlay`.
+  - Unit test
+    `production_ui_loop_clears_overlay_on_confirm_resolved`
+    feeds a resolved payload and asserts the overlay
+    disappears.
+  - `cargo test -p rafaello-tui` green.
+- **Files touched.**
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
+  (`ui_loop` + `ingest_notification` extended to dispatch
+  confirm topics; ~120 lines net).
+- **Size.** medium.
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+#### cK4 — feat(rafaello-tui): wire `a`/`d`/`s`/`t` overlay keys to `bus.publish` reply
+
+- **What.** Extend the production `ui_loop` event handler
+  (cK2's `handle_normal_key`) so that when the active
+  `InputMode` is `ConfirmOverlay`, keystrokes route
+  through `handle_overlay_key` (lib.rs:147) instead of
+  the normal-mode handler. On a non-`None`
+  `ConfirmAnswerEnvelope` return, publish the envelope
+  on `CONFIRM_ANSWER_TOPIC` (`frontend.tui.confirm_answer`,
+  lib.rs:17) via the threaded `Client` handle (same
+  client lifted in cK2), with the
+  `request_id` / `in_reply_to` shape produced by
+  `build_confirm_answer` (lib.rs:86). After publish, set
+  the mode back to `Normal` (the handler already returns
+  `Normal` per lib.rs:158) and `Redraw`. Mirrors the
+  test-mode confirm-answer publish shape used by
+  `run_plural_auto_confirm_loop` at `rfl_tui.rs:148-200`
+  — promoted from test-mode to production. Keys other
+  than `a`/`d`/`s`/`t` (per `Answer::from_key` at
+  lib.rs:68) in overlay state remain `Ignore` so
+  text input is blocked while overlay is active
+  (matches `InputMode::input_blocked()` semantic at
+  lib.rs:47).
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1; mirrors the m5a c25 test-mode
+  `InputMode::ConfirmOverlay` shape promoted to
+  production. The library already returns the correct
+  envelope; cK4 publishes it.
+- **Depends on.** cK3 (overlay rendering + queue
+  plumbing); m5a c25 (test-mode overlay shape — design
+  parent).
+- **Acceptance.**
+  - Unit test
+    `overlay_mode_a_publishes_allow_answer_and_returns_to_normal`
+    asserts `bus.publish` is called with the envelope
+    `build_confirm_answer` produces for `Answer::Allow`
+    and that the mode transitions back to `Normal`.
+  - Sibling tests for `d` (Deny), `s` (Skip), `t`
+    (Toggle), and one for a non-overlay key remaining
+    `Ignore` while overlay is active.
+  - `cargo test -p rafaello-tui` green.
+- **Files touched.**
+  `rafaello/crates/rafaello-tui/src/bin/rfl_tui.rs`
+  (event-handler dispatch by mode + publish helper +
+  tests; ~100 lines net).
+- **Size.** small-to-medium.
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+#### cK5 — test(rafaello): tmux-driven end-to-end integration tests for production TUI input + overlay
+
+- **What.** Add one (or two) `tmux send-keys`-driven
+  integration tests under
+  `rafaello/crates/rafaello/tests/` that prove the
+  cK1..cK4 wiring end-to-end in **production mode**
+  (i.e. not via `cfg.test_message` / `test_confirm_answers`
+  hooks). Recipe:
+  1. Build `rfl` + `rfl-tui` + `rfl-openai-stub` +
+     `rfl-mailcat`.
+  2. `rfl init` + `rfl install rfl-mailcat` under a
+     `tempfile::tempdir` project root.
+  3. Spawn `rfl chat --project-root <PROJECT>` inside a
+     scratch `tmux new-session -d` pane (xterm 100×30 to
+     match the c27 recipe).
+  4. Drive deterministically with the **existing**
+     test-hook envs (no new hooks added):
+     - `RFL_OPENAI_STUB_SCRIPTED_TURNS` (c14 multi-turn
+       scripted-turns dispatcher) — supplies the
+       assistant turn that emits a `send-mail` tool call.
+     - `RFL_TUI_TEST_CONFIRM_ANSWERS` (m5b row 56 hook) —
+       **NOT used** for the production-mode assertion;
+       Phase K's whole point is to prove the overlay key
+       handler works without that hook. The overlay
+       answer is keyed in via `tmux send-keys -t pane "a"`.
+  5. `tmux send-keys -t pane "Please email alice@example.com a status update" Enter`
+     → wait → assert overlay copy appears via
+     `tmux capture-pane -p` (substring
+     `"send-mail"` + `"[a]llow"`).
+  6. `tmux send-keys -t pane "a"` → wait → assert
+     overlay clears, `tool_result` row lands in `entries`,
+     `confirm_allowed` row lands in `audit_events`.
+  7. `tmux send-keys -t pane "q"` → assert clean exit
+     (or `Ctrl-C` per c27 owner-judgment item 12 default).
+  - Linux-only (`#[cfg(target_os = "linux")]`) — same
+    discipline as `syd-pty`-dependent tests per scope
+    §"Acceptance summary".
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1. The unit tests in cK1..cK4 cover handler
+  correctness against `TestBackend`; cK5 is the
+  regression-grade end-to-end proof that an actual user
+  keystroke flows from PTY → crossterm `EventStream` →
+  handler → `publish_submitted_line` →
+  supervisor → `rfl-openai-stub` → tool-call →
+  overlay render → `a` key → `bus.publish` reply →
+  supervisor dispatch → audit row. Authenticity bar
+  matches c27 fix `de8e187` (real captured behavior,
+  not authored).
+- **Depends on.** cK1, cK2, cK3, cK4 (the full wiring
+  surface this test exercises); c14
+  (`RFL_OPENAI_STUB_SCRIPTED_TURNS`); m5b row 56
+  (`RFL_TUI_TEST_CONFIRM_ANSWERS` referenced for
+  contrast in test docstring — not invoked); c27 (tmux
+  recipe + capture-pane shape — copied here).
+- **Acceptance.**
+  - New test file
+    `rafaello/crates/rafaello/tests/rfl_chat_production_tui_input_overlay_e2e.rs`
+    green on Linux.
+  - The test does **not** set `RFL_TUI_TEST_MESSAGE`,
+    `RFL_TUI_TEST_CONFIRM_ANSWER`, or
+    `RFL_TUI_TEST_CONFIRM_ANSWERS` for the body that
+    asserts the user-typed flow (proves production-mode
+    code path is exercised).
+  - `entries` SQLite table contains the `tool_call` +
+    `tool_result` + assistant-message rows; `audit_events`
+    contains `confirm_request` + `confirm_allowed`.
+  - `cargo test -p rafaello` green on Linux.
+- **Files touched.**
+  `rafaello/crates/rafaello/tests/rfl_chat_production_tui_input_overlay_e2e.rs`
+  (new, ~220 lines). Possibly a small shared helper in
+  the existing `tests/common/` if c27 established one
+  (verify at agent-prompt construction).
+- **Size.** medium-to-large (body-justified by tmux
+  scaffolding + full end-to-end assertion shape; c27
+  EXFIL1-headline precedent).
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+#### cK6 — docs(rafaello): recapture manual-validation §5 against the rewired binary
+
+- **What.** Re-execute the `manual-validation.md` §5
+  tmux script (originally captured by c27 / Phase J §2)
+  against the post-Phase-K binary. The c27 capture stays
+  in place as the original-shape evidence; cK6 adds a
+  **fresh transcript set** under
+  `rafaello/plans/milestones/m6-polish-release/transcripts/section-5-phase-k/`
+  (sibling directory to preserve c27 history) containing
+  the six recaptured files:
+  - `01-after-launch.txt` — should now show the input
+    bar from cK1 (was blank under the pre-Phase-K
+    binary per retrospective §5 finding).
+  - `02-modal.txt` — should now show the overlay copy
+    from cK3 (was blank pre-Phase-K).
+  - `03-response.txt` through `06-sqlite-entries.txt` —
+    parity with c27.
+  Append a §5.1 subsection to `manual-validation.md`
+  documenting the Phase K recapture, referencing the new
+  transcript directory + linking back to retrospective.md
+  for the route-decision context.
+- **Why.** Owner-authorized amendment per `891b93a`
+  Route 1. Retrospective §5's hard-requirement #3
+  recapture currently records the pre-Phase-K blank-pane
+  evidence; cK6 closes the loop by recording the
+  post-wiring rendered evidence against the same script.
+  Authenticity bar matches c27 fix `de8e187` — real
+  captured transcripts, not authored.
+- **Depends on.** cK1, cK2, cK3, cK4, cK5 (the rewired
+  binary + the integration test that proves the wiring
+  before manual recapture); c26 (manual-validation.md
+  §5 skeleton); c27 (original §5 transcript set + tmux
+  recipe).
+- **Acceptance.**
+  - Six new transcript files exist under
+    `rafaello/plans/milestones/m6-polish-release/transcripts/section-5-phase-k/`.
+  - `01-after-launch.txt` is **non-blank** (contains
+    the cK1 prompt glyph at minimum); contrast with the
+    pre-Phase-K blank capture in
+    `transcripts/section-5/01-after-launch.txt`.
+  - `02-modal.txt` contains the
+    `paint_confirm_overlay` copy substrings
+    (`"send-mail"`, `"[a]llow"`).
+  - `manual-validation.md` §5.1 references all six new
+    files by relative path.
+  - The c27 originals at
+    `transcripts/section-5/` are **untouched** (Phase K
+    is additive, not a rewrite — preserves the
+    pre/post evidence pair).
+- **Files touched.**
+  Six new transcript files (~200 lines captured);
+  `manual-validation.md` §5.1 (~40 lines). Total ~240
+  lines.
+- **Size.** medium (m4 c30 / m5a c40 / c27
+  manual-validation precedent).
+- **Scope sections.** owner-authorized amendment per
+  `891b93a` / Route 1.
+
+> **Phase K sizing addendum.** Phase K adds 6
+> implementation rows post-RATIFIED, taking m6 from
+> **28 + 1 retro = 29 slots** to **34 + 1 retro = 35
+> slots**. The c28 retrospective slot is **not**
+> consumed by Phase K — retrospective.md drives a
+> fresh round after Phase K lands (to absorb the §5
+> recapture from cK6) and ratifies against the full
+> c01..c27 + cK1..cK6 surface. Phase K bucketing:
+> small-to-medium (cK1, cK4), medium (cK2, cK3, cK6),
+> medium-to-large (cK5). No `large` rows. No
+> workspace-wide cutover (the wiring is confined to
+> `rafaello-tui/src/bin/rfl_tui.rs` plus a single new
+> integration test + transcripts).
+
 ---
 
 ## Acceptance traceability appendix
