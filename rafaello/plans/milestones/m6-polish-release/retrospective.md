@@ -1,9 +1,133 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 2 draft — folds
-> `retrospective-pi-review-1.md` (3 B / 4 M / 2 N,
+> **Status: round 3 draft — folds
+> `retrospective-pi-review-2.md` (4 B / 3 M / 2 N,
 > blocking).** Claude-authored 2026-05-12; awaiting pi
-> round 2. Round-2 changelog by pi-1 finding:
+> round 3. Round 3 closed both blocker implementation
+> gaps via sibling fix commits before this fold:
+>
+> - **B1 (env_clear regression)** — closed by
+>   `fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty
+>   after caller env_clear` (`6f1fe4b`). The fix lives
+>   at the right layer: lockin's `SandboxedCommand`
+>   re-applies sandbox-internal env (currently the syd
+>   PTY-helper env) right before `spawn` / `status` /
+>   `output`, in both the sync and tokio variants. The
+>   rafaello-core supervisor's `cmd.env_clear()` call
+>   is unchanged; lockin owns syd-pty preservation
+>   end-to-end. The shipped bundled `rfl-openai` and
+>   `rfl-mailcat` manifests do NOT need
+>   `CARGO_BIN_EXE_syd-pty` in `env.pass` for the
+>   canonical cold-start to work. Regression test
+>   `lockin/crates/sandbox/tests/fake_syd_records_cargo_bin_exe_env_after_env_clear.rs`
+>   exercises the exact failure mode (sandbox command
+>   + `env_clear()` + fake-syd records environ) and
+>   passes against the fix; pre-fix it fails.
+> - **B2 (rendered TUI capture)** — partially closed.
+>   The transcript recapture refresh against Fix A
+>   (sibling commit
+>   `docs(rafaello-m6-c27): refresh §5 captures against
+>   env_clear fix; surface frontend null-stdio
+>   finding` (`de8e187`)) confirms the wire-shape ran
+>   end-to-end against vanilla bundled manifests; real
+>   `rfl audit` + sqlite dumps + bus-event log all live
+>   on disk. The rendered modal/response captures
+>   remain blank, but the deeper structural reason is
+>   now identified (and is **not** a tmux-harness
+>   limitation): `frontend/mod.rs:202-205` spawns
+>   `rfl-tui` with null stdin/stdout, so the TUI's
+>   ratatui render output goes to /dev/null rather
+>   than to the parent's pty. This makes B2 a
+>   **scope-side owner question**, not an
+>   implementation-side blocker: does m6 ratify §5 on
+>   wire-shape + audit + integration-test evidence
+>   (option A), or amend the frontend-supervisor stdio
+>   shape pre-merge to inherit parent stdio for the
+>   TUI subprocess (option B — one-line code change at
+>   `frontend/mod.rs:204-205`)? Both routes are
+>   addressable inside the ratification-candidate
+>   window; the §5 disposition table at §4 / §4.5
+>   below tracks both.
+>
+> Retro-text round-3 changes by pi-2 finding:
+>
+> - **B3 ratification-state inconsistency** —
+>   Round-2's "retro RATIFIED but merge still blocked"
+>   wedge dropped. §9's `decisions.md` row 33 trigger
+>   condition is restored verbatim: m6 retro RATIFIED
+>   triggers the ff-only merge to `main`. §4.5
+>   "manual-validation residual gates" reframed as
+>   **pre-merge ratification-candidate sweep** — work
+>   that the driver does on the
+>   ratification-candidate commit before pi's final
+>   pass. §1 hard-requirement disposition stays ✓
+>   honestly (hard reqs #1 / #2 now closed by the
+>   sibling fix; #3 disposition depends on pi-3 owner
+>   B2 routing; #4 / #5 unchanged).
+> - **B4 row 68 manifest shape + line cite** —
+>   reworded to `LoadPolicy::Lazy { command }` per
+>   live `streams/f-manifest/rfc-manifest-schema.md:272-280,
+>   :318-325`; the round-2 `[load.triggers]
+>   kind = "tool"` framing is dropped. `register_lazy`
+>   line cite corrected from `:401-421` (which is
+>   `ensure_spawned`) to `:370-389`.
+> - **B4 row 64 manual-validation overclaim** — row 64
+>   narrowed: the binary is buildable + the integration
+>   test (c14/c15) anchors its contract. Manual
+>   validation §5 uses a stub-shape backend that
+>   mirrors the same contract; the on-disk
+>   `rfl-openai-stub` binary's 5 s self-timeout is
+>   too short for an out-of-test interactive run, so
+>   §5 uses a long-lived Python `http.server` mirror
+>   per `transcripts/section-5/00-CONTEXT.md`. The
+>   row no longer claims manual-validation consumes
+>   the release stub binary directly.
+> - **M1 stale "panic" / "SydPtyNotFound" wording** —
+>   c09 phase summary, c15 phase summary, defensive
+>   negatives list, and glossary entry all corrected
+>   to live shapes (`anyhow::bail!` for syd-pty
+>   resolution failure;
+>   `std::process::exit(1)` +
+>   `exhaustion_exits_deterministically` for stub
+>   exhaustion).
+> - **M2 §1 hard-requirement disposition** — now
+>   honest after Fix A closes #1 / #2 and §5
+>   wire-evidence + open scope question covers #3.
+> - **M3 c10 smoke explanation** — c10 doesn't exercise
+>   the supervisor's `env_clear` path because c10
+>   spawns `rfl-bus-fixture` directly via `nix develop
+>   --command`, not through the rafaello-side plugin
+>   supervisor's `cmd.env_clear()` code path. The new
+>   `fake_syd_records_cargo_bin_exe_env_after_env_clear`
+>   lockin test fills that gap by exercising the
+>   exact env_clear preservation contract at the
+>   correct layer (lockin's `SandboxedCommand`); it
+>   fails pre-fix and passes post-fix. Explanation
+>   updated in the c09 phase summary + §4.
+> - **N1 "post-merge" → "pre-merge / ratification-
+>   candidate sweep"** — done globally.
+> - **N2 redundant `--since` enumeration in row 63** —
+>   round-2 left two listings (`1h/30m/24h` and the
+>   arbitrary `<number><m|h|d>` clause). The arbitrary
+>   grammar is canonical; the round-2 leading
+>   `1h`/`30m`/`24h` enumeration removed.
+>
+> Round-3 net: 4B/3M/2N → 0B/0M/0N after sibling
+> commits + this fold, conditional on pi confirming
+> the B2 routing question (option A wire-evidence
+> ratification, or option B frontend stdio amendment).
+> Convergence trajectory: 3B → 4B → 0B (or 0B+1
+> scope question). m1 took 4 rounds; m5b took 4; m5a
+> took 6 with a drift tail. m6 is on track to converge
+> at round 3 or 4.
+>
+> ---
+>
+> **(History — round 2 draft, kept for trajectory.)**
+>
+> Round 2 folded
+> `retrospective-pi-review-1.md` (3 B / 4 M / 2 N,
+> blocking). Round-2 changelog by pi-1 finding:
 >
 > - **B1 §5 transcripts** — closed by the sibling commit
 >   `fix(rafaello-m6): replace c27 schematic transcripts
@@ -13,21 +137,22 @@
 >   request id; `wire-events.txt` adds supplementary
 >   real bus-event evidence. The §J2 TUI-render
 >   substring grep set is preserved as the
->   operator-witnessed gate for the post-merge sweep
+>   operator-witnessed gate for the pre-merge sweep
 >   (headless `tmux capture-pane` doesn't surface
 >   ratatui's alternate screen in this harness; see the
 >   transcripts' `00-CONTEXT.md`). This re-routes the §5
 >   acceptance from ✅ to ◐ partial + a documented
->   post-merge gate.
+>   pre-merge gate.
 > - **B2 §4 overclaim** — §4 split into "implemented
 >   scaffolding" vs "witnessed evidence". New §4.5
 >   "Manual-validation residual gates" lists the pending
 >   §1 / §2 / §4 / §6 / §7 / §G items by file/line + the
->   post-merge driver sweep that fills them. The
+>   pre-merge ratification-candidate sweep that fills them. The
 >   "every acceptance bullet maps" sentence dropped; the
 >   table now flags the four bullets whose witnessed-half
->   is post-merge (macOS CI URL, clean Homebrew install,
->   LiteLLM bootstrap, §5 attached-tmux render).
+>   is pre-merge / ratification-candidate (macOS CI URL,
+>   clean Homebrew install, LiteLLM bootstrap, §5
+>   attached-tmux render).
 > - **B3 four decisions row corrections** —
 >   - Row 62: typed `SandboxError::SydPtyNotFound` →
 >     `anyhow::bail!` channel matching live
@@ -166,38 +291,70 @@ ratification).
 **Hard requirement disposition** (owner-set 2026-05-12,
 verbatim from driver prompt):
 
-1. **First chat from cold MUST just work.** ✓ — landed
-   via Phases A + B + C + H (5-line bootstrap in
-   `rafaello/README.md`; `rfl init --yes` materialises
-   the default lock + the bundled `rfl-openai` package
-   tree per PP1; `rfl install rfl-mailcat` lands the
-   tool-side; `rfl chat` inside the devshell discovers
-   `syd-pty` via either the devshell export *or* the
-   lockin sibling-lookup arm). Verified end-to-end by
+1. **First chat from cold MUST just work.** ✓ —
+   closed end-to-end at round 3. Phases A + B + C + H
+   shipped the 5-line bootstrap, `rfl init --yes`
+   materialisation, positional `rfl install`, and the
+   devshell entry. Round-3 fix
+   `fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty
+   after caller env_clear` (`6f1fe4b`) closes the
+   round-2-surfaced env_clear regression: the cold-start
+   chat against the **shipped vanilla** bundled
+   `rfl-openai` / `rfl-mailcat` manifests now works
+   without any operator-side `env.pass` workaround.
+   Verified end-to-end by
    `rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`
-   (deterministic, stub-driven) and by the §5 tmux
-   transcript (real `rfl-openai` against the stub).
+   (deterministic, stub-driven) + the round-3 §5
+   transcript recapture (real cold-start flow against
+   the bundled tree, wire-events log in
+   `transcripts/section-5/wire-events.txt`).
 2. **The `syd-pty` discovery problem is solved at the
-   right layer.** ✓ — Phase C landed the belt-and-braces
-   fix: devshell exports `CARGO_BIN_EXE_syd-pty`
-   (c08 `17f683f`), lockin sandbox's
-   `SandboxBuilder::syd_pty_path` resolves via
-   spec/env/sibling/PATH with **no `pty:off` fallback**
-   at that layer (c09 `333e9d8`), and the env is set on
-   the syd child command via `Command::env`. Tests
-   (c10 `5467938`) exercise the resolution arms via a
-   fake-`syd` `[[bin]]` gated by the net-new
-   `lockin/crates/sandbox` `test-fixture` feature plus a
-   rafaello-side devshell smoke.
+   right layer.** ✓ — closed end-to-end at round 3.
+   Phase C shipped the belt-and-braces fix: devshell
+   exports `CARGO_BIN_EXE_syd-pty` (c08 `17f683f`),
+   lockin sandbox's `SandboxBuilder::syd_pty_path`
+   resolves via spec/env/sibling/PATH with **no
+   `pty:off` fallback** (c09 `333e9d8`), and the env is
+   set on the syd child via
+   `Command::env(... pty)` at `linux.rs:30-31`. The
+   round-3 fix at `6f1fe4b` adds the missing piece:
+   `SandboxedCommand` re-applies sandbox-internal env
+   before every spawn so callers that invoke
+   `cmd.env_clear()` don't strip the resolved syd-pty
+   env. Right layer: lockin owns syd-pty discovery
+   and now owns syd-pty preservation. Tests cover the
+   resolution arms via fake-`syd` `[[bin]]`
+   (c10 `5467938`) + the new
+   `fake_syd_records_cargo_bin_exe_env_after_env_clear`
+   in `6f1fe4b`.
 3. **`manual-validation.md` §5 captures a real
-   tmux-driven interactive `rfl chat` recording.** ✓ —
-   c28 `4e22268` lands six transcript files under
-   `milestones/m6-polish-release/transcripts/section-5/`
-   (`01-after-launch.txt`, `02-modal.txt`,
-   `03-response.txt`, `04-audit.txt`, `05-sqlite-audit.txt`,
-   `06-sqlite-entries.txt`) wired into §5 with the
-   send-mail flow against the stub. See §4 for the
-   LiteLLM-driven second-transcript carveout.
+   tmux-driven interactive `rfl chat` recording.** ◐
+   partial — closure depends on pi-3 / owner routing
+   per the §4.5 / `transcripts/section-5/00-CONTEXT.md`
+   open question. Wire-shape + audit + integration-test
+   evidence is on disk and real:
+   `04-audit.txt` / `05-sqlite-audit.txt` /
+   `06-sqlite-entries.txt` are live `rfl audit` +
+   sqlite dumps with live `AuditKind` variants,
+   `wire-events.txt` records the real
+   `user_message → tool_request → confirm_request →
+   confirm_reply → tool_result` bus sequence, and the
+   integration test
+   `rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`
+   is the deterministic regression anchor. The
+   rendered modal/response captures (01/02/03) remain
+   blank because `frontend/mod.rs:202-205` spawns
+   `rfl-tui` with null stdin/stdout — the TUI's
+   ratatui render output goes to /dev/null rather than
+   to the parent's pty. **Owner question (per §4.5
+   / `00-CONTEXT.md`):** ratify §5 on wire-shape +
+   audit evidence (option A — keeps the rendered
+   modal route as a v2 follow-up), or apply the
+   one-line frontend-supervisor stdio amendment pre-
+   merge (option B — drop `Stdio::null()` at
+   `frontend/mod.rs:204-205` so TUI inherits the
+   parent's pty) and re-capture? Both routes fit
+   inside the ratification-candidate window.
 4. **Bootstrap UX fits ≤5 shell lines.** ✓ — c21
    `85ce87b` lands the verbatim 5-line snippet in
    `rafaello/README.md` (one `cd`, one `nix develop …
@@ -277,8 +434,18 @@ RATIFIED.
   child-env injection in `lockin/crates/sandbox/src/lib.rs`.
   Resolution order: `spec.syd_pty_path` →
   `$CARGO_BIN_EXE_syd-pty` → sibling-of-syd → `PATH` →
-  hard `Err(SandboxError::SydPtyNotFound)` (owner-judgment
-  item 4 default: no `pty:off` fallback).
+  hard `anyhow::bail!("Linux sandbox requires syd-pty…")`
+  (live error channel per `:246-272`; pi-1 round-1 §B3
+  / pi-2 round-2 §M1: round-1 named a non-existent
+  typed `SandboxError::SydPtyNotFound` variant). The
+  resolved path is set on the syd child via
+  `command.env("CARGO_BIN_EXE_syd-pty", pty)` at
+  `linux.rs:30-31`. **Owner-judgment item 4 default: no
+  `pty:off` fallback at this layer.** Round-3 follow-up
+  fix `fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty
+  after caller env_clear` (`6f1fe4b`) re-applies this
+  env at spawn time so callers that clear the env
+  (the supervisor pattern) don't strip it.
 - **c10 `5467938`** — fake-syd `[[bin]]` (gated by the
   net-new `lockin/crates/sandbox/Cargo.toml`
   `test-fixture` feature, round-5 M-1) records argv +
@@ -286,6 +453,15 @@ RATIFIED.
   the explicit / sibling / hard-error arms, plus
   rafaello-side devshell smoke
   `rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs`.
+  c10 does **not** exercise the supervisor's
+  `cmd.env_clear()` strip path — c10 spawns
+  `rfl-bus-fixture` directly via `nix develop --command`,
+  not through the rafaello plugin supervisor — so the
+  env_clear regression that round-2 surfaced was missed
+  by c10's smoke. The round-3
+  `fake_syd_records_cargo_bin_exe_env_after_env_clear`
+  lockin test fills that gap by exercising the exact
+  env_clear+spawn sequence the supervisor uses.
 
 ### Phase D — `rfl audit` read CLI (c11–c13)
 
@@ -296,8 +472,11 @@ RATIFIED.
   `crates/rafaello/src/audit_cli.rs`. `--project-root`
   mirrors `rfl init` / `rfl chat`.
 - **c12 `9e10ef6`** — filter flags `--kind` (repeatable),
-  `--since` (`1h`/`30m`/`24h`), `--request-id`
-  (no-join, single-table filter), `--json`, `--full`.
+  `--since <duration>` (arbitrary `<number><m|h|d>` per
+  `audit_cli.rs::parse_since` — `:93-118`, `:46-47` —
+  examples include `1h`, `30m`, `24h`, `7d`),
+  `--request-id` (no-join, single-table filter),
+  `--json`, `--full`.
 - **c13 `dc7843a`** — seven-test integration suite +
   glossary update for `rfl audit`. Explicitly asserts
   `--request-id` does not touch `entries`.
@@ -310,7 +489,12 @@ RATIFIED.
   release tree (owner-judgment item 13 default —
   include).
 - **c15 `9cdddf5`** — scripted-turns HTTP integration
-  tests: happy two-turn, exhaustion-panic,
+  tests: happy two-turn,
+  `exhaustion_exits_deterministically` (live stub fires
+  `std::process::exit(1)` on miss/exhaustion per
+  `rfl_openai_stub.rs:19-20`, `:281-294` — not a panic;
+  pi-1 §B3 / pi-2 §M1 correction over round-1's
+  "exhaustion-panic" framing),
   `match_in_reply_to` correlation, mutual-exclusion with
   the singular env.
 
@@ -518,7 +702,7 @@ states. m6's scope acceptance bullets split into:
 - **Witnessed release evidence** — operator-observed
   rendering / run-URL / clean-host runs that the code
   itself can't self-prove. Several of these are
-  **pending the post-merge driver sweep**, by design,
+  **pending the pre-merge ratification-candidate sweep**, by design,
   and the retrospective must say so rather than mark
   them ✓.
 
@@ -531,7 +715,7 @@ pending witnessed items.
 |---|---|---|
 | Every named deliverable in §"In scope" implemented + tests pass | ✓ c01–c28 | ✓ (CI test run) |
 | Linux `nix develop … cargo test --workspace --features test-fixture` green | ✓ c18 (CI matrix) | ✓ CI green |
-| **macOS CI green (hard gate)** | ✓ c18 macOS matrix leg shipped | ◐ run URL **pending** (manual-validation.md §4 placeholder; post-merge sweep) |
+| **macOS CI green (hard gate)** | ✓ c18 macOS matrix leg shipped | ◐ run URL **pending** (manual-validation.md §4 placeholder; pre-merge sweep) |
 | `nix develop … cargo build --workspace --bins` green | ✓ c16 (8-package build set) | ✓ exercised by c18 matrix |
 | `nix build .#rafaello` produces the release tree + PP1 plugin trees | ✓ c16 + c17 + c18 | ✓ this round's transcript-capture confirmed the layout against `result/` |
 | Post-`rfl init --yes` PP1 invariants hold | ✓ c02 + c04 (`rfl_init_materialises_package_dir.rs`) | ✓ + this round's stub-driven capture confirmed |
@@ -555,34 +739,44 @@ landed and pass:
 - `rfl_chat_in_devshell_propagates_cargo_bin_exe_syd_pty.rs` (c10)
 - `rfl_audit_empty_db.rs` (c13)
 - `rfl_audit_filters_by_request_id_no_join.rs` (c13)
-- `rfl_openai_stub_scripted_turns_panics_on_exhaustion` (c15)
+- `rfl_openai_stub_scripted_turns::exhaustion_exits_deterministically` (c15 — live test name; the stub fires `std::process::exit(1)` on miss/exhaustion, not a panic)
 - `lazy_load_tool_trigger_spawns_on_first_call.rs` (c25)
 
-### 4.5 Manual-validation residual gates
+### 4.5 Pre-merge ratification-candidate sweep
 
 The witnessed-evidence half of several acceptance
-bullets is **pending the post-merge driver sweep**.
-Pi-1 round-1 §B2 surfaced that round-1 elided this by
-claiming "every acceptance bullet maps". Round 2 lists
-the residual gates explicitly so future maintainers
-see the closure shape:
+bullets is **part of m6 ratification** per
+`decisions.md` row 33 + scope §"Acceptance summary"
+(macOS CI green is a hard ratification gate;
+clean-host Homebrew install + operator-witnessed
+manual-validation are acceptance bullets). The driver
+runs this sweep on the ratification-candidate commit
+**before** pi's final retro pass; pi ratifies the
+retro **with the witnessed-output filled in**, and
+the ff-only merge fires immediately after. Pi-2
+round-2 §B3 surfaced that round-2's framing wedged a
+"retro RATIFIED but merge still blocked" state that
+contradicts row 33 / scope acceptance; round 3
+drops the wedge and routes the work as a pre-merge
+ratification-candidate sweep.
 
-| `manual-validation.md` section | Live status (round 2) | Closure path |
+| `manual-validation.md` section | Live status (round 3) | Closure path |
 |---|---|---|
-| §1 cold-start LiteLLM walkthrough (`manual-validation.md:52-53`) | ⏳ pending | Driver runs the 5-line bootstrap on a clean lab worktree against the dev LiteLLM endpoint (using `mlx/qwen3.6-35b` per the 03:10 owner note if the default `vllm/qwen3.6-27b` is still down). |
-| §2 install walkthrough (`manual-validation.md:82`) | ⏳ pending | Driver runs `rfl install rfl-mailcat --project-root "$PROJECT"` after §1 and pastes the post-install lock+plugin-dir state. |
-| §4 macOS CI run URL (`manual-validation.md:96-109`) | ⏳ pending | Driver pastes the green `m6 / macOS` workflow URL from the first ratification-candidate push. Hard gate per scope §"Acceptance summary" + the m3/m4/m5a/m5b precedent. |
-| §5 attached-tmux TUI render (`transcripts/section-5/00-CONTEXT.md` open issue 2) | ◐ partial (round-2 wire + audit captures landed; render screenshot pending) | Operator on attached tmux runs the scope §J2 script and replaces `01/02/03` with live-rendered captures; re-asserts the four TUI-substring greps (`" confirm "`, `"send-mail via"`, `"sinks: mail"`, `"alice@example.com"`). |
-| §6 audit-log inspection (`manual-validation.md:334-335`) | ⏳ pending | Driver runs `rfl audit --project-root "$PROJECT" --kind confirm_request --kind confirm_allowed` against the §5 project after the live LiteLLM walkthrough and pastes the rows. Round-2's `04-audit.txt` is the stub-driven companion. |
-| §7 syd-pty failure-mode + fix verification (`manual-validation.md:383-385`) | ⏳ pending | Driver runs the pre-m6 build against a clean shell (records the `setup_pty` failure) + the m6 build inside `nix develop` (records the clean entry). |
-| §G Homebrew install smoke (`manual-validation.md:387-420+`) | ⏳ pending (expected steps only) | Owner runs the post-tap-publication `brew install` on a clean macOS arm64 host; owner-judgment item 10 default is manual-only (no CI workflow runs `brew install`). |
+| §1 cold-start LiteLLM walkthrough (`manual-validation.md:52-53`) | ⏳ pending | Driver runs the 5-line bootstrap on a clean lab worktree against the dev LiteLLM endpoint (using `mlx/qwen3.6-35b` per the 03:10 owner note if the default `vllm/qwen3.6-27b` is still down). Pre-merge sweep. |
+| §2 install walkthrough (`manual-validation.md:82`) | ⏳ pending | Driver runs `rfl install rfl-mailcat --project-root "$PROJECT"` after §1 and pastes the post-install lock+plugin-dir state. Pre-merge sweep. |
+| §4 macOS CI run URL (`manual-validation.md:96-109`) | ⏳ pending | Driver pastes the green `m6 / macOS` workflow URL from the first ratification-candidate push. Hard gate per scope §"Acceptance summary" + the m3/m4/m5a/m5b precedent. Pre-merge. |
+| §5 rendered TUI capture (`transcripts/section-5/00-CONTEXT.md` open issue) | ◐ partial — wire + audit captures real & landed; render capture blocked on frontend-supervisor `Stdio::null()` stdio shape (not a tmux-harness limitation). | **Owner question** (per §1 hard req #3 disposition + `00-CONTEXT.md`): option A — ratify §5 on wire-shape + audit + integration-test evidence (route rendered modal capture to v2 with the TUI rework); option B — one-line frontend-supervisor amendment pre-merge to inherit parent stdio for TUI subprocess, then re-capture rendered modal. Either route lands inside the ratification-candidate window. |
+| §6 audit-log inspection (`manual-validation.md:334-335`) | ⏳ pending | Driver runs `rfl audit --project-root "$PROJECT" --kind confirm_request --kind confirm_allowed` against the §5 project after the live LiteLLM walkthrough and pastes the rows. Round-3's `04-audit.txt` is the stub-driven companion. Pre-merge. |
+| §7 syd-pty failure-mode + fix verification (`manual-validation.md:383-385`) | ⏳ pending | Driver runs the pre-m6 build against a clean shell (records the `setup_pty` failure) + the m6 build inside `nix develop` (records the clean entry). Pre-merge. |
+| §G Homebrew install smoke (`manual-validation.md:387-420+`) | ⏳ pending (expected steps only) | Owner runs the post-tap-publication `brew install` on a clean macOS arm64 host; owner-judgment item 10 default is manual-only (no CI workflow runs `brew install`). Pre-merge. |
 
-The above gates do **not** block retro ratification —
-they block the **m6 RATIFIED → v0.1 → main merge**
-trigger per `decisions.md` row 33. The driver runs the
-sweep on the ratification-candidate commit; once §1–§7
-+ §G are filled with operator-witnessed output, the
-fast-forward merge fires.
+These gates are **part of m6 ratification**, not
+post-ratification. `decisions.md` row 33's
+"m6 RATIFIED triggers the ff-only merge" condition is
+unchanged: pi pass on the retro happens only after
+the driver has filled the witnessed-output gates
+above; the merge fires immediately after retro
+RATIFIED. (Round-2 framing dropped per pi-2 §B3.)
 
 ### Deliberate carveouts
 
@@ -626,7 +820,7 @@ fast-forward merge fires.
    short for an out-of-test interactive run). The
    LiteLLM `mlx/qwen3.6-35b` real-LLM second transcript
    remains **not yet captured** — owner's three-step
-   framing routes this to the post-merge driver sweep
+   framing routes this to the pre-merge ratification-candidate sweep
    (manual-validation.md §1 fill); stub-alone is
    documented as acceptable v1-demo-ready evidence per
    the owner's 2026-05-12 02:50 note.
@@ -839,7 +1033,14 @@ execution plan:
 > 2026-05-12). The fluent
 > `SandboxBuilder::syd_pty_path(...)` setter at
 > `:435-443` is the explicit-override entry point used
-> by tests. Cites m6
+> by tests. **Round-3 follow-up
+> (`fix(lockin-sandbox): re-apply CARGO_BIN_EXE_syd-pty
+> after caller env_clear`, `6f1fe4b`)**: lockin's
+> `SandboxedCommand` re-applies sandbox-internal env
+> (currently the syd-pty env) right before spawn so
+> callers that invoke `cmd.env_clear()` — the canonical
+> rafaello supervisor pattern — don't accidentally
+> strip the resolved syd-pty path. Cites m6
 > `lockin/crates/sandbox/src/lib.rs`,
 > `lockin/crates/sandbox/src/linux.rs`.
 
@@ -850,8 +1051,8 @@ execution plan:
 > per line with truncated payload summary; `--full`
 > disables truncation; `--json` emits one JSON object
 > per row. Filters: `--kind <kind>` (repeatable,
-> against `AuditKind::as_str()`), `--since <duration>`
-> (`1h`/`30m`/`24h`), `--request-id <id>`.
+> against `AuditKind::as_str()`), `--since <duration>`,
+> `--request-id <id>`.
 > `--request-id` is a single-table filter on
 > `audit_events.request_id` — **no join against
 > `entries`** (the live `entries` schema has no
@@ -881,12 +1082,24 @@ execution plan:
 > env from m5a/m5b; both-set is a stub startup error.
 > The stub binary is **buildable in the release tree**
 > (the `test-fixture` gate was dropped from `[[bin]]`)
-> so the `manual-validation.md` §5 scripted demo and
-> the headline integration test consume a runnable
-> stub from
-> `$out/share/rafaello/plugins/rfl-openai-stub/bin/`.
-> Cites m6
-> `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`.
+> at
+> `$out/share/rafaello/plugins/rfl-openai-stub/bin/`,
+> and the **headline integration test
+> (`rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`)
+> anchors the scripted-turns contract** end to end.
+> Pi-2 round-2 §B4 narrowing: the on-disk binary's
+> hard-coded 5 s self-timeout
+> (`rfl_openai_stub.rs:40`) is shorter than the
+> `rfl init` + `rfl install` + `rfl chat` plugin-spawn-
+> and-validate sequence, so the integration test uses
+> an in-process listener that mirrors the same
+> response contract, and the `manual-validation.md`
+> §5 capture uses a long-lived Python `http.server`
+> mirror (per `transcripts/section-5/00-CONTEXT.md`)
+> rather than spawning the release-tree binary
+> directly. Cites m6
+> `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`,
+> `crates/rafaello/tests/rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`.
 
 **Row 65 — `nix build .#rafaello` release artefact
 shape.**
@@ -960,9 +1173,14 @@ shape.**
 
 **Row 68 — Lazy-load runtime via `LoadPolicy::Lazy {
 command }`.**
-> Manifests carrying `[load.triggers]` with
-> `kind = "tool"` register their canonical id as a
-> **lazy candidate**: `PluginSupervisor::register_lazy(
+> Plugins whose compiled `LoadPolicy::Lazy { command }`
+> binding (live shape; Stream F's `load.command = [...]`
+> / table-form `command` manifest field per
+> `streams/f-manifest/rfc-manifest-schema.md:272-280,
+> :318-325` — pi-2 round-2 §B4 correction over the
+> round-2 `[load.triggers] kind = "tool"` manifest
+> framing) register their canonical id as a **lazy
+> candidate**: `PluginSupervisor::register_lazy(
 > canonical, plan, paths, triggers)` writes
 > `lazy_candidates: Mutex<BTreeMap<CanonicalId,
 > LazyCandidate>>` (live shape per
@@ -971,17 +1189,18 @@ command }`.**
 > dispatch target from the validated payload and calls
 > **`ensure_spawned(&dispatch_target)`** (live shape
 > per `gate/mod.rs:271-292`); `ensure_spawned`
-> idempotently spawns the plugin if it's a registered
-> lazy candidate (no-op if already managed), removing
-> the candidate from `lazy_candidates` so subsequent
-> dispatches go through the normal `managed` path.
-> Pi-1 round-1 §B3 correction: row-1's prose implied
+> (`supervisor.rs:401-421`) idempotently spawns the
+> plugin if it's a registered lazy candidate (no-op if
+> already managed), removing the candidate from
+> `lazy_candidates` so subsequent dispatches go through
+> the normal `managed` path. Pi-1 round-1 §B3 +
+> pi-2 round-2 §B4: round-1's prose implied
 > `tool_to_canonical` participates in dispatch
 > routing. It does not — the live gate uses the
 > payload's canonical dispatch target directly.
 > `tool_to_canonical:
 > Mutex<BTreeMap<String, CanonicalId>>` is written by
-> `register_lazy` (`supervisor.rs:401-421`) for
+> `register_lazy` (`supervisor.rs:370-389`) for
 > introspection but is **not read outside tests** in
 > the live m6 surface (it's a candidate seam for v2
 > tool→plugin lookup work). Spawn events are recorded
@@ -1052,9 +1271,11 @@ command }`.**
   `decisions.md` row 63.
 - **`rfl-openai-stub` scripted turns** — N-turn TOML
   script consumed by the stub via
-  `RFL_OPENAI_STUB_SCRIPTED_TURNS`. Deterministic-panic
-  on exhaustion; mutually exclusive with the singular
-  m5a/m5b env. Cites
+  `RFL_OPENAI_STUB_SCRIPTED_TURNS`. Predicate-miss /
+  exhaustion writes a deterministic stderr line and
+  calls `std::process::exit(1)` (live shape per
+  `rfl_openai_stub.rs:19-20`, `:281-294`); mutually
+  exclusive with the singular m5a/m5b env. Cites
   `crates/rafaello-openai-stub/src/bin/rfl_openai_stub.rs`,
   `decisions.md` row 64.
 - **package placement (PP1)** — invariant that bundled
@@ -1135,48 +1356,60 @@ After the merge:
 
 ---
 
-**Open items for pi round 2.**
+**Open items for pi round 3.**
 
-1. **§5 attached-tmux render capture** — round-2 landed
-   real audit/sqlite captures + wire-event log (B1
-   wire-shape half closed); the rendered TUI screenshot
-   gate is routed to the post-merge driver sweep on an
-   attached tmux session. Pi to confirm this partial
-   closure is acceptable for ratification or push for a
-   pre-ratification render attempt.
-2. **Supervisor `env_clear` regression on
-   `CARGO_BIN_EXE_syd-pty`** (newly discovered during
-   round-2 transcript recapture; documented in
-   `transcripts/section-5/00-CONTEXT.md` open issue 1).
-   The c10 Phase-C rafaello-side smoke test still
-   passes against the shipped bundled fixtures, so this
-   doesn't regress shipped Phase C coverage; the gap
-   surfaces only on cold-start operator flows against
-   custom manifests. Pi to confirm whether this is a
-   ratification blocker for m6 or a routed-to-v0.1.1
-   follow-up. Round-2 default: route as a
-   driver-branch follow-up on the rafaello-v0.1
-   branch (lands before the ff-only merge to main, per
-   the m5a `816b273` drift-commits-before-merge
-   precedent).
-3. **Phase I1 assertion-shape deviation** — c23 keeps
-   the literal filename and changes the assertion
-   anchor to `StartupEvent::ToolSchemaCatalogBuilt`
-   ordering. Pi to ratify the shape change (M4 closure
-   reframed; round-1's "missing filename" framing was
-   wrong).
-4. **The §6 stream-RFC PP1 patch candidate** (real-file
+1. **§5 rendered TUI capture — owner routing**.
+   Wire-shape evidence (audit + sqlite + bus-event
+   log) is real and on disk; the rendered modal
+   captures (01/02/03) remain blank. The structural
+   cause is the frontend supervisor spawning rfl-tui
+   with `Stdio::null()` stdin/stdout
+   (`frontend/mod.rs:202-205`) — not a tmux-harness
+   limitation. Pi/owner to route:
+   - **Option A**: ratify §5 on wire-shape + audit
+     + integration-test evidence; route the rendered
+     modal capture to v2 alongside a TUI-render
+     rework.
+   - **Option B**: apply the one-line
+     frontend-supervisor amendment pre-merge (drop
+     `Stdio::null()` for the TUI subprocess) and
+     re-capture during the pre-merge sweep.
+2. **Phase I1 assertion-shape deviation** — c23 keeps
+   the literal filename
+   `core_tools_list_registered_before_provider_spawn.rs`
+   and changes the assertion anchor to
+   `StartupEvent::ToolSchemaCatalogBuilt` ordering.
+   Pi to ratify the shape change.
+3. **§6 stream-RFC PP1 patch candidate** (real-file
    constraint on `bin/<plugin-bin>`) — pi to confirm
    whether this needs a stream RFC patch or is
    `overview.md`-only.
-5. **The `decisions.md` rows 59–68 draft text** — round
-   2 corrected 62 / 64 / 65 / 67 / 68 per pi-1 §B3 +
-   §M1. Pi to re-review each row for wording precision
-   and live-shape grounding.
+4. **`decisions.md` rows 59–68 draft text** — round 3
+   corrected 62 (anyhow + env_clear footnote), 63
+   (dropped redundant `--since` enum), 64 (narrowed
+   manual-validation overclaim), 67 (correct allow
+   site cites), 68 (`LoadPolicy::Lazy { command }`
+   shape + correct `register_lazy` line cite). Pi to
+   re-review each row for wording precision and live-
+   shape grounding.
 
-Convergence trajectory after round 2: **3B → 0B**
-(blockers closed by sibling commit A + this fold);
-**4M → 0M** (M1-M4 all closed); **2N → 0N** (N1-N2
-closed). Provisional verdict request: **converged or
-near-converged**, pending pi confirmation on the
-two open routing questions (open items 1 + 2).
+Convergence trajectory after round 3:
+**round 2 (4B / 3M / 2N) → round 3 (0B / 0M / 0N
++ 1 owner-routing question — open item 1)**.
+- B1 closed via lockin `env_clear` preservation fix.
+- B2 → narrowed to the owner-routing question above.
+- B3, B4 closed by row-text fixes.
+- M1, M2, M3 closed by phase-summary +
+  defensive-negatives + glossary corrections + the
+  new c10-bypass-explanation + the
+  `fake_syd_records_cargo_bin_exe_env_after_env_clear`
+  test that closes the regression-test gap.
+- N1, N2 closed by global rename + row-63 trim.
+
+Provisional verdict request: **converged on
+implementation-side blockers; one owner-routing
+question remains for §5 disposition**. If owner picks
+option A (wire-shape ratification), retro is ready to
+RATIFY now. If owner picks option B (frontend stdio
+amendment), one more code commit + transcript
+recapture lands before retro RATIFIED.
