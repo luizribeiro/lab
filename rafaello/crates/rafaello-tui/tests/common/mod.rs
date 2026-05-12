@@ -123,6 +123,7 @@ pub struct SpawnOpts {
     pub ready_delay_ms: Option<u64>,
     pub test_message: Option<String>,
     pub test_confirm_answer: Option<String>,
+    pub test_confirm_answers: Option<String>,
     pub test_confirm_delay_ms: Option<u64>,
     pub test_grant_before_message: Option<String>,
 }
@@ -135,6 +136,7 @@ impl Default for SpawnOpts {
             ready_delay_ms: None,
             test_message: None,
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: None,
         }
@@ -171,6 +173,9 @@ pub fn spawn_tui<S: Service + Send + Sync + 'static>(opts: SpawnOpts, service: S
     }
     if let Some(a) = opts.test_confirm_answer.as_deref() {
         cmd.env("RFL_TUI_TEST_CONFIRM_ANSWER", a);
+    }
+    if let Some(a) = opts.test_confirm_answers.as_deref() {
+        cmd.env("RFL_TUI_TEST_CONFIRM_ANSWERS", a);
     }
     if let Some(ms) = opts.test_confirm_delay_ms {
         cmd.env("RFL_TUI_TEST_CONFIRM_DELAY_MS", ms.to_string());

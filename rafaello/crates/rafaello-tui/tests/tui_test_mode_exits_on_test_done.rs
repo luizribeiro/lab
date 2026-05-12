@@ -20,6 +20,7 @@ async fn test_done_event_triggers_immediate_clean_exit() {
             ready_delay_ms: None,
             test_message: None,
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: None,
         },

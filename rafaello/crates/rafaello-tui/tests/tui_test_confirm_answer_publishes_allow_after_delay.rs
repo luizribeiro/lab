@@ -20,6 +20,7 @@ async fn confirm_answer_allow_published_after_delay() {
             ready_delay_ms: None,
             test_message: None,
             test_confirm_answer: Some("allow".to_string()),
+            test_confirm_answers: None,
             test_confirm_delay_ms: Some(10),
             test_grant_before_message: None,
         },

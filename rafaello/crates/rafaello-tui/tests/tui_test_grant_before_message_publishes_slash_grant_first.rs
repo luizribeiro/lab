@@ -19,6 +19,7 @@ async fn grant_published_before_user_message() {
             ready_delay_ms: None,
             test_message: Some("please email alice".to_string()),
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: Some(
                 r#"{"tool":"send-mail","args_subset":{"to":"alice@example.com"}}"#.to_string(),

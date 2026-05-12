@@ -20,6 +20,7 @@ async fn slash_grant_publishes_typed_event() {
             ready_delay_ms: None,
             test_message: Some("/grant tool_a".to_string()),
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: None,
         },

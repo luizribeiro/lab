@@ -12,6 +12,7 @@ pub const RFL_TUI_READY_DELAY_MS: &str = "RFL_TUI_READY_DELAY_MS";
 pub const RFL_TUI_MAX_LIFETIME: &str = "RFL_TUI_MAX_LIFETIME";
 pub const RFL_TUI_TEST_MESSAGE: &str = "RFL_TUI_TEST_MESSAGE";
 pub const RFL_TUI_TEST_CONFIRM_ANSWER: &str = "RFL_TUI_TEST_CONFIRM_ANSWER";
+pub const RFL_TUI_TEST_CONFIRM_ANSWERS: &str = "RFL_TUI_TEST_CONFIRM_ANSWERS";
 pub const RFL_TUI_TEST_CONFIRM_DELAY_MS: &str = "RFL_TUI_TEST_CONFIRM_DELAY_MS";
 pub const RFL_TUI_TEST_GRANT_BEFORE_MESSAGE: &str = "RFL_TUI_TEST_GRANT_BEFORE_MESSAGE";
 
@@ -23,9 +24,14 @@ pub const ENV_PASS_ALLOWLIST: &[&str] = &[
     RFL_TUI_MAX_LIFETIME,
     RFL_TUI_TEST_MESSAGE,
     RFL_TUI_TEST_CONFIRM_ANSWER,
+    RFL_TUI_TEST_CONFIRM_ANSWERS,
     RFL_TUI_TEST_CONFIRM_DELAY_MS,
     RFL_TUI_TEST_GRANT_BEFORE_MESSAGE,
 ];
+
+pub const MUTUALLY_EXCLUSIVE_CONFIRM_ANSWER_ERR: &str =
+    "RFL_TUI_TEST_CONFIRM_ANSWER and RFL_TUI_TEST_CONFIRM_ANSWERS are mutually exclusive; \
+     set one or the other";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestConfirmAnswer {
@@ -61,6 +67,7 @@ pub struct TuiEnv {
     pub max_lifetime_secs: Option<u64>,
     pub test_message: Option<String>,
     pub test_confirm_answer: Option<TestConfirmAnswer>,
+    pub test_confirm_answers: Option<Vec<TestConfirmAnswer>>,
     pub test_confirm_delay_ms: u64,
     pub test_grant_before_message: Option<TestGrantBeforeMessage>,
 }
@@ -80,6 +87,10 @@ where
     let max_lifetime_secs = parse_optional_u64(RFL_TUI_MAX_LIFETIME, get(RFL_TUI_MAX_LIFETIME))?;
     let test_message = get(RFL_TUI_TEST_MESSAGE).filter(|s| !s.is_empty());
     let test_confirm_answer = parse_confirm_answer(get(RFL_TUI_TEST_CONFIRM_ANSWER))?;
+    let test_confirm_answers = parse_confirm_answers_env(get(RFL_TUI_TEST_CONFIRM_ANSWERS))?;
+    if test_confirm_answer.is_some() && test_confirm_answers.is_some() {
+        return Err(anyhow!("{}", MUTUALLY_EXCLUSIVE_CONFIRM_ANSWER_ERR));
+    }
     let test_confirm_delay_ms = parse_optional_u64(
         RFL_TUI_TEST_CONFIRM_DELAY_MS,
         get(RFL_TUI_TEST_CONFIRM_DELAY_MS),
@@ -96,23 +107,41 @@ where
         max_lifetime_secs,
         test_message,
         test_confirm_answer,
+        test_confirm_answers,
         test_confirm_delay_ms,
         test_grant_before_message,
     })
 }
 
+fn parse_confirm_answer_token(token: &str) -> Result<TestConfirmAnswer> {
+    match token {
+        "allow" => Ok(TestConfirmAnswer::Allow),
+        "deny" => Ok(TestConfirmAnswer::Deny),
+        "always_allow_session" => Ok(TestConfirmAnswer::AlwaysAllowSession),
+        "timeout" => Ok(TestConfirmAnswer::Timeout),
+        other => Err(anyhow!(
+            "confirm-answer entries must be one of allow|deny|always_allow_session|timeout \
+             (got {:?})",
+            other
+        )),
+    }
+}
+
 fn parse_confirm_answer(value: Option<String>) -> Result<Option<TestConfirmAnswer>> {
     match value.filter(|s| !s.is_empty()).as_deref() {
         None => Ok(None),
-        Some("allow") => Ok(Some(TestConfirmAnswer::Allow)),
-        Some("deny") => Ok(Some(TestConfirmAnswer::Deny)),
-        Some("always_allow_session") => Ok(Some(TestConfirmAnswer::AlwaysAllowSession)),
-        Some("timeout") => Ok(Some(TestConfirmAnswer::Timeout)),
-        Some(other) => Err(anyhow!(
-            "{} must be one of allow|deny|always_allow_session|timeout (got {:?})",
-            RFL_TUI_TEST_CONFIRM_ANSWER,
-            other
-        )),
+        Some(s) => Ok(Some(parse_confirm_answer_token(s)?)),
+    }
+}
+
+pub fn parse_confirm_answers(s: &str) -> Result<Vec<TestConfirmAnswer>> {
+    s.split(',').map(parse_confirm_answer_token).collect()
+}
+
+fn parse_confirm_answers_env(value: Option<String>) -> Result<Option<Vec<TestConfirmAnswer>>> {
+    match value.filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(raw) => Ok(Some(parse_confirm_answers(&raw)?)),
     }
 }
 

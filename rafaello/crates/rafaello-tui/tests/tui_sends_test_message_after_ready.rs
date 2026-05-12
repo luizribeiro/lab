@@ -20,6 +20,7 @@ async fn tui_publishes_test_message_after_frontend_ready() {
             ready_delay_ms: None,
             test_message: Some("what's in README.md".to_string()),
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: None,
         },

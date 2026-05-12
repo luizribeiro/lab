@@ -24,6 +24,7 @@ use futures::stream::StreamExt;
 use rafaello_core::RenderNode;
 use rafaello_tui::env::{self, TestConfirmAnswer, TestGrantBeforeMessage};
 use rafaello_tui::paint::draw_with_panic_isolation;
+use rafaello_tui::test_confirm_queue::TestConfirmAnswerQueue;
 use rafaello_tui::{slash::SlashCommand, slash::SlashKind, CONFIRM_ANSWER_TOPIC};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -84,17 +85,94 @@ async fn main() -> Result<()> {
     }
 
     if cfg.test_mode {
-        if let Some(answer) = cfg.test_confirm_answer {
-            spawn_auto_confirm_answer(
+        if let Some(answers) = cfg.test_confirm_answers {
+            run_plural_test_mode(
+                answers,
                 client.peer().clone(),
                 confirm_rx,
-                answer,
                 cfg.test_confirm_delay_ms,
-            );
+            )
+            .await
+        } else {
+            if let Some(answer) = cfg.test_confirm_answer {
+                spawn_auto_confirm_answer(
+                    client.peer().clone(),
+                    confirm_rx,
+                    answer,
+                    cfg.test_confirm_delay_ms,
+                );
+            }
+            std::future::pending::<Result<()>>().await
         }
-        std::future::pending::<Result<()>>().await
     } else {
         run_production_mode(notifications).await
+    }
+}
+
+async fn run_plural_test_mode(
+    answers: Vec<TestConfirmAnswer>,
+    peer: fittings_core::context::PeerHandle,
+    confirm_rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    delay_ms: u64,
+) -> Result<()> {
+    let (fatal_tx, mut fatal_rx) = tokio::sync::oneshot::channel::<String>();
+    let queue = Arc::new(TestConfirmAnswerQueue::new(answers, fatal_tx));
+    let join_handle = tokio::spawn(run_plural_auto_confirm_loop(
+        queue, peer, confirm_rx, delay_ms,
+    ));
+    tokio::select! {
+        res = join_handle => {
+            match res {
+                Ok(()) => {
+                    std::future::pending::<()>().await;
+                    unreachable!("plural-auto-confirm loop exited Ok unexpectedly")
+                }
+                Err(join_err) => {
+                    let msg = fatal_rx
+                        .try_recv()
+                        .ok()
+                        .unwrap_or_else(|| {
+                            format!("rfl-tui: confirm-answer task panicked: {join_err}")
+                        });
+                    panic!("{msg}");
+                }
+            }
+        }
+        msg = &mut fatal_rx => {
+            let msg = msg.unwrap_or_else(|_| "fatal channel closed".to_string());
+            panic!("{msg}");
+        }
+    }
+}
+
+async fn run_plural_auto_confirm_loop(
+    queue: Arc<TestConfirmAnswerQueue>,
+    peer: fittings_core::context::PeerHandle,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    delay_ms: u64,
+) {
+    while let Some(payload) = rx.recv().await {
+        let answer = queue.next_answer();
+        let Some(answer_str) = answer.answer_str() else {
+            continue;
+        };
+        let Some(confirm_id) = payload.get("request_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let confirm_id = confirm_id.to_string();
+        if delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
+        let request_id = JsonRpcId::String(Ulid::new().to_string());
+        let _ = peer.notify(
+            "bus.publish",
+            json!({
+                "topic": CONFIRM_ANSWER_TOPIC,
+                "payload": { "request_id": confirm_id, "answer": answer_str },
+                "request_id": request_id,
+                "in_reply_to": [JsonRpcId::String(confirm_id.clone())],
+            }),
+        );
     }
 }
 

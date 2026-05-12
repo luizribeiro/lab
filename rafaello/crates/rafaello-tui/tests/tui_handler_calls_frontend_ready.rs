@@ -55,6 +55,7 @@ async fn tui_handler_calls_frontend_ready_then_self_exits() {
             ready_delay_ms: None,
             test_message: None,
             test_confirm_answer: None,
+            test_confirm_answers: None,
             test_confirm_delay_ms: None,
             test_grant_before_message: None,
         },

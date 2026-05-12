@@ -5,6 +5,7 @@ pub mod confirm;
 pub mod env;
 pub mod paint;
 pub mod slash;
+pub mod test_confirm_queue;
 
 use crossterm::event::KeyCode;
 use fittings_core::message::JsonRpcId;
