@@ -76,8 +76,31 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
     let source_dir = bundled::resolve_plugin_dir(BUNDLED_OPENAI)?;
     let canonical =
         CanonicalId::parse(OPENAI_CANONICAL).map_err(|e| InitError::Canonical(Box::new(e)))?;
-    let topic = topic_id::derive(OPENAI_CANONICAL);
 
+    let manifest_path = source_dir.join("rafaello.toml");
+    let manifest_raw = std::fs::read_to_string(&manifest_path).map_err(|source| InitError::Io {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    let manifest = Manifest::parse(&manifest_raw).map_err(|e| InitError::Manifest(Box::new(e)))?;
+    let grant = synthesise_grant(&manifest);
+
+    if !args.yes && !prompt_accept(&grant)? {
+        std::fs::write(&lock_path, EMPTY_LOCK_TOML).map_err(|source| InitError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(
+            stderr,
+            "declined; wrote empty lock at {}",
+            lock_path.display()
+        );
+        let _ = stderr.flush();
+        return Ok(());
+    }
+
+    let topic = topic_id::derive(OPENAI_CANONICAL);
     let plugins_root = project_root.join(".rafaello").join("plugins");
     std::fs::create_dir_all(&plugins_root).map_err(|source| InitError::Io {
         path: plugins_root.clone(),
@@ -92,17 +115,9 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
     }
     copy_tree_dereferenced(&source_dir, &target_dir)?;
 
-    let manifest_path = target_dir.join("rafaello.toml");
-    let manifest_raw = std::fs::read_to_string(&manifest_path).map_err(|source| InitError::Io {
-        path: manifest_path.clone(),
-        source,
-    })?;
-    let manifest = Manifest::parse(&manifest_raw).map_err(|e| InitError::Manifest(Box::new(e)))?;
-
     let content_digest = digest::content_digest(&target_dir)?;
     let manifest_digest = digest::manifest_digest(&manifest.canonical_bytes());
 
-    let grant = synthesise_grant(&manifest);
     let bindings = Bindings {
         provider: true,
         provider_id: Some("openai".to_string()),
@@ -129,6 +144,51 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
     })?;
 
     Ok(())
+}
+
+const EMPTY_LOCK_TOML: &str = "[session]\n";
+
+fn prompt_accept(grant: &Grant) -> Result<bool, InitError> {
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = render_review(&mut stderr, grant);
+        let _ = stderr.flush();
+    }
+    let mut input = String::new();
+    match std::io::stdin().read_line(&mut input) {
+        Ok(0) => Ok(false),
+        Ok(_) => {
+            let trimmed = input.trim();
+            Ok(matches!(trimmed, "y" | "Y"))
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+fn render_review<W: Write>(w: &mut W, grant: &Grant) -> std::io::Result<()> {
+    writeln!(w, "rfl init: review default grant for {}", OPENAI_CANONICAL)?;
+    let default = grant.bundles.get("default");
+    if let Some(net) = default.and_then(|b| b.network.as_ref()) {
+        writeln!(
+            w,
+            "network: mode={:?}, allow_hosts={:?}",
+            net.mode, net.allow_hosts
+        )?;
+    }
+    if let Some(env) = default.and_then(|b| b.env.as_ref()) {
+        writeln!(
+            w,
+            "env: pass={:?}, allow_secrets={:?}",
+            env.pass, env.allow_secrets
+        )?;
+        writeln!(w, "env.set: {:?}", env.set)?;
+    }
+    writeln!(
+        w,
+        "subscribes: {:?} / publishes: {:?}",
+        grant.subscribes, grant.publishes
+    )?;
+    write!(w, "Proceed? [y/N] ")
 }
 
 fn synthesise_grant(manifest: &Manifest) -> Grant {
