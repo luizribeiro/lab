@@ -133,6 +133,27 @@ pub async fn run_ttl_ticker(queue: Arc<Mutex<ConfirmQueue>>) {
     }
 }
 
+fn parse_taint_entries(v: &Value) -> Vec<(String, Option<String>)> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| {
+                    let source = e.get("source")?.as_str()?.to_string();
+                    let detail = e.get("detail").and_then(|x| x.as_str()).map(str::to_string);
+                    Some((source, detail))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn render_taint_entry(source: &str, detail: Option<&str>) -> String {
+    match detail.filter(|d| !d.is_empty()) {
+        Some(d) => format!("{source}: {d}"),
+        None => source.to_string(),
+    }
+}
+
 /// Paint the overlay frame above the input line. The frame's title
 /// includes the `+N more pending` badge when other entries are queued
 /// behind the head.
@@ -154,18 +175,39 @@ pub fn paint_confirm_overlay<B: Backend>(
     } else {
         head.details.sinks.join(", ")
     };
-    let taint = match &head.details.taint {
-        Value::Array(a) if a.is_empty() => "(none)".to_string(),
-        v => v.to_string(),
-    };
     let args = serde_json::to_string(&head.details.args).unwrap_or_default();
-    let lines: Vec<Line> = vec![
+    let mut lines: Vec<Line> = vec![
         Line::from(head.summary.clone()),
         Line::from(format!("args: {args}")),
         Line::from(format!("sinks: {sinks}")),
-        Line::from(format!("taint: {taint}")),
-        Line::from(format!("{}s remaining", head.ttl_remaining)),
     ];
+    let taint_entries = parse_taint_entries(&head.details.taint);
+    let non_provider: Vec<&(String, Option<String>)> = taint_entries
+        .iter()
+        .filter(|(s, _)| s != "provider")
+        .collect();
+    if non_provider.is_empty() {
+        let taint = match &head.details.taint {
+            Value::Array(a) if a.is_empty() => "(none)".to_string(),
+            v => v.to_string(),
+        };
+        lines.push(Line::from(format!("taint: {taint}")));
+    } else {
+        lines.push(Line::from("provenance:".to_string()));
+        const MAX_PROVENANCE_ROWS: usize = 5;
+        if non_provider.len() <= MAX_PROVENANCE_ROWS {
+            for (s, d) in &non_provider {
+                lines.push(Line::from(render_taint_entry(s, d.as_deref())));
+            }
+        } else {
+            for (s, d) in non_provider.iter().take(MAX_PROVENANCE_ROWS) {
+                lines.push(Line::from(render_taint_entry(s, d.as_deref())));
+            }
+            let more = non_provider.len() - MAX_PROVENANCE_ROWS;
+            lines.push(Line::from(format!("... ({more} more)")));
+        }
+    }
+    lines.push(Line::from(format!("{}s remaining", head.ttl_remaining)));
     let block_title = title.clone();
     term.draw(|frame| {
         let area = frame.area();
