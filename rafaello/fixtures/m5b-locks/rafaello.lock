@@ -1,0 +1,101 @@
+[plugin."builtin:openai@0.0.0"]
+entry = "bin/rfl-openai"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."builtin:openai@0.0.0".grant]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.openai.tool_request", "provider.openai.assistant_message"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.network]
+mode = "proxy"
+allow_hosts = ["127.0.0.1"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.env]
+pass = ["LITELLM_API_KEY"]
+allow_secrets = ["LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+
+[plugin."builtin:openai@0.0.0".grant.bundles.default.env.set]
+RFL_OPENAI_API_KEY_ENV = "LITELLM_API_KEY"
+RFL_OPENAI_ENDPOINT_URL = "https://litellm.thepromisedlan.club/v1"
+RFL_OPENAI_MODEL = "vllm/qwen3.6-27b"
+
+[plugin."builtin:openai@0.0.0".bindings]
+provider = true
+provider_id = "openai"
+load = "eager"
+
+[plugin."local:mailcat@0.0.0"]
+entry = "bin/rfl-mailcat"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:mailcat@0.0.0".bindings]
+tools = ["send-mail"]
+load = "eager"
+
+[plugin."local:mailcat@0.0.0".bindings.tool_meta.send-mail]
+sinks = ["mail"]
+always_confirm = false
+grant_match = "schemas/send-mail-grant.json"
+
+[plugin."local:mockprovider@0.0.0"]
+entry = "bin/rfl-mockprovider"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:mockprovider@0.0.0".grant]
+subscribes = ["core.session.user_message", "core.session.tool_result"]
+publishes = ["provider.mock.tool_request", "provider.mock.assistant_message"]
+
+[plugin."local:mockprovider@0.0.0".grant.bundles.default.network]
+mode = "deny"
+
+[plugin."local:mockprovider@0.0.0".bindings]
+provider = true
+provider_id = "mock"
+load = "eager"
+
+[plugin."local:rafaello-fetch@0.0.0"]
+entry = "bin/rafaello-fetch"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:rafaello-fetch@0.0.0".grant.bundles.default.network]
+mode = "deny"
+allow_hosts = []
+
+[plugin."local:rafaello-fetch@0.0.0".grant.bundles.default.env]
+pass = ["RFL_FETCH_TEST_BODY_PATH", "RFL_FETCH_TEST_LOG_PATH", "RFL_FETCH_TEST_TAINT_OVERRIDE"]
+
+[plugin."local:rafaello-fetch@0.0.0".bindings]
+tools = ["web-fetch"]
+load = "eager"
+
+[plugin."local:rafaello-fetch@0.0.0".bindings.tool_meta.web-fetch]
+sinks = ["network"]
+always_confirm = false
+grant_match = "schemas/web-fetch-grant.json"
+
+[plugin."local:readfile@0.0.0"]
+entry = "bin/rfl-readfile"
+digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+manifest_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+granted_at = "2026-05-11T00:00:00Z"
+
+[plugin."local:readfile@0.0.0".bindings]
+tools = ["read-file"]
+load = "eager"
+
+[plugin."local:readfile@0.0.0".grant.bundles.default.filesystem]
+read_dirs = ["${project}"]
+
+[plugin."local:readfile@0.0.0".grant.bundles.default.network]
+mode = "deny"
+
+[session]
+provider_active = "builtin:openai@0.0.0"
