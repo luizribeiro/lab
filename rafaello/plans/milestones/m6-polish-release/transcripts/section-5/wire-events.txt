@@ -1,0 +1,10 @@
+rfl-tui: project-root=/tmp/m6-stub-capture/project
+rfl-chat: frontend-ready-observed
+rfl-tui: bus.event topic=core.session.user_message seq=1
+rfl-tui: bus.event topic=core.session.entry.finalized seq=2
+rfl-tui: bus.event topic=core.session.tool_request seq=3
+rfl-tui: bus.event topic=core.session.confirm_request seq=4
+rfl-tui: bus.event topic=core.session.entry.finalized seq=5
+rfl-tui: bus.event topic=core.session.confirm_reply seq=6
+rfl-tui: bus.event topic=core.session.tool_result seq=7
+rfl-tui: bus.event topic=core.session.entry.finalized seq=8

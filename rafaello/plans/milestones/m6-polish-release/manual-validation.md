@@ -210,48 +210,81 @@ cp "$TRANSCRIPTS"/*.txt "$REPO_TRANSCRIPTS/"
 
 ### Captured transcripts
 
-The six files live under
-`rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`:
+The files live under
+`rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`.
+Retro round 2 replaced the c27 schematic content (which pi-1 §B1
+correctly flagged as fabricated against the live
+`AuditKind::as_str()` table) with real captures from a
+`nix build .#rafaello`-built `rfl` running against a long-lived
+Python `http.server` OpenAI stub. See `00-CONTEXT.md` in the
+same directory for the full capture environment, the
+file-by-file provenance, and the two open issues surfaced by
+the capture (the supervisor `env_clear` regression on
+`CARGO_BIN_EXE_syd-pty`; the headless-tmux `capture-pane`
+limitation that left 01-03 blank).
 
-- `01-after-launch.txt` — initial TUI pane after the chat
-  process renders. The provider/tool header lines show the
-  bundled `rfl-openai` against the stub endpoint and the
-  installed `local:mailcat@0.0.0` `send-mail` tool.
-- `02-modal.txt` — confirmation modal painted after the model
-  proposes `send-mail to=alice@example.com`. The captured pane
-  satisfies each grep step in the script block above:
-  the title-border string `" confirm "`, the summary line
-  `"send-mail via"` (specifically `send-mail via
-  local:mailcat@0.0.0 — sinks: [mail]`), the sinks-line
-  string `"sinks: mail"`, and the recipient
-  `"alice@example.com"`.
-- `03-response.txt` — pane after the `a` allow keybinding fires
-  and the assistant-message follow-up renders (the stub's
-  turn-2 response: `"Email sent to alice."`).
-- `04-audit.txt` — `rfl audit --project-root "$PROJECT"` dump.
-  The grep steps `"confirm_request"` and `"confirm_allowed"`
-  both match (rows 4 + 5 of the dump).
-- `05-sqlite-audit.txt` — direct `SELECT seq, kind, request_id
-  FROM audit_events ORDER BY seq` dump, showing the same kinds
-  that surface through the `rfl audit` CLI.
-- `06-sqlite-entries.txt` — direct `SELECT seq, kind FROM
-  entries ORDER BY seq` dump, showing the canonical
-  `text → tool_call → tool_result → text` sequence
-  (assistant-message text bracketing the tool call).
+- `00-CONTEXT.md` — capture context, file-by-file provenance,
+  open issues route.
+- `01-after-launch.txt` — real `tmux capture-pane` after
+  spawning `rfl chat …` in detached tmux. **Blank** because
+  the cloud-agent harness's headless tmux does not surface
+  ratatui's alternate-screen render; the chat process is alive
+  and `wire-events.txt` shows the bus events firing. Operator
+  re-capture against an attached tmux is a post-merge
+  follow-up.
+- `02-modal.txt` — real `capture-pane` after the prompt is
+  typed. Same blank-pane caveat as 01.
+- `03-response.txt` — real `capture-pane` after the `a`
+  Allow keybinding fires. Same blank-pane caveat as 01.
+- `04-audit.txt` — real `rfl audit --project-root <PROJECT>`
+  dump. Four rows: `install_accepted` (from the `rfl install
+  rfl-mailcat` step), `confirm_request`,
+  `confirm_request_taint_attached`, `confirm_allowed`. Live
+  `AuditKind::as_str()` variants only (pi-1 §B1 + §N1
+  closure). Request id `01KRDW85BVC348Y5XS50RR6D77` is a real
+  ULID. Bracketed `[<rid>|-]` rendering per
+  `crates/rafaello/src/audit_cli.rs:232-233`.
+- `05-sqlite-audit.txt` — real `sqlite3` dump of
+  `SELECT seq, kind, request_id FROM audit_events ORDER BY
+  seq`. Same four rows as 04.
+- `06-sqlite-entries.txt` — real `sqlite3` dump of
+  `SELECT seq, kind FROM entries ORDER BY seq`. Three rows:
+  `text` (the user-message entry), `tool_call`, `tool_result`.
+- `wire-events.txt` — real `rfl-tui` stderr from the same
+  chat run. Each `bus.event topic=…` line is a real bus
+  broadcast observed by the TUI bridge; the
+  `user_message → tool_request → confirm_request →
+  confirm_reply → tool_result` sequence is end-to-end
+  evidence that the wire shape ran against the real
+  binaries.
 
 ### Grep expectations
 
-Each `grep` step in the J2 script asserts a non-empty match
-against the corresponding transcript file:
+The `rfl audit` and `sqlite3` substrings are asserted
+against the populated dumps:
 
-| File | grep substring |
-| --- | --- |
-| `02-modal.txt` | `" confirm "` |
-| `02-modal.txt` | `"send-mail via"` |
-| `02-modal.txt` | `"sinks: mail"` |
-| `02-modal.txt` | `"alice@example.com"` |
-| `04-audit.txt` | `"confirm_request"` |
-| `04-audit.txt` | `"confirm_allowed"` |
+| File | grep substring | source |
+| --- | --- | --- |
+| `04-audit.txt` | `confirm_request` | row 2 |
+| `04-audit.txt` | `confirm_allowed` | row 4 |
+| `05-sqlite-audit.txt` | `confirm_request` | row 2 |
+| `05-sqlite-audit.txt` | `confirm_allowed` | row 4 |
+| `06-sqlite-entries.txt` | `tool_call` | row 1 |
+| `06-sqlite-entries.txt` | `tool_result` | row 2 |
+| `wire-events.txt` | `frontend-ready-observed` | line 2 |
+| `wire-events.txt` | `core.session.confirm_request` | line 6 |
+| `wire-events.txt` | `core.session.tool_result` | line 9 |
+
+The scope §J2 TUI-render substring grep set (`" confirm "`,
+`"send-mail via"`, `"sinks: mail"`, `"alice@example.com"`)
+remains the **operator-witnessed acceptance criterion**.
+Those substrings are not present in the headless 01-03
+captures; they fire only in an attached tmux render. The
+post-merge driver sweep replaces 01-03 with the live render
+and re-asserts the full grep set. Until then, the wire-event
+table above + `04-audit.txt` rows 2 + 4 are the round-2
+evidence that the same flow ran end-to-end against the live
+binaries.
 
 ### Quit binding
 
@@ -284,11 +317,15 @@ inside a temp `--project-root`. The test asserts:
   test-mode chat exits after the scripted turns drain and the
   `RFL_TUI_MAX_LIFETIME` budget is honoured).
 
-The CI-runnable test plus the operator-witnessed transcripts
-under `transcripts/section-5/` jointly satisfy hard requirement
-#3.
+The CI-runnable test plus the round-2 real captures under
+`transcripts/section-5/` (audit dumps + wire-event log)
+satisfy the wire-shape half of hard requirement #3. The
+operator-witnessed TUI render half is gated on the
+post-merge driver sweep documented in `00-CONTEXT.md`.
 
-*Status*: ✅ landed (c27).
+*Status*: ◐ partial (round 2). Wire-shape + audit evidence
+landed via real captures replacing c27's schematic content;
+TUI render capture deferred to attached-tmux operator sweep.
 
 ## §6 — Audit-log inspection walkthrough
 
@@ -328,8 +365,14 @@ Cross-reference: an unfiltered dump (`rfl audit --project-root
 <PROJECT>`) also surfaces the m5b kinds
 (`confirm_request_taint_attached`,
 `plugin_publish_rejected_taint_superset`,
-`taint_dropped_in_envelope`) alongside m5a's `confirm_denied`
-/ `tool_call_started` / `tool_call_completed` family.
+`tool_request_taint_unioned_from_in_reply_to`) alongside m5a's
+`confirm_denied` / `confirm_allowed_with_session_grant` /
+`grant_added` family. The authoritative kind list is
+`AuditKind::as_str()` at
+`rafaello-core/src/audit/mod.rs:64-91`; pi-1 round-1 §N1
+correctly noted that the c27-era prose mentioned
+`taint_dropped_in_envelope` / `tool_call_started` /
+`tool_call_completed`, none of which exist in the live enum.
 
 *Status*: ⏳ pending — runs after §5 against the same
 `$PROJECT`.

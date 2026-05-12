@@ -1,6 +1,4 @@
-  1  2026-05-12T18:03:21.114Z  install_accepted        req-init-1   plugin=builtin:openai@0.0.0
-  2  2026-05-12T18:03:23.802Z  install_accepted        req-inst-1   plugin=local:mailcat@0.0.0
-  3  2026-05-12T18:03:27.331Z  tool_call_started       req-7a3f12   tool=send-mail plugin=local:mailcat@0.0.0
-  4  2026-05-12T18:03:27.332Z  confirm_request         req-7a3f12   tool=send-mail sinks=[mail]
-  5  2026-05-12T18:03:28.918Z  confirm_allowed         req-7a3f12   via=keybinding:a
-  6  2026-05-12T18:03:29.044Z  tool_call_completed     req-7a3f12   tool=send-mail ok=true
+1  2026-05-12T10:38:15.761640428+00:00  install_accepted  [-]  {"canonical":"local:mailcat@0.0.0","unused_allow_secrets":[]}
+2  2026-05-12T10:38:15.931238035+00:00  confirm_request  [01KRDW85BVC348Y5XS50RR6D77]  {"plugin":"local:mailcat@0.0.0","sinks":["mail"],"tool":"send-mail","tool_call_i
+3  2026-05-12T10:38:15.931400406+00:00  confirm_request_taint_attached  [01KRDW85BVC348Y5XS50RR6D77]  {"request_id":"01KRDW85BVC348Y5XS50RR6D77","taint":[{"detail":"openai","source":
+4  2026-05-12T10:38:15.931628869+00:00  confirm_allowed  [01KRDW85BVC348Y5XS50RR6D77]  {"plugin":"local:mailcat@0.0.0","tool":"send-mail"}
