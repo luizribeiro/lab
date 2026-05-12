@@ -1,12 +1,87 @@
 # m5b — taint matching + propagation + verbatim exfil demo — retrospective
 
-> **Status: round 1 draft.** First pass against `scope.md`
-> round 7 (ratified `50c5ae8`) + `commits.md` round 6
-> (ratified `b301a39`) at the m5b tip (`e533361`).
-> Worktree `/home/luiz/lab-wt/m5b-retro-claude` on branch
+> **Status: round 2 — folds `retrospective-pi-review-1.md`
+> (3 B / 4 M / 3 N).** Round 1 draft was the first pass
+> against `scope.md` round 7 (ratified `50c5ae8`) +
+> `commits.md` round 6 (ratified `b301a39`) at the m5b tip
+> (`e533361`, c23b). Worktree
+> `/home/luiz/lab-wt/m5b-retro-claude` on branch
 > `agents/m5b/retro-claude`, forked off the driver branch at
 > the c23b tip where all 28 m5b plan-row commits + the one
 > ratified-deviation sibling test (c23b) have landed.
+>
+> Round-2 fixes by pi-1 finding (one line each):
+>
+> - **B-1** §3 now lists **c24 as a deviation peer to c23**
+>   (same single-completion-stub limitation). c24's commit
+>   body explicitly carries a "deviation: path 3
+>   (`confirm_request_taint_attached` audit row not
+>   asserted)" note. §3 deviation table expands to two rows;
+>   §3.2 adds the c24 narrative. §8 coverage report
+>   re-routes the allow-arm audit-row anchor to harness
+>   coverage (c23b's `confirm_request_taint_attached`
+>   assertion path covers the allow-arm semantics as well as
+>   the deny-arm). §10 owner-judgment item 2 status moves
+>   from "honoured" to "honoured with deviation".
+> - **B-2** §8 manual-validation framing corrected: the file
+>   landed at **c15** (`6bea5ba`) as a 9-line wire-shape
+>   note (§3 "Wire shapes" anchoring the `details.taint`
+>   `[]`-vs-`null` rendering contract), not a c28 skeleton.
+>   The c28 row's manual-validation work was the §C38c
+>   acceptance test, not the doc. §8's "bullets to fill"
+>   list is reframed as "additions the existing 9-line
+>   file needs before merge."
+> - **B-3** §6.1 Stream A drift plan: §7.2.6 row 4 reference
+>   dropped (no such row in the live RFC table per pi-1
+>   B-3). The actual narrowing is the **`rpc_reply`
+>   superset arm** which sits under §A9's §"Out of scope"
+>   item 2 framing (not taken in m5b; v2 candidate).
+>   Reframed §6.1 bullets so rows 3 + 5 (assistant_message
+>   + confirm_answer) and the `rpc_reply` arm are listed
+>   explicitly rather than via the invented row-4 anchor.
+> - **M-1** c23b file path corrected throughout (§3 / §5 /
+>   §8): live file lives at
+>   `rafaello-core/tests/m5b_value_match_exfil_chain_fires_harness.rs`
+>   (not the round-1
+>   `rfl_chat_value_match_taint_unioned_in_canonical_tool_request.rs`
+>   guess).
+> - **M-2** §2.5 §TM4 hook signature corrected to the live
+>   shape: `pub type PublishTestHook = Arc<dyn Fn(&BusEvent)
+>   -> Option<BrokerError> + Send + Sync>` (the hook
+>   *may inject a `BrokerError`*, which is how the TR1/TR3
+>   stale-entry assertions exercise the rejection paths
+>   without forcing a separate fault-injection seam); stored
+>   in `Mutex<Option<PublishTestHook>>` with last-writer-
+>   wins semantics. The round-1 `Box<dyn Fn(&PublishMsg) +
+>   Send + Sync>` was wrong on three counts (Arc not Box;
+>   `BusEvent` not `PublishMsg`; hook returns
+>   `Option<BrokerError>` not unit).
+> - **M-3** §9 cache path corrected:
+>   `crates/rafaello-core/src/reemit/referenced_taint_index.rs`
+>   (not the round-1 `referenced_taint_index.rs`).
+> - **M-4** §6.5 explicit Stream B (fittings) unaffected
+>   rationale added — c16's TUI overlay extension is
+>   `rafaello-tui`-internal and does not touch the fittings
+>   RPC surface; c18/c19's multi-answer hook is test-only
+>   plumbing also outside the fittings surface. Stream E
+>   (renderer) coverage anchored on `decisions.md` row 29
+>   (m5a-internal TUI overlay rendering) — m5b honours
+>   unchanged. No §6.6 needed.
+> - **N-1** §1 "bonus negatives" phrasing dropped — c24
+>   (§EXFIL2 allow-arm) and c25 (§EXFIL3 provider-only
+>   negative) are *scope-ratified* tests, not bonuses.
+> - **N-2** §1 LoC + test-count stats explicitly pinned to
+>   the c23b tip `e533361` (was implicit `HEAD`).
+> - **N-3** §7 row numbering reworded "expected to land as
+>   rows 50-58" (not "lands as rows 50-58") — the rows are
+>   sketches; the editor commit adding them to
+>   `decisions.md` lands after retro convergence.
+>
+> Drift commits (§6 patches + §7 `decisions.md` row
+> appends) land in a follow-up commit on this retro branch
+> **after retrospective ratification**, per the m5a
+> precedent (m5a's drift landed at `816b273` after retro
+> convergence). This commit folds pi-1 only.
 >
 > `scope.md` converged in **7 pi rounds** (m5a was 6, m4 was
 > 6, m3 was 22, m2 was 8, m1 was 4, m0 was 3); `commits.md`
@@ -20,10 +95,16 @@
 > without leaking a test-only path into the production
 > `Broker::publish_async` body. See §2.5.
 >
-> Companion: `manual-validation.md` — landed as the c28
-> skeleton (per m5a §5.3 / m4 §5.3 precedent; the file
-> currently contains the section scaffold only and awaits
-> Phase-3 manual runs documented in §8 below).
+> Companion: `manual-validation.md` — landed at **c15**
+> (`6bea5ba`) as a 9-line **§3 "Wire shapes"** note that
+> anchors the `details.taint` rendering contract
+> (`Vec<TaintEntry>` JSON; `[]` for empty, never `null`;
+> §CD1 / §CD3). The c28 row's manual-validation work was
+> the §C38c positive gate-through-orchestration test, not
+> a doc skeleton. §8 below enumerates the *additions* the
+> existing 9-line file needs before merge (manual-run
+> transcripts, audit-log dumps, etc.), framed as
+> additions-to-an-existing-file rather than skeleton-fill.
 >
 > This document is the milestone-level review against
 > `scope.md` round 7 and `commits.md` round 6, following the
@@ -63,7 +144,9 @@ commits; commits rounds 1–6 + 6 pi-review files + 3
 ratification commits; driver-preflight) land before c01 and
 are not counted in the plan-row total.
 
-**LoC.** `git diff rafaello-v0.1..HEAD --shortstat` reports
+**LoC.** `git diff rafaello-v0.1..e533361 --shortstat` (the
+c23b tip — pinned explicitly per the m5a §1 N-3 trap of
+"shortstat-against-`HEAD`-includes-retro-commits") reports
 **190 files changed, 20,181 insertions, 69 deletions**
 across the 29 plan-row commits + the docs-iteration commits.
 The same diff restricted to `rafaello/crates`,
@@ -74,7 +157,7 @@ implementation half nets **106 new top-level `tests/*.rs`
 files** (106 A, 19 M, 0 D — no Phase-3 test renames or
 deletions). The `rafaello-v0.1` baseline (workspace-wide
 `rafaello.*/tests/[^/]+\.rs$` files via `git ls-tree`)
-carried **577** test files; the live tree at the c23b tip
+carried **577** test files; the live tree at `e533361`
 carries **683**.
 
 **Demo bar status.** The m5b-scoped demo-bar arm green:
@@ -91,11 +174,16 @@ carries **683**.
   end (the headline security guarantee) is asserted by the
   integration test; the value-match chain end-to-end is
   covered by the c23b harness sibling (`e533361`,
-  `tests/rfl_chat_value_match_taint_unioned_in_canonical_tool_request.rs`
+  `rafaello-core/tests/m5b_value_match_exfil_chain_fires_harness.rs`
   — see §3.1).
 
-Bonus negatives all green:
-- §EXFIL2 allow-arm audit-trail variant (`cac7ae5`, c24).
+Other scope-ratified tests landed:
+- §EXFIL2 allow-arm audit-trail variant (`cac7ae5`, c24)
+  — landed with a documented deviation (path 3:
+  `confirm_request_taint_attached` audit row not asserted
+  in the integration test; same single-completion-stub
+  limitation as c23, harness-covered by c23b's audit-row
+  assertion path). See §3.2.
 - §EXFIL3 provider-only-taint negative — no value match, no
   referenced union (`6bb626b`, c25).
 - §C38a five-tree spawn + clean shutdown smoke (`ca28de3`,
@@ -278,20 +366,35 @@ in some interleaving and still pass the subscriber-side
 check).
 
 Round-7 fold (pi-6 M-1) added §TM4 as a dedicated test
-seam:
+seam. Live shape (verified in `crates/rafaello-core/src/bus.rs`):
 
-- `Broker::install_publish_test_hook(&self,
-  hook: Box<dyn Fn(&PublishMsg) + Send + Sync>)` —
-  cfg-gated behind `#[cfg(any(test, feature =
-  "test-fixture"))]`; production builds compile without it
-  via `#[cfg(not(any(test, feature = "test-fixture")))]`.
+- `pub type PublishTestHook = Arc<dyn Fn(&BusEvent) ->
+  Option<BrokerError> + Send + Sync>` — the hook receives
+  the `BusEvent` (not a `PublishMsg`) and *may inject a
+  `BrokerError`* by returning `Some(_)`, returning `None`
+  for the pass-through case. The injection arm is what
+  lets the TR1/TR3 stale-entry assertions exercise the
+  rejection paths without forcing a separate
+  fault-injection seam.
+- `pub fn install_publish_test_hook(&self, hook:
+  PublishTestHook)` — interior-mutable, stores into
+  `BrokerInner.publish_test_hook:
+  Mutex<Option<PublishTestHook>>`.
+- Cfg-gated behind `#[cfg(any(test, feature =
+  "test-fixture"))]`; production builds compile a no-op
+  `check_publish_test_hook` arm via `#[cfg(not(any(test,
+  feature = "test-fixture")))]` so the dispatch site
+  vanishes in release builds.
 - Fires inside the broker pump *after* the handler records
   into the re-emit caches but *before* `fan_out` to
   subscribers — the exact ordering point the TR1/TR3 tests
-  need.
-- Last-writer-wins on second install; no explicit clear
-  method (install a no-op hook to "remove"). Acceptance
-  test `broker_publish_test_hook_replaces_on_second_install.rs`
+  need. Three `check_publish_test_hook` call sites in
+  `bus.rs` (around line 1128 / 1196 / 1234) cover the
+  re-emit paths exercised by the tests.
+- Last-writer-wins on second install (the `Mutex<Option<_>>`
+  replacement); no explicit clear method (install a no-op
+  hook to "remove"). Acceptance test
+  `broker_publish_test_hook_replaces_on_second_install.rs`
   pins the semantics.
 
 Landed at c08 (`f4b9421`) as the round-7-added internal-
@@ -431,16 +534,20 @@ No `#[allow(unused)]` shims needed in any plan-row commit.
 
 ## 3. What deviated from commits.md
 
-Of the 28 plan rows, **28 landed exactly as written** (1:1
-correspondence with the ratified `commits.md` round-6
-table). **One additional commit** (c23b, `e533361`) landed
-as a Phase-3 deviation per the owner ratification at
-`86d6124`, raising the Phase-3 implementation total to 29
-commits.
+Of the 28 plan rows, **26 landed exactly as written** and
+**two landed with documented deviations** (c23 and c24 —
+both rooted in the same m5a `rfl-openai-stub` single-
+completion limitation; see §3.1 / §3.2). **One additional
+commit** (c23b, `e533361`) landed as a Phase-3 closure per
+the owner ratification at `86d6124`, raising the Phase-3
+implementation total to 29 commits. The c23b sibling closes
+the audit-row anchor that *both* c23 and c24 leave
+unasserted at the integration-test level.
 
 | Row(s) | Deviation | Rationale | Routed forward to |
 |--------|-----------|-----------|-------------------|
-| c23 | Headline integration test (§EXFIL1) landed at `9503912` but the value-match / audit-row / provenance-overlay chain cannot fire end-to-end through the m5a `rfl-openai-stub` single-completion shape (§2.6). Owner ratified option C: keep c23 as the broker-block end-to-end demo, add a harness-level sibling closing the coverage gap. | Single-completion stub puts both tool_calls into the canonical pipeline before the first `tool_result` round-trips through `handle_tool_result`. The end-to-end value-match chain needs the fetch result to be observed by the canonical re-emit pipeline before the send-mail tool_request evaluates. Stub-shape change would touch m5a's `rfl-openai-stub` binary and add 1-2 commits — better deferred to m6 alongside `rfl init` / interactive-demo polish. | §5 item 1 (m6 follow-up: multi-turn `rfl-openai-stub` shape); c23b harness sibling closed the coverage gap mechanically at `e533361`. |
+| c23 | Headline integration test (§EXFIL1) landed at `9503912` but the value-match / audit-row / provenance-overlay chain cannot fire end-to-end through the m5a `rfl-openai-stub` single-completion shape (§2.6 / §3.1). Owner ratified option C: keep c23 as the broker-block end-to-end demo, add a harness-level sibling closing the coverage gap. | Single-completion stub puts both tool_calls into the canonical pipeline before the first `tool_result` round-trips through `handle_tool_result`. The end-to-end value-match chain needs the fetch result to be observed by the canonical re-emit pipeline before the send-mail tool_request evaluates. Stub-shape change would touch m5a's `rfl-openai-stub` binary and add 1-2 commits — better deferred to m6 alongside `rfl init` / interactive-demo polish. | §5 item 1 (m6 follow-up: multi-turn `rfl-openai-stub` shape); c23b harness sibling closed the coverage gap mechanically at `e533361`. |
+| c24 | Allow-arm audit-trail variant (§EXFIL2) landed at `cac7ae5` with an in-commit deviation note (commit body §"Deviation (path 3 per c24 row text)"): the scope §EXFIL2 acceptance bullet cites `confirm_request_taint_attached` as the regression anchor for "the operator inspecting `audit_events` afterward can see the operator allowed a verbatim flow," but the audit row does not fire under the same single-completion-stub fixture c23 uses — the §AL1 non-provider predicate cannot fire for send-mail's modal because no fetch tool_result has been recorded into `TaintMatchMap` by the time send-mail's args reach the broker. c24 lands the **end-to-end allow-arm shape** (entries / mailcat.log / fetch.log / audit-kind sequence) without the audit-row anchor. | Same root cause as c23 (m5a stub single-completion shape). c24's commit body enumerates the same three paths as c23's deviation note and selects path 2 implicitly (the audit-row anchor lives on the c23b harness sibling, which asserts the row under the synthetic event sequence — same primitives, deterministic ordering). | §5 item 1 (multi-turn stub shape); audit-row anchor closed by c23b at `e533361` — the harness covers the §AL1 predicate regardless of allow/deny disposition, since the predicate fires on the canonical taint vector shape, not on the operator's answer. |
 
 No mid-Phase-3 file renames, no test relocations, no row
 reorderings. Two rows (c04, c14) are unsplittable cutovers
@@ -497,6 +604,70 @@ that doesn't change the roadmap-row security guarantee but
 *does* leave a coverage gap, the option-C pattern (keep the
 ratified test + add a harness sibling) is cheaper than
 reopening commits.md and stronger than ignoring the gap.
+
+### 3.2 c24 deviation in detail (same-root cause as c23)
+
+c24 (§EXFIL2, `cac7ae5`) is the allow-arm audit-trail
+variant: same fixture as c23, same scripted stub response,
+but `RFL_TUI_TEST_CONFIRM_ANSWERS = "allow,allow"` instead
+of `"allow,deny"`. The operator allows fetch, then allows
+the verbatim send-mail; the integration test asserts
+`mailcat.log` gains one entry whose `args.to` / `args.body`
+capture the verbatim exfil values, `entries` carries both
+`tool_call`s + both `tool_result`s with turn-2
+`tool_result.ok = true`, `fetch.log` records the turn-1 URL
+once, and `audit_events` carries 2× `confirm_request` +
+2× `confirm_allowed` rows with zero `confirm_denied`.
+
+The deviation, recorded verbatim in c24's commit body under
+`## Deviation (path 3 per c24 row text)`: the scope §EXFIL2
+acceptance bullet cites the
+`confirm_request_taint_attached` audit row as the
+regression anchor for "the operator inspecting
+`audit_events` afterward can see they allowed a verbatim
+flow." Under the c23 stub fixture
+(`exfil-stub-response.json` — single chat completion
+carrying both tool_calls) and m5a's `rfl-openai` adapter
+(which appends tool_results to history but does not
+currently issue a follow-up chat completion), both
+`provider.openai.tool_request` events publish before either
+`core.session.tool_result` lands. The `TaintMatchMap`
+therefore has no fetch tool_result recorded by the time
+send-mail's args reach the broker, and the §AL1
+non-provider predicate cannot fire for send-mail's modal.
+
+The same three paths from c23's deviation are enumerated in
+c24's commit body. Path 1 (extend `rfl-openai` to issue a
+follow-up chat completion when in-flight tool_results land)
+is non-trivial production work with ripple risk into m5a
+tests that script single-turn completions; routed to m6
+alongside `rfl init` polish (§5 item 1). Path 2 (synthesise
+the bus events in-tree via `ReemitRouter` +
+`ConfirmationGate` directly — the rafaello-core unit-test
+idiom) is what c23b implements at the harness seam; c23b's
+assertion *covers the §AL1 audit row*, and the audit-row
+shape is operator-disposition-independent (the row fires on
+the canonical taint vector shape, not on the answer the
+operator types — the gate writes
+`confirm_request_taint_attached` at modal *open*, before
+the answer arrives, so the allow-arm and deny-arm
+trajectories see the same row written for the same modal).
+Path 3 (accept the integration test without the audit-row
+anchor; route the anchor to the harness sibling) is what
+landed.
+
+**Why the c23 + c24 deviations cluster under one
+owner-ratification.** Both rows hit the same single-
+completion-stub limitation; c24 was authored after c23's
+option-C ratification (`86d6124`) and inlined the
+analysis into its commit body rather than spinning out a
+second deviation note. The c23b harness sibling
+(`e533361`) was scoped to cover *both* rows' audit-row
+anchors — its synthetic event sequence asserts the §AL1
+predicate fires for a non-provider canonical taint vector,
+which is the load-bearing guarantee for c23's deny-arm
+audit row *and* c24's allow-arm audit row. No separate
+c24b sibling was needed.
 
 ---
 
@@ -583,7 +754,7 @@ note's framing.
 | 8 | **`rfl audit` read CLI** (scope §"Out of scope" item 4). m6 polish. | new CLI subcommand reading `audit_events` | → m6 |
 | 9 | **macOS CI green hard gate** (m3 / m4 / m5a carryover ratification gate). | CI run URL in `manual-validation.md` §4 | → driver post-merge sweep |
 | 10 | **Interactive `rfl chat` recording for `manual-validation.md` §1** (LiteLLM proxy + `send-mail` walkthrough). m5a §5 item 10 carryover; m5b adds the verbatim-exfil walkthrough on top. | recorded asciinema/transcript | → driver post-merge sweep (m4 §5.3 / m5a §5 item 10 pattern) |
-| 11 | **`manual-validation.md` skeleton fill** (§8 below enumerates the bullets) | the c28 skeleton | → driver post-merge sweep |
+| 11 | **`manual-validation.md` additions** (§8 below enumerates the additions). The file exists as a 9-line §3 wire-shape note landed at c15 (`6bea5ba`); m5b additions extend it with manual-run transcripts, audit-log dumps, and the macOS-CI URL. | the c15 9-line file | → driver post-merge sweep |
 | 12 | **`core_tools_list_registered_before_provider_spawn.rs`** — m5a §5 item 14 carryover. Structural guarantee (the supervisor's `CorePluginService::new` runs ahead of the spawn loop by construction); the missing test is a defence-in-depth regression anchor. m5b did not pick this up because it is m5a-territory regression coverage, not m5b-shaped work. | `rafaello-core/tests/` defence-in-depth | → m6 (unchanged) |
 | 13 | **Production `#[allow(clippy::result_large_err)]` sweep** — m4 / m5a carryover. m5b's new production code (broker §PT1 enforcement, re-emit `TaintMatchMap`, `ReferencedTaintIndex`) does not introduce new `result_large_err` allows beyond the m4 / m5a baseline. Recorded for completeness; scope unchanged. | workspace-wide error-shape choice | → m6 (deferred per m4 retro §5.5, unchanged scope) |
 
@@ -669,8 +840,15 @@ table. Patches:
   candidate. Banner records the narrowing rationale (the
   load-bearing path is `tool_request ↔ tool_result`; rows
   3 / 5 are descriptive but unenforced in v1).
-- **§7.2.6 row 4 — `confirm_reply`** narrowing follows the
-  same v1-known-limitation banner as rows 3 / 5.
+- **`plugin.<a>.rpc_reply` superset arm** — the §A9
+  fallback also names `plugin.<a>.rpc_reply` as an
+  unenforced arm of the same narrowing. Scope §"Out of
+  scope" item 2 covers it explicitly. No separate §7.2.6
+  table row in the live RFC; banner anchors on the §A9
+  fallback list rather than on an invented row number.
+  (Round-1 draft mistakenly referred to "§7.2.6 row 4" —
+  the live RFC table has no row 4 entry for `confirm_reply`;
+  pi-1 B-3 caught the misattribution.)
 
 ### 6.2 `overview.md` patches
 
@@ -698,7 +876,7 @@ table. Patches:
   `ReferencedTaintIndex.lookup_request` /
   `lookup_result`. Authoritative implementation cite:
   `crates/rafaello-core/src/reemit/taint_match.rs` +
-  `reemit/referenced_taint.rs`.
+  `reemit/referenced_taint_index.rs`.
 - **`Audit log`** — m5a entry already cites
   `AuditKind::as_str()` as authoritative. m5b adds the
   three new kinds (`confirm_request_taint_attached`,
@@ -715,22 +893,42 @@ verbatim (`sinks = ["network"]`,
 "RFL_FETCH_TEST_LOG_PATH", "RFL_FETCH_TEST_TAINT_OVERRIDE"]`,
 the `grant_match` schema). No Stream F changes needed.
 
-### 6.5 Other streams (B / C / D / E)
+### 6.5 Other streams (B / C / E)
 
-Streams B (process), C (supervisor), D (TUI), E (renderer)
-are unaffected by m5b's load-bearing additions:
+Live `streams/` tree contains `a-security`, `b-fittings`,
+`c-scripting`, `e-renderer`, `f-manifest` (no `d-*`
+directory — TUI work lives under Stream E renderer +
+`decisions.md` row 29). m5b's load-bearing additions touch
+none of B / C / E:
 
-- **Stream D (TUI)** — m5b extends the `ConfirmOverlay`
-  render with a `provenance:` block when the §AL1 predicate
-  fires (c16). This is a render-shape extension internal to
-  the overlay component (m5a-shipped); the Stream D RFC
-  documents the overlay component but not its internal
-  block list, so no patch needed. The `RFL_TUI_TEST_CONFIRM_ANSWERS`
-  multi-answer hook (§TUI-MA / c18 + c19) is test-only
-  surface; not Stream-D-documented.
+- **Stream B (fittings)** — **unaffected.** The TUI overlay
+  extension (c16 `provenance:` block render) is
+  `rafaello-tui`-internal; the multi-answer scripted hook
+  (c18 + c19) is test-plumbing-only env var conventions.
+  Neither touches the fittings RPC surface
+  (`core.tools_list`, `plugin.<id>.rpc_request` /
+  `rpc_reply`, the fittings handshake). The §PT1 broker-
+  intake superset check fires on bus traffic, not on
+  fittings RPC traffic — fittings `rpc_reply` arm is
+  explicitly *not* covered by the §A9 / §"Out of scope"
+  item 2 narrowing per §6.1 above (descriptive but
+  unenforced in v1). No Stream B patch needed; pi-1 M-4
+  asked for the explicit confirmation.
+- **Stream C (scripting)** — unaffected. m5b does not touch
+  the slash-command surface, the `frontend.tui.slash_command`
+  / `core.session.command_result` topic pair, or the
+  `SlashHandler`. m5a's c38 RwLock migration holds
+  unchanged.
 - **Stream E (renderer)** — `decisions.md` row 29 already
   pins TUI overlay rendering as m5a-internal; m5b honours
-  unchanged.
+  unchanged. The c16 `provenance:` block is a render-shape
+  *content* extension internal to the overlay component;
+  the Stream E RFC documents the rendering pipeline and
+  the overlay's *existence* but not its internal block
+  list, so no patch needed. The
+  `RFL_TUI_TEST_CONFIRM_ANSWERS` multi-answer hook
+  (§TUI-MA / c18 + c19) is test-only surface; not Stream-
+  E-documented.
 
 ---
 
@@ -740,7 +938,9 @@ m5b lands **nine** load-bearing design choices that warrant
 new `decisions.md` rows. Each row sketch below carries an
 explicit `Refines/Reverses` anchor in the decision-table
 style (m5a precedent). An editor commit during the retro-
-branch sweep adds these as rows 50-58 (after m5a's 46-49)
+branch sweep adds these as **expected rows 50-58** (after
+m5a's 46-49; the exact row numbers land at editor-commit
+time pending no intervening `decisions.md` appends)
 to `decisions.md` proper.
 
 ### 7.1 Row candidate: Taint matching algorithm — literal hash + substring containment + `RFL_TAINT_MATCH_HASH_KEY`
@@ -1055,10 +1255,10 @@ last one?"
 
 ### What's not tested (load-bearing follow-ups)
 
-- **Stream A §7.2.6 rows 3, 4, 5** (`assistant_message`,
-  `confirm_reply`, `confirm_answer` superset narrowing) —
-  scope §"Out of scope" item 2 ratifies as v1 known
-  limitation. §5 item 2 above.
+- **Stream A §7.2.6 rows 3 + 5** (`assistant_message` +
+  `confirm_answer` superset narrowing) and the §A9
+  `plugin.<a>.rpc_reply` arm — scope §"Out of scope" item
+  2 ratifies as v1 known limitation. §5 item 2 above.
 - **Laundered-flow taint** — scope §"Out of scope" item
   1. §5 item 7.
 - **Real-network `rafaello-fetch`** — §5 item 3. The
@@ -1072,15 +1272,18 @@ last one?"
   pattern (mechanical-green-as-substitute, or recorded
   asciinema if owner accepts manual-validation walltime) is
   the m5b default.
-- **`manual-validation.md` skeleton fill** — §5 item 11;
+- **`manual-validation.md` additions** — §5 item 11;
   enumerated below.
 
-### `manual-validation.md` bullets the c28 skeleton needs filled
+### `manual-validation.md` additions the existing 9-line file needs
 
-The c28 commit (`0261962`) lands the manual-validation.md
-skeleton following the m4 §5.3 / m5a §5.3 pattern. The
-file is a section scaffold awaiting Phase-3 manual runs.
-To close before merge:
+The live `manual-validation.md` (landed at c15 / `6bea5ba`)
+contains one §3 "Wire shapes" note pinning the
+`details.taint` `Vec<TaintEntry>` JSON rendering (`[]` for
+empty, never `null`; §CD1 / §CD3). To close before merge,
+the file needs the following additions (m4 §5.3 / m5a §5.3
+pattern — manual-run transcripts as new sections appended
+to the existing §3):
 
 1. **§1 Real-network demo** — `rfl chat` against the dev
    LiteLLM proxy with the `m5b-locks/` lock; captured
@@ -1133,7 +1336,7 @@ primitives in m6**. m6 inherits m5b's full security surface:
   value-walk, the lazy-TTL `record` / `lookup` shape, and
   the per-router ownership via
   `ReemitRouter::with_taint_match_map`.
-- **`ReferencedTaintIndex`** — `crates/rafaello-core/src/reemit/referenced_taint.rs`
+- **`ReferencedTaintIndex`** — `crates/rafaello-core/src/reemit/referenced_taint_index.rs`
   with both arms (`by_request_id` populated by
   `handle_tool_request`; `by_result_id` populated by
   `handle_tool_result`), the `record_request` /
@@ -1220,17 +1423,33 @@ at c13 (`b81c3a4`). Closes Stream A §7.2.6 row 1 in full.
 
 **Owner re-look before merge:** confirm c13's union shape
 matches the owner's mental model. Specifically: the
-`rfl_chat_value_match_taint_unioned_in_canonical_tool_request.rs`
+`rafaello-core/tests/m5b_value_match_exfil_chain_fires_harness.rs`
 harness sibling (c23b) and the c13 unit tests both encode
 the union semantics; either failing under m6 polish would
 signal drift.
 
 ### 10.2 §EXFIL2 allow-arm audit-trail variant inclusion (item 2, §A5)
 
-**Status: honoured.** Default (include) ratified at scope
-round 1; landed as c24 (`cac7ae5`). The verbatim exfil
-visible-when-allowed case is asserted end-to-end against
-the same m5b lock as c23.
+**Status: honoured with deviation.** Default (include)
+ratified at scope round 1; landed as c24 (`cac7ae5`) with
+the path-3 deviation documented in §3.2 — the §EXFIL2
+end-to-end shape (entries / mailcat.log / fetch.log /
+audit-kind sequence) is asserted against the same m5b lock
+as c23, but the `confirm_request_taint_attached` regression
+anchor cited in the scope §EXFIL2 acceptance bullet does
+not fire under the c23/c24 shared single-completion-stub
+fixture. The audit-row anchor is covered by the c23b
+harness sibling (`e533361`), whose §AL1 predicate
+assertion is operator-disposition-independent and therefore
+covers both the allow-arm (c24) and deny-arm (c23)
+trajectories.
+
+**Owner re-look before merge:** confirm that "audit-row
+anchor covered at the harness seam rather than at the
+integration-test seam" is acceptable as the §EXFIL2
+acceptance shape. Reopening would require the m6 multi-
+turn-stub work to land in m5b instead (§5 item 1) — out of
+scope per the m5b → m6 boundary.
 
 ### 10.3 `rafaello-fetch` semantics — file-backed (item 3, §A6)
 
@@ -1305,8 +1524,8 @@ consumed; the 28-commit total holds. Routed to v2 per
 **Owner re-look before merge:** confirm the v1-known-
 limitation framing is acceptable. The Stream A drift
 patch (§6.1) records the rationale (load-bearing path is
-`tool_request ↔ tool_result`); rows 3/4/5 are descriptive
-but unenforced. Reopening would add ~4 commits + ~6 tests
+`tool_request ↔ tool_result`); rows 3 + 5 + the
+`plugin.<a>.rpc_reply` arm are descriptive but unenforced. Reopening would add ~4 commits + ~6 tests
 in a v2 milestone.
 
 ### 10.10 Map / cache / outstanding-taint / audit-writer location split (item 10, §A2)
@@ -1338,12 +1557,14 @@ dequeue semantics.
 
 ---
 
-*End of m5b retrospective round 1 draft. Pi review expected
-to run 2-4 rounds per `plans/README.md` "Retrospective
-drafts deserve the same adversarial review as scope and
-commits" rule + the m1 / m5a precedent (m1 needed 4 rounds;
-m5a needed 6 — though m5a's bracket reflects the drift-
-commit ratification trajectory rather than pi-finding
-density). Drift commits (§6) land on this retro branch
-after retrospective ratification, before merge to
-`rafaello-v0.1`.*
+*End of m5b retrospective round 2. Folds pi-1's 3 blockers
+/ 4 majors / 3 nits per the inline fix list at the top of
+the file. Pi-2 review expected per `plans/README.md`
+"Retrospective drafts deserve the same adversarial review
+as scope and commits" rule + the m1 / m5a precedent (m1
+needed 4 rounds; m5a needed 6 — though m5a's bracket
+reflects the drift-commit ratification trajectory rather
+than pi-finding density). Drift commits (§6) + the
+`decisions.md` row appends (§7) land in a separate
+follow-up commit on this retro branch **after retrospective
+ratification**, per the m5a `816b273` precedent.*
