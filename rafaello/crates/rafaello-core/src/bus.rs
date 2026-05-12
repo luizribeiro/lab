@@ -1,3 +1,6 @@
+// Module-level result_large_err allow ratified by
+// m6 per decisions.md row 67 — boxing the error
+// hierarchy is post-v1.
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};

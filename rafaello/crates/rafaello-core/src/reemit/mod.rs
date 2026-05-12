@@ -1,3 +1,6 @@
+// Module-level result_large_err allow ratified by
+// m6 per decisions.md row 67 — boxing the error
+// hierarchy is post-v1.
 #![allow(clippy::result_large_err)]
 
 //! Core re-emit router (scope §CR1 + §CR2 + §CR3 + §CR4 + §CR5

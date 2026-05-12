@@ -6,6 +6,9 @@
 //! acquired, the holder pid is written, and only then is the SQLite file
 //! opened and the schema initialized.
 
+// Module-level result_large_err allow ratified by
+// m6 per decisions.md row 67 — boxing the error
+// hierarchy is post-v1.
 #![allow(clippy::result_large_err)]
 
 use std::fs::{File, OpenOptions};
