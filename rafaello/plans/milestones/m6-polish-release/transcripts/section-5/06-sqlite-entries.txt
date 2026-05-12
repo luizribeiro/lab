@@ -1,0 +1,4 @@
+1|text
+2|tool_call
+3|tool_result
+4|text

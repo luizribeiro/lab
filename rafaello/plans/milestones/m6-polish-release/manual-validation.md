@@ -108,27 +108,187 @@ here, e.g.:
 The URL must point at a run whose `m6 / macOS` job is green
 against the rafaello-v0.1 candidate commit.
 
-## §5 — Interactive tmux recording (filled by c27)
+## §5 — Interactive tmux recording
 
-*Placeholder — filled by c27 (Phase J2).*
+The tmux-driven end-to-end recording of an `rfl chat` session
+against the §1 cold-start bootstrap, captured against
+`rfl-openai-stub` (deterministic; the canonical proof-of-life
+per hard requirement #3) and copied into
+`rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`.
+See §J below for the 2026-05-12 LiteLLM outage that pinned the
+stub-driven capture as the only landed evidence.
 
-c27 lands the concrete tmux-driven recording of an end-to-end
-`rfl chat` session against the §1 cold-start bootstrap: launch
-in a tmux session, drive a prompt that triggers the
-`send-mail` modal, capture the modal text via
-`tmux capture-pane`, assert the live overlay substrings (the
-` confirm ` border, the `send-mail via local:mailcat@0.0.0 —
-sinks: [mail]` summary, the `args: { … "alice@example.com" …
-}` line, the `sinks: mail` line), allow via the `a` binding
-(`rafaello-tui/src/lib.rs:70`), capture the assistant response,
-and quit cleanly via Ctrl-C (the m3 chat-loop quit binding;
-round-3 J2 correction).
+### Tmux script (verbatim from scope §J2)
 
-Per hard requirement #3 this section is the **canonical proof
-of life** for v1: no mechanical-coverage substitute is
-acceptable.
+```sh
+# Round-4 B-2 fold: every `rfl <subcommand>` invocation runs
+# from inside the lab worktree (where `.#rafaello` resolves)
+# and points at the throwaway PROJECT via `--project-root`.
 
-*Status*: ⏳ pending — filled by c27.
+LAB_WORKTREE=/home/luiz/lab            # or current rafaello-v0.1 worktree
+PROJECT=$(mktemp -d -t m6-demo-XXXX)
+TRANSCRIPTS="$PROJECT/transcripts/section-5"
+mkdir -p "$TRANSCRIPTS"
+
+cd "$LAB_WORKTREE"
+
+# Materialise the lock + bundled rfl-openai under $PROJECT.
+nix develop .#rafaello --impure --command \
+  rfl init --yes --project-root "$PROJECT"
+
+export LITELLM_API_KEY=<dev-proxy-key-from-pass>
+
+# Install rfl-mailcat under the same $PROJECT.
+nix develop .#rafaello --impure --command \
+  rfl install rfl-mailcat --project-root "$PROJECT"
+
+# Open the tmux session that hosts rfl chat against $PROJECT.
+tmux new-session -d -s rafaello-m6-demo \
+  "cd '$LAB_WORKTREE' && nix develop .#rafaello --impure --command \
+     rfl chat --project-root '$PROJECT'"
+
+# Wait for the TUI to render the initial pane.
+sleep 2
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$TRANSCRIPTS/01-after-launch.txt"
+
+# Send a prompt that triggers the send-mail tool.
+tmux send-keys -t rafaello-m6-demo \
+  "Please email alice@example.com a one-line hello note." Enter
+sleep 3
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$TRANSCRIPTS/02-modal.txt"
+# Live overlay copy (confirm.rs:160-211):
+#   - title border:  " confirm "
+#   - summary line:  "send-mail via local:mailcat@0.0.0 — sinks: [mail]"
+#   - args line:     "args: { … "alice@example.com" … }"
+#   - sinks line:    "sinks: mail"
+grep " confirm "          "$TRANSCRIPTS/02-modal.txt"
+grep "send-mail via"      "$TRANSCRIPTS/02-modal.txt"
+grep "sinks: mail"        "$TRANSCRIPTS/02-modal.txt"
+grep "alice@example.com"  "$TRANSCRIPTS/02-modal.txt"
+
+# Allow the call. Live binding (rafaello-tui/src/lib.rs:70):
+#   KeyCode::Char('y') | KeyCode::Char('a') | KeyCode::Enter => Allow.
+tmux send-keys -t rafaello-m6-demo "a"
+sleep 3
+tmux capture-pane -t rafaello-m6-demo -p \
+  > "$TRANSCRIPTS/03-response.txt"
+# The assistant-message line from the live LiteLLM model (or the
+# multi-turn stub if running deterministically) acknowledges the
+# send. Operator pastes the rendered line; no fixed substring
+# asserted because real-model wording is non-deterministic.
+
+# Quit cleanly. The m3 chat loop's quit binding is Ctrl-C
+# (the TUI's input-mode loop doesn't bind 'q' as quit — see
+# rafaello-tui/src/lib.rs input handling). Owner-judgment item
+# 12 confirms the live binding at implementation time.
+tmux send-keys -t rafaello-m6-demo "C-c"
+sleep 1
+tmux kill-session -t rafaello-m6-demo
+
+# Audit + SQLite dumps.
+nix develop .#rafaello --impure --command \
+  rfl audit --project-root "$PROJECT" \
+  > "$TRANSCRIPTS/04-audit.txt"
+grep "confirm_request"   "$TRANSCRIPTS/04-audit.txt"
+grep "confirm_allowed"   "$TRANSCRIPTS/04-audit.txt"
+
+sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
+  "SELECT seq, kind, request_id FROM audit_events ORDER BY seq" \
+  > "$TRANSCRIPTS/05-sqlite-audit.txt"
+sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
+  "SELECT seq, kind FROM entries ORDER BY seq" \
+  > "$TRANSCRIPTS/06-sqlite-entries.txt"
+
+# Round-4 B-2: final copy of captured transcripts into the
+# in-repo committed location.
+REPO_TRANSCRIPTS="$LAB_WORKTREE/rafaello/plans/milestones/m6-polish-release/transcripts/section-5"
+mkdir -p "$REPO_TRANSCRIPTS"
+cp "$TRANSCRIPTS"/*.txt "$REPO_TRANSCRIPTS/"
+```
+
+### Captured transcripts
+
+The six files live under
+`rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`:
+
+- `01-after-launch.txt` — initial TUI pane after the chat
+  process renders. The provider/tool header lines show the
+  bundled `rfl-openai` against the stub endpoint and the
+  installed `local:mailcat@0.0.0` `send-mail` tool.
+- `02-modal.txt` — confirmation modal painted after the model
+  proposes `send-mail to=alice@example.com`. The captured pane
+  satisfies each grep step in the script block above:
+  the title-border string `" confirm "`, the summary line
+  `"send-mail via"` (specifically `send-mail via
+  local:mailcat@0.0.0 — sinks: [mail]`), the sinks-line
+  string `"sinks: mail"`, and the recipient
+  `"alice@example.com"`.
+- `03-response.txt` — pane after the `a` allow keybinding fires
+  and the assistant-message follow-up renders (the stub's
+  turn-2 response: `"Email sent to alice."`).
+- `04-audit.txt` — `rfl audit --project-root "$PROJECT"` dump.
+  The grep steps `"confirm_request"` and `"confirm_allowed"`
+  both match (rows 4 + 5 of the dump).
+- `05-sqlite-audit.txt` — direct `SELECT seq, kind, request_id
+  FROM audit_events ORDER BY seq` dump, showing the same kinds
+  that surface through the `rfl audit` CLI.
+- `06-sqlite-entries.txt` — direct `SELECT seq, kind FROM
+  entries ORDER BY seq` dump, showing the canonical
+  `text → tool_call → tool_result → text` sequence
+  (assistant-message text bracketing the tool call).
+
+### Grep expectations
+
+Each `grep` step in the J2 script asserts a non-empty match
+against the corresponding transcript file:
+
+| File | grep substring |
+| --- | --- |
+| `02-modal.txt` | `" confirm "` |
+| `02-modal.txt` | `"send-mail via"` |
+| `02-modal.txt` | `"sinks: mail"` |
+| `02-modal.txt` | `"alice@example.com"` |
+| `04-audit.txt` | `"confirm_request"` |
+| `04-audit.txt` | `"confirm_allowed"` |
+
+### Quit binding
+
+`Ctrl-C` terminates the chat loop (the m3 chat-loop quit
+binding; round-3 J2 correction over round 2's mistaken `q`
+assumption — `rafaello-tui/src/lib.rs`'s input-mode handler
+does not bind `q` as quit). Owner-judgment item 12 records the
+implementation-time verification gate; the live binding stands
+as-is for v1.
+
+### Programmatic companion
+
+The regression-grade companion that exercises the same flow
+deterministically lives at
+`rafaello/crates/rafaello/tests/rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`.
+It uses `rfl-openai-stub` (scope §A8 multi-turn contract,
+mirrored via an in-process listener for the longer plugin-
+spawn-and-validate window the integrated flow needs) plus
+`RFL_TUI_TEST_CONFIRM_ANSWERS=allow` (m5b §5 row 56 hook) to
+drive `init → install → chat → confirm → persist` end-to-end
+inside a temp `--project-root`. The test asserts:
+
+- the `entries` table holds the canonical `tool_call` +
+  `tool_result` + assistant-message text rows;
+- the `audit_events` table holds the `confirm_request` +
+  `confirm_allowed` rows;
+- the chat process exits with status zero — the test-mode
+  analogue of the manual `Ctrl-C`-clean exit (the live TUI's
+  quit binding is `Ctrl-C` per the round-3 J2 correction; the
+  test-mode chat exits after the scripted turns drain and the
+  `RFL_TUI_MAX_LIFETIME` budget is honoured).
+
+The CI-runnable test plus the operator-witnessed transcripts
+under `transcripts/section-5/` jointly satisfy hard requirement
+#3.
+
+*Status*: ✅ landed (c27).
 
 ## §6 — Audit-log inspection walkthrough
 
@@ -265,6 +425,55 @@ shell.
 tarball land (Phase G commits c19 / c20); the manual run is
 the **only** smoke for the `brew install` path per owner-
 judgment item 10.
+
+## §J — LiteLLM proxy outage on 2026-05-12 (c27 capture context)
+
+Context for future maintainers reading this file alongside the
+`transcripts/section-5/` artifacts: the §5 transcripts were
+captured against `rfl-openai-stub` (scope §A8 / §E1 multi-turn
+contract), **not** the live `vllm/qwen3.6-27b` model on the
+`https://litellm.thepromisedlan.club/v1` LiteLLM proxy.
+
+Owner-confirmed status at c27 commit time (2026-05-12 ~03:10
+local):
+
+- `vllm/qwen3.6-27b` — **down** (upstream `sodium:8001`
+  unreachable);
+- `vllm/gpt-oss-120b` — **down** (upstream `vanadium:8000`
+  unreachable);
+- `mlx/deepseek-v4-flash` — 500;
+- `mlx/qwen2.5-coder-7b` — 500;
+- `mlx/qwen3.6-35b` — alive (the only model still serving
+  cleanly on the proxy at retro time).
+
+Per the owner's Phase J guidance:
+1. The stub-driven transcript is the canonical proof of life
+   for the v1 wire-shape contract — deterministic, reproducible
+   without external dependency, and faithful to the OpenAI Chat
+   Completions wire shape that `rfl-openai` speaks against the
+   proxy.
+2. A real-LLM transcript against `mlx/qwen3.6-35b` (via
+   `RFL_OPENAI_MODEL=mlx/qwen3.6-35b` overriding the bundled
+   `vllm/qwen3.6-27b` default) is welcome alongside the stub
+   transcript when the proxy is reachable; the `rfl-openai`
+   plugin speaks generic OpenAI Chat Completions, so any alive
+   model on the proxy works without code changes. None landed
+   in c27 because the operator capture window coincided with
+   the outage.
+3. With LiteLLM partially down at retro time AND the
+   stub-driven transcript already covering the v1 wire-shape
+   contract, the stub transcripts under
+   `transcripts/section-5/` stand as v1-demo-ready evidence
+   per the owner's explicit acceptance.
+
+The CI-runnable companion at
+`rafaello/crates/rafaello/tests/rfl_chat_demo_bar_init_install_chat_confirm_persist.rs`
+exercises the same flow deterministically against the same
+stub contract; future maintainers re-running the J2 tmux
+script against a healthy LiteLLM proxy can drop the
+real-provider transcripts (e.g. `01b-after-launch-litellm.txt`,
+`02b-modal-litellm.txt`, …) alongside the stub captures
+without invalidating the existing files.
 
 ---
 

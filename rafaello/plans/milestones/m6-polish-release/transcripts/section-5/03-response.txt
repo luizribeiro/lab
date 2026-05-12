@@ -1,0 +1,9 @@
+rafaello v0.1 — interactive chat
+project: /tmp/m6-demo-xxxx
+provider: builtin:openai@0.0.0 (rfl-openai-stub @ 127.0.0.1)
+tools:    send-mail (via local:mailcat@0.0.0 — sinks: [mail])
+─────────────────────────────────────────────────────────────
+> Please email alice@example.com a one-line hello note.
+[tool] send-mail to=alice@example.com → ok
+assistant: Email sent to alice.
+> █

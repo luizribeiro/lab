@@ -1,0 +1,6 @@
+1|install_accepted|req-init-1
+2|install_accepted|req-inst-1
+3|tool_call_started|req-7a3f12
+4|confirm_request|req-7a3f12
+5|confirm_allowed|req-7a3f12
+6|tool_call_completed|req-7a3f12

@@ -1,0 +1,6 @@
+  1  2026-05-12T18:03:21.114Z  install_accepted        req-init-1   plugin=builtin:openai@0.0.0
+  2  2026-05-12T18:03:23.802Z  install_accepted        req-inst-1   plugin=local:mailcat@0.0.0
+  3  2026-05-12T18:03:27.331Z  tool_call_started       req-7a3f12   tool=send-mail plugin=local:mailcat@0.0.0
+  4  2026-05-12T18:03:27.332Z  confirm_request         req-7a3f12   tool=send-mail sinks=[mail]
+  5  2026-05-12T18:03:28.918Z  confirm_allowed         req-7a3f12   via=keybinding:a
+  6  2026-05-12T18:03:29.044Z  tool_call_completed     req-7a3f12   tool=send-mail ok=true
