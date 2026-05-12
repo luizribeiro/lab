@@ -1,11 +1,17 @@
-//! `rfl install --fixture <PACKAGE_DIR>` subcommand (scope §Tr1).
+//! `rfl install <PLUGIN>` / `rfl install --fixture <PACKAGE_DIR>`
+//! subcommand (scope §Tr1, §B1).
 //!
-//! Installs a local package fixture into `${PROJECT_ROOT}/rafaello.lock`
-//! after running m1's V3 path (`validate::lock`, which internally
-//! invokes `trifecta::evaluate` + `carveout::*`). Trifecta refusal and
-//! carve-out refusal map to typed install errors with stderr hints;
-//! the `--i-know-what-im-doing` / `--allow-credential-paths` flags are
-//! applied to the candidate `PluginEntry` *before* validation runs.
+//! Installs a bundled plugin (positional arg, resolved against
+//! `RFL_BUNDLED_PLUGINS_DIR` or the rfl-binary's share/ sibling) or a
+//! local package fixture into `${PROJECT_ROOT}/rafaello.lock` after
+//! running m1's V3 path (`validate::lock`, which internally invokes
+//! `trifecta::evaluate` + `carveout::*`). Both arms materialise the
+//! source tree to `${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/` via
+//! PP1 (symlinks dereferenced); digests are computed over the copied
+//! tree. Trifecta refusal and carve-out refusal map to typed install
+//! errors with stderr hints; the `--i-know-what-im-doing` /
+//! `--allow-credential-paths` flags are applied to the candidate
+//! `PluginEntry` *before* validation runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -29,10 +35,17 @@ use rafaello_core::trifecta;
 use rafaello_core::validate::{self, LockValidationContext};
 use serde_json::json;
 
+use crate::bundled::{self, BundledError};
+use crate::pp1;
+
 #[derive(Debug, clap::Args)]
 pub struct InstallArgs {
+    #[arg(required_unless_present = "fixture", conflicts_with = "fixture")]
+    pub plugin: Option<String>,
+    #[arg(long, required_unless_present = "plugin", conflicts_with = "plugin")]
+    pub fixture: Option<PathBuf>,
     #[arg(long)]
-    pub fixture: PathBuf,
+    pub project_root: Option<PathBuf>,
     #[arg(long)]
     pub lock: Option<PathBuf>,
     #[arg(long = "i-know-what-im-doing", default_value_t = false)]
@@ -75,20 +88,37 @@ pub enum InstallError {
     Audit(#[from] AuditError),
     #[error("NoHomeDir")]
     NoHomeDir,
+    #[error("BundledPluginNotFound: no bundled plugin named '{name}'")]
+    BundledPluginNotFound { name: String },
+}
+
+fn resolve_bundled_source(plugin: &str) -> Result<PathBuf, InstallError> {
+    match bundled::resolve_plugin_dir(plugin) {
+        Ok(p) => Ok(p),
+        Err(BundledError::NotFound { name }) => Err(InstallError::BundledPluginNotFound { name }),
+        Err(BundledError::Io(source)) => Err(InstallError::Io {
+            path: PathBuf::from("<rfl-exe>"),
+            source,
+        }),
+    }
 }
 
 pub fn run(args: InstallArgs) -> Result<(), InstallError> {
-    let project_root = std::env::current_dir().map_err(|source| InstallError::Io {
-        path: PathBuf::from("."),
-        source,
-    })?;
-    let package_dir = args
-        .fixture
-        .canonicalize()
-        .map_err(|source| InstallError::Io {
-            path: args.fixture.clone(),
+    let project_root = match args.project_root.clone() {
+        Some(p) => p,
+        None => std::env::current_dir().map_err(|source| InstallError::Io {
+            path: PathBuf::from("."),
             source,
-        })?;
+        })?,
+    };
+    let source_dir = match (&args.fixture, &args.plugin) {
+        (Some(path), _) => path.canonicalize().map_err(|source| InstallError::Io {
+            path: path.clone(),
+            source,
+        })?,
+        (None, Some(name)) => resolve_bundled_source(name)?,
+        (None, None) => unreachable!("clap requires one of fixture/plugin"),
+    };
     let lock_path = args
         .lock
         .clone()
@@ -96,7 +126,7 @@ pub fn run(args: InstallArgs) -> Result<(), InstallError> {
 
     let audit = AuditWriter::open_for_install(&project_root)?;
 
-    let manifest_path = package_dir.join("rafaello.toml");
+    let manifest_path = source_dir.join("rafaello.toml");
     let manifest_raw =
         std::fs::read_to_string(&manifest_path).map_err(|source| InstallError::Io {
             path: manifest_path.clone(),
@@ -104,12 +134,19 @@ pub fn run(args: InstallArgs) -> Result<(), InstallError> {
         })?;
     let manifest =
         Manifest::parse(&manifest_raw).map_err(|e| InstallError::Manifest(Box::new(e)))?;
-    validate_with_package(&manifest_path, &package_dir, &manifest)
+    validate_with_package(&manifest_path, &source_dir, &manifest)
         .map_err(|e| InstallError::Manifest(Box::new(e)))?;
 
     let canonical_str = format!("local:{}@{}", manifest.name, manifest.version);
     let canonical =
         CanonicalId::parse(&canonical_str).map_err(|e| InstallError::Canonical(Box::new(e)))?;
+
+    let topic = topic_id::derive(&canonical.to_string());
+    let package_dir =
+        pp1::materialise(&project_root, &topic, &source_dir).map_err(|e| InstallError::Io {
+            path: e.path,
+            source: e.source,
+        })?;
 
     let manifest_digest = digest::manifest_digest(&manifest.canonical_bytes());
     let content_digest = digest::content_digest(&package_dir)?;

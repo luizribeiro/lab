@@ -4,6 +4,7 @@ pub mod bundled;
 pub mod chat;
 pub mod init;
 pub mod install;
+pub mod pp1;
 pub mod status;
 
 use std::collections::{BTreeMap, BTreeSet};

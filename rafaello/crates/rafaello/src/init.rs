@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::Utc;
 use rafaello_core::digest;
@@ -25,6 +25,7 @@ use rafaello_core::manifest::Manifest;
 use rafaello_core::topic_id;
 
 use crate::bundled::{self, BundledError};
+use crate::pp1;
 
 const BUNDLED_OPENAI: &str = "openai";
 const OPENAI_CANONICAL: &str = "builtin:openai@0.0.0";
@@ -101,19 +102,11 @@ pub fn run(args: InitArgs) -> Result<(), InitError> {
     }
 
     let topic = topic_id::derive(OPENAI_CANONICAL);
-    let plugins_root = project_root.join(".rafaello").join("plugins");
-    std::fs::create_dir_all(&plugins_root).map_err(|source| InitError::Io {
-        path: plugins_root.clone(),
-        source,
-    })?;
-    let target_dir = plugins_root.join(&topic);
-    if target_dir.exists() {
-        std::fs::remove_dir_all(&target_dir).map_err(|source| InitError::Io {
-            path: target_dir.clone(),
-            source,
+    let target_dir =
+        pp1::materialise(&project_root, &topic, &source_dir).map_err(|e| InitError::Io {
+            path: e.path,
+            source: e.source,
         })?;
-    }
-    copy_tree_dereferenced(&source_dir, &target_dir)?;
 
     let content_digest = digest::content_digest(&target_dir)?;
     let manifest_digest = digest::manifest_digest(&manifest.canonical_bytes());
@@ -276,53 +269,4 @@ fn bundle_to_grant(b: &CapabilityBundle) -> GrantBundle {
         }),
         limits: None,
     }
-}
-
-fn copy_tree_dereferenced(src: &Path, dst: &Path) -> Result<(), InitError> {
-    std::fs::create_dir_all(dst).map_err(|source| InitError::Io {
-        path: dst.to_path_buf(),
-        source,
-    })?;
-    let entries = std::fs::read_dir(src).map_err(|source| InitError::Io {
-        path: src.to_path_buf(),
-        source,
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|source| InitError::Io {
-            path: src.to_path_buf(),
-            source,
-        })?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let meta = std::fs::metadata(&from).map_err(|source| InitError::Io {
-            path: from.clone(),
-            source,
-        })?;
-        if meta.is_dir() {
-            copy_tree_dereferenced(&from, &to)?;
-        } else if meta.is_file() {
-            std::fs::copy(&from, &to).map_err(|source| InitError::Io {
-                path: from.clone(),
-                source,
-            })?;
-            let mut perms = std::fs::metadata(&to)
-                .map_err(|source| InitError::Io {
-                    path: to.clone(),
-                    source,
-                })?
-                .permissions();
-            let src_perms = meta.permissions();
-            perms.set_readonly(src_perms.readonly());
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                perms.set_mode(src_perms.mode());
-            }
-            std::fs::set_permissions(&to, perms).map_err(|source| InitError::Io {
-                path: to.clone(),
-                source,
-            })?;
-        }
-    }
-    Ok(())
 }

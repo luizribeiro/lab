@@ -142,3 +142,37 @@ pub fn fixture_tempdir() -> (tempfile::TempDir, PathBuf) {
     let p = td.path().to_path_buf();
     (td, p)
 }
+
+/// Write a synthetic bundled-plugin tree at `<root>/<plugin_name>/`
+/// suitable for `RFL_BUNDLED_PLUGINS_DIR=<root>` lookup.
+pub fn write_bundled_plugin(root: &Path, plugin_name: &str, manifest_name: &str) {
+    let plugin_dir = root.join(plugin_name);
+    fs::create_dir_all(plugin_dir.join("bin")).unwrap();
+    let entry_rel = format!("bin/{plugin_name}");
+    let manifest = format!(
+        r#"schema = 1
+name = "{manifest_name}"
+version = "0.0.0"
+entry = "{entry_rel}"
+rafaello = ">=0.1, <0.2"
+
+[provides]
+tools = ["{plugin_name}-tool"]
+
+[provides.tool.{plugin_name}-tool]
+sinks = []
+always_confirm = false
+
+[capabilities.default.filesystem]
+read_dirs = ["${{project}}"]
+
+[capabilities.default.network]
+mode = "deny"
+"#
+    );
+    fs::write(plugin_dir.join("rafaello.toml"), manifest).unwrap();
+    fs::write(plugin_dir.join("openrpc.json"), b"{}").unwrap();
+    let bin = plugin_dir.join(&entry_rel);
+    fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+}
