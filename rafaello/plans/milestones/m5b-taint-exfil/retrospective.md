@@ -1,6 +1,73 @@
 # m5b — taint matching + propagation + verbatim exfil demo — retrospective
 
-> **Status: round 3 — folds `retrospective-pi-review-2.md`
+> **Status: round 4 — CONVERGED. Folds
+> `retrospective-pi-review-3.md` (0 B / 2 M / 1 N) per
+> pi-3's "ready for owner ratification" call.** Round 4
+> is the final polish + drift-commits-plan fold. Pi-3
+> closed all blockers and surfaced two wording-polish
+> majors + one nit: (M-1) residual "zero production code
+> path" / "vanishes in release builds" sentences at §2.5
+> + §9 (the round-3 fold only touched the §TM4 paragraph,
+> missing the sizing-signal restatement at §4 and a
+> §9-inheritance bullet); (M-2) §5 item 2 surface column
+> named a non-existent `reemit::handle_rpc_reply` —
+> live rpc-reply handling lives in `bus.rs::handle_plugin_publish`'s
+> `rpc_reply` branch, not under the canonical re-emit
+> pipeline; (N-1) §8 §EXFIL2 c24 entry lacked the
+> split-coverage caveat (the bullet read as "c24 covers
+> §EXFIL2" without the c23b-audit-row-primitive callout).
+>
+> Round-4 fixes by pi-3 finding:
+>
+> - **M-1** §2.5 + §4 + §9 inheritance bullet aligned to
+>   the §TM4 corrected wording: "storage and installer
+>   are cfg-gated; production uses a cfg-selected no-op
+>   checker and pays no hook storage / dynamic dispatch."
+>   The "zero production code path" + "vanishes in
+>   release builds" claims removed from all three call
+>   sites.
+> - **M-2** §5 item 2 surface column reworded: rows 3 / 5
+>   keep their `reemit/mod.rs::handle_assistant_message` +
+>   `handle_confirm_answer` anchors; row 4
+>   (`plugin.<a>.rpc_reply`) anchored to the live broker
+>   intake path
+>   `bus.rs::handle_plugin_publish`'s `rpc_reply` branch
+>   (there is no `reemit::handle_rpc_reply` — rpc replies
+>   route through the broker, not the canonical re-emit
+>   pipeline). §6.5 Stream B rationale tightened:
+>   `plugin.<a>.rpc_reply` is covered as a "v1-known-
+>   limitation / not enforced by §PT1" framing rather than
+>   "explicitly not covered by the §A9 narrowing."
+> - **N-1** §8 §EXFIL2 bullet extended with a one-line
+>   split-coverage caveat: c24 covers the allow-arm
+>   end-to-end shape; the
+>   `confirm_request_taint_attached` audit-row primitive
+>   is covered at the harness seam by c23b.
+>
+> Round 4 also drafts the **drift-commits execution plan**
+> as a new §6.6, listing the four retro-branch drift
+> commits (decisions.md row appends; glossary.md
+> additions; overview.md patches; Stream A drift) and the
+> one post-merge driver-branch commit (manual-validation
+> additions). Drift commits remain deferred to land
+> *after* this retro ratification per the m5a `816b273`
+> precedent; the plan exists in §6.6 so the editor
+> commits have a checklist to work from.
+>
+> Pi-3's verdict: **CONVERGED — ready for owner
+> ratification.**
+>
+> Convergence trajectory: 3B → 2B → 0B → CONVERGED. m5a
+> retro took 6 rounds (with a drift-trajectory tail); m1
+> retro took 4 rounds; m4 retro took 2; m5b retro
+> converges at 4 rounds with one extra polish round on
+> top of the standard 2-3 retro bracket.
+>
+> ---
+>
+> **(History — round 3 draft, kept for trajectory.)**
+>
+> Round 3 folded `retrospective-pi-review-2.md`
 > (2 B / 2 M / 2 N).** Pi-2 closed pi-1's blockers and
 > surfaced two new carries: (B-1) the round-2 §8 additions
 > list still diverged from the six ratified scope §"Manual
@@ -766,10 +833,11 @@ of two cumulative pressures:
    `by_result_id`) ratified at round 3.
 2. **§TM4 broker publish-test hook (round 7 fold).** Added
    in pi-6 M-1 to keep the TR1/TR3 stale-entry assertions
-   honest. The seam adds zero production code (cfg-gated
-   both at the storage field and the dispatch call) but
-   needed a round to ratify the shape (last-writer-wins,
-   no explicit clear, fresh `Broker` per test).
+   honest. Storage and installer are cfg-gated; production
+   uses a cfg-selected no-op checker and pays no hook
+   storage / dynamic dispatch. Ratification still needed a
+   round to pin the shape (last-writer-wins, no explicit
+   clear, fresh `Broker` per test).
 
 The commits bracket landed at m5a-parity (6 rounds) despite
 the narrower row count because the round-by-round folds had
@@ -818,7 +886,7 @@ note's framing.
 | # | Item | Surface | Routed to |
 |---|------|---------|-----------|
 | 1 | **Multi-turn `rfl-openai-stub` shape** — the m5a stub emits a single chat-completion response per stubbed turn. A two-turn (or N-turn) shape — where the stub emits one `tool_call`, awaits the canonical `tool_result`, then emits the next response — would let a single end-to-end integration test cover the value-match chain (the gap c23b closes at the harness seam). Useful for the m6 interactive-demo recording (`manual-validation.md` §1 pattern) but **not load-bearing for m5b security**. | `crates/rafaello-openai/src/bin/rfl_openai_stub.rs` + an `rfl-openai-stub.scripted-turns` env-var conventions extension | → m6 |
-| 2 | **§A9 fallback — `assistant_message` / `rpc_reply` / `confirm_answer` superset narrowing.** Scope §"Out of scope" item 2 + owner-judgment item 9 ratified the v1 narrowing (m5b enforces superset only on the `tool_request ↔ tool_result` flow; Stream A §7.2.6 row 3 = `provider.<id>.assistant_message`, row 4 = `plugin.<a>.rpc_reply`, row 5 = `frontend.<id>.confirm_answer` — all descriptive but unenforced in v1). Default position is "known v1 limitation; v2 candidate." | `reemit/mod.rs::handle_assistant_message`, `handle_rpc_reply`, `handle_confirm_answer` + matching tests | → v2 (NOT m6; m6 has no security primitives per scope §"m5b → m6 boundary") |
+| 2 | **§A9 fallback — `assistant_message` / `rpc_reply` / `confirm_answer` superset narrowing.** Scope §"Out of scope" item 2 + owner-judgment item 9 ratified the v1 narrowing (m5b enforces superset only on the `tool_request ↔ tool_result` flow; Stream A §7.2.6 row 3 = `provider.<id>.assistant_message`, row 4 = `plugin.<a>.rpc_reply`, row 5 = `frontend.<id>.confirm_answer` — all descriptive but unenforced in v1). Default position is "known v1 limitation; v2 candidate." | conceptual: superset enforcement on the three topics. Live handlers: `reemit/mod.rs::handle_assistant_message` + `handle_confirm_answer` for rows 3 / 5; for row 4 the rpc-reply intake is `bus.rs::handle_plugin_publish`'s `rpc_reply` branch (there is no `reemit::handle_rpc_reply` — rpc replies route through the broker's intake path, not the canonical re-emit pipeline). | → v2 (NOT m6; m6 has no security primitives per scope §"m5b → m6 boundary") |
 | 3 | **Real-network `rafaello-fetch`.** §TF2 ships the file-backed handler via `RFL_FETCH_TEST_BODY_PATH`. A real-network handler (HTTP client, host allowlist, timeout) is post-v1; the `network` sink declaration is the load-bearing fact for m5b's exfil demo. | `crates/rafaello-fetch/src/lib.rs` (real-HTTP arm) | → post-v1 / v2 |
 | 4 | **Substring-containment threshold tuning** (scope §A3 / owner-judgment item 5). m5b ships single threshold = 16 bytes. v2 candidate: per-source-class table (e.g., user-source: 8 bytes; tool-source: 16 bytes; provider-source: 24 bytes). | `crates/rafaello-core/src/reemit/taint_match.rs::TaintMatchMap::lookup` | → v2 (data needed: false-positive / false-negative rates from dogfooding) |
 | 5 | **TaintMatchMap hard cap (max-entries-per-session).** Scope §"Risks" #2 reserved this for v2. m5b's per-router map is dropped on `ReemitRouter` shutdown; lazy TTL expiry on `record` / `lookup` keeps memory bounded for normal session lengths but pathological scripts could grow the map without bound within the TTL window. | `TaintMatchMap` add bounded-LRU eviction | → v2 |
@@ -985,12 +1053,13 @@ none of B / C / E:
   Neither touches the fittings RPC surface
   (`core.tools_list`, `plugin.<id>.rpc_request` /
   `rpc_reply`, the fittings handshake). The §PT1 broker-
-  intake superset check fires on bus traffic, not on
-  fittings RPC traffic — fittings `rpc_reply` arm is
-  explicitly *not* covered by the §A9 / §"Out of scope"
-  item 2 narrowing per §6.1 above (descriptive but
-  unenforced in v1). No Stream B patch needed; pi-1 M-4
-  asked for the explicit confirmation.
+  intake superset check fires on `tool_result` traffic, not
+  on fittings `rpc_reply` traffic — the fittings
+  `rpc_reply` arm is covered as a **v1-known-limitation /
+  not enforced by §PT1** per §6.1 (row 4 of Stream A
+  §7.2.6); the v1 narrowing applies, not exclusion from
+  the narrowing. No Stream B patch needed; pi-1 M-4 asked
+  for the explicit confirmation.
 - **Stream C (scripting)** — unaffected. m5b does not touch
   the slash-command surface, the `frontend.tui.slash_command`
   / `core.session.command_result` topic pair, or the
@@ -1006,6 +1075,82 @@ none of B / C / E:
   `RFL_TUI_TEST_CONFIRM_ANSWERS` multi-answer hook
   (§TUI-MA / c18 + c19) is test-only surface; not Stream-
   E-documented.
+
+### 6.6 Drift commits — execution plan
+
+Drift commits land **after retrospective ratification** on
+this same retro branch (m5a `816b273` precedent), before
+the merge to `rafaello-v0.1`. The plan is a single drift
+commit per stream/file (kept atomic per m5a's pattern;
+splitting only if pre-commit hooks flag the consolidated
+patch as too large). Anticipated commit list, in landing
+order:
+
+1. **`docs(rafaello-plans): m5b decisions.md row appends`**
+   — appends the nine `decisions.md` rows sketched in §7
+   below (expected rows 50-58 — pending no intervening
+   non-m5b appends between retro ratification and the
+   editor commit). Each row carries the `Refines/Reverses`
+   anchor from its §7 sketch.
+2. **`docs(rafaello-plans): m5b glossary.md additions`**
+   — extends the `Taint` entry with two lines naming the
+   value-driven matching layer (`TaintMatchMap`) and the
+   ancestry-union layer (`ReferencedTaintIndex`,
+   cited at
+   `crates/rafaello-core/src/reemit/referenced_taint_index.rs`).
+   Extends the `Audit log` entry's example family list
+   with the three new m5b kinds
+   (`confirm_request_taint_attached`,
+   `plugin_publish_rejected_taint_superset`,
+   `tool_request_taint_unioned_from_in_reply_to`) keeping
+   the `AuditKind::as_str()` authoritative-pointer pattern
+   m5a established. No new glossary terms — m5b's load-
+   bearing terms (`TaintMatchMap`, `ReferencedTaintIndex`,
+   `OutstandingDispatch.tool_request_taint`) are
+   implementation-internal and do not warrant glossary
+   entries per the `plans/README.md` "Glossary entries are
+   added when a new load-bearing term first lands in
+   overview.md or a stream RFC" rule. (Glossary additions
+   for those would only land if a future Stream-A patch
+   names them — see drift commit 4 below.)
+3. **`docs(rafaello-plans): m5b overview.md patches`** —
+   the three §6.2 patches (§4.5 banner pointing at the
+   m5b implementation; §6.6 confirmation-protocol banner
+   addition for value-driven `details.taint` population;
+   §7 tool-dispatch banner naming the `TaintMatchMap`
+   refresh ordering + `ReferencedTaintIndex` lookup in
+   `handle_tool_request`).
+4. **`docs(rafaello-plans): m5b Stream A drift`** —
+   the §6.1 Stream A patches: §5 status banner with the
+   m5b paragraph (`TaintMatchMap` + `ReferencedTaintIndex`
+   + `OutstandingDispatch.tool_request_taint` + §PT1 +
+   the three new audit kinds + `BrokerError::TaintSupersetViolated`
+   + `Broker::set_audit_writer`); §7.2.1 matching-algorithm
+   banner naming `SipHasher13` + `RFL_TAINT_MATCH_HASH_KEY`;
+   §7.2.2 illustrative-vs-canonical-source clarification;
+   §7.2.6 row 1 + row 2 closure banner; §7.2.6 rows 3 + 4
+   + 5 v1-known-limitation annotation
+   (row 3 = `provider.<id>.assistant_message`,
+   row 4 = `plugin.<a>.rpc_reply`,
+   row 5 = `frontend.<id>.confirm_answer`).
+5. **`docs(rafaello-plans): m5b manual-validation.md
+   additions`** *(deferred to driver post-merge sweep)* —
+   the six ratified scope §"Manual validation" bullets
+   (§8 below) appended to the existing 9-line file with
+   captured transcripts / dumps. Splits from the retro-
+   branch drift commits because manual-run data depends
+   on post-merge CI / dev-shell runs that the retro branch
+   cannot complete. This commit lands on the driver branch
+   per §5 item 11 routing.
+
+Stream F (manifest) — no drift, per §6.4. Stream B
+(fittings) / Stream C (scripting) / Stream E (renderer)
+— no drift, per §6.5.
+
+Expected drift commit count: **4 retro-branch commits**
+(landed before merge to `rafaello-v0.1`) +
+**1 driver-branch commit** (manual-validation, landed post-
+merge per the m4 / m5a §5.3 pattern).
 
 ---
 
@@ -1302,7 +1447,14 @@ last one?"
     variant), c25 (§EXFIL3 provider-only-taint
     negative). **§EXFIL1 value-match-chain end-to-end
     closed at the harness seam by c23b** (`e533361`,
-    deviation per option C — §3.1).
+    deviation per option C — §3.1). **§EXFIL2 via c24
+    covers the allow-arm end-to-end shape
+    (`confirm_allowed` × 2 + `mailcat.log` receives the
+    verbatim send-mail entry + `entries` carries both
+    `tool_call`s and both `tool_result`s); its audit-row
+    primitive (`confirm_request_taint_attached`) is
+    covered at the harness seam by c23b — split coverage
+    per §3.2.**
   - **c38 acceptance-test follow-ups** (§C38a-§C38c,
     item 11): c26 (five-tree spawn + clean shutdown),
     c27 (inactive-provider re-emit ignored), c28
@@ -1679,14 +1831,14 @@ dequeue semantics.
 
 ---
 
-*End of m5b retrospective round 3. Folds pi-2's 2 blockers
-/ 2 majors / 2 nits per the inline fix list at the top of
-the file. Pi-3 review expected per `plans/README.md`
-"Retrospective drafts deserve the same adversarial review
-as scope and commits" rule + the m1 / m5a precedent (m1
-needed 4 rounds; m5a needed 6 — though m5a's bracket
-reflects the drift-commit ratification trajectory rather
-than pi-finding density). Drift commits (§6) + the
-`decisions.md` row appends (§7) land in a separate
-follow-up commit on this retro branch **after retrospective
-ratification**, per the m5a `816b273` precedent.*
+*End of m5b retrospective round 4 — **CONVERGED**. Folds
+pi-3's 0 blockers / 2 majors / 1 nit (wording polish) and
+adds the drift-commits execution plan at §6.6. Pi-3
+verdict: "ready for owner ratification."
+Convergence trajectory: 3B → 2B → 0B → CONVERGED.
+Drift commits (§6.6 plan: decisions.md / glossary.md /
+overview.md / Stream A) land in separate follow-up commits
+on this retro branch **after owner ratification**, before
+merge to `rafaello-v0.1` — m5a `816b273` precedent. The
+manual-validation additions land on the driver branch
+post-merge per the m4 / m5a §5.3 pattern.*
