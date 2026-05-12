@@ -358,6 +358,9 @@ pub async fn run_chat(project_root: Option<PathBuf>) -> Result<(), RflChatError>
         ToolSchemaCatalog::build(&acl, &compiled_plugins, &plugin_dirs)
             .map_err(|e| RflChatError::ToolCatalog(Box::new(e)))?,
     );
+    chat::test_ordering_hook::record(
+        chat::test_ordering_hook::StartupEvent::ToolSchemaCatalogBuilt,
+    );
 
     // Step C5: broker → plugin supervisor → frontend supervisor → registry → pipeline → controller.
     let acl_for_routing = acl.clone();

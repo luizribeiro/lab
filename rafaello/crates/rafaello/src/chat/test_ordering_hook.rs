@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 pub enum StartupEvent {
     SetAuditWriter,
     PluginSupervisorSpawn,
+    ToolSchemaCatalogBuilt,
 }
 
 fn queue() -> &'static Mutex<Vec<StartupEvent>> {
@@ -40,6 +41,7 @@ impl StartupEvent {
         match self {
             StartupEvent::SetAuditWriter => "set_audit_writer",
             StartupEvent::PluginSupervisorSpawn => "plugin_supervisor_spawn",
+            StartupEvent::ToolSchemaCatalogBuilt => "tool_schema_catalog_built",
         }
     }
 }
