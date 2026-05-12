@@ -437,7 +437,7 @@ fn max_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     }
 }
 
-fn resolve_entry(plugin_dir: &std::path::Path, rel: &str) -> Result<PathBuf, CompileError> {
+pub fn resolve_entry(plugin_dir: &std::path::Path, rel: &str) -> Result<PathBuf, CompileError> {
     let pkg_canon = std::fs::canonicalize(plugin_dir).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             CompileError::EntryNotFound

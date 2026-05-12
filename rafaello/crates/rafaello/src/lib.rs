@@ -1,5 +1,6 @@
 //! `rafaello` library: CLI surface and shared types for the `rfl` binary.
 
+pub mod bundled;
 pub mod chat;
 pub mod init;
 pub mod install;
