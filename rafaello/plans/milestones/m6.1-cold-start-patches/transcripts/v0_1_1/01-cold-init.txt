@@ -1,0 +1,30 @@
+luiz@sodium /tmp % rfl init --yes --project-root '/tmp/rfl-m61-VUM5' && echo '== ls project ==' && l
+s '/tmp/rfl-m61-VUM5' && echo '== ls plugins ==' && ls '/tmp/rfl-m61-VUM5/.rafaello/plugins/'*/bin/
+== ls project ==
+rafaello.lock
+== ls plugins ==
+rfl-openai
+luiz@sodium /tmp %
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

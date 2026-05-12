@@ -1,0 +1,30 @@
+luiz@sodium /tmp % rfl chat --project-root '/tmp/rfl-m61-VUM5'
+rfl-tui: project-root=/tmp/rfl-m61-VUM5
+rfl-chat: frontend-ready-observed
+luiz@sodium /tmp %
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
