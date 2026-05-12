@@ -43,3 +43,35 @@ jobs:
         run: |
           nix develop .#rafaello --impure -L --command \
             cargo test --manifest-path rafaello/Cargo.toml --workspace --features rafaello-core/test-fixture
+
+  nix-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+        with:
+          determinate: true
+
+      - uses: DeterminateSystems/magic-nix-cache-action@c6a5746789488c8753af0d61fc6b5d79a80391f3
+        with:
+          use-flakehub: false
+
+      - name: nix build .#rafaello
+        run: nix build .#rafaello -L
+
+      - name: F2 layout check (pi-2 M-4; macOS-portable per pi-3 B-3 / pi-4 B-2)
+        run: |
+          test "$(find ./result/bin -maxdepth 1 -type f -exec basename {} \; | sort | tr '\n' ' ')" \
+            = "rfl rfl-tui "
+          for plugin in rfl-openai rfl-openai-stub rfl-readfile rfl-mailcat \
+                        rfl-mockprovider rafaello-fetch; do
+            test -f "./result/share/rafaello/plugins/$plugin/rafaello.toml"
+            test -f "./result/share/rafaello/plugins/$plugin/openrpc.json"
+            test -f "./result/share/rafaello/plugins/$plugin/bin/$plugin"
+            test ! -L "./result/share/rafaello/plugins/$plugin/bin/$plugin"
+          done
