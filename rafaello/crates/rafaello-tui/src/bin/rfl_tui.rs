@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             std::future::pending::<Result<()>>().await
         }
     } else {
-        run_production_mode(notifications).await
+        run_production_mode(&client, notifications).await
     }
 }
 
@@ -232,9 +232,8 @@ fn spawn_auto_confirm_answer(
     });
 }
 
-fn publish_submitted_line(client: &Client<OneShotConnector>, text: &str) -> Result<()> {
-    let request_id = JsonRpcId::String(Ulid::new().to_string());
-    let (topic, payload) = if text.starts_with('/') {
+fn submitted_line_envelope(text: &str) -> (&'static str, Value) {
+    if text.starts_with('/') {
         let cmd = rafaello_tui::slash::parse(text);
         (
             "frontend.tui.slash_command",
@@ -242,7 +241,12 @@ fn publish_submitted_line(client: &Client<OneShotConnector>, text: &str) -> Resu
         )
     } else {
         ("frontend.tui.user_message", json!({ "text": text }))
-    };
+    }
+}
+
+fn publish_submitted_line(client: &Client<OneShotConnector>, text: &str) -> Result<()> {
+    let request_id = JsonRpcId::String(Ulid::new().to_string());
+    let (topic, payload) = submitted_line_envelope(text);
     client
         .peer()
         .notify(
@@ -307,6 +311,7 @@ fn bus_event_handler(
 }
 
 async fn run_production_mode(
+    client: &Client<OneShotConnector>,
     mut notifications: broadcast::Receiver<InboundNotification>,
 ) -> Result<()> {
     install_panic_hook();
@@ -318,7 +323,7 @@ async fn run_production_mode(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("build ratatui terminal")?;
 
-    let result = ui_loop(&mut terminal, &mut notifications).await;
+    let result = ui_loop(&mut terminal, &mut notifications, client).await;
 
     restore_terminal();
     result
@@ -327,10 +332,11 @@ async fn run_production_mode(
 async fn ui_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     notifications: &mut broadcast::Receiver<InboundNotification>,
+    client: &Client<OneShotConnector>,
 ) -> Result<()> {
     let mut buffer: VecDeque<RenderNode> = VecDeque::with_capacity(RENDER_BUFFER_CAP);
     let mut scroll: u16 = 0;
-    let input_buffer: String = String::new();
+    let mut input_buffer: String = String::new();
     let mode: InputMode = InputMode::default();
     let mut events = EventStream::new();
 
@@ -340,10 +346,20 @@ async fn ui_loop(
             key = events.next() => {
                 let Some(ev) = key else { return Ok(()); };
                 let ev = ev.context("crossterm event stream error")?;
-                match handle_terminal_event(ev, &mut scroll, buffer.len()) {
+                match handle_terminal_event(
+                    ev,
+                    &mode,
+                    &mut scroll,
+                    &mut input_buffer,
+                    buffer.len(),
+                ) {
                     EventOutcome::Quit => return Ok(()),
                     EventOutcome::Redraw => true,
                     EventOutcome::Ignore => false,
+                    EventOutcome::Submit(line) => {
+                        publish_submitted_line(client, &line)?;
+                        true
+                    }
                 }
             }
             note = notifications.recv() => {
@@ -365,9 +381,16 @@ enum EventOutcome {
     Quit,
     Redraw,
     Ignore,
+    Submit(String),
 }
 
-fn handle_terminal_event(ev: Event, scroll: &mut u16, len: usize) -> EventOutcome {
+fn handle_terminal_event(
+    ev: Event,
+    mode: &InputMode,
+    scroll: &mut u16,
+    input_buffer: &mut String,
+    len: usize,
+) -> EventOutcome {
     let Event::Key(key) = ev else {
         return EventOutcome::Ignore;
     };
@@ -386,6 +409,30 @@ fn handle_terminal_event(ev: Event, scroll: &mut u16, len: usize) -> EventOutcom
                 *scroll += 1;
             }
             EventOutcome::Redraw
+        }
+        code => {
+            if matches!(mode, InputMode::Normal) {
+                handle_normal_key(code, input_buffer)
+            } else {
+                EventOutcome::Ignore
+            }
+        }
+    }
+}
+
+fn handle_normal_key(code: KeyCode, input_buffer: &mut String) -> EventOutcome {
+    match code {
+        KeyCode::Char(c) => {
+            input_buffer.push(c);
+            EventOutcome::Redraw
+        }
+        KeyCode::Backspace => {
+            input_buffer.pop();
+            EventOutcome::Redraw
+        }
+        KeyCode::Enter => {
+            let line = std::mem::take(input_buffer);
+            EventOutcome::Submit(line)
         }
         _ => EventOutcome::Ignore,
     }
@@ -475,9 +522,14 @@ impl Connector for OneShotConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyEvent, KeyModifiers};
     use rafaello_tui::ConfirmDetails;
     use ratatui::backend::TestBackend;
     use serde_json::json;
+
+    fn key_event(code: KeyCode) -> Event {
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
 
     fn terminal_text(term: &Terminal<TestBackend>) -> String {
         let buf = term.backend().buffer();
@@ -549,5 +601,55 @@ mod tests {
             !all.contains("> "),
             "prompt glyph must be hidden when blocked, got: {all:?}"
         );
+    }
+
+    #[test]
+    fn normal_mode_char_appends_to_input_buffer() {
+        let mut input = String::from("hi");
+        let mut scroll: u16 = 0;
+        let mode = InputMode::Normal;
+        let out = handle_terminal_event(
+            key_event(KeyCode::Char('!')),
+            &mode,
+            &mut scroll,
+            &mut input,
+            0,
+        );
+        assert!(matches!(out, EventOutcome::Redraw));
+        assert_eq!(input, "hi!");
+    }
+
+    #[test]
+    fn normal_mode_backspace_pops_last_char() {
+        let mut input = String::from("foo");
+        let mut scroll: u16 = 0;
+        let mode = InputMode::Normal;
+        let out = handle_terminal_event(
+            key_event(KeyCode::Backspace),
+            &mode,
+            &mut scroll,
+            &mut input,
+            0,
+        );
+        assert!(matches!(out, EventOutcome::Redraw));
+        assert_eq!(input, "fo");
+    }
+
+    #[test]
+    fn normal_mode_enter_invokes_publish_submitted_line() {
+        let mut input = String::from("hello");
+        let mut scroll: u16 = 0;
+        let mode = InputMode::Normal;
+        let out =
+            handle_terminal_event(key_event(KeyCode::Enter), &mode, &mut scroll, &mut input, 0);
+        let line = match out {
+            EventOutcome::Submit(s) => s,
+            _ => panic!("expected Submit outcome for Enter"),
+        };
+        assert_eq!(line, "hello");
+        assert!(input.is_empty(), "Enter must clear input_buffer");
+        let (topic, payload) = submitted_line_envelope(&line);
+        assert_eq!(topic, "frontend.tui.user_message");
+        assert_eq!(payload, json!({ "text": "hello" }));
     }
 }
