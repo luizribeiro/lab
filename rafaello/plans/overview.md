@@ -462,6 +462,20 @@ them before fan-out; plugin authors never write `taint` directly
 (they may add to it for their own published events, but core
 verifies the superset rule).
 
+> **m5b banner.** The envelope shape is unchanged from m4 — m5b
+> only *populates* `taint` differently. Canonical
+> `tool_request.taint` is the union of value-walked entries
+> (per-router `TaintMatchMap`, `handle_tool_request`) and the
+> taint of every event the provider cites in `in_reply_to` (via
+> `ReferencedTaintIndex.lookup_result`). Canonical
+> `tool_result.taint` is the union of the tool-source entry and
+> the referenced `tool_request.taint`
+> (`ReferencedTaintIndex.lookup_request`). Plugin-published
+> `taint` on `plugin.<id>.tool_result` is checked at intake
+> against the canonical `tool_request.taint` (§PT1 broker-intake
+> superset check) and otherwise discarded. m5b retrospective
+> §6.2; `decisions.md` rows 50–57.
+
 ### 4.6 Reserved env vars
 
 Two distinct classes of `RFL_*` env vars: *core-injected
@@ -777,6 +791,15 @@ Plugins cannot publish replies; frontends cannot publish
 replies; only core re-emits a validated answer. Timeout:
 60 s default, fail-closed (`deny`). Spec: security RFC §5.6.
 
+> **m5b banner.** Gate-emitted `core.session.confirm_request`
+> payloads carry `details.taint` populated from the canonical
+> `tool_request.taint` (value-walk ∪ referenced-event union)
+> rather than the m5a `[]`-or-clone shape. A
+> `confirm_request_taint_attached` audit row fires per §AL1
+> (only on non-provider canonical taint — provider-only taint
+> does not trigger the row or the overlay). m5b retrospective
+> §6.2; `decisions.md` rows 57, 58.
+
 ## 7. Tool dispatch
 
 A tool call is the only path from LLM-shaped output to a tool
@@ -802,6 +825,18 @@ hold: `core.session.tool_request` is the *only* path from any
 LLM-shaped output to a tool plugin. fittings RPC across plugin
 boundaries is expressed as bus events and is therefore subject
 to this rule.
+
+> **m5b banner.** The re-emit path in `handle_tool_request`
+> refreshes the per-router `TaintMatchMap` (record-before-publish
+> on every `tool_result` / `user_message`) and consults
+> `ReferencedTaintIndex.lookup_result(in_reply_to_id)` to union
+> in the cached canonical taint of every referenced event before
+> publishing the canonical `core.session.tool_request`. The
+> §PT1 broker-intake superset check (§5.4-side; not a re-emit
+> rejection) is the single point where a plugin-supplied
+> `tool_result` is rejected for narrowing the canonical taint —
+> re-emit always *constructs* the superset, never rejects (§TR4b
+> / `decisions.md` row 54). m5b retrospective §6.2.
 
 ## 8. Provider model
 

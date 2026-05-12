@@ -343,12 +343,58 @@ binds *content*, not just *name*.
 >   plugin-supplied-taint superset check half of §7.2.6 row
 >   1 (`decisions.md` row 48).
 >
+> **m5b additions** (m5b retrospective §6.1).
+>
+> - `TaintMatchMap` (per-router value→taint map) — literal-hash
+>   arm via `siphasher::sip::SipHasher13` keyed by the constant
+>   pair `RFL_TAINT_MATCH_HASH_KEY = (0xc0ffee_d00d_f00d_b002,
+>   0xa11ce_b0b_face_b00c)`, plus a 16-byte-threshold
+>   substring-containment arm (m5b c05–c07; live at
+>   `crates/rafaello-core/src/reemit/taint_match.rs`).
+>   `decisions.md` row 50 records the constant as the
+>   load-bearing determinism choice for v2's future
+>   `aho-corasick` migration.
+> - `ReferencedTaintIndex` (per-router cache `by_request_id` /
+>   `by_result_id`) (m5b c09–c13; live at
+>   `crates/rafaello-core/src/reemit/referenced_taint_index.rs`)
+>   — feeds the ancestry-union step on canonical
+>   `tool_request.taint` and `tool_result.taint`. Shares a
+>   5-minute TTL with `TaintMatchMap` (`decisions.md` row 52,
+>   lazy expiry, no background sweep).
+> - `OutstandingDispatch.tool_request_taint` field (m5b c04) —
+>   caches the canonical `tool_request.taint` at dispatch so
+>   the §PT1 broker-intake check can verify the plugin's
+>   published `tool_result.taint` is a superset.
+> - **§PT1** — broker-intake superset check on
+>   `plugin.<id>.tool_result` (m5b c14, `75cc375`). On
+>   violation: audit `plugin_publish_rejected_taint_superset`
+>   + publish `core.lifecycle.publish_rejected` with `code =
+>   "taint_superset_violated"` + synthesise a deny-shaped
+>   `core.session.tool_result`. The plugin's `taint` field is
+>   discarded after the check (row 7 unchanged). §PT1 is the
+>   single rejection site; the re-emit-side §TR4b
+>   *construct-the-superset* path never rejects
+>   (`decisions.md` rows 51, 54).
+> - Three new `AuditKind` variants (m5b c03):
+>   `confirm_request_taint_attached` (§AL1 predicate — non-
+>   provider canonical taint only; `decisions.md` row 58),
+>   `plugin_publish_rejected_taint_superset` (§PT1 rejection
+>   audit), `tool_request_taint_unioned_from_in_reply_to`
+>   (re-emit's ancestry-union audit).
+> - `BrokerError::TaintSupersetViolated { publisher, topic,
+>   missing: Vec<TaintEntry> }` distinct variant (m5b c01,
+>   `e10f9e8`; `decisions.md` row 53).
+> - `Broker::set_audit_writer(&self, Arc<AuditWriter>)`
+>   interior-mutable plumbing
+>   (`BrokerInner.audit: Mutex<Option<Arc<AuditWriter>>>`) —
+>   m5b c02 (`bc2279c`; `decisions.md` row 55).
+>
 > Per `plans/README.md` §"Authoring conventions" stream RFCs
-> are not retroactively rewritten; the m2 / m3 / m4 / m5a
-> wire schemas are referenced via this banner rather than
+> are not retroactively rewritten; the m2 / m3 / m4 / m5a /
+> m5b wire schemas are referenced via this banner rather than
 > inlined into §5.x. m2 retrospective §2.3 + §2.4 +
 > m3 retrospective §2.2 + §2.5 + m4 retrospective §2 +
-> m5a retrospective §6.1.
+> m5a retrospective §6.1 + m5b retrospective §6.1.
 
 ### 5.1 Topic and pattern grammars (canonical)
 
@@ -1002,6 +1048,24 @@ substring containment, which is the common LLM-mediated exfil
 shape. It does not catch laundering through the model
 ("summarise then send"), and does not pretend to.
 
+> **m5b banner (retrospective §6.1; `decisions.md` row 50).**
+> The "per-session provenance map keyed by literal value hash"
+> is the live `TaintMatchMap` at
+> `crates/rafaello-core/src/reemit/taint_match.rs`. The literal-
+> hash arm uses `siphasher::sip::SipHasher13` keyed by the
+> fixed constant pair `RFL_TAINT_MATCH_HASH_KEY =
+> (0xc0ffee_d00d_f00d_b002, 0xa11ce_b0b_face_b00c)` so
+> process-restart hash equality holds for scripted-event test
+> suites. The substring-containment arm uses a 16-byte minimum
+> needle threshold (scope §A3 / owner-judgment item 5; per-class
+> thresholds deferred to v2). The map is in-process only and
+> never persisted; it shares a default 5-minute lazy-expiry TTL
+> with `ReferencedTaintIndex` (`decisions.md` row 52). Per-
+> router (one `TaintMatchMap` per `ReemitRouter`), scoped to the
+> `rfl chat` process — entries do not survive shutdown. Future
+> v2 `aho-corasick` migration must preserve the constant pair
+> for determinism. m5b c05–c07 land the primitive.
+
 #### 7.2.2 Taint sources synthesised by core
 
 - A `web.fetch` result → `{source: "web", detail: "<host>"}`.
@@ -1011,6 +1075,16 @@ shape. It does not catch laundering through the model
   `{source: "external", detail: "<abs-path>"}`.
 - `core.session.user_message` → `{source: "user"}` (the only
   taint that authorises sinks; see 7.2.4).
+
+> **m5b banner (retrospective §6.1).** The `web.fetch` →
+> `{source: "web", detail: "<host>"}` form above is
+> *illustrative*. Live canonical synthesis in `handle_tool_result`
+> (m4 / m5a / m5b) emits `{source: "tool", detail: "<canonical>"}`
+> for every tool-origin result regardless of tool name; the
+> per-tool `source` taxonomy (`web` / `project` / `external`)
+> is a v1-bound abstraction not implemented in the live wire.
+> Recorded here so future readers don't mistake the
+> illustrative shape for the canonical shape.
 
 Plugin-added taint must use the form `{source: "plugin.<id>",
 detail: "..."}`. Taint inheritance is enforced via the mandatory
@@ -1177,6 +1251,47 @@ external instrumentation).
 This makes taint inheritance non-bypassable for the event
 classes that matter, and removes the "just omit the field"
 escape from the previous draft.
+
+> **m5b banner (retrospective §6.1).** The §7.2.6 mandatory-
+> `in_reply_to` table's superset claim is enforced in v1 for
+> rows 1 + 2 and recorded as a known v1 limitation for rows
+> 3 + 4 + 5:
+>
+> - **Row 1 — `plugin.<id>.tool_result` superset.** Closed
+>   in v1 by *both halves*: m5a's broker `outstanding_dispatched`
+>   atomic intake map (routed-to-this-plugin half) +
+>   m5b's §PT1 broker-intake superset check
+>   (`b81c3a4` + `75cc375`; `decisions.md` row 51) and
+>   m5b's §PT2 closure at c13 (canonical
+>   `tool_result.taint` = tool-source ∪ referenced-tool_request-
+>   taint; `decisions.md` row 57).
+> - **Row 2 — `provider.<id>.tool_request` superset.** Closed
+>   in v1 *by construction* via §TR4a + §TR4b — the
+>   `ReferencedTaintIndex` cache plus the
+>   construct-the-superset re-emit step in
+>   `handle_tool_request` (m5b c11–c12; `decisions.md` row 54).
+>   No re-emit-side rejection — the re-emit always constructs
+>   the canonical superset; §PT1 is the single rejection site.
+> - **Row 3 — `provider.<id>.assistant_message` superset.**
+>   **v1 known limitation; v2 candidate.** The load-bearing
+>   v1 path is `tool_request ↔ tool_result`; row 3 is
+>   descriptive but unenforced in v1. Covered by scope §"Out
+>   of scope" item 2 + owner-judgment item 9 ratification.
+> - **Row 4 — `plugin.<a>.rpc_reply` superset.**
+>   **v1 known limitation; v2 candidate.** The §PT1 broker-
+>   intake superset check fires on `tool_result` traffic, not
+>   on fittings `rpc_reply` traffic. The fittings RPC arm is
+>   covered by the same v1-narrowing rationale, not excluded
+>   from it.
+> - **Row 5 — `frontend.<id>.confirm_answer` superset.**
+>   **v1 known limitation; v2 candidate.** Same v1-narrowing
+>   rationale as rows 3 / 4.
+>
+> Rows 3 / 4 / 5 are all covered by scope §"Out of scope"
+> item 2 + owner-judgment item 9 ratification. Per
+> `plans/README.md` §"Authoring conventions" the §7.2.6 table
+> body is not retroactively rewritten; this banner is the
+> authoritative v1-coverage record. m5b retrospective §6.1.
 
 ### 7.3 Carve-outs by decomposition (lockin-implementable)
 
