@@ -1,8 +1,30 @@
 # m6.1 — v0.1.1 cold-start patches — scope
 
-> **Status:** round 4 — claude-authored 2026-05-12, awaiting
-> pi round 4. Folds `scope-pi-review-3.md` (0B / 0M / 2N,
-> NON-BLOCKING) on top of round 3. Target verdict: CONVERGED.
+> **Status:** round 5 — claude-authored 2026-05-12, awaiting
+> pi round 5. Folds `scope-pi-review-4.md` (0B / 0M / 1N,
+> NON-BLOCKING) on top of round 4. Target verdict: CONVERGED
+> (0/0/0).
+>
+> **Round-5 changelog (single pi-4 nit folded):**
+>
+> - **N-1.** Internal-split c01 row's
+>   `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)` test
+>   coverage description now reads "env-arm + release-arm
+>   + dev-fallback hit", matching the normative §A0
+>   c01-test list. The stale "release-arm hit + dev-fallback
+>   hit" wording is replaced.
+>
+> Cumulative trajectory: round 1 → 2B/5M/4N → round 2 →
+> 2B/1M/3N → round 3 → 0B/0M/2N → round 4 → 0B/0M/1N →
+> round 5 (this commit), target verdict CONVERGED.
+>
+> ---
+>
+> **(History — round 4 status, preserved for traceability.)**
+>
+> Round 4 — claude-authored 2026-05-12. Folds
+> `scope-pi-review-3.md` (0B / 0M / 2N, NON-BLOCKING) on top
+> of round 3. Target verdict: CONVERGED.
 >
 > **Round-4 changelog (both pi-3 nits folded):**
 >
@@ -904,10 +926,12 @@ Proposed commit order, 6 commits:
    The existing `resolve_plugin_dir(name)` is **not** modified;
    `rfl install`'s call site remains untouched. Unit tests in
    the same file cover: `resolve_plugin_dir("rfl-mailcat")`
-   release-arm regression guard; `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)`
-   release + dev arms; `resolve_runtime_binary(&OPENAI_NAMES)`
-   env-override / release / dev-fallback / not-found. Under
-   the 100-line / 3–5-file commit limit.
+   release-arm regression guard;
+   `resolve_plugin_dir_for_bundled(&OPENAI_NAMES)` env-arm +
+   release-arm + dev-fallback hit;
+   `resolve_runtime_binary(&OPENAI_NAMES)` env-override /
+   release / dev-fallback / not-found. Under the 100-line /
+   3–5-file commit limit.
 2. **c02** — `fix(rafaello): rfl init swaps shim for runtime
    binary at materialisation time`. Edits `init::run` per
    §A2; adds C1 acceptance test
@@ -997,7 +1021,7 @@ swap" lands as a load-bearing term).
 
 ## Disagreements with pi (cumulative)
 
-None across rounds 1–3. All four blockers (pi-1 B-1/B-2,
-pi-2 B-1/B-2), all six majors, and all nine nits across the
-three review rounds were substantive and accurate; every
+None across rounds 1–4. All four blockers (pi-1 B-1/B-2,
+pi-2 B-1/B-2), all six majors, and all ten nits across the
+four review rounds were substantive and accurate; every
 one is folded. No standing disagreement.
