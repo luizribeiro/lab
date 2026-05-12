@@ -119,6 +119,7 @@ pub(crate) struct SandboxSpec {
     pub(crate) allow_interactive_tty: bool,
     pub(crate) allow_non_pie_exec: bool,
     pub(crate) syd_path: Option<PathBuf>,
+    pub(crate) syd_pty_path: Option<PathBuf>,
     pub(crate) read_paths: Vec<PathBuf>,
     pub(crate) read_dirs: Vec<PathBuf>,
     pub(crate) write_paths: Vec<PathBuf>,
@@ -150,6 +151,8 @@ pub struct Sandbox {
     private_tmp: tempfile::TempDir,
     #[cfg(target_os = "linux")]
     syd: PathBuf,
+    #[cfg(target_os = "linux")]
+    syd_pty: Option<PathBuf>,
 }
 
 impl Sandbox {
@@ -158,6 +161,7 @@ impl Sandbox {
     #[cfg(target_os = "linux")]
     pub(crate) fn new(spec: SandboxSpec) -> Result<Self> {
         let syd = resolve_syd_path(&spec)?;
+        let syd_pty = Some(resolve_syd_pty_path(&spec, &syd)?);
 
         let private_tmp = create_private_tmp()?;
 
@@ -165,6 +169,7 @@ impl Sandbox {
             spec,
             private_tmp,
             syd,
+            syd_pty,
         })
     }
 
@@ -191,7 +196,13 @@ impl Sandbox {
     /// [`SandboxBuilder::build`]; not part of the public API.
     #[cfg(target_os = "linux")]
     pub(crate) fn build_command(&self, program: &Path) -> Command {
-        linux::build_sandbox_command(&self.spec, self.private_tmp.path(), &self.syd, program)
+        linux::build_sandbox_command(
+            &self.spec,
+            self.private_tmp.path(),
+            &self.syd,
+            self.syd_pty.as_deref(),
+            program,
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -228,6 +239,36 @@ fn resolve_syd_path(spec: &SandboxSpec) -> Result<PathBuf> {
     anyhow::bail!(
         "Linux sandbox requires syd but could not find it. \
          Set LOCKIN_SYD_PATH, add syd to PATH, or call .syd_path() explicitly."
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_syd_pty_path(spec: &SandboxSpec, resolved_syd: &Path) -> Result<PathBuf> {
+    if let Some(path) = &spec.syd_pty_path {
+        return Ok(path.clone());
+    }
+    if let Some(val) = std::env::var_os("CARGO_BIN_EXE_syd-pty") {
+        let path = PathBuf::from(val);
+        anyhow::ensure!(
+            path.is_absolute(),
+            "CARGO_BIN_EXE_syd-pty must be absolute, got: {}",
+            path.display()
+        );
+        return Ok(path);
+    }
+    if let Some(parent) = resolved_syd.parent() {
+        let sibling = parent.join("syd-pty");
+        if sibling.exists() {
+            return Ok(sibling);
+        }
+    }
+    if let Some(p) = find_in_path("syd-pty") {
+        return Ok(p);
+    }
+    anyhow::bail!(
+        "Linux sandbox requires syd-pty but could not find it. \
+         Set CARGO_BIN_EXE_syd-pty, place syd-pty next to syd, add syd-pty to PATH, \
+         or call .syd_pty_path() explicitly."
     )
 }
 
@@ -379,6 +420,27 @@ impl SandboxBuilder {
         );
         assert_no_control_chars("syd_path", &path);
         self.spec.syd_path = Some(path);
+        self
+    }
+
+    /// Sets the absolute path to the `syd-pty` helper binary (Linux
+    /// only; ignored on other platforms).
+    ///
+    /// If not set, the library checks `CARGO_BIN_EXE_syd-pty`, then a
+    /// sibling of the resolved `syd` binary, then `PATH`. If none of
+    /// those resolve, sandbox construction fails with a hard error —
+    /// there is no silent fallback.
+    ///
+    /// Panics if `path` is not absolute.
+    pub fn syd_pty_path(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        assert!(
+            path.is_absolute(),
+            "syd_pty_path must be absolute, got: {}",
+            path.display()
+        );
+        assert_no_control_chars("syd_pty_path", &path);
+        self.spec.syd_pty_path = Some(path);
         self
     }
 

@@ -9,6 +9,12 @@ dist = false
 [features]
 default = []
 tokio = ["dep:tokio"]
+test-fixture = []
+
+[[bin]]
+name = "fake-syd"
+path = "tests/bin/fake_syd.rs"
+required-features = ["test-fixture"]
 
 [dependencies]
 anyhow = "1.0"

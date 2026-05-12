@@ -16,6 +16,7 @@ pub(crate) fn build_sandbox_command(
     spec: &SandboxSpec,
     private_tmp: &Path,
     syd: &Path,
+    syd_pty: Option<&Path>,
     program: &Path,
 ) -> Command {
     let mut command = Command::new(syd);
@@ -26,6 +27,9 @@ pub(crate) fn build_sandbox_command(
         .env("TMPDIR", private_tmp)
         .env("TMP", private_tmp)
         .env("TEMP", private_tmp);
+    if let Some(pty) = syd_pty {
+        command.env("CARGO_BIN_EXE_syd-pty", pty);
+    }
     if !matches!(spec.observation, ObservationMode::None) {
         command
             .env("SYD_LOG", "notice")
@@ -605,6 +609,7 @@ mod tests {
             &SandboxSpec::default(),
             tmp.path(),
             Path::new("/usr/bin/syd"),
+            None,
             Path::new("/bin/sh"),
         );
         let envs: Vec<_> = cmd.get_envs().collect();
@@ -648,6 +653,7 @@ mod tests {
             &spec,
             tmp.path(),
             Path::new("/usr/bin/syd"),
+            None,
             Path::new("/bin/sh"),
         );
         let env_pairs: Vec<(String, String)> = cmd
@@ -704,6 +710,7 @@ mod tests {
             &spec,
             tmp.path(),
             Path::new("/usr/bin/syd"),
+            None,
             Path::new("/bin/sh"),
         );
         let env_pairs: Vec<(String, String)> = cmd
