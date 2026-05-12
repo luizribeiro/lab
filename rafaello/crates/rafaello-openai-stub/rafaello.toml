@@ -1,0 +1,17 @@
+schema = 1
+name = "openai-stub"
+version = "0.0.0"
+entry = "bin/rfl-openai-stub"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+provider = "openai-stub"
+tool = {}
+
+[capabilities.default.filesystem]
+read_dirs = []
+write_dirs = []
+
+[capabilities.default.network]
+mode = "deny"

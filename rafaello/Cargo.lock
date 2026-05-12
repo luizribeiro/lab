@@ -1669,6 +1669,7 @@ name = "rafaello-openai-stub"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "rafaello-core",
  "serde",
  "serde_json",
  "tempfile",

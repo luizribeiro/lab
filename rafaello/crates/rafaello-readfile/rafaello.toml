@@ -1,0 +1,24 @@
+schema = 1
+name = "readfile"
+version = "0.0.0"
+entry = "bin/rfl-readfile"
+rafaello = ">=0.1, <0.2"
+load = "eager"
+
+[provides]
+tools = ["read-file"]
+
+[provides.tool.read-file]
+sinks = []
+always_confirm = false
+
+[bus]
+subscribes = []
+publishes = []
+
+[capabilities.default.filesystem]
+read_dirs = ["${project}"]
+write_dirs = []
+
+[capabilities.default.network]
+mode = "deny"
