@@ -1,0 +1,4 @@
+1|install_accepted|
+2|confirm_request|01KREGAWWZA53BZPNE7SBRDVJ6
+3|confirm_request_taint_attached|01KREGAWWZA53BZPNE7SBRDVJ6
+4|confirm_allowed|01KREGAWWZA53BZPNE7SBRDVJ6

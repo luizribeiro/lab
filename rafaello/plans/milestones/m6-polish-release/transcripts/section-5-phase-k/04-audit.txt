@@ -1,0 +1,4 @@
+1  2026-05-12T16:29:01.622667731+00:00  install_accepted  [-]  {"canonical":"local:mailcat@0.0.0","unused_allow_secrets":[]}
+2  2026-05-12T16:29:17.087781857+00:00  confirm_request  [01KREGAWWZA53BZPNE7SBRDVJ6]  {"plugin":"local:mailcat@0.0.0","sinks":["mail"],"tool":"send-mail","tool_call_i
+3  2026-05-12T16:29:17.087931659+00:00  confirm_request_taint_attached  [01KREGAWWZA53BZPNE7SBRDVJ6]  {"request_id":"01KREGAWWZA53BZPNE7SBRDVJ6","taint":[{"detail":"openai","source":
+4  2026-05-12T16:29:36.053645533+00:00  confirm_allowed  [01KREGAWWZA53BZPNE7SBRDVJ6]  {"plugin":"local:mailcat@0.0.0","tool":"send-mail"}
