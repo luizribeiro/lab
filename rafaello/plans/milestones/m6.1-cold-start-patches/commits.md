@@ -1,8 +1,9 @@
 # m6.1 — v0.1.1 cold-start patches — commits
 
-> **Status:** round 4 — claude-authored 2026-05-12, awaiting
-> pi round 4. Folds `commits-pi-review-3.md` (1B / 0M / 1N,
-> BLOCKING) on top of round 3.
+> **Status:** round 4 — **CONVERGED** (`commits-pi-review-4.md`
+> verdict 0B / 0M / 0N, claude-authored 2026-05-12). Pinging
+> owner for ratification. Folds `commits-pi-review-3.md`
+> (1B / 0M / 1N, BLOCKING) on top of round 3.
 >
 > **Round-4 changelog (both pi-3 findings folded):**
 >
