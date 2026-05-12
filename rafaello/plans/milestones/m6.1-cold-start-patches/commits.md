@@ -1,8 +1,79 @@
 # m6.1 — v0.1.1 cold-start patches — commits
 
-> **Status:** round 2 — claude-authored 2026-05-12, awaiting
-> pi round 2. Folds `commits-pi-review-1.md` (2B / 4M / 3N,
-> BLOCKING) on top of round 1.
+> **Status:** round 3 — claude-authored 2026-05-12, awaiting
+> pi round 3. Folds `commits-pi-review-2.md` (1B / 0M / 2N,
+> BLOCKING) on top of round 2.
+>
+> **Round-3 changelog (every pi-2 finding folded):**
+>
+> - **B-1 (existing `rfl init` tests will fail after c02).**
+>   The pre-existing `rfl_init_*` tests set
+>   `RFL_BUNDLED_PLUGINS_DIR` but **not**
+>   `RFL_BUNDLED_BIN_OPENAI`. After c02 makes `init::run`
+>   call `resolve_runtime_binary(&OPENAI_NAMES)`, the dev
+>   fallback walks up to
+>   `<workspace>/target/<profile>/rfl-openai`. That binary
+>   only exists if a prior cargo build produced it, so the
+>   existing tests would be order-dependent on target-dir
+>   state. **Round-3 fix**: c02 explicitly adds
+>   `.env("RFL_BUNDLED_BIN_OPENAI",
+>   workspace_bin("rfl-openai-stub"))` to every existing
+>   `rfl_init_*` test that reaches `pp1::materialise`. The
+>   affected tests (verified via grep for `--yes` /
+>   `--force` and absence of decline/short-circuit
+>   patterns):
+>   - `rfl_init_writes_default_lock.rs`
+>   - `rfl_init_yes_skips_prompt.rs`
+>   - `rfl_init_round_trip_byte_stable.rs`
+>   - `rfl_init_materialises_package_dir.rs`
+>   - `rfl_init_writes_lock_against_synthetic_bundled_tree.rs`
+>   - `rfl_init_force_rewrites.rs`
+>   - `rfl_init_then_install_against_in_tree_bundled_smoke.rs`
+>   Tests that short-circuit before `pp1::materialise`
+>   (decline, EOF, idempotent-no-overwrite, --help) are
+>   **not** updated — the resolver is never reached on
+>   those paths. Each affected test gains exactly **one
+>   line** (`.env("RFL_BUNDLED_BIN_OPENAI",
+>   workspace_bin("rfl-openai-stub"))`) before
+>   `.output()`/`.spawn()`. Cumulative diff: 1 production
+>   file + 1 new C1 test + 7 existing tests × 1 line =
+>   9 files, ~160 lines total. Defended as one cohesive
+>   commit per CLAUDE.md "Tests and Business Logic: Same
+>   Commit, Always" — the production change and the test
+>   plumbing must ship together to keep the suite green.
+>   If pi prefers a split, c02 splits into:
+>   - c02a (`init.rs` + C1 acceptance), 2 files.
+>   - c02b ("update existing tests to declare runtime-bin
+>     env"), 7 files / 7 lines.
+>   Round-3 lean is **one commit (c02)**; pi adjudicates.
+>   The cross-checks section is also corrected to drop the
+>   incorrect "`CARGO_BIN_EXE_*` makes c21 tests safe"
+>   claim — the new resolver deliberately does not
+>   consult that env var.
+> - **N-1 (round-2 banner overclaimed c04 acceptance
+>   command shape).** c04's test lives in the
+>   `rafaello-tui` binary's `#[cfg(test)]` module, so its
+>   acceptance command uses `-p rafaello-tui --bin
+>   rfl-tui -- handle_terminal_event`, not `-p rafaello
+>   --test <name>`. Round-3 banner / changelog wording
+>   updated to call this out and exclude c04 from the
+>   blanket claim.
+> - **N-2 (traceability appendix missing
+>   `00-CONTEXT.md`).** Round-3 appendix lists
+>   `00-CONTEXT.md` alongside the appendix file + 3
+>   transcripts for §D coverage.
+>
+> Cumulative trajectory: round 1 → 2B/4M/3N (BLOCKING) →
+> round 2 → 1B/0M/2N (BLOCKING) → round 3 (this commit),
+> target verdict CONVERGED.
+>
+> ---
+>
+> **(History — round 2 status, preserved for traceability.)**
+>
+> Round 2 — claude-authored 2026-05-12. Folds
+> `commits-pi-review-1.md` (2B / 4M / 3N, BLOCKING) on top
+> of round 1.
 >
 > **Round-2 changelog (every pi-1 finding folded):**
 >
@@ -293,7 +364,8 @@ in this commits.md table — same pattern as m4/m5/m6.
 
 ### c02 — fix(rafaello): `rfl init` swaps shim for runtime binary at materialisation time
 
-- **What.** Scope §A2. Edit
+- **What.** Scope §A2 + the test-plumbing follow-on from
+  pi-2 B-1. Edit
   `rafaello/crates/rafaello/src/init.rs::run`:
   1. Replace `const BUNDLED_OPENAI: &str = "openai"` with
      the imported `OPENAI_NAMES` constant from `bundled`.
@@ -325,6 +397,14 @@ in this commits.md table — same pattern as m4/m5/m6.
      &target_dir).ok()` cleanup before returning the
      error, so a retry against a fixed environment starts
      clean (scope §A3).
+  6. **(Round 3, pi-2 B-1 fold.)** Update each existing
+     `rfl_init_*` test that reaches `pp1::materialise`
+     (listed in the round-3 banner above) to add one
+     `.env("RFL_BUNDLED_BIN_OPENAI",
+     workspace_bin("rfl-openai-stub"))` line before
+     `.output()` / `.spawn()`. Tests that short-circuit
+     before materialise (decline, EOF, idempotent, --help)
+     are not touched. Per-test diff is exactly one line.
 - **Why.** Scope §A2/§A3. The defect: today's `init::run`
   copies the m4-c20 shim (`#!/bin/sh\nexec "$@"`) into
   `${PROJECT_ROOT}/.rafaello/plugins/<topic>/bin/rfl-openai`
@@ -374,11 +454,18 @@ in this commits.md table — same pattern as m4/m5/m6.
     AND the temp `tmp/.rafaello/plugins/<topic>/`
     directory was cleaned up (does not exist after the
     error) AND the lock was not written.
-- **Size.** 2 files modified (`init.rs` ~30 line delta +
-  one new test file ~120 lines). Within budget. Note
-  per-commit agent must take care not to drift into c01's
-  helper definitions — the helpers are imported, not
-  redefined.
+- **Size.** 9 files: `init.rs` (~30 line delta), 1 new
+  test file (~120 lines, C1), 7 existing
+  `rfl_init_*.rs` tests (1 line each, totalling ~7
+  lines). Cumulative diff ~160 lines. Above the
+  CLAUDE.md ≤5-file guideline; defended as one cohesive
+  unit per "Tests and Business Logic: Same Commit,
+  Always" — the production change requires the test
+  plumbing update for the suite to stay green. Pi may
+  push back to split into c02a/c02b (see round-3 banner);
+  driver's lean is one commit. **Per-commit agent must
+  take care** not to drift into c01's helper definitions
+  — the helpers are imported, not redefined.
 - **Acceptance command.** `cargo test --manifest-path
   rafaello/Cargo.toml --workspace --features
   rafaello-core/test-fixture -p rafaello --test
@@ -690,24 +777,29 @@ in this commits.md table — same pattern as m4/m5/m6.
 | §C2 — subprocess no-override regression| c03            | `rfl_init_runtime_binary_outside_cargo_env.rs`             |
 | §C3 — Ctrl-C unit test                 | c04            | Same test module additions                                 |
 | §C4 — tmux Ctrl-C regression           | c05            | `rfl_chat_ctrl_c_quits_cleanly.rs`                         |
-| §D — manual-validation appendix        | c06            | `manual-validation.md` + 3 transcripts                     |
+| §D — manual-validation appendix        | c06            | `manual-validation.md` + `00-CONTEXT.md` + 3 transcripts   |
 
 ## Cross-checks
 
-- **Existing `c21` tests still pass.** c02 swaps the shim
-  for the real binary post-`pp1::materialise`, but the
-  c21 tests (`rfl_init_writes_default_lock.rs`,
-  `rfl_init_materialises_package_dir.rs`,
-  `rfl_init_force_rewrites.rs`,
-  `rfl_init_idempotent_no_overwrite.rs`) all run under
-  cargo test with `RFL_BUNDLED_PLUGINS_DIR` set to an
-  in-tree fixture and `CARGO_BIN_EXE_*` available. c02's
-  edits do not break any of those assertions —
-  `pp1::materialise`'s file count is unchanged, the lock
-  shape is unchanged, the digest field still computes
-  from `target_dir`. The c21 tests' file-presence checks
-  remain green because the swap overwrites in place
-  rather than adding/removing files.
+- **Existing `c21` tests still pass after c02.** c02
+  swaps the shim for the real binary post-`pp1::materialise`.
+  The new resolver does **not** consult
+  `CARGO_BIN_EXE_*` (deliberate per scope §A1 and pi-2
+  B-1's correction). Therefore c02 also adds one
+  `.env("RFL_BUNDLED_BIN_OPENAI",
+  workspace_bin("rfl-openai-stub"))` line to each existing
+  `rfl_init_*` test that reaches `pp1::materialise`
+  (listed in the round-3 banner). With that env set, each
+  test's `init::run` invocation finds the stub binary,
+  swaps it into the install dir, and the test's existing
+  assertions hold (file count unchanged,
+  lock shape unchanged, digest still computes from
+  `target_dir` — now reflecting the stub bytes, not the
+  shim bytes; the existing tests do not assert digest
+  values, only digest presence / round-trip).
+  Tests that short-circuit before `pp1::materialise`
+  (decline, EOF, idempotent, --help) are unaffected by
+  the resolver change and are not modified.
 - **`rfl install rfl-mailcat` (m6 c-Phase-B) unchanged.**
   c01 explicitly does not modify
   `bundled::resolve_plugin_dir(name)`; `install.rs:96`
@@ -730,7 +822,7 @@ in this commits.md table — same pattern as m4/m5/m6.
 | Commit | Files | Approx LoC | Test coverage              |
 |--------|-------|------------|----------------------------|
 | c01    | 1     | ~150       | 9 unit tests in-file       |
-| c02    | 2     | ~150       | 1 integration test (C1)    |
+| c02    | 9     | ~160       | 1 new C1 + 7 existing tests updated 1 line each |
 | c03    | 1     | ~150       | 1 integration test (C2)    |
 | c04    | 1     | ~50        | unit test in-file (C3)     |
 | c05    | 2     | ~180 + 1   | this **is** the test (C4)  |
@@ -754,6 +846,6 @@ may push back if any line counts feel padded.
 
 ## Disagreements with pi (cumulative)
 
-None across round 1. Both blockers, all four majors, and
-all three nits were substantive and accurate; every one is
-folded in round 2.
+None across rounds 1–2. All three blockers (pi-1 B-1/B-2,
+pi-2 B-1), all four majors, and all five nits were
+substantive and accurate; every one is folded.
