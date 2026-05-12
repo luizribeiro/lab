@@ -1,16 +1,23 @@
 # m6 — v1 polish + release readiness — retrospective
 
-> **Status: round 6 draft — folds
-> `retrospective-pi-review-5.md` (0 B / 0 M / 1 N,
+> **Status: round 7 draft — folds
+> `retrospective-pi-review-6.md` (0 B / 0 M / 1 N,
 > **NON-BLOCKING**).** Claude-authored 2026-05-12;
-> awaiting pi round 6. Round-6 changelog: folded pi-5
-> N1 (stale "§5 narrative" self-reference — retro §5
-> is the v2 follow-ups table, not the transcript
-> narrative; the pre/post evidence pair lives in §1
-> hard req #3 + `manual-validation.md` §5.1, and the
-> round-5 changelog + round-6 open-item checklist now
-> point there). All substantive Phase K absorption
-> from round 5 stands.
+> awaiting pi round 7. Round-7 changelog: folded pi-6
+> N1 (stale "Convergence trajectory after round 5 /
+> round 5 (0B / 0M / 0N target)" footer — retargeted
+> to the actual round-6 outcome of 0/0/1 NON-BLOCKING
+> and round 7 as the new 0/0/0 target). All
+> substantive Phase K absorption from round 5 stands.
+>
+> ---
+>
+> **(History — round 6 draft, kept for trajectory.)**
+>
+> Round 6 folded `retrospective-pi-review-5.md`
+> (0 B / 0 M / 1 N, NON-BLOCKING) — retargeted the
+> stale "§5 narrative" self-references to §1 hard
+> req #3 + `manual-validation.md` §5.1.
 >
 > ---
 >
@@ -1628,7 +1635,7 @@ After the merge:
 
 ---
 
-**Open items for pi round 6.**
+**Open items for pi round 7.**
 
 1. **Phase K absorption** — §1 hard requirement #3
    flipped ✓; §2 appends Phase K (cK1..cK6) as a
@@ -1663,13 +1670,18 @@ After the merge:
    manual-validation appendix §5.1 + retrospective §1
    hard req #3 + §2 carry the Phase K record.
 
-Convergence trajectory after round 5:
+Convergence trajectory after round 7:
 **round 4 (0B / 0M / 1N NON-BLOCKING) → round 5
-(0B / 0M / 0N target)**. Round 4's lone N (worktree-
-relative hash trail) is moot on `agents/m6/drift`,
-and the open `Stdio::null()` routing question that
-round 4 deliberately left open is resolved by Route 1
-+ Phase K.
+(0B / 0M / 1N NON-BLOCKING) → round 6 (0B / 0M / 1N
+NON-BLOCKING) → round 7 (0B / 0M / 0N target)**.
+Round 4's lone N (worktree-relative hash trail) is
+moot on `agents/m6/drift`; round 5's lone N (stale
+"§5 narrative" self-reference) was folded into
+round 6; round 6's lone N (stale "after round 5"
+convergence-trail footer) is folded into this
+round 7 pass. The open `Stdio::null()` routing
+question that round 4 deliberately left open is
+resolved by Route 1 + Phase K.
 
 Provisional verdict request: **converged on all
 implementation-side blockers and all retrospective
