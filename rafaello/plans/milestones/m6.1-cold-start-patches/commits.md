@@ -1,8 +1,56 @@
 # m6.1 — v0.1.1 cold-start patches — commits
 
-> **Status:** round 3 — claude-authored 2026-05-12, awaiting
-> pi round 3. Folds `commits-pi-review-2.md` (1B / 0M / 2N,
-> BLOCKING) on top of round 2.
+> **Status:** round 4 — claude-authored 2026-05-12, awaiting
+> pi round 4. Folds `commits-pi-review-3.md` (1B / 0M / 1N,
+> BLOCKING) on top of round 3.
+>
+> **Round-4 changelog (both pi-3 findings folded):**
+>
+> - **B-1 (missed `rfl_init_without_lock_not_yet_implemented.rs`).**
+>   Round 3's affected-test enumeration listed 7 tests;
+>   pi-3 caught that `rfl_init_without_lock_not_yet_implemented.rs`
+>   also reaches `pp1::materialise` (uses `--yes` against a
+>   synthetic bundled tree). Round 4 adds it to the c02
+>   affected-test list, bumping the count to 8 tests + 1
+>   production file + 1 new C1 test = 10 files. The
+>   round-3 grep heuristic missed this file because its
+>   name is "not_yet_implemented" — vestigial from a c21
+>   pre-implementation phase, retained when c21 amended
+>   the test to assert success. The full corrected list:
+>   - `rfl_init_writes_default_lock.rs`
+>   - `rfl_init_yes_skips_prompt.rs`
+>   - `rfl_init_round_trip_byte_stable.rs`
+>   - `rfl_init_materialises_package_dir.rs`
+>   - `rfl_init_writes_lock_against_synthetic_bundled_tree.rs`
+>   - `rfl_init_force_rewrites.rs`
+>   - `rfl_init_then_install_against_in_tree_bundled_smoke.rs`
+>   - `rfl_init_without_lock_not_yet_implemented.rs`
+>     (**added round 4 per pi-3 B-1**).
+>   Pi-3 also accepted the single-commit cohesion argument
+>   for c02 (vs c02a/c02b split) **once this test is
+>   added**. Round 4 keeps c02 as one commit at 10 files.
+> - **N-1 (sizing-summary inconsistency).** The global
+>   sizing-summary sentence "All commits respect the
+>   CLAUDE.md ≤5-file / ≤100-line production-code envelope"
+>   contradicted c02's admitted 9-file (now 10-file)
+>   shape. Round 4 reworded to: "All commits keep
+>   production-code deltas within the intended envelope;
+>   c02 intentionally exceeds the file-count guideline
+>   only for one-line updates to existing tests needed to
+>   keep the suite green."
+>
+> Cumulative trajectory: round 1 → 2B/4M/3N (BLOCKING) →
+> round 2 → 1B/0M/2N (BLOCKING) → round 3 → 1B/0M/1N
+> (BLOCKING) → round 4 (this commit), target verdict
+> CONVERGED.
+>
+> ---
+>
+> **(History — round 3 status, preserved for traceability.)**
+>
+> Round 3 — claude-authored 2026-05-12. Folds
+> `commits-pi-review-2.md` (1B / 0M / 2N, BLOCKING) on top
+> of round 2.
 >
 > **Round-3 changelog (every pi-2 finding folded):**
 >
@@ -35,17 +83,12 @@
 >   those paths. Each affected test gains exactly **one
 >   line** (`.env("RFL_BUNDLED_BIN_OPENAI",
 >   workspace_bin("rfl-openai-stub"))`) before
->   `.output()`/`.spawn()`. Cumulative diff: 1 production
->   file + 1 new C1 test + 7 existing tests × 1 line =
->   9 files, ~160 lines total. Defended as one cohesive
->   commit per CLAUDE.md "Tests and Business Logic: Same
->   Commit, Always" — the production change and the test
->   plumbing must ship together to keep the suite green.
->   If pi prefers a split, c02 splits into:
->   - c02a (`init.rs` + C1 acceptance), 2 files.
->   - c02b ("update existing tests to declare runtime-bin
->     env"), 7 files / 7 lines.
->   Round-3 lean is **one commit (c02)**; pi adjudicates.
+>   `.output()`/`.spawn()`. (**Round 4 updates this list
+>   to 8 tests per pi-3 B-1**; see the round-4 changelog
+>   above.) Defended as one cohesive commit per CLAUDE.md
+>   "Tests and Business Logic: Same Commit, Always" — the
+>   production change and the test plumbing must ship
+>   together to keep the suite green.
 >   The cross-checks section is also corrected to drop the
 >   incorrect "`CARGO_BIN_EXE_*` makes c21 tests safe"
 >   claim — the new resolver deliberately does not
@@ -397,9 +440,10 @@ in this commits.md table — same pattern as m4/m5/m6.
      &target_dir).ok()` cleanup before returning the
      error, so a retry against a fixed environment starts
      clean (scope §A3).
-  6. **(Round 3, pi-2 B-1 fold.)** Update each existing
-     `rfl_init_*` test that reaches `pp1::materialise`
-     (listed in the round-3 banner above) to add one
+  6. **(Round 3, pi-2 B-1 fold; round-4 corrected per
+     pi-3 B-1.)** Update each existing `rfl_init_*` test
+     that reaches `pp1::materialise` (the 8 tests listed
+     in the round-4 banner above) to add one
      `.env("RFL_BUNDLED_BIN_OPENAI",
      workspace_bin("rfl-openai-stub"))` line before
      `.output()` / `.spawn()`. Tests that short-circuit
@@ -454,18 +498,15 @@ in this commits.md table — same pattern as m4/m5/m6.
     AND the temp `tmp/.rafaello/plugins/<topic>/`
     directory was cleaned up (does not exist after the
     error) AND the lock was not written.
-- **Size.** 9 files: `init.rs` (~30 line delta), 1 new
-  test file (~120 lines, C1), 7 existing
-  `rfl_init_*.rs` tests (1 line each, totalling ~7
-  lines). Cumulative diff ~160 lines. Above the
-  CLAUDE.md ≤5-file guideline; defended as one cohesive
-  unit per "Tests and Business Logic: Same Commit,
-  Always" — the production change requires the test
-  plumbing update for the suite to stay green. Pi may
-  push back to split into c02a/c02b (see round-3 banner);
-  driver's lean is one commit. **Per-commit agent must
-  take care** not to drift into c01's helper definitions
-  — the helpers are imported, not redefined.
+- **Size.** 10 files: `init.rs` (~30 line delta), 1 new
+  test file (~120 lines, C1), 8 existing `rfl_init_*.rs`
+  tests (1 line each, totalling ~8 lines). Cumulative
+  diff ~160 lines. Above the CLAUDE.md ≤5-file guideline;
+  pi-3 accepted the cohesion argument given the test
+  plumbing must ship with the production change to keep
+  the suite green. **Per-commit agent must take care**
+  not to drift into c01's helper definitions — the
+  helpers are imported, not redefined.
 - **Acceptance command.** `cargo test --manifest-path
   rafaello/Cargo.toml --workspace --features
   rafaello-core/test-fixture -p rafaello --test
@@ -822,16 +863,18 @@ in this commits.md table — same pattern as m4/m5/m6.
 | Commit | Files | Approx LoC | Test coverage              |
 |--------|-------|------------|----------------------------|
 | c01    | 1     | ~150       | 9 unit tests in-file       |
-| c02    | 9     | ~160       | 1 new C1 + 7 existing tests updated 1 line each |
+| c02    | 10    | ~160       | 1 new C1 + 8 existing tests updated 1 line each |
 | c03    | 1     | ~150       | 1 integration test (C2)    |
 | c04    | 1     | ~50        | unit test in-file (C3)     |
 | c05    | 2     | ~180 + 1   | this **is** the test (C4)  |
 | c06    | 5     | (docs)     | n/a — manual evidence      |
 
-All commits respect the CLAUDE.md ≤5-file / ≤100-line
-production-code envelope. c01 and c05 hit ~150–180 LoC
-because the test count is intentionally thorough — pi
-may push back if any line counts feel padded.
+All commits keep production-code deltas within the
+intended envelope; c02 intentionally exceeds the
+file-count guideline only for one-line updates to existing
+tests needed to keep the suite green (pi-3 ratified the
+cohesion). c01 and c05 hit ~150–180 LoC because the test
+count is intentionally thorough.
 
 ## References
 
@@ -846,6 +889,6 @@ may push back if any line counts feel padded.
 
 ## Disagreements with pi (cumulative)
 
-None across rounds 1–2. All three blockers (pi-1 B-1/B-2,
-pi-2 B-1), all four majors, and all five nits were
-substantive and accurate; every one is folded.
+None across rounds 1–3. All four blockers (pi-1 B-1/B-2,
+pi-2 B-1, pi-3 B-1), all four majors, and all six nits
+were substantive and accurate; every one is folded.
