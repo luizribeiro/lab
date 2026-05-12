@@ -29,8 +29,8 @@ use rafaello_tui::env::{self, TestConfirmAnswer, TestGrantBeforeMessage};
 use rafaello_tui::paint::draw_with_input_bar;
 use rafaello_tui::test_confirm_queue::TestConfirmAnswerQueue;
 use rafaello_tui::{
-    slash::SlashCommand, slash::SlashKind, InputMode, CONFIRM_ANSWER_TOPIC, CONFIRM_REPLY_TOPIC,
-    CONFIRM_REQUEST_TOPIC,
+    handle_overlay_key, slash::SlashCommand, slash::SlashKind, ConfirmAnswerEnvelope, InputMode,
+    CONFIRM_ANSWER_TOPIC, CONFIRM_REPLY_TOPIC, CONFIRM_REQUEST_TOPIC,
 };
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
@@ -356,7 +356,7 @@ async fn ui_loop(
                 let ev = ev.context("crossterm event stream error")?;
                 match handle_terminal_event(
                     ev,
-                    &mode,
+                    &mut mode,
                     &mut scroll,
                     &mut input_buffer,
                     buffer.len(),
@@ -366,6 +366,10 @@ async fn ui_loop(
                     EventOutcome::Ignore => false,
                     EventOutcome::Submit(line) => {
                         publish_submitted_line(client, &line)?;
+                        true
+                    }
+                    EventOutcome::PublishConfirmAnswer(env) => {
+                        publish_confirm_answer(client, &env)?;
                         true
                     }
                 }
@@ -394,11 +398,12 @@ enum EventOutcome {
     Redraw,
     Ignore,
     Submit(String),
+    PublishConfirmAnswer(ConfirmAnswerEnvelope),
 }
 
 fn handle_terminal_event(
     ev: Event,
-    mode: &InputMode,
+    mode: &mut InputMode,
     scroll: &mut u16,
     input_buffer: &mut String,
     len: usize,
@@ -410,7 +415,7 @@ fn handle_terminal_event(
         return EventOutcome::Ignore;
     }
     match key.code {
-        KeyCode::Char('q') => EventOutcome::Quit,
+        KeyCode::Char('q') if matches!(mode, InputMode::Normal) => EventOutcome::Quit,
         KeyCode::Up => {
             *scroll = scroll.saturating_sub(1);
             EventOutcome::Redraw
@@ -422,14 +427,37 @@ fn handle_terminal_event(
             }
             EventOutcome::Redraw
         }
-        code => {
-            if matches!(mode, InputMode::Normal) {
-                handle_normal_key(code, input_buffer)
-            } else {
-                EventOutcome::Ignore
+        code => match mode {
+            InputMode::Normal => handle_normal_key(code, input_buffer),
+            InputMode::ConfirmOverlay { .. } => {
+                let (new_mode, env) = handle_overlay_key(mode, code);
+                *mode = new_mode;
+                match env {
+                    Some(e) => EventOutcome::PublishConfirmAnswer(e),
+                    None => EventOutcome::Ignore,
+                }
             }
-        }
+        },
     }
+}
+
+fn publish_confirm_answer(
+    client: &Client<OneShotConnector>,
+    env: &ConfirmAnswerEnvelope,
+) -> Result<()> {
+    client
+        .peer()
+        .notify(
+            "bus.publish",
+            json!({
+                "topic": env.topic,
+                "payload": env.payload,
+                "request_id": env.request_id,
+                "in_reply_to": env.in_reply_to,
+            }),
+        )
+        .context("rfl-tui: bus.publish frontend.tui.confirm_answer")?;
+    Ok(())
 }
 
 fn handle_normal_key(code: KeyCode, input_buffer: &mut String) -> EventOutcome {
@@ -651,10 +679,10 @@ mod tests {
     fn normal_mode_char_appends_to_input_buffer() {
         let mut input = String::from("hi");
         let mut scroll: u16 = 0;
-        let mode = InputMode::Normal;
+        let mut mode = InputMode::Normal;
         let out = handle_terminal_event(
             key_event(KeyCode::Char('!')),
-            &mode,
+            &mut mode,
             &mut scroll,
             &mut input,
             0,
@@ -667,10 +695,10 @@ mod tests {
     fn normal_mode_backspace_pops_last_char() {
         let mut input = String::from("foo");
         let mut scroll: u16 = 0;
-        let mode = InputMode::Normal;
+        let mut mode = InputMode::Normal;
         let out = handle_terminal_event(
             key_event(KeyCode::Backspace),
-            &mode,
+            &mut mode,
             &mut scroll,
             &mut input,
             0,
@@ -683,9 +711,14 @@ mod tests {
     fn normal_mode_enter_invokes_publish_submitted_line() {
         let mut input = String::from("hello");
         let mut scroll: u16 = 0;
-        let mode = InputMode::Normal;
-        let out =
-            handle_terminal_event(key_event(KeyCode::Enter), &mode, &mut scroll, &mut input, 0);
+        let mut mode = InputMode::Normal;
+        let out = handle_terminal_event(
+            key_event(KeyCode::Enter),
+            &mut mode,
+            &mut scroll,
+            &mut input,
+            0,
+        );
         let line = match out {
             EventOutcome::Submit(s) => s,
             _ => panic!("expected Submit outcome for Enter"),
@@ -766,6 +799,123 @@ mod tests {
         assert!(dirty);
         assert!(!mode.is_overlay(), "overlay must clear on resolved");
         assert!(queue.is_empty());
+    }
+
+    fn overlay_mode_for(request_id: &str) -> InputMode {
+        InputMode::ConfirmOverlay {
+            confirm_id: JsonRpcId::String(request_id.to_string()),
+            summary: String::new(),
+            details: ConfirmDetails {
+                tool_call_id: String::new(),
+                tool: String::new(),
+                args: json!({}),
+                sinks: Vec::new(),
+                always_confirm: false,
+                taint: json!([]),
+            },
+            ttl_remaining: 0,
+            queued_count: 0,
+        }
+    }
+
+    fn assert_publish(
+        outcome: EventOutcome,
+        request_id: &str,
+        expected_answer: &str,
+    ) -> ConfirmAnswerEnvelope {
+        let env = match outcome {
+            EventOutcome::PublishConfirmAnswer(e) => e,
+            other => panic!("expected PublishConfirmAnswer, got {other:?}"),
+        };
+        assert_eq!(env.topic, CONFIRM_ANSWER_TOPIC);
+        assert_eq!(
+            env.in_reply_to,
+            vec![JsonRpcId::String(request_id.to_string())]
+        );
+        assert_eq!(
+            env.payload,
+            json!({ "request_id": request_id, "answer": expected_answer })
+        );
+        env
+    }
+
+    impl std::fmt::Debug for EventOutcome {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                EventOutcome::Quit => write!(f, "Quit"),
+                EventOutcome::Redraw => write!(f, "Redraw"),
+                EventOutcome::Ignore => write!(f, "Ignore"),
+                EventOutcome::Submit(s) => write!(f, "Submit({s:?})"),
+                EventOutcome::PublishConfirmAnswer(env) => {
+                    write!(f, "PublishConfirmAnswer({env:?})")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_mode_allow_keys_publish_allow_answer_and_return_to_normal() {
+        for code in [KeyCode::Char('y'), KeyCode::Char('a'), KeyCode::Enter] {
+            let mut input = String::new();
+            let mut scroll: u16 = 0;
+            let mut mode = overlay_mode_for("req-allow");
+            let out = handle_terminal_event(key_event(code), &mut mode, &mut scroll, &mut input, 0);
+            assert_publish(out, "req-allow", "allow");
+            assert!(
+                matches!(mode, InputMode::Normal),
+                "mode must transition back to Normal for {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_mode_deny_keys_publish_deny_answer() {
+        for code in [KeyCode::Char('n'), KeyCode::Char('d'), KeyCode::Esc] {
+            let mut input = String::new();
+            let mut scroll: u16 = 0;
+            let mut mode = overlay_mode_for("req-deny");
+            let out = handle_terminal_event(key_event(code), &mut mode, &mut scroll, &mut input, 0);
+            assert_publish(out, "req-deny", "deny");
+            assert!(matches!(mode, InputMode::Normal));
+        }
+    }
+
+    #[test]
+    fn overlay_mode_s_publishes_always_allow_session_answer() {
+        let mut input = String::new();
+        let mut scroll: u16 = 0;
+        let mut mode = overlay_mode_for("req-aas");
+        let out = handle_terminal_event(
+            key_event(KeyCode::Char('s')),
+            &mut mode,
+            &mut scroll,
+            &mut input,
+            0,
+        );
+        assert_publish(out, "req-aas", "always_allow_session");
+        assert!(matches!(mode, InputMode::Normal));
+    }
+
+    #[test]
+    fn overlay_mode_non_answer_key_remains_ignore() {
+        let mut input = String::new();
+        let mut scroll: u16 = 0;
+        let mut mode = overlay_mode_for("req-ignore");
+        let out = handle_terminal_event(
+            key_event(KeyCode::Char('x')),
+            &mut mode,
+            &mut scroll,
+            &mut input,
+            0,
+        );
+        assert!(
+            matches!(out, EventOutcome::Ignore),
+            "non-answer overlay key must yield Ignore, got {out:?}"
+        );
+        assert!(
+            matches!(mode, InputMode::ConfirmOverlay { .. }),
+            "mode must remain ConfirmOverlay on non-answer key"
+        );
     }
 
     #[test]
