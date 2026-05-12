@@ -1,9 +1,62 @@
 # m6 — v1 polish + release readiness — scope
 
-> **Status:** round 3 — claude-authored 2026-05-12, awaiting pi
-> round 3. Folds `scope-pi-review-2.md` (B/2 M/5 N/3, verdict:
-> blocking-but-narrowing) on top of round 2's full
-> `scope-pi-review-1.md` fold. Round 2's residual issues were
+> **Status:** round 4 — claude-authored 2026-05-12, awaiting pi
+> round 4. Folds `scope-pi-review-3.md` (B/2 M/1 N/1, verdict:
+> blocking-but-very-narrow) on top of rounds 2–3. Round-3
+> residuals: (a) round-3's `bin/<plugin-bin>` symlinks in the
+> release plugin tree would canonicalise outside `package_dir`
+> and trip `compile::resolve_entry`'s `EntryEscape` check
+> (`rafaello-core/src/compile.rs:440-465`) and
+> `validate_with_package::resolve_inside_package`'s
+> `!canon.starts_with(pkg_canon)` rejection
+> (`rafaello-core/src/manifest/validate_with_package.rs:100-117`);
+> (b) the J2 tmux script `cd`-ed into an empty `mktemp -d`
+> with no flake, and `rfl install` lacked `--project-root` so
+> init/install/chat/audit could not all be redirected the
+> same way; (c) the fake-syd fixture path
+> `tests/fixtures/fake_syd.rs` is not auto-built by Cargo;
+> (d) F1 mixed package-name list with the acceptance
+> installed-binary list. Round 4 folds:
+>
+> - **Release plugin tree carries real binaries, not symlinks**
+>   (B-1). Each `<release-prefix>/share/rafaello/plugins/<plugin>/`
+>   contains an **actual** `bin/<plugin-bin>` file alongside
+>   the manifest, so `canonicalize → starts_with(package_dir)`
+>   holds. Top-level `<release-prefix>/bin/` carries only the
+>   user-facing `rfl` (+ `rfl-tui` for the chat subprocess
+>   tree per `decisions.md` row 34). PP1 acceptance asserts
+>   `compile::resolve_entry` succeeds against the post-`rfl init`
+>   `.rafaello/plugins/<topic-id>/bin/rfl-openai`.
+> - **J2 runs from the lab worktree, not the throwaway
+>   project** (B-2). All `rfl <subcommand>` invocations get
+>   `--project-root "$PROJECT"`; `rfl install` gains
+>   `--project-root` in Phase B1 (one-line addition for
+>   symmetry with `init`/`chat`/`audit`); J2 explicitly
+>   `mkdir -p`s the transcript dir; a final copy step lands
+>   the captures under
+>   `rafaello/plans/milestones/m6-polish-release/transcripts/section-5/`
+>   for commit.
+> - **Fake-syd as a Cargo `[[bin]]`** (M-1). Adds
+>   `[[bin]] name = "fake-syd" path = "tests/bin/fake_syd.rs"
+>   required-features = ["test-fixture"]` to
+>   `lockin/crates/sandbox/Cargo.toml` so Cargo discovers and
+>   builds it under the existing `test-fixture` feature gate;
+>   C3 tests use `env!("CARGO_BIN_EXE_fake-syd")` to locate
+>   the binary at runtime.
+> - **F1 list renamed "package build set"** (N-1); acceptance
+>   keeps the "release binary set" naming for the
+>   installed-binary list.
+>
+> Cumulative trajectory: round 1 → 7B/6M/4N (BLOCKING) →
+> round 2 → 2B/5M/3N (BLOCKING-narrowing) → round 3 →
+> 2B/1M/1N (BLOCKING-very-narrow) → round 4 (this commit),
+> target verdict CONVERGED.
+>
+> Prior-round status text (preserved for traceability):
+>
+> Round 3 folded `scope-pi-review-2.md` (B/2 M/5 N/3,
+> verdict: blocking-but-narrowing). Round 2's residual issues
+> were
 > all about lining the new install/release-tree story up with
 > the **live** `rfl chat` package resolver
 > (`${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/rafaello.toml`,
@@ -375,24 +428,53 @@ ${PROJECT_ROOT}/.rafaello/plugins/<topic-id>/
 ├── rafaello.toml           # bundled plugin manifest
 ├── openrpc.json            # sibling per decisions.md row 31
 ├── bin/
-│   └── rfl-openai          # entry binary
+│   └── rfl-openai          # entry binary — REAL FILE (not symlink)
 └── schemas/                # grant-match templates (if any)
     └── …
 ```
 
+**PP1 containment invariant (round-4 B-1 fold).** The
+`entry = "bin/rfl-openai"` field in the lock's `[plugin."…"]`
+table resolves through `compile::resolve_entry`
+(`crates/rafaello-core/src/compile.rs:440-465`) and
+`validate_with_package::resolve_inside_package`
+(`crates/rafaello-core/src/manifest/validate_with_package.rs:100-117`),
+both of which **canonicalise the joined path and reject
+anything whose canonical target escapes `package_dir`**
+(`EntryEscape`). Therefore the binary inside the plugin's
+`bin/` directory **must be an actual file**, not a symlink
+into `<release-prefix>/bin/` or anywhere else outside the
+plugin's package directory. The Phase F package output writes
+the binary directly to
+`$out/share/rafaello/plugins/<plugin>/bin/<plugin-bin>`; the
+PP1 copy step uses a recursive file copy (or
+dereferencing-symlink copy if upstream Nix store layout
+produces symlinks), never a symlink-preserving copy.
+
+Top-level `<release-prefix>/bin/` is irrelevant for plugin
+binaries; it carries only the user-facing entry points
+**`rfl`** (the CLI binary) and **`rfl-tui`** (spawned as a
+subprocess by `rfl chat` per `decisions.md` row 34). The
+bundled plugin binaries — `rfl-openai`, `rfl-mailcat`,
+`rfl-readfile`, `rfl-mockprovider`, `rafaello-fetch`,
+`rfl-openai-stub` — live **only** inside their respective
+`share/rafaello/plugins/<plugin>/bin/` directories.
+
 The bundled package **source** lives in the release tree at
 `<release-prefix>/share/rafaello/plugins/<plugin-name>/`
 (Phase F lays this out). Cold-start (Phase A) and explicit
-install (Phase B) **copy** that tree into the project's
-`.rafaello/plugins/<topic-id>/` so the live runtime resolver
-finds it. The lock's `entry = "bin/rfl-openai"` is relative to
-the copied package directory; `digest` and `manifest_digest`
-are computed over the **copied** tree so subsequent
-`rfl chat` revalidation passes.
+install (Phase B) **copy** that tree (dereferencing any
+symlinks) into the project's `.rafaello/plugins/<topic-id>/`
+so the live runtime resolver finds it. `digest` and
+`manifest_digest` are computed over the **copied** tree so
+subsequent `rfl chat` revalidation passes.
 
 This invariant ties the entire install/runtime story together:
 without it, Phase A writes a valid-looking lock but `rfl chat`
-fails to find the manifest. Pi round-2 B-1 caught the gap.
+fails to find the manifest, or `compile::resolve_entry`
+rejects the entry as `EntryEscape`. Pi round-2 B-1 surfaced
+the missing copy step; round-3 B-1 surfaced the symlink
+containment violation.
 
 ### Phase A — `rfl init` (≈4 commits)
 
@@ -487,12 +569,18 @@ the user must later `rfl install` an alternate provider.
 - `rfl_init_writes_default_lock.rs` — `--yes` happy path;
   asserts the generated TOML deserialises via `Lock::from_toml`
   and the round-trip is byte-stable.
-- `rfl_init_materialises_package_dir.rs` (**round-3 B-1**) —
-  after `rfl init --yes`, asserts
-  `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/rafaello.toml`
-  exists, `bin/rfl-openai` is present, and the lock's
-  `digest` / `manifest_digest` fields match the digests of
-  the copied tree (per PP1).
+- `rfl_init_materialises_package_dir.rs` (**round-3 B-1 +
+  round-4 B-1**) — after `rfl init --yes`, asserts:
+  - `${PROJECT_ROOT}/.rafaello/plugins/<topic-id-of-openai>/rafaello.toml`
+    exists and parses via `Manifest::parse`;
+  - `bin/rfl-openai` exists inside the same directory as a
+    **regular file** (`std::fs::metadata(...).file_type().is_file()`
+    is `true`, `is_symlink()` is `false`);
+  - the lock's `digest` / `manifest_digest` fields match the
+    digests of the copied tree (per PP1);
+  - `compile::resolve_entry(&plugin_dir, "bin/rfl-openai")`
+    returns `Ok(_)` with the canonical path inside
+    `plugin_dir` (no `EntryEscape`).
 - `rfl_init_idempotent_no_overwrite.rs` — second run leaves the
   lock byte-identical and exits 0; the materialised package
   dir is also unchanged.
@@ -527,6 +615,12 @@ Extends `InstallArgs` (live
   conflicts_with = "fixture")]`. Exactly one of the two must
   be supplied; setting both is a clap error before `run()`
   executes.
+- `project_root: Option<PathBuf>` (round-4 B-2 fold) —
+  matches the existing `rfl chat --project-root` and the new
+  `rfl init --project-root` + `rfl audit --project-root`
+  ergonomics. Defaults to `std::env::current_dir()`. Lets the
+  J2 tmux script point every `rfl <subcommand>` at the same
+  throwaway project from a single lab-worktree cwd.
 
 Resolution order:
 
@@ -570,12 +664,25 @@ manifest named **`rafaello.toml`** (not `manifest.toml`) per
 <release-prefix>/share/rafaello/plugins/<plugin>/
 ├── rafaello.toml
 ├── openrpc.json
-├── bin/<plugin-bin>        # symlink to ../../../bin/<plugin-bin> for compactness
+├── bin/<plugin-bin>        # REAL FILE (round-4 B-1 — not symlink)
 └── schemas/                # grant-match templates (if any)
 ```
 
-The Phase F package output installs both `bin/` (resolved
-binaries) and `share/rafaello/plugins/` as a single layout.
+Round-4 B-1 fold: `bin/<plugin-bin>` is an **actual file
+inside the plugin's package directory**, not a symlink into
+`<release-prefix>/bin/`. The `compile::resolve_entry` /
+`validate_with_package::resolve_inside_package` containment
+checks canonicalise the path and reject anything escaping
+`package_dir`; a symlink whose target lives in
+`<release-prefix>/bin/` would canonicalise out and trip
+`EntryEscape`. The Phase F package output writes each plugin
+binary directly into its plugin-specific
+`share/rafaello/plugins/<plugin>/bin/` directory.
+
+Top-level `<release-prefix>/bin/` carries only the
+user-facing entry points: `rfl` (CLI) and `rfl-tui` (the
+TUI subprocess spawned by `rfl chat` per `decisions.md` row
+34). Plugin binaries do **not** live in `<release-prefix>/bin/`.
 
 **B3 — tests.** Integration tests in
 `rafaello/tests/rfl_install_positional_*.rs`:
@@ -598,6 +705,18 @@ binaries) and `share/rafaello/plugins/` as a single layout.
   M-5) — invoking `rfl install` with neither argument is a
   clap error; invoking with both is a clap error; both cases
   exit non-zero before `run()`.
+- `rfl_install_project_root_flag.rs` (round-4 B-2) —
+  `rfl install rfl-mailcat --project-root <tmpdir>` from a
+  different cwd writes the lock + materialised package dir
+  under `<tmpdir>/.rafaello/plugins/<topic-id>/`, not under
+  the invoking cwd.
+- `rfl_install_resolves_entry_against_canonicalised_package_dir.rs`
+  (round-4 B-1) — after `rfl install rfl-mailcat` against a
+  fixture release tree whose `bin/rfl-mailcat` is a real
+  file, asserts `compile::resolve_entry(&plugin_dir,
+  &manifest.entry)` returns `Ok(<canonicalised-path>)` and
+  the canonicalised path lies inside the project's
+  `.rafaello/plugins/<topic-id>/` (no `EntryEscape`).
 
 Glossary candidate: `rfl install <plugin>` (positional argument
 resolves against the bundled plugin tree).
@@ -648,16 +767,30 @@ fix and a silent fallback would re-introduce the m5a wall.
 The patch lands in **upstream lockin** (owner-judgment item 2
 below — default: upstream lockin).
 
-**C3 — regression tests.** Round-3 M-4 fold: instead of
-asserting stderr-absence (weak proxy), introduce a **fake
-`syd` wrapper** test binary at
-`lockin/crates/sandbox/tests/fixtures/fake_syd.rs` that
-prints its `argv` and `environ` to a sentinel file (path
-passed via `RFL_FAKE_SYD_RECORD_PATH`) then `exec`s `true`.
-Tests instantiate a `SandboxSpec` whose `syd_path` points at
-the compiled fake-syd binary, run a no-op child command, and
-read the sentinel file. Three tests in
-`lockin/crates/sandbox/tests/`:
+**C3 — regression tests.** Round-3 M-4 + round-4 M-1 fold:
+introduce a **fake `syd` wrapper** Cargo binary at
+`lockin/crates/sandbox/tests/bin/fake_syd.rs`, registered as a
+test-only `[[bin]]` in `lockin/crates/sandbox/Cargo.toml`:
+
+```toml
+[[bin]]
+name = "fake-syd"
+path = "tests/bin/fake_syd.rs"
+required-features = ["test-fixture"]
+```
+
+The `required-features = ["test-fixture"]` gate keeps the
+fixture binary out of the default release build per the
+project-wide `test-fixture` feature convention. Tests opt in
+via `--features test-fixture` (already standard for the
+rafaello test suite). The binary prints its `argv` and
+`environ` to a sentinel file (path passed via
+`RFL_FAKE_SYD_RECORD_PATH`), then `exec`s `true`. Integration
+tests locate it via `env!("CARGO_BIN_EXE_fake-syd")` — the
+same Cargo-injected env-var mechanism the live syd discovery
+uses for `CARGO_BIN_EXE_syd-pty`.
+
+Three tests in `lockin/crates/sandbox/tests/`:
 
 - `fake_syd_records_cargo_bin_exe_env_when_set_explicitly.rs` —
   `spec.syd_pty_path = Some(<fixture-syd-pty-path>)`. Asserts
@@ -822,39 +955,62 @@ Per roadmap row + pi B-1 reframe. The output already exists
 binary, so consumers like the Homebrew formula (Phase G) have
 nothing to install for `rfl-openai`, `rfl-tui`, etc.
 
-**F1 — expand `cargoBuildFlags` to every release binary.**
-Replace the `[ "-p" "rafaello" ]` line with the **release-binary
-list** (round-3 M-2 reconciliation; `rafaello-bus-fixture` is
-test-shaped and **excluded** per owner-judgment item 9
-default):
+**F1 — expand `cargoBuildFlags` to the package build set.**
+(Round-4 N-1 rename: "package build set" is the list of
+Cargo **package** names passed via `-p` flags;
+"release binary set" in the acceptance summary names the
+**installed binaries** produced by those packages. The two
+lists are 1:1 in m6 but conceptually distinct — Cargo
+packages can produce multiple binaries; here each does
+exactly one.)
 
-- `rafaello` (the `rfl` binary)
-- `rafaello-tui`
-- `rafaello-openai`
-- `rafaello-openai-stub` *(included for `manual-validation.md`
-  scripted demo + integration tests; owner may move to
-  test-only if v1-demo doesn't need a runnable stub on a
-  user machine — owner-judgment item 13 below)*
-- `rafaello-readfile`
-- `rafaello-mailcat`
-- `rafaello-mockprovider`
-- `rafaello-fetch`
+The **package build set** (round-3 M-2 reconciliation;
+`rafaello-bus-fixture` is test-shaped and **excluded** per
+owner-judgment item 9 default):
 
-The acceptance summary lists this same set. The bus-fixture
-crate stays inside the test tree and never ships to end users.
+- `rafaello`            → installs `rfl`
+- `rafaello-tui`        → installs `rfl-tui`
+- `rafaello-openai`     → installs `rfl-openai`
+- `rafaello-openai-stub` → installs `rfl-openai-stub`
+  *(included for `manual-validation.md` scripted demo +
+  integration tests; owner-judgment item 13)*
+- `rafaello-readfile`   → installs `rfl-readfile`
+- `rafaello-mailcat`    → installs `rfl-mailcat`
+- `rafaello-mockprovider` → installs `rfl-mockprovider`
+- `rafaello-fetch`      → installs `rafaello-fetch`
+
+Replace the live `[ "-p" "rafaello" ]` in
+`rafaello/nix/package.nix:16` with the eight-package list
+above. The bus-fixture crate stays inside the test tree and
+never ships to end users.
 
 **F2 — bundled plugin tree in the package output.** Phase B2
 promotes the bundled plugin source trees to
 `<release-prefix>/share/rafaello/plugins/<plugin>/` with the
-manifest named **`rafaello.toml`** (per `decisions.md` row 25
-— round-3 B-1 / B-2 fold). F2 plumbs them through
-`package.nix`: a `postInstall` step copies each plugin's
-manifest tree (`rafaello/crates/<plugin>/rafaello.toml`, the
-sibling `openrpc.json` per `decisions.md` row 31, and any
-`schemas/` directory) to
-`$out/share/rafaello/plugins/<plugin>/`. The `bin/<plugin-bin>`
-inside each plugin dir is a relative symlink into `$out/bin/`
-so the layout matches PP1's expected tree shape.
+manifest named **`rafaello.toml`** (per `decisions.md` row 25).
+F2 plumbs them through `package.nix`'s `postInstall` step:
+
+- Copies each plugin's manifest tree
+  (`rafaello/crates/<plugin>/rafaello.toml`, the sibling
+  `openrpc.json` per `decisions.md` row 31, and any
+  `schemas/` directory) to
+  `$out/share/rafaello/plugins/<plugin>/`.
+- **Moves** each plugin binary (built by Cargo into
+  `$out/bin/<bin>` per the standard `buildRustPackage`
+  layout) into its plugin-specific
+  `$out/share/rafaello/plugins/<plugin>/bin/<bin>` directory
+  as an **actual file** (round-4 B-1 fold). Plugin binaries
+  are **removed** from `$out/bin/`.
+- Leaves only `$out/bin/rfl` and `$out/bin/rfl-tui` at the
+  top level — the two user-facing entry points (`rfl` is
+  the CLI; `rfl-tui` is the subprocess spawned by `rfl chat`
+  per `decisions.md` row 34).
+
+This ensures `compile::resolve_entry` /
+`validate_with_package::resolve_inside_package` containment
+checks pass against the plugin's own package directory after
+the PP1 copy step (the binary's canonical path stays inside
+the plugin dir; no symlink target escapes).
 
 **F3 — CI matrix coverage.** GitHub Actions extends with a
 `nix build .#rafaello` job on `ubuntu-latest` and
@@ -1060,44 +1216,59 @@ existing 9-line m5b c15 file with seven sections:
 `crates/rafaello-core/src/gate/mod.rs:374-378`):
 
 ```sh
-# Setup.
-PROJECT=$(mktemp -d)
-cd "$PROJECT"
-nix develop .#rafaello --impure --command rfl init --yes
-export LITELLM_API_KEY=<dev-proxy-key-from-pass>
-nix develop .#rafaello --impure --command rfl install rfl-mailcat
+# Round-4 B-2 fold: every `rfl <subcommand>` invocation runs
+# from inside the lab worktree (where `.#rafaello` resolves)
+# and points at the throwaway PROJECT via `--project-root`.
 
-# Open the tmux session that hosts rfl chat.
+LAB_WORKTREE=/home/luiz/lab            # or current rafaello-v0.1 worktree
+PROJECT=$(mktemp -d -t m6-demo-XXXX)
+TRANSCRIPTS="$PROJECT/transcripts/section-5"
+mkdir -p "$TRANSCRIPTS"
+
+cd "$LAB_WORKTREE"
+
+# Materialise the lock + bundled rfl-openai under $PROJECT.
+nix develop .#rafaello --impure --command \
+  rfl init --yes --project-root "$PROJECT"
+
+export LITELLM_API_KEY=<dev-proxy-key-from-pass>
+
+# Install rfl-mailcat under the same $PROJECT.
+nix develop .#rafaello --impure --command \
+  rfl install rfl-mailcat --project-root "$PROJECT"
+
+# Open the tmux session that hosts rfl chat against $PROJECT.
 tmux new-session -d -s rafaello-m6-demo \
-  "cd '$PROJECT' && nix develop .#rafaello --impure --command rfl chat"
+  "cd '$LAB_WORKTREE' && nix develop .#rafaello --impure --command \
+     rfl chat --project-root '$PROJECT'"
 
 # Wait for the TUI to render the initial pane.
 sleep 2
 tmux capture-pane -t rafaello-m6-demo -p \
-  > "$PROJECT/transcripts/section-5/01-after-launch.txt"
+  > "$TRANSCRIPTS/01-after-launch.txt"
 
 # Send a prompt that triggers the send-mail tool.
 tmux send-keys -t rafaello-m6-demo \
   "Please email alice@example.com a one-line hello note." Enter
 sleep 3
 tmux capture-pane -t rafaello-m6-demo -p \
-  > "$PROJECT/transcripts/section-5/02-modal.txt"
+  > "$TRANSCRIPTS/02-modal.txt"
 # Live overlay copy (confirm.rs:160-211):
 #   - title border:  " confirm "
 #   - summary line:  "send-mail via local:mailcat@0.0.0 — sinks: [mail]"
 #   - args line:     "args: { … "alice@example.com" … }"
 #   - sinks line:    "sinks: mail"
-grep " confirm "          "$PROJECT/transcripts/section-5/02-modal.txt"
-grep "send-mail via"      "$PROJECT/transcripts/section-5/02-modal.txt"
-grep "sinks: mail"        "$PROJECT/transcripts/section-5/02-modal.txt"
-grep "alice@example.com"  "$PROJECT/transcripts/section-5/02-modal.txt"
+grep " confirm "          "$TRANSCRIPTS/02-modal.txt"
+grep "send-mail via"      "$TRANSCRIPTS/02-modal.txt"
+grep "sinks: mail"        "$TRANSCRIPTS/02-modal.txt"
+grep "alice@example.com"  "$TRANSCRIPTS/02-modal.txt"
 
 # Allow the call. Live binding (rafaello-tui/src/lib.rs:70):
 #   KeyCode::Char('y') | KeyCode::Char('a') | KeyCode::Enter => Allow.
 tmux send-keys -t rafaello-m6-demo "a"
 sleep 3
 tmux capture-pane -t rafaello-m6-demo -p \
-  > "$PROJECT/transcripts/section-5/03-response.txt"
+  > "$TRANSCRIPTS/03-response.txt"
 # The assistant-message line from the live LiteLLM model (or the
 # multi-turn stub if running deterministically) acknowledges the
 # send. Operator pastes the rendered line; no fixed substring
@@ -1112,18 +1283,24 @@ sleep 1
 tmux kill-session -t rafaello-m6-demo
 
 # Audit + SQLite dumps.
-nix develop .#rafaello --impure --command rfl audit \
-  --project-root "$PROJECT" \
-  > "$PROJECT/transcripts/section-5/04-audit.txt"
-grep "confirm_request"   "$PROJECT/transcripts/section-5/04-audit.txt"
-grep "confirm_allowed"   "$PROJECT/transcripts/section-5/04-audit.txt"
+nix develop .#rafaello --impure --command \
+  rfl audit --project-root "$PROJECT" \
+  > "$TRANSCRIPTS/04-audit.txt"
+grep "confirm_request"   "$TRANSCRIPTS/04-audit.txt"
+grep "confirm_allowed"   "$TRANSCRIPTS/04-audit.txt"
 
 sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
   "SELECT seq, kind, request_id FROM audit_events ORDER BY seq" \
-  > "$PROJECT/transcripts/section-5/05-sqlite-audit.txt"
+  > "$TRANSCRIPTS/05-sqlite-audit.txt"
 sqlite3 "$PROJECT/.rafaello/state/session.sqlite" \
   "SELECT seq, kind FROM entries ORDER BY seq" \
-  > "$PROJECT/transcripts/section-5/06-sqlite-entries.txt"
+  > "$TRANSCRIPTS/06-sqlite-entries.txt"
+
+# Round-4 B-2: final copy of captured transcripts into the
+# in-repo committed location.
+REPO_TRANSCRIPTS="$LAB_WORKTREE/rafaello/plans/milestones/m6-polish-release/transcripts/section-5"
+mkdir -p "$REPO_TRANSCRIPTS"
+cp "$TRANSCRIPTS"/*.txt "$REPO_TRANSCRIPTS/"
 ```
 
 Allow key (`a`) matches the live binding at
@@ -1531,12 +1708,12 @@ existing rows rather than adding new commits.
 | 1 | A1 | `rfl init` CLI scaffold + idempotency invariant | 1 |
 | 2 | A2 | `rfl-openai` default-entry materialisation against live lock schema | 1 |
 | 3 | A3 | install-time review prompt (TTY + `--yes` + decline paths) | 1 |
-| 4 | A4 | `rfl init` integration tests (4 tests) | 1 |
+| 4 | A4 | `rfl init` integration tests (4 tests incl. PP1 + `resolve_entry` assertion) | 1 |
 | 5 | B1 | `rfl install` positional plugin-id resolution + `--fixture: Option` (clap conflicts/required-unless) + PP1 package-tree copy | 1 |
 | 6 | B2 | bundled plugin source tree under `share/rafaello/plugins/<plugin>/` with manifest `rafaello.toml` | 1 |
-| 7 | B3 | `rfl install <plugin>` integration tests (4 tests incl. clap-error case) | 1 |
+| 7 | B3 | `rfl install <plugin>` integration tests (6 tests incl. clap-error, `--project-root`, `resolve_entry` containment) | 1 |
 | 8 | C1 | devshell `CARGO_BIN_EXE_syd-pty` export | 1 |
-| 9 | C2 | lockin sandbox `resolve_syd_pty_path` + env on syd child + fake-syd test fixture | 1 |
+| 9 | C2 | lockin sandbox `resolve_syd_pty_path` + env on syd child + fake-syd `[[bin]]` in `sandbox/Cargo.toml` | 1 |
 | 10 | C3 | syd-pty discovery tests (3 fake-syd lockin tests + 1 rafaello-side smoke test) | 1 |
 | 11 | D1 | `rfl audit` CLI scaffold against live `audit_events` schema + `--project-root` flag | 1 |
 | 12 | D2 | filter flags (`--kind`, `--since`, `--request-id` no-join, `--json`, `--full`) | 1 |
@@ -1544,7 +1721,7 @@ existing rows rather than adding new commits.
 | 14 | E1 | `RFL_OPENAI_STUB_SCRIPTED_TURNS` parser + dispatcher (correct crate path) | 1 |
 | 15 | E2 | stub scripted-turns unit tests (incl. mutual-exclusion + exhaustion) | 1 |
 | 16 | F1 | `cargoBuildFlags` expansion to every **release binary** (8-binary list; bus-fixture excluded per item 9) | 1 |
-| 17 | F2 | bundled plugin source trees in package output (`share/rafaello/plugins/<plugin>/rafaello.toml` + openrpc + schemas) | 1 |
+| 17 | F2 | bundled plugin source trees in package output (real binaries inside each plugin dir; `bin/` top-level retains only `rfl` + `rfl-tui`) | 1 |
 | 18 | F3 | CI matrix `nix build` on Linux + macOS | 1 |
 | 19 | G1 | Homebrew formula scaffold per chosen model (default G.β separate tap) | 1 |
 | 20 | G2 | release-tag automation (G.β only — vacates if G.α or G.γ wins item 5) | 0-1 |
@@ -1692,14 +1869,12 @@ immediately after per `decisions.md` row 33 ⇒ v1 demo-ready.
 
 ## Disagreements with pi (cumulative)
 
-**Round 1**: none. **Round 2**: none — round-1 pi closed
-B-6's no-fallback interpretation in round-2 review ("closed
-on policy. Round 2 chooses no lockin-layer fallback"). **Round
-3**: none. Every round-2 B/M/N item is folded as a direct text
-change; no items are being argued back. The G.β model is
-made actionable (M-1 fold) but remains owner-overridable at
-ratification — that's a clarification of default semantics,
-not a disagreement.
+**Round 1**: none. **Round 2**: none. **Round 3**: none.
+**Round 4**: none. Every B/M/N item across all four rounds is
+folded as a direct text change; no items are being argued
+back. The G.β model is made actionable (round-3 M-1 fold)
+but remains owner-overridable at ratification — that's a
+clarification of default semantics, not a disagreement.
 
 ---
 
@@ -1708,10 +1883,12 @@ not a disagreement.
 - Round 1 → `scope-pi-review-1.md` (B/7 M/6 N/4, BLOCKING).
 - Round 2 → `scope-pi-review-2.md` (B/2 M/5 N/3,
   BLOCKING-but-narrowing).
-- Round 3 → this commit. Folds every round-2 B/M/N. Awaiting
-  pi round 3; target verdict is 0/0/0 or nits-only.
+- Round 3 → `scope-pi-review-3.md` (B/2 M/1 N/1,
+  BLOCKING-but-very-narrow).
+- Round 4 → this commit. Folds every round-3 B/M/N. Awaiting
+  pi round 4; target verdict CONVERGED.
 
 ---
 
-*End of m6 scope round 3 draft. Claude-authored; awaiting pi
+*End of m6 scope round 4 draft. Claude-authored; awaiting pi
 adversarial review per `plans/README.md` Phase 2.*
