@@ -498,7 +498,7 @@ fn ingest_notification(
     let Some(payload) = params.get("payload") else {
         return false;
     };
-    if topic.starts_with("core.entry.") {
+    if topic.starts_with("core.session.entry.") {
         let Some(tree) = payload.get("tree") else {
             return false;
         };
