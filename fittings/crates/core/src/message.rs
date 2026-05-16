@@ -1,88 +1,13 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Number, Value};
+use serde_json::Value;
 
 pub type Metadata = HashMap<String, String>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcId {
-    String(String),
-    Number(Number),
-    Null,
-}
-
-impl JsonRpcId {
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for JsonRpcId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::String(value) => write!(f, "{value}"),
-            Self::Number(value) => write!(f, "{value}"),
-            Self::Null => f.write_str("null"),
-        }
-    }
-}
-
-impl From<String> for JsonRpcId {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
-
-impl From<&str> for JsonRpcId {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_owned())
-    }
-}
-
-impl From<&String> for JsonRpcId {
-    fn from(value: &String) -> Self {
-        Self::String(value.clone())
-    }
-}
-
-impl From<&JsonRpcId> for JsonRpcId {
-    fn from(value: &JsonRpcId) -> Self {
-        value.clone()
-    }
-}
-
-impl From<i64> for JsonRpcId {
-    fn from(value: i64) -> Self {
-        Self::Number(value.into())
-    }
-}
-
-impl From<u64> for JsonRpcId {
-    fn from(value: u64) -> Self {
-        Self::Number(value.into())
-    }
-}
-
-impl From<Number> for JsonRpcId {
-    fn from(value: Number) -> Self {
-        Self::Number(value)
-    }
-}
-
-impl PartialEq<&str> for JsonRpcId {
-    fn eq(&self, other: &&str) -> bool {
-        matches!(self, Self::String(value) if value == other)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
-    pub id: Option<JsonRpcId>,
+    pub id: String,
     pub method: String,
     pub params: Value,
     #[serde(default, skip_serializing, skip_deserializing)]
@@ -91,7 +16,7 @@ pub struct Request {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
-    pub id: JsonRpcId,
+    pub id: String,
     pub result: Value,
     #[serde(default, skip_serializing, skip_deserializing)]
     pub metadata: Metadata,
@@ -111,18 +36,11 @@ impl std::fmt::Display for ServiceError {
 }
 
 impl ServiceError {
-    pub const SERVER_BAND: std::ops::RangeInclusive<i32> = -32099..=-32000;
-    pub const RESERVED_CLUSTER: std::ops::RangeInclusive<i32> = -32768..=-32000;
+    pub const MIN_CODE: i32 = 1;
+    pub const MAX_CODE: i32 = 999;
 
     pub fn is_valid_code_value(code: i32) -> bool {
-        match code {
-            0 => false,
-            1..=i32::MAX => true,
-            -31999..=-1 => true,
-            -32099..=-32000 => true,
-            -32768..=-32100 => false,
-            i32::MIN..=-32769 => true,
-        }
+        (Self::MIN_CODE..=Self::MAX_CODE).contains(&code)
     }
 
     pub fn has_valid_code(&self) -> bool {
@@ -134,7 +52,7 @@ impl ServiceError {
 mod tests {
     use serde_json::json;
 
-    use super::{JsonRpcId, Request, Response, ServiceError};
+    use super::{Request, Response, ServiceError};
 
     #[test]
     fn request_response_serde_roundtrip_and_metadata_isolation() {
@@ -165,7 +83,7 @@ mod tests {
         assert!(request_out.get("metadata").is_none());
 
         let mut response = Response {
-            id: JsonRpcId::from("req-1"),
+            id: "req-1".to_string(),
             result: json!({"ok": true}),
             metadata: Default::default(),
         };
@@ -177,7 +95,7 @@ mod tests {
         let response_back: Response =
             serde_json::from_value(response_out).expect("response should deserialize");
         assert!(response_back.metadata.is_empty());
-        assert_eq!(response_back.id, JsonRpcId::from("req-1"));
+        assert_eq!(response_back.id, "req-1");
         assert_eq!(response_back.result, json!({"ok": true}));
 
         let response_with_metadata: Response = serde_json::from_value(json!({
@@ -190,37 +108,23 @@ mod tests {
     }
 
     #[test]
-    fn service_error_code_helper_accepts_widened_ranges() {
+    fn service_error_code_helper_accepts_only_rfc_pass_through_range() {
         assert!(ServiceError::is_valid_code_value(1));
-        assert!(ServiceError::is_valid_code_value(42));
+        assert!(ServiceError::is_valid_code_value(500));
         assert!(ServiceError::is_valid_code_value(999));
-        assert!(ServiceError::is_valid_code_value(1_000));
-        assert!(ServiceError::is_valid_code_value(i32::MAX));
-
-        assert!(ServiceError::is_valid_code_value(-1));
-        assert!(ServiceError::is_valid_code_value(-31_999));
-        assert!(ServiceError::is_valid_code_value(-32_000));
-        assert!(ServiceError::is_valid_code_value(-32_050));
-        assert!(ServiceError::is_valid_code_value(-32_099));
-        assert!(ServiceError::is_valid_code_value(-32_769));
-        assert!(ServiceError::is_valid_code_value(-40_000));
-        assert!(ServiceError::is_valid_code_value(i32::MIN));
 
         assert!(!ServiceError::is_valid_code_value(0));
-        assert!(!ServiceError::is_valid_code_value(-32_100));
-        assert!(!ServiceError::is_valid_code_value(-32_600));
-        assert!(!ServiceError::is_valid_code_value(-32_603));
-        assert!(!ServiceError::is_valid_code_value(-32_700));
-        assert!(!ServiceError::is_valid_code_value(-32_768));
+        assert!(!ServiceError::is_valid_code_value(-1));
+        assert!(!ServiceError::is_valid_code_value(1_000));
 
         let valid = ServiceError {
-            code: -31_999,
-            message: "above reserved negative".into(),
+            code: 123,
+            message: "ok".into(),
             data: None,
         };
         let invalid = ServiceError {
-            code: 0,
-            message: "zero is reserved by JSON-RPC".into(),
+            code: 1_001,
+            message: "too large".into(),
             data: None,
         };
 

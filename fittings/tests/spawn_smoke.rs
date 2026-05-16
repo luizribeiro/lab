@@ -20,7 +20,6 @@ struct MissingNameParams {}
 trait SpawnHelloInvalidParamsClientService {
     async fn hello(
         &self,
-        ctx: fittings::ServiceContext,
         params: MissingNameParams,
     ) -> Result<HelloResult, fittings::FittingsError>;
 }
@@ -37,7 +36,6 @@ struct MissingMethodResult {
 trait SpawnHelloUnknownMethodClientService {
     async fn missing(
         &self,
-        ctx: fittings::ServiceContext,
         params: MissingMethodParams,
     ) -> Result<MissingMethodResult, fittings::FittingsError>;
 }
@@ -175,8 +173,7 @@ async fn generated_typed_client_surfaces_service_side_invalid_params() {
 
     assert!(matches!(
         error,
-        FittingsError::InvalidParams { message, .. }
-            if message.contains("failed to decode params for method `hello`")
+        FittingsError::InvalidParams(message) if message == "Invalid params"
     ));
 }
 
@@ -193,7 +190,7 @@ async fn generated_typed_client_surfaces_unknown_method_errors() {
 
     assert!(matches!(
         error,
-        FittingsError::MethodNotFound { message, .. } if message == "missing"
+        FittingsError::MethodNotFound(message) if message == "Method not found"
     ));
 }
 
@@ -449,7 +446,7 @@ fn invalid_envelope_reuses_string_id_and_maps_to_invalid_request() {
     let response = parse_single_response(&output.stdout);
     assert_eq!(response["id"], "bad-1");
     assert_eq!(response["error"]["code"], -32600);
-    assert_eq!(response["error"]["message"], "unexpected field `metadata`");
+    assert_eq!(response["error"]["message"], "Invalid Request");
 }
 
 #[test]
@@ -488,10 +485,7 @@ fn empty_batch_returns_single_invalid_request_error() {
     let response = parse_single_response(&output.stdout);
     assert_eq!(response["id"], Value::Null);
     assert_eq!(response["error"]["code"], -32600);
-    assert_eq!(
-        response["error"]["message"],
-        "batch request must not be empty"
-    );
+    assert_eq!(response["error"]["message"], "Invalid Request");
 }
 
 #[test]

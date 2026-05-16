@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 
 use crate::{
-    context::ServiceContext,
     error::FittingsError,
     message::{Request, Response},
     service::Service,
@@ -9,12 +8,7 @@ use crate::{
 
 #[async_trait]
 pub trait Middleware: Send + Sync {
-    async fn handle(
-        &self,
-        req: Request,
-        ctx: ServiceContext,
-        next: &dyn Service,
-    ) -> Result<Response, FittingsError>;
+    async fn handle(&self, req: Request, next: &dyn Service) -> Result<Response, FittingsError>;
 }
 
 #[cfg(test)]
@@ -22,7 +16,6 @@ mod tests {
     use async_trait::async_trait;
 
     use crate::{
-        context::ServiceContext,
         error::FittingsError,
         message::{Request, Response},
         service::Service,
@@ -37,10 +30,9 @@ mod tests {
         async fn handle(
             &self,
             req: Request,
-            ctx: ServiceContext,
             next: &dyn Service,
         ) -> Result<Response, FittingsError> {
-            next.call(req, ctx).await
+            next.call(req).await
         }
     }
 

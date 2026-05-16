@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use fittings_core::{
-    context::ServiceContext,
     error::FittingsError,
     message::{Metadata, Request, Response},
     service::Service,
@@ -13,7 +12,6 @@ pub trait MethodRouter: Send + Sync {
         &self,
         method: &str,
         params: Value,
-        ctx: ServiceContext,
         metadata: Metadata,
     ) -> Result<Value, FittingsError>;
 }
@@ -33,14 +31,14 @@ impl<R> Service for RouterService<R>
 where
     R: MethodRouter,
 {
-    async fn call(&self, req: Request, ctx: ServiceContext) -> Result<Response, FittingsError> {
+    async fn call(&self, req: Request) -> Result<Response, FittingsError> {
         let result = self
             .router
-            .route(&req.method, req.params, ctx, req.metadata.clone())
+            .route(&req.method, req.params, req.metadata.clone())
             .await?;
 
         Ok(Response {
-            id: req.id.unwrap_or(fittings_core::message::JsonRpcId::Null),
+            id: req.id,
             result,
             metadata: req.metadata,
         })
@@ -52,12 +50,7 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
 
-    use fittings_core::{
-        context::ServiceContext,
-        error::FittingsError,
-        message::{JsonRpcId, Request},
-        service::Service,
-    };
+    use fittings_core::{error::FittingsError, message::Request, service::Service};
 
     use super::{MethodRouter, RouterService};
 
@@ -69,7 +62,6 @@ mod tests {
             &self,
             method: &str,
             params: serde_json::Value,
-            _ctx: ServiceContext,
             _metadata: fittings_core::message::Metadata,
         ) -> Result<serde_json::Value, FittingsError> {
             if method != "echo" {
@@ -84,16 +76,13 @@ mod tests {
     async fn router_service_delegates_and_wraps_response() {
         let service = RouterService::new(EchoRouter);
         let request = Request {
-            id: Some(JsonRpcId::from("r-1")),
+            id: "r-1".to_string(),
             method: "echo".to_string(),
             params: json!({"x": 1}),
             metadata: Default::default(),
         };
 
-        let response = service
-            .call(request, ServiceContext::detached())
-            .await
-            .expect("call should succeed");
+        let response = service.call(request).await.expect("call should succeed");
 
         assert_eq!(response.id, "r-1");
         assert_eq!(response.result, json!({"x": 1}));
@@ -103,19 +92,16 @@ mod tests {
     async fn router_service_propagates_router_errors() {
         let service = RouterService::new(EchoRouter);
         let request = Request {
-            id: Some(JsonRpcId::from("r-2")),
+            id: "r-2".to_string(),
             method: "unknown".to_string(),
             params: json!({}),
             metadata: Default::default(),
         };
 
-        let error = service
-            .call(request, ServiceContext::detached())
-            .await
-            .expect_err("call should fail");
+        let error = service.call(request).await.expect_err("call should fail");
         assert!(matches!(
             error,
-            FittingsError::MethodNotFound { message, .. } if message == "unknown"
+            FittingsError::MethodNotFound(message) if message == "unknown"
         ));
     }
 }

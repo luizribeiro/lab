@@ -213,10 +213,7 @@ fn stdio_e2e_invalid_tool_arguments_return_error_envelope() {
     let response = response_by_id(&responses, "call-bad-1");
     assert_error_response_envelope(response, json!("call-bad-1"));
     assert_eq!(response["error"]["code"], -32602);
-    assert_eq!(
-        response["error"]["message"],
-        "`arguments.a` must be a number"
-    );
+    assert_eq!(response["error"]["message"], "Invalid params");
 }
 
 #[test]
@@ -259,10 +256,7 @@ fn stdio_e2e_initialized_request_before_initialize_returns_invalid_request() {
     let response = &responses[0];
     assert_error_response_envelope(response, json!("early-init"));
     assert_eq!(response["error"]["code"], -32600);
-    assert_eq!(
-        response["error"]["message"],
-        "received notifications/initialized before initialize"
-    );
+    assert_eq!(response["error"]["message"], "Invalid Request");
 }
 
 #[test]

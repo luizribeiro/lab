@@ -22,7 +22,6 @@ pub type ProcessConnector = SubprocessConnector;
 #[deprecated(note = "Use SubprocessTransport instead.")]
 pub type ProcessTransport = SubprocessTransport;
 pub use fittings_core::{
-    context::{DroppedNotifications, OutboundNotification, PeerHandle, ServiceContext},
     error::FittingsError,
     message::{Metadata, Request, Response, ServiceError},
     middleware::Middleware,

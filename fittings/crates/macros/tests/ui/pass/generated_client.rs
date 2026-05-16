@@ -1,4 +1,4 @@
-use fittings::{async_trait, FittingsError, ServiceContext};
+use fittings::{FittingsError, async_trait};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,11 +14,7 @@ struct HelloResult {
 
 #[fittings::service]
 trait HelloService {
-    async fn hello(
-        &self,
-        ctx: ServiceContext,
-        params: HelloParams,
-    ) -> Result<HelloResult, FittingsError>;
+    async fn hello(&self, params: HelloParams) -> Result<HelloResult, FittingsError>;
 }
 
 struct DummyTransport;
@@ -58,11 +54,7 @@ fn main() {
 struct DummyServiceImpl;
 
 impl HelloService for DummyServiceImpl {
-    async fn hello(
-        &self,
-        _ctx: ServiceContext,
-        _params: HelloParams,
-    ) -> Result<HelloResult, FittingsError> {
+    async fn hello(&self, _params: HelloParams) -> Result<HelloResult, FittingsError> {
         Ok(HelloResult {
             message: String::new(),
         })

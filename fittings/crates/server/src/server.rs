@@ -1,28 +1,14 @@
-use std::{
-    collections::HashMap,
-    panic::AssertUnwindSafe,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-};
-
-use std::sync::RwLock;
+use std::{panic::AssertUnwindSafe, sync::Arc};
 
 use fittings_core::{
-    context::{
-        CancellationConfig, DroppedNotifications, OutboundNotification, OutboundRequest,
-        PeerHandle, PendingOutbound, ServiceContext, SharedCancellationConfig,
-    },
     error::FittingsError,
-    id_allocator::IdAllocator,
     message::{Request, Response},
     service::Service,
     transport::Transport,
 };
 use fittings_wire::{
     codec::{decode_request_line, encode_response_line, WireDecodeError},
-    error_map::{from_error_envelope, to_error_envelope},
+    error_map::to_error_envelope,
     types::{JsonRpcId, RequestEnvelope, ResponseEnvelope},
 };
 use futures::FutureExt;
@@ -31,100 +17,13 @@ use tokio::{
     sync::{mpsc, Semaphore},
     task::JoinSet,
 };
-use tokio_util::sync::CancellationToken;
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
-const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
-
-/// In-flight per-request cancellation tokens keyed by request id. The
-/// dispatcher registers a token when an inbound request enters execution
-/// and removes it when the handler returns. The cancellation reader (S5)
-/// fires the matching token without traversing the request-worker
-/// semaphore, so saturated handlers still observe cancellation promptly.
-#[derive(Clone, Default)]
-struct InFlightTokens {
-    inner: Arc<Mutex<HashMap<JsonRpcId, CancellationToken>>>,
-}
-
-impl InFlightTokens {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn insert(&self, id: JsonRpcId, token: CancellationToken) {
-        self.inner
-            .lock()
-            .expect("in-flight token map poisoned")
-            .insert(id, token);
-    }
-
-    fn remove(&self, id: &JsonRpcId) {
-        self.inner
-            .lock()
-            .expect("in-flight token map poisoned")
-            .remove(id);
-    }
-
-    fn fire(&self, id: &JsonRpcId) -> bool {
-        if let Some(token) = self
-            .inner
-            .lock()
-            .expect("in-flight token map poisoned")
-            .get(id)
-        {
-            token.cancel();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn has_type_mismatch(&self, id: &JsonRpcId) -> bool {
-        let guard = self.inner.lock().expect("in-flight token map poisoned");
-        guard
-            .keys()
-            .any(|key| key.to_string() == id.to_string() && !same_id_kind(key, id))
-    }
-}
-
-fn same_id_kind(a: &JsonRpcId, b: &JsonRpcId) -> bool {
-    matches!(
-        (a, b),
-        (JsonRpcId::String(_), JsonRpcId::String(_))
-            | (JsonRpcId::Number(_), JsonRpcId::Number(_))
-            | (JsonRpcId::Null, JsonRpcId::Null)
-    )
-}
-
-/// Drops the per-request entry from `InFlightTokens` once the owning
-/// handler completes. Lives next to the handler future inside
-/// `execute_request`.
-struct InFlightTokenGuard {
-    map: InFlightTokens,
-    id: JsonRpcId,
-}
-
-impl Drop for InFlightTokenGuard {
-    fn drop(&mut self) {
-        self.map.remove(&self.id);
-    }
-}
 
 pub struct Server<S, T> {
     service: Arc<S>,
     transport: T,
     max_in_flight: usize,
-    notification_capacity: usize,
-    cancellation: SharedCancellationConfig,
-    peer: PeerHandle,
-    notify_rx: Option<mpsc::Receiver<OutboundNotification>>,
-    dropped_notifications: DroppedNotifications,
-    outbound_request_rx: Option<mpsc::UnboundedReceiver<OutboundRequest>>,
-    pending_outbound: PendingOutbound,
-    id_allocator: Arc<IdAllocator>,
-    closed_token: CancellationToken,
-    null_in_flight: Arc<AtomicBool>,
-    in_flight_tokens: InFlightTokens,
 }
 
 impl<S, T> Server<S, T>
@@ -133,39 +32,10 @@ where
     T: Transport + 'static,
 {
     pub fn new(service: S, transport: T) -> Self {
-        let dropped_notifications = DroppedNotifications::new();
-        let (notify_tx, notify_rx) =
-            mpsc::channel::<OutboundNotification>(DEFAULT_NOTIFICATION_CAPACITY);
-        let (request_tx, request_rx) = mpsc::unbounded_channel::<OutboundRequest>();
-        let pending_outbound = PendingOutbound::new();
-        let id_allocator = Arc::new(IdAllocator::server());
-        let closed_token = CancellationToken::new();
-        let cancellation: SharedCancellationConfig =
-            Arc::new(RwLock::new(CancellationConfig::lsp_default()));
-        let peer = PeerHandle::with_outbound_calls(
-            notify_tx,
-            dropped_notifications.clone(),
-            id_allocator.clone(),
-            request_tx,
-            pending_outbound.clone(),
-            cancellation.clone(),
-            closed_token.clone(),
-        );
         Self {
             service: Arc::new(service),
             transport,
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
-            notification_capacity: DEFAULT_NOTIFICATION_CAPACITY,
-            cancellation,
-            peer,
-            notify_rx: Some(notify_rx),
-            dropped_notifications,
-            outbound_request_rx: Some(request_rx),
-            pending_outbound,
-            id_allocator,
-            closed_token,
-            null_in_flight: Arc::new(AtomicBool::new(false)),
-            in_flight_tokens: InFlightTokens::new(),
         }
     }
 
@@ -174,164 +44,42 @@ where
         self
     }
 
-    pub fn with_notification_capacity(mut self, n: usize) -> Self {
-        self.notification_capacity = n.max(1);
-        let (notify_tx, notify_rx) =
-            mpsc::channel::<OutboundNotification>(self.notification_capacity);
-        let (request_tx, request_rx) = mpsc::unbounded_channel::<OutboundRequest>();
-        self.peer = PeerHandle::with_outbound_calls(
-            notify_tx,
-            self.dropped_notifications.clone(),
-            self.id_allocator.clone(),
-            request_tx,
-            self.pending_outbound.clone(),
-            self.cancellation.clone(),
-            self.closed_token.clone(),
-        );
-        self.notify_rx = Some(notify_rx);
-        self.outbound_request_rx = Some(request_rx);
-        self
-    }
-
-    /// Configure the cancellation notification method and id-field extractor
-    /// the dispatcher will listen for. The library default is the LSP shape
-    /// (`$/cancelRequest`, id field `id`); MCP callers override to
-    /// `notifications/cancelled` + `requestId`.
-    ///
-    /// This commit only stores the configuration; the dispatcher's
-    /// token-firing logic that consumes it lands in c21.
-    pub fn with_cancellation(self, method: &str, id_field: &str) -> Self {
-        {
-            let mut cfg = self.cancellation.write().expect("cancellation poisoned");
-            cfg.method = method.to_string();
-            cfg.id_field = id_field.to_string();
-        }
-        self
-    }
-
-    pub fn cancellation_method(&self) -> String {
-        self.cancellation
-            .read()
-            .expect("cancellation poisoned")
-            .method
-            .clone()
-    }
-
-    pub fn cancellation_id_field(&self) -> String {
-        self.cancellation
-            .read()
-            .expect("cancellation poisoned")
-            .id_field
-            .clone()
-    }
-
-    pub fn dropped_notifications(&self) -> DroppedNotifications {
-        self.dropped_notifications.clone()
-    }
-
-    /// Connection-scoped peer handle for tasks that live outside any inbound
-    /// request handler (e.g. server startup tasks). Inside a handler, the
-    /// `PeerHandle` is reachable via `ServiceContext::peer()`.
-    pub fn peer(&self) -> PeerHandle {
-        self.peer.clone()
-    }
-
     pub async fn serve(mut self) -> Result<(), FittingsError> {
         let semaphore = Arc::new(Semaphore::new(self.max_in_flight));
         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let mut notify_rx = self
-            .notify_rx
-            .take()
-            .expect("notify receiver should be present until serve is called");
-        let mut outbound_request_rx = self
-            .outbound_request_rx
-            .take()
-            .expect("outbound request receiver should be present until serve is called");
-        let pending_outbound = self.pending_outbound.clone();
-        let peer = self.peer.clone();
         let mut response_tx = Some(response_tx);
         let mut workers = JoinSet::new();
         let mut accepting = true;
 
-        let result: Result<(), FittingsError> = 'serve: loop {
+        loop {
             if !accepting && workers.is_empty() {
                 if let Some(tx) = response_tx.take() {
                     drop(tx);
                 }
 
-                let mut drain_error: Option<FittingsError> = None;
                 while let Some(frame) = response_rx.recv().await {
                     if let Err(error) = self.transport.send(&frame).await {
                         workers.abort_all();
                         while workers.join_next().await.is_some() {}
-                        drain_error = Some(error);
-                        break;
-                    }
-                }
-                if let Some(error) = drain_error {
-                    break 'serve Err(error);
-                }
-
-                while let Ok(notification) = notify_rx.try_recv() {
-                    if let Some(frame) = encode_notification(notification) {
-                        if let Err(error) = self.transport.send(&frame).await {
-                            break 'serve Err(error);
-                        }
+                        return Err(error);
                     }
                 }
 
-                break 'serve Ok(());
+                return Ok(());
             }
 
             tokio::select! {
-                biased;
-                Some(notification) = notify_rx.recv() => {
-                    if let Some(frame) = encode_notification(notification) {
-                        if let Err(error) = self.transport.send(&frame).await {
-                            workers.abort_all();
-                            while workers.join_next().await.is_some() {}
-                            break 'serve Err(error);
-                        }
-                    }
-                }
-                Some(request) = outbound_request_rx.recv() => {
-                    if let Some(frame) = encode_outbound_request(request) {
-                        if let Err(error) = self.transport.send(&frame).await {
-                            workers.abort_all();
-                            while workers.join_next().await.is_some() {}
-                            break 'serve Err(error);
-                        }
-                    }
-                }
                 Some(frame) = response_rx.recv() => {
                     if let Err(error) = self.transport.send(&frame).await {
                         workers.abort_all();
                         while workers.join_next().await.is_some() {}
-                        break 'serve Err(error);
+                        return Err(error);
                     }
                 }
                 recv_result = self.transport.recv(), if accepting => {
                     match recv_result {
                         Ok(frame) => {
-                            if route_inbound_response(&frame, &pending_outbound) {
-                                continue;
-                            }
-                            if route_inbound_cancellation(
-                                &frame,
-                                &self.cancellation,
-                                &self.in_flight_tokens,
-                            ) {
-                                continue;
-                            }
-                            self.spawn_frame_handler(
-                                frame,
-                                semaphore.clone(),
-                                response_tx.as_ref().expect("response sender should be present").clone(),
-                                peer.clone(),
-                                &mut workers,
-                                self.null_in_flight.clone(),
-                                self.in_flight_tokens.clone(),
-                            ).await;
+                            self.spawn_frame_handler(frame, semaphore.clone(), response_tx.as_ref().expect("response sender should be present").clone(), &mut workers).await;
                         }
                         Err(error) if is_graceful_eof(&error) => {
                             accepting = false;
@@ -339,7 +87,7 @@ where
                         Err(error) => {
                             workers.abort_all();
                             while workers.join_next().await.is_some() {}
-                            break 'serve Err(error);
+                            return Err(error);
                         }
                     }
                 }
@@ -348,33 +96,20 @@ where
                         if join_error.is_panic() {
                             workers.abort_all();
                             while workers.join_next().await.is_some() {}
-                            break Err(FittingsError::internal("request worker panicked"));
+                            return Err(FittingsError::internal("request worker panicked"));
                         }
                     }
                 }
             }
-        };
-
-        // Wake any still-pending outbound callers with a transport error so
-        // their futures don't hang past the connection's lifetime.
-        for pending in pending_outbound.drain_all() {
-            let _ = pending.send(Err(FittingsError::transport("peer connection closed")));
         }
-        self.closed_token.cancel();
-
-        result
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn spawn_frame_handler(
         &self,
         frame: Vec<u8>,
         semaphore: Arc<Semaphore>,
         response_tx: mpsc::UnboundedSender<Vec<u8>>,
-        peer: PeerHandle,
         workers: &mut JoinSet<()>,
-        null_in_flight: Arc<AtomicBool>,
-        in_flight_tokens: InFlightTokens,
     ) {
         let permit = match semaphore.acquire_owned().await {
             Ok(permit) => permit,
@@ -386,55 +121,15 @@ where
         let service = Arc::clone(&self.service);
         workers.spawn(async move {
             let _permit = permit;
-            handle_frame(
-                frame,
-                service,
-                response_tx,
-                peer,
-                null_in_flight,
-                in_flight_tokens,
-            )
-            .await;
+            handle_frame(frame, service, response_tx).await;
         });
     }
-}
-
-/// Drop guard that releases the single-slot Null-id in-flight flag once the
-/// owning request finishes. Per `rfc-fittings-notifications.md:137-145`, at
-/// most one inbound `"id": null` request may be in flight on a connection;
-/// a second one is rejected as a protocol-error duplicate.
-struct NullIdInFlightGuard {
-    flag: Arc<AtomicBool>,
-}
-
-impl Drop for NullIdInFlightGuard {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::Release);
-    }
-}
-
-fn try_acquire_null_slot(flag: &Arc<AtomicBool>) -> Option<NullIdInFlightGuard> {
-    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .ok()
-        .map(|_| NullIdInFlightGuard { flag: flag.clone() })
-}
-
-fn duplicate_null_id_error() -> ResponseEnvelope {
-    to_error_envelope(
-        JsonRpcId::Null,
-        FittingsError::invalid_request(
-            "duplicate null-id request: only one explicit null-id request may be in flight",
-        ),
-    )
 }
 
 async fn handle_frame<S>(
     frame: Vec<u8>,
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
-    peer: PeerHandle,
-    null_in_flight: Arc<AtomicBool>,
-    in_flight_tokens: InFlightTokens,
 ) where
     S: Service + 'static,
 {
@@ -452,29 +147,11 @@ async fn handle_frame<S>(
 
     match value {
         Value::Array(batch) => {
-            handle_batch_request(
-                batch,
-                service,
-                response_tx,
-                peer,
-                null_in_flight,
-                in_flight_tokens,
-            )
-            .await;
+            handle_batch_request(batch, service, response_tx).await;
         }
         _ => {
             let response = match decode_request_line(&frame) {
-                Ok(request_envelope) => {
-                    execute_request(
-                        request_envelope,
-                        service,
-                        peer,
-                        &null_in_flight,
-                        &in_flight_tokens,
-                        None,
-                    )
-                    .await
-                }
+                Ok(request_envelope) => execute_request(request_envelope, service).await,
                 Err(error) => {
                     let (id, err) = map_decode_error(error);
                     Some(to_error_envelope(id, err))
@@ -488,21 +165,10 @@ async fn handle_frame<S>(
     }
 }
 
-enum BatchItemDecoded {
-    Ok {
-        envelope: RequestEnvelope,
-        token: Option<CancellationToken>,
-    },
-    Err(ResponseEnvelope),
-}
-
 async fn handle_batch_request<S>(
     batch: Vec<Value>,
     service: Arc<S>,
     response_tx: mpsc::UnboundedSender<Vec<u8>>,
-    peer: PeerHandle,
-    null_in_flight: Arc<AtomicBool>,
-    in_flight_tokens: InFlightTokens,
 ) where
     S: Service + 'static,
 {
@@ -515,67 +181,32 @@ async fn handle_batch_request<S>(
         return;
     }
 
-    // Pre-register cancellation tokens for every id-bearing item before
-    // processing begins, per rfc-fittings-notifications.md:639-643. A
-    // cancellation arriving for a later batch item must still fire that
-    // item's token even though execution has not reached it yet.
-    let mut decoded_items = Vec::with_capacity(batch.len());
-    let mut guards: Vec<InFlightTokenGuard> = Vec::new();
+    let mut responses = Vec::new();
+
     for item in batch {
         let item_line = match serde_json::to_vec(&item) {
             Ok(item_line) => item_line,
             Err(_) => {
-                decoded_items.push(BatchItemDecoded::Err(to_error_envelope(
+                responses.push(to_error_envelope(
                     JsonRpcId::Null,
                     FittingsError::invalid_request("batch item must be valid JSON-RPC request"),
-                )));
+                ));
                 continue;
             }
         };
 
-        match decode_request_line(&item_line) {
-            Ok(envelope) => {
-                let token = envelope.id.as_ref().map(|id| {
-                    let tok = CancellationToken::new();
-                    in_flight_tokens.insert(id.clone(), tok.clone());
-                    guards.push(InFlightTokenGuard {
-                        map: in_flight_tokens.clone(),
-                        id: id.clone(),
-                    });
-                    tok
-                });
-                decoded_items.push(BatchItemDecoded::Ok { envelope, token });
-            }
+        let response = match decode_request_line(&item_line) {
+            Ok(request_envelope) => execute_request(request_envelope, Arc::clone(&service)).await,
             Err(error) => {
                 let (id, err) = map_decode_error(error);
-                decoded_items.push(BatchItemDecoded::Err(to_error_envelope(id, err)));
+                Some(to_error_envelope(id, err))
             }
-        }
-    }
-
-    let mut responses = Vec::new();
-    for item in decoded_items {
-        let response = match item {
-            BatchItemDecoded::Ok { envelope, token } => {
-                execute_request(
-                    envelope,
-                    Arc::clone(&service),
-                    peer.clone(),
-                    &null_in_flight,
-                    &in_flight_tokens,
-                    token,
-                )
-                .await
-            }
-            BatchItemDecoded::Err(response) => Some(response),
         };
 
         if let Some(response) = response {
             responses.push(response);
         }
     }
-
-    drop(guards);
 
     if responses.is_empty() {
         return;
@@ -593,202 +224,29 @@ fn send_single_response(response_tx: mpsc::UnboundedSender<Vec<u8>>, response: R
     }
 }
 
-async fn execute_request<S>(
-    request: RequestEnvelope,
-    service: Arc<S>,
-    peer: PeerHandle,
-    null_in_flight: &Arc<AtomicBool>,
-    in_flight_tokens: &InFlightTokens,
-    pre_registered_token: Option<CancellationToken>,
-) -> Option<ResponseEnvelope>
+async fn execute_request<S>(request: RequestEnvelope, service: Arc<S>) -> Option<ResponseEnvelope>
 where
     S: Service + 'static,
 {
     let request_id = request.id.clone();
-    let _null_guard = if matches!(request_id, Some(JsonRpcId::Null)) {
-        match try_acquire_null_slot(null_in_flight) {
-            Some(guard) => Some(guard),
-            None => return Some(duplicate_null_id_error()),
-        }
-    } else {
-        None
-    };
-    let (cancellation_token, _token_guard) = match (request_id.as_ref(), pre_registered_token) {
-        (Some(_), Some(token)) => (token, None),
-        (Some(id), None) => {
-            let token = CancellationToken::new();
-            in_flight_tokens.insert(id.clone(), token.clone());
-            (
-                token,
-                Some(InFlightTokenGuard {
-                    map: in_flight_tokens.clone(),
-                    id: id.clone(),
-                }),
-            )
-        }
-        (None, _) => (CancellationToken::new(), None),
-    };
-    let token_for_check = cancellation_token.clone();
-    let ctx = ServiceContext::new(request_id.clone(), cancellation_token, peer);
     let request = Request {
-        id: request.id,
+        id: request.id.clone().unwrap_or(JsonRpcId::Null).to_string(),
         method: request.method,
         params: request.params.unwrap_or(Value::Null),
         metadata: Default::default(),
     };
 
-    let call_result = AssertUnwindSafe(service.call(request, ctx))
-        .catch_unwind()
-        .await;
-
-    let token_fired = token_for_check.is_cancelled();
-    let handler_self_cancelled = matches!(call_result, Ok(Err(FittingsError::Cancelled { .. })));
+    let call_result = AssertUnwindSafe(service.call(request)).catch_unwind().await;
 
     match (request_id, call_result) {
-        (None, _) => None,
-        (Some(_), _) if token_fired || handler_self_cancelled => None,
         (Some(id), Ok(Ok(Response { result, .. }))) => Some(ResponseEnvelope::success(id, result)),
         (Some(id), Ok(Err(error))) => Some(to_error_envelope(id, error)),
-        (Some(id), Err(payload)) => Some(to_error_envelope(
+        (Some(id), Err(_)) => Some(to_error_envelope(
             id,
-            FittingsError::Panic {
-                message: panic_payload_message(payload),
-            },
+            FittingsError::internal("request handler panicked"),
         )),
+        (None, _) => None,
     }
-}
-
-fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        return (*s).to_string();
-    }
-    if let Some(s) = payload.downcast_ref::<String>() {
-        return s.clone();
-    }
-    "request handler panicked".to_string()
-}
-
-fn encode_notification(notification: OutboundNotification) -> Option<Vec<u8>> {
-    let envelope = RequestEnvelope::notification(notification.method, Some(notification.params));
-    let mut encoded = serde_json::to_vec(&envelope).ok()?;
-    encoded.push(b'\n');
-    Some(encoded)
-}
-
-fn encode_outbound_request(request: OutboundRequest) -> Option<Vec<u8>> {
-    let envelope = RequestEnvelope::new(request.id, request.method, Some(request.params));
-    let mut encoded = serde_json::to_vec(&envelope).ok()?;
-    encoded.push(b'\n');
-    Some(encoded)
-}
-
-/// If the inbound frame is a JSON-RPC response (has `result`/`error`) whose
-/// id matches a pending outbound call, deliver it to that call and return
-/// `true`. Otherwise return `false` so the caller dispatches the frame as a
-/// normal inbound request/notification.
-fn route_inbound_response(frame: &[u8], pending: &PendingOutbound) -> bool {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(frame) else {
-        return false;
-    };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    if !object.contains_key("result") && !object.contains_key("error") {
-        return false;
-    }
-    let envelope = match fittings_wire::codec::decode_response_line(frame) {
-        Ok(envelope) => envelope,
-        Err(_) => return false,
-    };
-    let Some(tx) = pending.remove(&envelope.id) else {
-        return false;
-    };
-    let result = match (envelope.result, envelope.error) {
-        (Some(value), None) => Ok(value),
-        (None, Some(error)) => Err(from_error_envelope(error)),
-        _ => Err(FittingsError::internal(
-            "response envelope must contain exactly one of `result` or `error`",
-        )),
-    };
-    let _ = tx.send(result);
-    true
-}
-
-/// If the inbound frame is the configured cancellation method (S7), fire
-/// the matching per-request token and swallow the frame so it does not
-/// reach the request-worker semaphore. Returns `true` whenever the
-/// frame's method matches the configured cancellation method, regardless
-/// of whether an id could be extracted — cancellation notifications are
-/// never dispatched as ordinary handler invocations. Malformed payloads
-/// (non-object params, missing the configured id field, or id-type
-/// mismatch with any in-flight key) are logged at WARN and dropped per
-/// scope §S7.1.
-fn route_inbound_cancellation(
-    frame: &[u8],
-    cancellation: &SharedCancellationConfig,
-    in_flight: &InFlightTokens,
-) -> bool {
-    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
-        return false;
-    };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let Some(method) = object.get("method").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    let cfg = cancellation
-        .read()
-        .expect("cancellation config poisoned")
-        .clone();
-    if method != cfg.method {
-        return false;
-    }
-
-    let params = object.get("params");
-    if !params.map(Value::is_object).unwrap_or(false) {
-        tracing::warn!(
-            method = %cfg.method,
-            "cancellation payload dropped: params missing or not a JSON object",
-        );
-        return true;
-    }
-    let params = params.expect("checked above");
-    let Some(id_value) = params.get(&cfg.id_field) else {
-        tracing::warn!(
-            method = %cfg.method,
-            id_field = %cfg.id_field,
-            "cancellation payload dropped: configured id field absent",
-        );
-        return true;
-    };
-    let id = match serde_json::from_value::<JsonRpcId>(id_value.clone()) {
-        Ok(id) => id,
-        Err(_) => {
-            tracing::warn!(
-                method = %cfg.method,
-                id_field = %cfg.id_field,
-                "cancellation payload dropped: id field is not a valid JSON-RPC id",
-            );
-            return true;
-        }
-    };
-    if !in_flight.fire(&id) {
-        if in_flight.has_type_mismatch(&id) {
-            tracing::warn!(
-                method = %cfg.method,
-                id = %id,
-                "cancellation payload dropped: id type does not match any in-flight request",
-            );
-        } else {
-            tracing::warn!(
-                method = %cfg.method,
-                id = %id,
-                "cancellation payload dropped: no matching in-flight request",
-            );
-        }
-    }
-    true
 }
 
 fn map_decode_error(error: WireDecodeError) -> (JsonRpcId, FittingsError) {
@@ -822,7 +280,6 @@ mod tests {
 
     use async_trait::async_trait;
     use fittings_core::{
-        context::ServiceContext,
         error::FittingsError,
         message::{Request, Response},
         service::Service,
@@ -862,11 +319,7 @@ mod tests {
 
     #[async_trait]
     impl Service for DelayService {
-        async fn call(
-            &self,
-            req: Request,
-            _ctx: ServiceContext,
-        ) -> Result<Response, FittingsError> {
+        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
             let delay_ms = req
                 .params
                 .get("delay_ms")
@@ -875,25 +328,11 @@ mod tests {
             sleep(Duration::from_millis(delay_ms)).await;
 
             Ok(Response {
-                id: req.id.unwrap_or(JsonRpcId::Null),
+                id: req.id,
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })
         }
-    }
-
-    #[test]
-    fn cancellation_default_is_lsp_and_override_applies() {
-        let (_client, server_transport) = MemoryTransport::pair(1);
-        let server = Server::new(DelayService, server_transport);
-        assert_eq!(server.cancellation_method(), "$/cancelRequest");
-        assert_eq!(server.cancellation_id_field(), "id");
-
-        let (_client, server_transport) = MemoryTransport::pair(1);
-        let server = Server::new(DelayService, server_transport)
-            .with_cancellation("notifications/cancelled", "requestId");
-        assert_eq!(server.cancellation_method(), "notifications/cancelled");
-        assert_eq!(server.cancellation_id_field(), "requestId");
     }
 
     #[tokio::test]
@@ -1024,7 +463,7 @@ mod tests {
 
         assert_eq!(response.id, JsonRpcId::Null);
         assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "batch request must not be empty");
+        assert_eq!(error.message, "Invalid Request");
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -1073,7 +512,6 @@ mod tests {
             &self,
             method: &str,
             params: serde_json::Value,
-            _ctx: ServiceContext,
             _metadata: fittings_core::message::Metadata,
         ) -> Result<serde_json::Value, FittingsError> {
             match method {
@@ -1144,13 +582,9 @@ mod tests {
         errors.sort_by_key(|error| error.code);
 
         assert_eq!(errors[0].code, -32700);
-        assert_ne!(
-            errors[0].message, "Parse error",
-            "predefined parse message should preserve the typed detail"
-        );
-        assert!(!errors[0].message.is_empty());
+        assert_eq!(errors[0].message, "Parse error");
         assert_eq!(errors[1].code, -32600);
-        assert_eq!(errors[1].message, "batch request must not be empty");
+        assert_eq!(errors[1].message, "Invalid Request");
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -1189,23 +623,11 @@ mod tests {
         assert_eq!(responses[0].id, JsonRpcId::from("bad-1"));
         assert_eq!(responses[1].id, JsonRpcId::from("bad-2"));
 
-        let mut messages: Vec<String> = Vec::new();
         for response in responses {
             let error = response.error.expect("response should be an error");
             assert_eq!(error.code, -32600);
-            assert_ne!(
-                error.message, "Invalid Request",
-                "predefined invalid-request message should preserve the typed detail"
-            );
-            assert!(!error.message.is_empty());
-            messages.push(error.message);
+            assert_eq!(error.message, "Invalid Request");
         }
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("method names starting with `rpc.` are reserved")),
-            "expected the reserved-method detail among preserved messages: {messages:?}",
-        );
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -1232,11 +654,7 @@ mod tests {
 
         assert_eq!(response.id, JsonRpcId::Null);
         assert_eq!(error.code, -32600);
-        assert_ne!(
-            error.message, "Invalid Request",
-            "predefined invalid-request message should preserve the typed detail"
-        );
-        assert!(!error.message.is_empty());
+        assert_eq!(error.message, "Invalid Request");
 
         drop(client);
         let result = handle.await.expect("server task join");
@@ -1247,17 +665,13 @@ mod tests {
 
     #[async_trait]
     impl Service for PanicService {
-        async fn call(
-            &self,
-            req: Request,
-            _ctx: ServiceContext,
-        ) -> Result<Response, FittingsError> {
+        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
             if req.method == "boom" {
                 panic!("handler panic");
             }
 
             Ok(Response {
-                id: req.id.unwrap_or(JsonRpcId::Null),
+                id: req.id,
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })
@@ -1291,14 +705,9 @@ mod tests {
 
     #[async_trait]
     impl Service for WrongIdService {
-        async fn call(
-            &self,
-            req: Request,
-            _ctx: ServiceContext,
-        ) -> Result<Response, FittingsError> {
-            let id = req.id.unwrap_or(JsonRpcId::Null);
+        async fn call(&self, req: Request) -> Result<Response, FittingsError> {
             Ok(Response {
-                id: JsonRpcId::from(format!("{id}-wrong")),
+                id: format!("{}-wrong", req.id),
                 result: json!({"ok": true}),
                 metadata: Default::default(),
             })

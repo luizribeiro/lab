@@ -190,10 +190,10 @@ fn validate_method_signature(method: &TraitItemFn) -> syn::Result<()> {
         ));
     }
 
-    if method.sig.inputs.len() != 3 {
+    if method.sig.inputs.len() != 2 {
         return Err(Error::new(
             method.sig.inputs.span(),
-            "service methods must have signature `async fn name(&self, ctx: ServiceContext, params: P) -> Result<R, FittingsError>`",
+            "service methods must have signature `async fn name(&self, params: P) -> Result<R, FittingsError>`",
         ));
     }
 
@@ -213,17 +213,7 @@ fn validate_method_signature(method: &TraitItemFn) -> syn::Result<()> {
         _ => {
             return Err(Error::new(
                 method.sig.inputs.span(),
-                "service methods must take a `ctx: ServiceContext` argument after `&self`",
-            ))
-        }
-    }
-
-    match method.sig.inputs.iter().nth(2) {
-        Some(FnArg::Typed(_)) => {}
-        _ => {
-            return Err(Error::new(
-                method.sig.inputs.span(),
-                "service methods must take exactly one `params` argument after `ctx`",
+                "service methods must take exactly one `params` argument after `&self`",
             ))
         }
     }

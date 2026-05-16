@@ -1,18 +1,18 @@
 use std::process;
 
-use fittings::{Result, ServiceContext};
+use fittings::Result;
 use hello_api::{HelloParams, HelloResult, HelloService, PingParams, PingResult};
 
 struct HelloServiceImpl;
 
 impl HelloService for HelloServiceImpl {
-    async fn hello(&self, _ctx: ServiceContext, params: HelloParams) -> Result<HelloResult> {
+    async fn hello(&self, params: HelloParams) -> Result<HelloResult> {
         Ok(HelloResult {
             message: format!("Hello, {}!", params.name),
         })
     }
 
-    async fn ping(&self, _ctx: ServiceContext, _params: PingParams) -> Result<PingResult> {
+    async fn ping(&self, _params: PingParams) -> Result<PingResult> {
         Ok(PingResult { ok: true })
     }
 }

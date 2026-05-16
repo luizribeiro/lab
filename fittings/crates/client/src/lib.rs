@@ -19,17 +19,7 @@ use std::{
     },
 };
 
-use fittings_core::{
-    context::{
-        CancellationConfig, DroppedNotifications, OutboundNotification, OutboundRequest,
-        PeerHandle, PendingOutbound, ServiceContext,
-    },
-    error::FittingsError,
-    id_allocator::IdAllocator,
-    message::Request,
-    service::Service,
-    transport::Connector,
-};
+use fittings_core::{error::FittingsError, transport::Connector};
 use fittings_wire::{
     codec::{decode_response_line, WireDecodeError},
     error_map::from_error_envelope,
@@ -40,13 +30,6 @@ use tokio::{
     sync::{broadcast, mpsc, mpsc::error::TryRecvError, oneshot},
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
-
-type ServiceSlot = Arc<RwLock<Option<Arc<dyn Service>>>>;
-type NotificationHandler = Arc<dyn Fn(String, Value) + Send + Sync + 'static>;
-type NotificationHandlerSlot = Arc<RwLock<Option<NotificationHandler>>>;
-
-const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
 const DEFAULT_NOTIFICATION_CAPACITY: usize = 1024;
 
@@ -231,15 +214,6 @@ enum ClientCommand {
     Shutdown,
 }
 
-struct ClosedGuard(CancellationToken);
-
-impl Drop for ClosedGuard {
-    fn drop(&mut self) {
-        self.0.cancel();
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn run_client_loop<T>(
     mut transport: T,
     mut request_rx: mpsc::UnboundedReceiver<ClientCommand>,
@@ -247,49 +221,20 @@ async fn run_client_loop<T>(
 ) where
     T: fittings_core::transport::Transport + Send + 'static,
 {
-    let _closed_guard = ClosedGuard(closed_token);
     let mut pending: HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>> =
         HashMap::new();
-    let (inbound_response_tx, mut inbound_response_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-    let shutdown =
-        |pending: &mut HashMap<JsonRpcId, oneshot::Sender<Result<Value, FittingsError>>>,
-         pending_outbound: &PendingOutbound,
-         request_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
-         error: FittingsError| {
-            fail_pending(pending, error.clone());
-            fail_pending_outbound(pending_outbound, error.clone());
-            fail_queued_calls(request_rx, error);
-        };
 
     loop {
         pending.retain(|_, sender| !sender.is_closed());
 
         tokio::select! {
-            Some(notification) = notify_rx.recv() => {
-                if let Err(error) = send_request(&mut transport, None, &notification.method, notification.params).await {
-                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
-                    return;
-                }
-            }
-            Some(outbound) = outbound_request_rx.recv() => {
-                if let Err(error) = send_request(&mut transport, Some(&outbound.id), &outbound.method, outbound.params).await {
-                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
-                    return;
-                }
-            }
-            Some(frame) = inbound_response_rx.recv() => {
-                if let Err(error) = transport.send(&frame).await {
-                    shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
-                    return;
-                }
-            }
             command = request_rx.recv() => {
                 match command {
                     Some(ClientCommand::Call { id, method, params, response_tx }) => {
                         if let Err(error) = send_request(&mut transport, Some(&id), &method, params).await {
                             let _ = response_tx.send(Err(error.clone()));
-                            shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
+                            fail_pending(&mut pending, error.clone());
+                            fail_queued_calls(&mut request_rx, error);
                             return;
                         }
 
@@ -297,14 +242,13 @@ async fn run_client_loop<T>(
                     }
                     Some(ClientCommand::Notify { method, params }) => {
                         if let Err(error) = send_request(&mut transport, None, &method, params).await {
-                            shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
+                            fail_pending(&mut pending, error.clone());
+                            fail_queued_calls(&mut request_rx, error);
                             return;
                         }
                     }
                     Some(ClientCommand::Shutdown) | None => {
-                        let error = FittingsError::internal("client closed");
-                        fail_pending(&mut pending, error.clone());
-                        fail_pending_outbound(&pending_outbound, error);
+                        fail_pending(&mut pending, FittingsError::internal("client closed"));
                         return;
                     }
                 }
@@ -326,7 +270,8 @@ async fn run_client_loop<T>(
                         }
                     },
                     Err(error) => {
-                        shutdown(&mut pending, &pending_outbound, &mut request_rx, error);
+                        fail_pending(&mut pending, error.clone());
+                        fail_queued_calls(&mut request_rx, error);
                         return;
                     }
                 }
@@ -669,7 +614,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            FittingsError::MethodNotFound { message, .. } if message == "missing-method"
+            FittingsError::MethodNotFound(message) if message == "Method not found"
         ));
 
         server.await.expect("server task should join");
@@ -816,7 +761,7 @@ mod tests {
             let error = result.expect_err("all pending calls should fail");
             assert!(matches!(
                 error,
-                FittingsError::InvalidRequest { message, .. }
+                FittingsError::InvalidRequest(message)
                     if message == "invalid response envelope: field `jsonrpc` must be \"2.0\""
             ));
         }
@@ -851,7 +796,7 @@ mod tests {
             let error = result.expect_err("all pending calls should fail");
             assert!(matches!(
                 error,
-                FittingsError::InvalidRequest { message, .. }
+                FittingsError::InvalidRequest(message)
                     if message == "response must be valid JSON-RPC 2.0 JSON"
             ));
         }
