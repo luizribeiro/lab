@@ -66,7 +66,7 @@ mod tests {
         if p.ends_with("deps") {
             p.pop();
         }
-        p.push("fake_agent");
+        p.push(format!("fake_agent{}", std::env::consts::EXE_SUFFIX));
         p
     }
 
