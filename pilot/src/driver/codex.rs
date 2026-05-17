@@ -38,6 +38,7 @@ pub struct CodexConfig {
     pub config_overrides: Vec<(String, String)>,
     pub extra_env: Vec<(String, String)>,
     pub paths: AgentPaths,
+    pub additional_dirs: Vec<PathBuf>,
     pub state: CodexPilotState,
 }
 
@@ -76,6 +77,7 @@ impl Default for CodexConfig {
             config_overrides: Vec::new(),
             extra_env: Vec::new(),
             paths: AgentPaths::default(),
+            additional_dirs: Vec::new(),
             state: CodexPilotState::default(),
         }
     }
@@ -151,6 +153,11 @@ impl Driver for Codex {
             };
             args.push("-c".into());
             args.push(format!("reasoning.effort={s}"));
+        }
+
+        for d in &self.config.additional_dirs {
+            args.push("--add-dir".into());
+            args.push(d.to_string_lossy().into_owned());
         }
 
         args.extend(opts.raw_args.iter().cloned());
@@ -667,6 +674,27 @@ mod tests {
             .find(|(k, _)| k == "CODEX_HOME")
             .expect("env set");
         assert_eq!(v, "/tmp/my-codex");
+    }
+
+    #[test]
+    fn additional_dirs_emits_repeated_add_dir_flags() {
+        let driver = Codex::with_config(CodexConfig {
+            additional_dirs: vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")],
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let positions: Vec<usize> = spec
+            .args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a == &"--add-dir")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(positions.len(), 2, "two --add-dir flags expected");
+        assert_eq!(spec.args[positions[0] + 1], "/tmp/a");
+        assert_eq!(spec.args[positions[1] + 1], "/tmp/b");
     }
 
     #[test]

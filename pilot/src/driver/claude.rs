@@ -22,6 +22,7 @@ pub struct ClaudeConfig {
     pub permission_mode: PermissionMode,
     pub extra_env: Vec<(String, String)>,
     pub paths: AgentPaths,
+    pub additional_dirs: Vec<PathBuf>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -87,6 +88,13 @@ impl Driver for Claude {
             };
             args.push("--effort".into());
             args.push(s.into());
+        }
+
+        if !self.config.additional_dirs.is_empty() {
+            args.push("--add-dir".into());
+            for d in &self.config.additional_dirs {
+                args.push(d.to_string_lossy().into_owned());
+            }
         }
 
         args.extend(opts.raw_args.iter().cloned());
@@ -438,6 +446,20 @@ mod tests {
             .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
             .expect("env set");
         assert_eq!(v, "/tmp/my-claude");
+    }
+
+    #[test]
+    fn additional_dirs_emits_add_dir_flag() {
+        let driver = Claude::with_config(ClaudeConfig {
+            additional_dirs: vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")],
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let i = spec.args.iter().position(|a| a == "--add-dir").unwrap();
+        assert_eq!(spec.args[i + 1], "/tmp/a");
+        assert_eq!(spec.args[i + 2], "/tmp/b");
     }
 
     #[test]

@@ -38,6 +38,7 @@ pub struct GeminiConfig {
     pub skip_trust: bool,
     pub extra_env: Vec<(String, String)>,
     pub paths: AgentPaths,
+    pub include_directories: Vec<PathBuf>,
 }
 
 impl Default for GeminiConfig {
@@ -54,6 +55,7 @@ impl Default for GeminiConfig {
             skip_trust: true,
             extra_env: Vec::new(),
             paths: AgentPaths::default(),
+            include_directories: Vec::new(),
         }
     }
 }
@@ -137,6 +139,18 @@ impl Driver for Gemini {
         }
         if let Auth::ApiKey(secret) = &self.config.auth {
             env.push(("GEMINI_API_KEY".into(), secret.expose_secret().to_string()));
+        }
+
+        if !self.config.include_directories.is_empty() {
+            let joined = self
+                .config
+                .include_directories
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(",");
+            args.push("--include-directories".into());
+            args.push(joined);
         }
 
         args.extend(opts.raw_args.iter().cloned());
@@ -322,6 +336,23 @@ mod tests {
                 option: "paths.config_home",
             }
         ));
+    }
+
+    #[test]
+    fn include_directories_emits_comma_separated_list() {
+        let driver = Gemini::with_config(GeminiConfig {
+            include_directories: vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")],
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let i = spec
+            .args
+            .iter()
+            .position(|a| a == "--include-directories")
+            .unwrap();
+        assert_eq!(spec.args[i + 1], "/tmp/a,/tmp/b");
     }
 
     #[test]
