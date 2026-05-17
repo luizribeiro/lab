@@ -255,7 +255,14 @@ fn parse_result(value: &serde_json::Value) -> Event {
         .get("result")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
-    Event::TurnComplete { final_text }
+    let is_error = value
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    Event::TurnComplete {
+        ok: !is_error,
+        final_text,
+    }
 }
 
 #[cfg(test)]

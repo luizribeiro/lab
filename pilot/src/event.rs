@@ -39,9 +39,14 @@ pub enum Event {
     },
 
     /// Sentinel emitted exactly once per turn when the agent has finished.
-    /// `final_text` is the canonical final message text if the agent surfaces
-    /// one separately from the streamed AssistantText deltas; otherwise None.
-    TurnComplete { final_text: Option<String> },
+    /// `ok` is false when the underlying CLI reported an error for this turn
+    /// (e.g. claude's `is_error: true`); `final_text` is the canonical final
+    /// message text if the agent surfaces one separately from the streamed
+    /// AssistantText deltas, otherwise None.
+    TurnComplete {
+        ok: bool,
+        final_text: Option<String>,
+    },
 
     /// Catch-all for agent JSON events that the driver did not normalize to
     /// one of the variants above. Preserves provenance (driver name) plus the
@@ -80,8 +85,12 @@ mod tests {
 
     #[test]
     fn turn_complete_with_and_without_text() {
-        let a = Event::TurnComplete { final_text: None };
+        let a = Event::TurnComplete {
+            ok: true,
+            final_text: None,
+        };
         let b = Event::TurnComplete {
+            ok: true,
             final_text: Some("ok".into()),
         };
         assert_ne!(a, b);
