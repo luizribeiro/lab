@@ -321,30 +321,44 @@ fn save_thread_map(
 }
 
 /// Best-effort path normalization that doesn't require the target file
-/// to already exist. We use this to key our process-wide lock registry
-/// so two configs pointing at the same logical file (`threads.json` vs
-/// `./threads.json` vs `/abs/path/threads.json`) share the same mutex.
+/// (or even its parent) to exist. We use this to key our process-wide
+/// lock registry so different spellings of the same logical file
+/// (`threads.json` / `./threads.json` / absolute path) share the same
+/// mutex.
 fn normalize_for_key(path: &std::path::Path) -> std::path::PathBuf {
     if let Ok(canonical) = std::fs::canonicalize(path) {
         return canonical;
     }
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let parent = if parent.as_os_str().is_empty() {
-        std::path::Path::new(".")
-    } else {
-        parent
-    };
-    let file_name = path.file_name().unwrap_or_default();
-    if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-        return canonical_parent.join(file_name);
-    }
-    if path.is_absolute() {
+
+    let absolute: std::path::PathBuf = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::new())
             .join(path)
+    };
+    let stripped: std::path::PathBuf = absolute
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+
+    let mut existing: &std::path::Path = &stripped;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match (existing.parent(), existing.file_name()) {
+            (Some(p), Some(name)) => {
+                tail.push(name.to_os_string());
+                existing = p;
+            }
+            _ => break,
+        }
     }
+
+    let mut result = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    for name in tail.iter().rev() {
+        result.push(name);
+    }
+    result
 }
 
 /// Returns a process-wide mutex shared by all `Codex` instances writing
@@ -566,14 +580,28 @@ mod tests {
     }
 
     #[test]
-    fn lock_for_path_canonicalizes_equivalent_paths_to_same_mutex() {
+    fn lock_for_path_dedups_equivalent_spellings_for_missing_files() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let abs = tmp_dir.path().join("threads.json");
-        let lock_a = lock_for_path(&abs);
-        let lock_b = lock_for_path(&abs.canonicalize().unwrap_or(abs.clone()));
+        let base = tmp_dir.path().to_path_buf();
+        let a = base.join("missing").join("threads.json");
+        let b = base.join(".").join("missing").join("threads.json");
+        let c = {
+            let mut p = base.clone();
+            p.push("./missing/./threads.json");
+            p
+        };
+
+        let la = lock_for_path(&a);
+        let lb = lock_for_path(&b);
+        let lc = lock_for_path(&c);
+
         assert!(
-            std::sync::Arc::ptr_eq(&lock_a, &lock_b),
-            "equivalent paths must yield the same lock instance"
+            std::sync::Arc::ptr_eq(&la, &lb),
+            "a and b must share a lock"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&la, &lc),
+            "a and c must share a lock"
         );
     }
 
