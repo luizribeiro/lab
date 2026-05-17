@@ -7,6 +7,7 @@
 
 use futures_util::StreamExt;
 use pilot::{Event, Session, TurnItem, TurnOptions};
+use std::io::Write;
 use std::time::Duration;
 
 #[tokio::main]
@@ -31,7 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(item) = stream.next().await {
         match item? {
-            TurnItem::Event(Event::AssistantText { delta }) => print!("{delta}"),
+            TurnItem::Event(Event::AssistantText { delta }) => {
+                print!("{delta}");
+                // Flush so streamed text appears live, not after the "[complete]" line.
+                std::io::stdout().flush().ok();
+            }
             TurnItem::Event(Event::Usage {
                 input_tokens,
                 output_tokens,
@@ -47,5 +52,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     }
+    println!();
     Ok(())
 }
