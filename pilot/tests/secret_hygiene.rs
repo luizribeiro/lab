@@ -42,8 +42,10 @@ fn apikey_secret_never_appears_in_any_config_debug() {
 /// Patterns we refuse to ship in fixture files. Add new prefixes as new
 /// providers/agents enter the ecosystem.
 const FORBIDDEN_FIXTURE_PATTERNS: &[&str] = &[
-    "sk-ant-",  // Anthropic
-    "sk_live_", // Stripe-style (in case CLI logs leaked)
+    "sk-",      // OpenAI / generic vendor "sk-..." keys
+    "sk-ant-",  // Anthropic (subset of sk- but listed for clarity)
+    "sk_live_", // Stripe-style
+    "sk-proj-", // OpenAI project keys
     "AIza",     // Google API keys
     "ghp_",     // GitHub personal access tokens
     "ghs_",     // GitHub server-side tokens
