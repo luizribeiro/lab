@@ -65,6 +65,24 @@ impl TurnStream {
             completed: false,
         }
     }
+
+    /// Cancel the running turn. Kills the child process immediately and
+    /// returns a `Turn` containing whatever events were accumulated before
+    /// cancellation. Any buffered-but-not-yet-yielded events are flushed
+    /// into the returned `Turn`.
+    ///
+    /// Equivalent to dropping the stream, but lets the caller recover the
+    /// partial event list.
+    #[allow(dead_code)] // wired into Session in a later commit
+    pub async fn cancel(mut self) -> Turn {
+        self.handle = None;
+        for e in self.pending.drain(..) {
+            self.events.push(e);
+        }
+        Turn {
+            events: self.events,
+        }
+    }
 }
 
 impl Stream for TurnStream {
@@ -246,5 +264,93 @@ mod tests {
         let start = Instant::now();
         drop(stream);
         assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn cancel_before_any_events_returns_empty_turn() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let stream = TurnStream::new(handle, rx, driver);
+
+        let start = std::time::Instant::now();
+        let turn = stream.cancel().await;
+        assert!(turn.events.is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn cancel_after_some_events_returns_partial_turn() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        writeln!(script, r#"emit {{"n":2}}"#).unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream = TurnStream::new(handle, rx, driver);
+
+        let first = stream.next().await.expect("first").expect("ok");
+        assert!(matches!(first, TurnItem::Event(_)));
+
+        let turn = stream.cancel().await;
+        assert_eq!(turn.events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_after_natural_completion_returns_full_turn() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        writeln!(script, r#"emit {{"n":2}}"#).unwrap();
+        writeln!(script, "exit 0").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream = TurnStream::new(handle, rx, driver);
+
+        let mut event_count = 0;
+        while let Some(item) = stream.next().await {
+            match item.expect("ok") {
+                TurnItem::Event(_) => event_count += 1,
+                TurnItem::Complete(_) => {}
+            }
+        }
+        assert_eq!(event_count, 2);
+
+        let turn = stream.cancel().await;
+        assert_eq!(turn.events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cancel_during_stderr_does_not_hang() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, "stderr noise on stderr").unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let stream = TurnStream::new(handle, rx, driver);
+
+        let start = std::time::Instant::now();
+        let _turn = stream.cancel().await;
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "cancel hung"
+        );
     }
 }
