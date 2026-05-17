@@ -14,10 +14,10 @@ pub struct TestDriver {
 }
 
 impl TestDriver {
-    pub fn new(name: &'static str) -> Self {
+    pub fn new(name: &'static str, program: impl Into<PathBuf>) -> Self {
         Self {
             name,
-            program: PathBuf::from("/bin/cat"),
+            program: program.into(),
         }
     }
 }
@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn command_carries_session_and_prompt() {
-        let d = TestDriver::new("t");
+        let d = TestDriver::new("t", "/bin/echo");
         let spec = d.command(Uuid::nil(), "hi", &TurnOptions::default());
         assert!(spec.args.iter().any(|a| a == &Uuid::nil().to_string()));
         assert!(spec.args.iter().any(|a| a == "hi"));
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn parse_returns_raw() {
-        let d = TestDriver::new("t");
+        let d = TestDriver::new("t", "/bin/echo");
         let ev = d.parse(serde_json::json!({"x": 1})).unwrap();
         assert!(matches!(ev, Event::Raw { driver: "t", .. }));
     }
