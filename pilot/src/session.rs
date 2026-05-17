@@ -12,16 +12,23 @@ use crate::driver::{Driver, TurnOptions};
 use crate::process::spawn_jsonl;
 use crate::turn::{Turn, TurnStream};
 
-fn session_lock_for(driver: &str, id: Uuid) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+fn session_lock_for(driver: &str, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    type Registry = Mutex<HashMap<(String, Uuid), std::sync::Arc<tokio::sync::Mutex<()>>>>;
+    use std::sync::{Mutex, OnceLock, Weak};
+    type Registry = Mutex<HashMap<(String, Uuid), Weak<tokio::sync::Mutex<()>>>>;
     static REGISTRY: OnceLock<Registry> = OnceLock::new();
     let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = registry.lock().unwrap_or_else(|e| e.into_inner());
-    map.entry((driver.to_string(), id))
-        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
+
+    map.retain(|_, weak| weak.strong_count() > 0);
+
+    let key = (driver.to_string(), id);
+    if let Some(arc) = map.get(&key).and_then(|w| w.upgrade()) {
+        return arc;
+    }
+    let arc = Arc::new(tokio::sync::Mutex::new(()));
+    map.insert(key, Arc::downgrade(&arc));
+    arc
 }
 
 /// One conversation with an agent CLI, identified by a UUID that the
@@ -199,6 +206,19 @@ mod tests {
         }
         f.flush().unwrap();
         f
+    }
+
+    #[tokio::test]
+    async fn cross_session_lock_registry_prunes_dead_entries() {
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+
+        {
+            let _lock = super::session_lock_for("script", id_a);
+        }
+
+        let lock_b = super::session_lock_for("script", id_b);
+        assert_eq!(Arc::strong_count(&lock_b), 1);
     }
 
     #[tokio::test]
