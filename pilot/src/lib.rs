@@ -6,6 +6,7 @@
 mod driver;
 mod error;
 mod event;
+mod process;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
