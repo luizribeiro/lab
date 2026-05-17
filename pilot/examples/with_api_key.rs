@@ -6,7 +6,7 @@
 //!     PILOT_AGENT_KEY=sk-... cargo run --example with_api_key
 
 use futures_util::StreamExt;
-use pilot::{Auth, Claude, ClaudeConfig, Session, TurnItem, TurnOptions};
+use pilot::{Auth, Claude, ClaudeConfig, Driver, Session, TurnItem, TurnOptions};
 use secrecy::SecretString;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,11 +16,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key =
         std::env::var("PILOT_AGENT_KEY").expect("set PILOT_AGENT_KEY to your provider API key");
 
-    let driver = Claude::with_config(ClaudeConfig {
+    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(ClaudeConfig {
         auth: Auth::ApiKey(SecretString::from(key)),
         ..Default::default()
-    });
-    let driver: Arc<dyn pilot::Driver> = Arc::new(driver);
+    }));
 
     let mut session = Session::new(driver, std::env::current_dir()?);
     let mut stream = session

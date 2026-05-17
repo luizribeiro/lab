@@ -4,9 +4,13 @@
 //!
 //! Run with:
 //!     cargo run --example multi_turn -- claude
+//!     cargo run --example multi_turn -- codex
+//!     cargo run --example multi_turn -- gemini
+//!     cargo run --example multi_turn -- pi
 
 use futures_util::StreamExt;
-use pilot::{Session, TurnItem, TurnOptions};
+use pilot::{Event, Session, TurnItem, TurnOptions};
+use std::io::Write;
 use std::time::Duration;
 
 async fn drain(session: &mut Session, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -21,8 +25,13 @@ async fn drain(session: &mut Session, prompt: &str) -> Result<(), Box<dyn std::e
         )
         .await?;
     while let Some(item) = stream.next().await {
-        if let TurnItem::Complete(turn) = item? {
-            println!("complete ({} events)", turn.events.len());
+        match item? {
+            TurnItem::Event(Event::AssistantText { delta }) => {
+                print!("{delta}");
+                std::io::stdout().flush().ok();
+            }
+            TurnItem::Complete(_) => println!(),
+            _ => {}
         }
     }
     Ok(())
@@ -32,7 +41,7 @@ async fn drain(session: &mut Session, prompt: &str) -> Result<(), Box<dyn std::e
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = std::env::args()
         .nth(1)
-        .expect("usage: multi_turn <claude|gemini|pi>");
+        .expect("usage: multi_turn <claude|codex|gemini|pi>");
     let driver = pilot::driver(&agent)?;
     let mut session = Session::new(driver, std::env::current_dir()?);
 

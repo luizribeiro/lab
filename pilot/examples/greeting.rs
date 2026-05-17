@@ -2,6 +2,7 @@
 //!
 //! Run with:
 //!     cargo run --example greeting -- claude
+//!     cargo run --example greeting -- codex
 //!     cargo run --example greeting -- gemini
 //!     cargo run --example greeting -- pi
 
@@ -14,7 +15,7 @@ use std::time::Duration;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = std::env::args()
         .nth(1)
-        .expect("usage: greeting <claude|gemini|pi>");
+        .expect("usage: greeting <claude|codex|gemini|pi>");
 
     let driver = pilot::driver(&agent)?;
     let mut session = Session::new(driver, std::env::current_dir()?);

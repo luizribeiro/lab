@@ -1,12 +1,12 @@
 # pilot
 
-Drive headless AI coding-agent CLIs (claude, gemini, pi) from Rust over their stream-JSON modes. Observe events turn-by-turn through a unified `Stream`-based API. No tmux, no PTY, no review-loop overhead — just driving.
+Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) from Rust over their stream-JSON modes. Observe events turn-by-turn through a unified `Stream`-based API. No tmux, no PTY, no review-loop overhead — just driving.
 
 ## Supported agents
 
 | Agent  | CLI flag set | Resume support | Auth env var | Status |
 |--------|---|---|---|---|
-| claude | `-p --output-format stream-json --verbose --session-id <uuid>` | yes (same flag) | `ANTHROPIC_API_KEY` | first-class |
+| claude | `-p --output-format stream-json --verbose --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `ANTHROPIC_API_KEY` | first-class |
 | gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | first-class |
 | pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | `PI_API_KEY` | first-class |
 | codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured from `thread.started` event via `Driver::observe`) | `OPENAI_API_KEY` | first-class |
