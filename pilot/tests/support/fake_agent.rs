@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::process;
+use std::thread;
+use std::time::Duration;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -28,6 +30,9 @@ fn main() {
         } else if let Some(rest) = line.strip_prefix("stderr ") {
             writeln!(err, "{rest}").unwrap();
             err.flush().unwrap();
+        } else if let Some(rest) = line.strip_prefix("sleep ") {
+            let ms: u64 = rest.trim().parse().unwrap_or(0);
+            thread::sleep(Duration::from_millis(ms));
         } else if let Some(rest) = line.strip_prefix("exit ") {
             let code: i32 = rest.trim().parse().unwrap_or(0);
             process::exit(code);

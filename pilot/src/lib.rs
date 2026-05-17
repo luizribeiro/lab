@@ -7,6 +7,7 @@ mod driver;
 mod error;
 mod event;
 mod process;
+mod turn;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -15,3 +16,4 @@ pub use driver::claude::{Claude, ClaudeConfig, PermissionMode};
 pub use driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 pub use error::{Error, ParseError, Result};
 pub use event::Event;
+pub use turn::{Turn, TurnItem, TurnStream};

@@ -7,7 +7,15 @@ use tokio::sync::mpsc;
 use crate::Error;
 use crate::driver::CommandSpec;
 
-pub(crate) struct ProcessHandle;
+pub(crate) struct ProcessHandle {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
 #[allow(dead_code)] // wired into Session in a later commit
 pub(crate) async fn spawn_jsonl(
@@ -24,6 +32,7 @@ pub(crate) async fn spawn_jsonl(
     }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn().map_err(Error::Spawn)?;
     let stdout = child.stdout.take().expect("stdout piped");
@@ -32,7 +41,7 @@ pub(crate) async fn spawn_jsonl(
     // bounded channel; slow consumers back-pressure the child via stdout pipe.
     let (tx, rx) = mpsc::channel(256);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let stderr_task = tokio::spawn(async move {
             let mut buf = String::new();
             let _ = BufReader::new(stderr).read_to_string(&mut buf).await;
@@ -76,7 +85,7 @@ pub(crate) async fn spawn_jsonl(
         }
     });
 
-    Ok((ProcessHandle, rx))
+    Ok((ProcessHandle { task: handle }, rx))
 }
 
 #[cfg(test)]
