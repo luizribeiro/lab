@@ -62,7 +62,18 @@ pub struct TurnOptions {
     pub reasoning: Option<ReasoningLevel>,
     pub timeout: Option<Duration>,
     pub env: Vec<(String, String)>,
-    pub raw_args: Vec<String>,
+    /// Additional CLI flags to append after the pilot-generated argv.
+    ///
+    /// Placement contract (the same for every built-in driver): these
+    /// arguments are inserted AFTER the typed flags (`--model`,
+    /// `--permission-mode`, `--sandbox`, etc.) and BEFORE the prompt
+    /// positional. They are appended verbatim with no shell quoting.
+    ///
+    /// Use this as an escape hatch for CLI flags pilot doesn't yet
+    /// expose as typed fields. If you find yourself reaching for it
+    /// repeatedly for the same flag, that's a signal to open an issue
+    /// asking for a typed knob.
+    pub extra_args: Vec<String>,
 }
 
 pub trait Driver: Send + Sync {

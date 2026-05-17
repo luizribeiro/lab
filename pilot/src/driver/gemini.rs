@@ -155,7 +155,7 @@ impl Driver for Gemini {
             args.push(joined);
         }
 
-        args.extend(opts.raw_args.iter().cloned());
+        args.extend(opts.extra_args.iter().cloned());
 
         Ok(CommandSpec { program, args, env })
     }

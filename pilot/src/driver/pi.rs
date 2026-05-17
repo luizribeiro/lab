@@ -79,7 +79,7 @@ impl Pi {
             args.push("--thinking".into());
             args.push(s.into());
         }
-        args.extend(opts.raw_args.iter().cloned());
+        args.extend(opts.extra_args.iter().cloned());
         args
     }
 

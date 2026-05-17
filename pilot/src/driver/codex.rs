@@ -162,7 +162,7 @@ impl Driver for Codex {
             args.push(d.to_string_lossy().into_owned());
         }
 
-        args.extend(opts.raw_args.iter().cloned());
+        args.extend(opts.extra_args.iter().cloned());
 
         args.push(prompt.to_string());
 

@@ -99,7 +99,7 @@ impl Driver for Claude {
             }
         }
 
-        args.extend(opts.raw_args.iter().cloned());
+        args.extend(opts.extra_args.iter().cloned());
 
         // `--` terminates any preceding variadic flag (e.g. `--add-dir`) so
         // the prompt is unambiguously the trailing positional.
@@ -391,9 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_args_appear_before_prompt() {
+    fn extra_args_appear_before_prompt() {
         let opts = TurnOptions {
-            raw_args: vec!["--add-dir".into(), "/tmp".into()],
+            extra_args: vec!["--add-dir".into(), "/tmp".into()],
             ..Default::default()
         };
         let spec = Claude::new().command(nil(), "p", &opts).unwrap();
