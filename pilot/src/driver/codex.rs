@@ -133,6 +133,24 @@ impl Driver for Codex {
         CommandSpec { program, args, env }
     }
 
+    /// Build the codex resume invocation.
+    ///
+    /// # Fallback semantics
+    ///
+    /// This driver maintains an in-memory `Uuid -> thread_id` map populated
+    /// by [`Driver::observe`] as `thread.started` events stream in. If
+    /// `session_id` is missing from that map — because:
+    ///   - the first turn's events were never drained,
+    ///   - this is the first turn after a `Session::resume(...)` call in a
+    ///     fresh process where the map was lost, OR
+    ///   - the first turn failed before yielding `thread.started`
+    ///
+    /// — `resume_command` falls back to a fresh `command()` invocation AND
+    /// emits a `tracing::warn!`. Continuity is silently broken in those
+    /// cases. Programs that need durable resume across process restarts
+    /// will need to persist the thread_id themselves (e.g., logged from
+    /// `Driver::observe` output) and reconstruct the codex driver state
+    /// at startup.
     fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
         let thread_id = self
             .thread_ids
@@ -141,6 +159,11 @@ impl Driver for Codex {
             .and_then(|m| m.get(&session_id).cloned());
 
         let Some(thread_id) = thread_id else {
+            tracing::warn!(
+                session_id = %session_id,
+                "codex resume_command: no captured thread_id for this session; falling back to a fresh `codex exec` (NEW thread). \
+                 Drain previous turns to capture thread.started, or persist thread_id externally for cross-process resume."
+            );
             return self.command(session_id, prompt, opts);
         };
 
@@ -319,6 +342,17 @@ mod tests {
         let sid = Uuid::new_v4();
         let spec = codex.resume_command(sid, "no thread id yet", &TurnOptions::default());
         assert!(!spec.args.iter().any(|a| a == "resume"));
+    }
+
+    #[test]
+    fn resume_command_fallback_is_identical_to_command() {
+        let codex = Codex::new();
+        let sid = Uuid::new_v4();
+        let resumed = codex.resume_command(sid, "x", &TurnOptions::default());
+        let fresh = codex.command(sid, "x", &TurnOptions::default());
+        assert_eq!(resumed.args, fresh.args);
+        assert_eq!(resumed.program, fresh.program);
+        assert_eq!(resumed.env, fresh.env);
     }
 
     #[test]
