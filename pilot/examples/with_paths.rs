@@ -33,12 +33,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "hello from pilot example\n",
     )?;
 
-    // Per-run isolated claude config dir is COMMENTED OUT below because
-    // pointing `CLAUDE_CONFIG_DIR` at a fresh empty directory means claude
-    // has no auth credentials there. To try it: set ANTHROPIC_API_KEY in
-    // your environment (so `Auth::Ambient` picks it up inside the new
-    // config home), or switch to `Auth::ApiKey(SecretString::from(...))`,
-    // then uncomment the lines below.
+    let mut config = ClaudeConfig::default();
+    config.additional_dirs = vec![extra_dir.path().to_path_buf()];
+
+    // Per-run isolated claude config dir is OPTIONAL — uncomment the lines
+    // below to enable it. Pointing `CLAUDE_CONFIG_DIR` at a fresh empty
+    // directory means claude has no auth credentials there, so you also need
+    // to set `ANTHROPIC_API_KEY` in your environment (so `Auth::Ambient`
+    // picks it up inside the new config home) OR switch to
+    // `Auth::ApiKey(SecretString::from(...))` on `config.auth`.
     //
     //     let config_dir = tempfile::tempdir()?;
     //     config.paths.config_home = Some(config_dir.path().to_path_buf());
@@ -46,9 +49,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (The struct-literal form is not available for `AgentPaths` here because
     // it's `#[non_exhaustive]` — examples live in a separate compilation unit
     // and must mutate the default value.)
-
-    let mut config = ClaudeConfig::default();
-    config.additional_dirs = vec![extra_dir.path().to_path_buf()];
     let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(config));
 
     let mut session = Session::new(driver, std::env::current_dir()?);
