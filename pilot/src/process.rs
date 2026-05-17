@@ -63,15 +63,16 @@ pub(crate) async fn spawn_jsonl(
         }
 
         let stderr_buf = stderr_task.await.unwrap_or_default();
-        if let Ok(status) = child.wait().await
-            && !status.success()
-        {
-            let _ = tx
-                .send(Err(Error::Exit {
-                    status,
-                    stderr: stderr_buf,
-                }))
-                .await;
+        #[allow(clippy::collapsible_if)]
+        if let Ok(status) = child.wait().await {
+            if !status.success() {
+                let _ = tx
+                    .send(Err(Error::Exit {
+                        status,
+                        stderr: stderr_buf,
+                    }))
+                    .await;
+            }
         }
     });
 
