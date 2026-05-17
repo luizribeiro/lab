@@ -1,6 +1,6 @@
 //! Pi (Inflection) driver.
 
-use crate::driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 use secrecy::ExposeSecret;
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ pub struct PiConfig {
     pub provider: Option<String>,
     pub default_model: Option<String>,
     pub extra_env: Vec<(String, String)>,
+    pub paths: AgentPaths,
     pub state: PiPilotState,
 }
 
@@ -88,6 +89,12 @@ impl Pi {
             // common one. Drivers/configs needing distinct vars can use
             // PiConfig::extra_env to add their own.
             env.push(("PI_API_KEY".into(), secret.expose_secret().to_string()));
+        }
+        if let Some(home) = &self.config.paths.config_home {
+            env.push((
+                "PI_CODING_AGENT_DIR".into(),
+                home.to_string_lossy().into_owned(),
+            ));
         }
         env
     }
@@ -293,6 +300,25 @@ mod tests {
             .expect("env set");
         assert_eq!(v, "pi-test-XYZ");
         assert!(!format!("{driver:?}").contains("pi-test-XYZ"));
+    }
+
+    #[test]
+    fn config_home_sets_pi_coding_agent_dir_env() {
+        let driver = Pi::with_config(PiConfig {
+            paths: AgentPaths {
+                config_home: Some(PathBuf::from("/tmp/my-pi")),
+            },
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let (_, v) = spec
+            .env
+            .iter()
+            .find(|(k, _)| k == "PI_CODING_AGENT_DIR")
+            .expect("env set");
+        assert_eq!(v, "/tmp/my-pi");
     }
 
     #[test]

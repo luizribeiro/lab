@@ -21,6 +21,22 @@ pub struct CommandSpec {
     pub env: Vec<(String, String)>,
 }
 
+/// Path overrides common to multiple agent CLIs. Each driver is
+/// responsible for translating these into its CLI's actual mechanism
+/// (flag or env var). Drivers that don't support a given override
+/// must return `Error::UnsupportedOption` from `command()` /
+/// `resume_command()` rather than silently ignoring it.
+#[derive(Default, Debug, Clone)]
+pub struct AgentPaths {
+    /// Override the CLI's config home directory.
+    /// - claude:  `CLAUDE_CONFIG_DIR` env var
+    /// - codex:   `CODEX_HOME` env var
+    /// - pi:      `PI_CODING_AGENT_DIR` env var
+    /// - gemini:  NOT SUPPORTED — setting this on a `GeminiConfig`
+    ///   causes `command()` to return `Error::UnsupportedOption`
+    pub config_home: Option<std::path::PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningLevel {
     Low,

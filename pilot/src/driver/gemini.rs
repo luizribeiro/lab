@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,7 @@ pub struct GeminiConfig {
     /// you trust to `Session::new(_, workdir)`.
     pub skip_trust: bool,
     pub extra_env: Vec<(String, String)>,
+    pub paths: AgentPaths,
 }
 
 impl Default for GeminiConfig {
@@ -52,6 +53,7 @@ impl Default for GeminiConfig {
             // explicitly. (See ../../docs/security.md once we have one.)
             skip_trust: true,
             extra_env: Vec::new(),
+            paths: AgentPaths::default(),
         }
     }
 }
@@ -81,6 +83,13 @@ impl Driver for Gemini {
         prompt: &str,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        if self.config.paths.config_home.is_some() {
+            return Err(crate::Error::UnsupportedOption {
+                driver: "gemini",
+                option: "paths.config_home",
+            });
+        }
+
         let program = self
             .config
             .binary
@@ -293,6 +302,26 @@ mod tests {
             .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
+    }
+
+    #[test]
+    fn config_home_on_gemini_returns_unsupported_option_error() {
+        let driver = Gemini::with_config(GeminiConfig {
+            paths: AgentPaths {
+                config_home: Some(PathBuf::from("/tmp/x")),
+            },
+            ..Default::default()
+        });
+        let err = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::Error::UnsupportedOption {
+                driver: "gemini",
+                option: "paths.config_home",
+            }
+        ));
     }
 
     #[test]

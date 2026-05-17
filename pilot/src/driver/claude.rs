@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +21,7 @@ pub struct ClaudeConfig {
     pub default_model: Option<String>,
     pub permission_mode: PermissionMode,
     pub extra_env: Vec<(String, String)>,
+    pub paths: AgentPaths,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -102,6 +103,12 @@ impl Driver for Claude {
                     secret.expose_secret().to_string(),
                 ));
             }
+        }
+        if let Some(home) = &self.config.paths.config_home {
+            env.push((
+                "CLAUDE_CONFIG_DIR".into(),
+                home.to_string_lossy().into_owned(),
+            ));
         }
 
         Ok(CommandSpec { program, args, env })
@@ -412,6 +419,25 @@ mod tests {
             .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
+    }
+
+    #[test]
+    fn config_home_sets_claude_config_dir_env() {
+        let driver = Claude::with_config(ClaudeConfig {
+            paths: AgentPaths {
+                config_home: Some(PathBuf::from("/tmp/my-claude")),
+            },
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let (_, v) = spec
+            .env
+            .iter()
+            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+            .expect("env set");
+        assert_eq!(v, "/tmp/my-claude");
     }
 
     #[test]

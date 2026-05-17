@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,7 @@ pub struct CodexConfig {
     /// `codex -c key=value` config overrides.
     pub config_overrides: Vec<(String, String)>,
     pub extra_env: Vec<(String, String)>,
+    pub paths: AgentPaths,
     pub state: CodexPilotState,
 }
 
@@ -74,6 +75,7 @@ impl Default for CodexConfig {
             skip_git_repo_check: true,
             config_overrides: Vec::new(),
             extra_env: Vec::new(),
+            paths: AgentPaths::default(),
             state: CodexPilotState::default(),
         }
     }
@@ -159,6 +161,9 @@ impl Driver for Codex {
         env.extend(opts.env.iter().cloned());
         if let Auth::ApiKey(secret) = &self.config.auth {
             env.push(("OPENAI_API_KEY".into(), secret.expose_secret().to_string()));
+        }
+        if let Some(home) = &self.config.paths.config_home {
+            env.push(("CODEX_HOME".into(), home.to_string_lossy().into_owned()));
         }
 
         Ok(CommandSpec { program, args, env })
@@ -643,6 +648,25 @@ mod tests {
             std::sync::Arc::ptr_eq(&la, &lc),
             "a and c must share a lock"
         );
+    }
+
+    #[test]
+    fn config_home_sets_codex_home_env() {
+        let driver = Codex::with_config(CodexConfig {
+            paths: AgentPaths {
+                config_home: Some(PathBuf::from("/tmp/my-codex")),
+            },
+            ..Default::default()
+        });
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let (_, v) = spec
+            .env
+            .iter()
+            .find(|(k, _)| k == "CODEX_HOME")
+            .expect("env set");
+        assert_eq!(v, "/tmp/my-codex");
     }
 
     #[test]
