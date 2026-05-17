@@ -49,22 +49,31 @@ async fn smoke(agent: &str) {
     let mut session = Session::new(driver, std::env::temp_dir());
 
     let mut stream = session
-        .send("Say only the word: hi", TurnOptions::default())
+        .send(
+            "Say only the word: hi",
+            TurnOptions {
+                timeout: Some(std::time::Duration::from_secs(60)),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap_or_else(|e| panic!("send failed for {agent}: {e:?}"));
 
     let mut saw_text = false;
-    let mut saw_complete = false;
+    let mut completes = 0usize;
     while let Some(item) = stream.next().await {
         match item.unwrap_or_else(|e| panic!("stream error from {agent}: {e:?}")) {
             TurnItem::Event(Event::AssistantText { .. }) => saw_text = true,
-            TurnItem::Complete(_) => saw_complete = true,
+            TurnItem::Complete(_) => completes += 1,
             _ => {}
         }
     }
 
     assert!(saw_text, "{agent} produced no AssistantText event");
-    assert!(saw_complete, "{agent} produced no Complete event");
+    assert_eq!(
+        completes, 1,
+        "{agent} produced {completes} Complete events; expected exactly 1"
+    );
 }
 
 #[tokio::test]
