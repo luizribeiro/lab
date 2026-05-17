@@ -93,7 +93,12 @@ impl Driver for Pi {
         "pi"
     }
 
-    fn command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let program = self
             .config
             .binary
@@ -101,14 +106,19 @@ impl Driver for Pi {
             .unwrap_or_else(|| PathBuf::from("pi"));
         let mut args = self.base_args(session_id, opts);
         args.push(prompt.to_string());
-        CommandSpec {
+        Ok(CommandSpec {
             program,
             args,
             env: self.env_for(opts),
-        }
+        })
     }
 
-    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let program = self
             .config
             .binary
@@ -117,11 +127,11 @@ impl Driver for Pi {
         let mut args = self.base_args(session_id, opts);
         args.push("--continue".into());
         args.push(prompt.to_string());
-        CommandSpec {
+        Ok(CommandSpec {
             program,
             args,
             env: self.env_for(opts),
-        }
+        })
     }
 
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
@@ -216,7 +226,9 @@ mod tests {
 
     #[test]
     fn default_command_includes_required_flags() {
-        let spec = Pi::new().command(nil(), "hello", &TurnOptions::default());
+        let spec = Pi::new()
+            .command(nil(), "hello", &TurnOptions::default())
+            .unwrap();
         assert_eq!(spec.args.last().unwrap(), "hello");
         assert!(spec.args.contains(&"-p".to_string()));
         let mi = spec.args.iter().position(|a| a == "--mode").unwrap();
@@ -226,8 +238,12 @@ mod tests {
 
     #[test]
     fn resume_command_adds_continue_flag() {
-        let cspec = Pi::new().command(nil(), "hi", &TurnOptions::default());
-        let rspec = Pi::new().resume_command(nil(), "hi", &TurnOptions::default());
+        let cspec = Pi::new()
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
+        let rspec = Pi::new()
+            .resume_command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         assert!(!cspec.args.iter().any(|a| a == "--continue"));
         assert!(rspec.args.iter().any(|a| a == "--continue"));
     }
@@ -238,7 +254,9 @@ mod tests {
             provider: Some("github-copilot".into()),
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "--provider").unwrap();
         assert_eq!(spec.args[i + 1], "github-copilot");
     }
@@ -249,7 +267,7 @@ mod tests {
             reasoning: Some(ReasoningLevel::Medium),
             ..Default::default()
         };
-        let spec = Pi::new().command(nil(), "hi", &opts);
+        let spec = Pi::new().command(nil(), "hi", &opts).unwrap();
         let i = spec.args.iter().position(|a| a == "--thinking").unwrap();
         assert_eq!(spec.args[i + 1], "medium");
     }
@@ -260,7 +278,9 @@ mod tests {
             auth: Auth::ApiKey(secrecy::SecretString::from("pi-test-XYZ")),
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let (_, v) = spec
             .env
             .iter()

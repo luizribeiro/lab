@@ -27,8 +27,13 @@ impl Driver for TestDriver {
         self.name
     }
 
-    fn command(&self, session_id: Uuid, prompt: &str, _opts: &TurnOptions) -> CommandSpec {
-        CommandSpec {
+    fn command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        _opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        Ok(CommandSpec {
             program: self.program.clone(),
             args: vec![
                 "--session".into(),
@@ -37,7 +42,7 @@ impl Driver for TestDriver {
                 prompt.into(),
             ],
             env: Vec::new(),
-        }
+        })
     }
 
     fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
@@ -55,7 +60,9 @@ mod tests {
     #[test]
     fn command_carries_session_and_prompt() {
         let d = TestDriver::new("t", "/bin/echo");
-        let spec = d.command(Uuid::nil(), "hi", &TurnOptions::default());
+        let spec = d
+            .command(Uuid::nil(), "hi", &TurnOptions::default())
+            .unwrap();
         assert!(spec.args.iter().any(|a| a == &Uuid::nil().to_string()));
         assert!(spec.args.iter().any(|a| a == "hi"));
     }

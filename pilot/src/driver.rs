@@ -48,13 +48,23 @@ pub trait Driver: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Build the command for the FIRST turn of a session.
-    fn command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec;
+    fn command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec>;
 
     /// Build the command for a SUBSEQUENT turn that should resume an
     /// existing session. Default implementation delegates to `command` —
     /// drivers whose CLI requires distinct first-turn vs resume flags
     /// (e.g. gemini, codex) MUST override this.
-    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         self.command(session_id, prompt, opts)
     }
 

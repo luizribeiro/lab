@@ -326,7 +326,7 @@ mod tests {
                 _: uuid::Uuid,
                 _: &str,
                 _: &crate::driver::TurnOptions,
-            ) -> crate::driver::CommandSpec {
+            ) -> crate::Result<crate::driver::CommandSpec> {
                 unreachable!("not invoked in this test")
             }
             fn parse(

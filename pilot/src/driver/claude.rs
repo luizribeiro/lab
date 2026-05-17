@@ -42,7 +42,12 @@ impl Driver for Claude {
         "claude"
     }
 
-    fn command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let program = self
             .config
             .binary
@@ -99,18 +104,23 @@ impl Driver for Claude {
             }
         }
 
-        CommandSpec { program, args, env }
+        Ok(CommandSpec { program, args, env })
     }
 
-    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         // Claude rejects re-use of --session-id with an existing UUID
         // ("Session ID is already in use"). Subsequent turns use --resume
         // to attach to the previously-created session.
-        let mut spec = self.command(session_id, prompt, opts);
+        let mut spec = self.command(session_id, prompt, opts)?;
         if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
             spec.args[i] = "--resume".to_string();
         }
-        spec
+        Ok(spec)
     }
 
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
@@ -288,7 +298,9 @@ mod tests {
 
     #[test]
     fn default_command_argv_snapshot() {
-        let spec = Claude::new().command(nil(), "hello", &TurnOptions::default());
+        let spec = Claude::new()
+            .command(nil(), "hello", &TurnOptions::default())
+            .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
             claude -p --verbose --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 hello
@@ -307,7 +319,7 @@ mod tests {
             model: Some("claude-opus-4-7".into()),
             ..Default::default()
         };
-        let spec = driver.command(nil(), "hi", &opts);
+        let spec = driver.command(nil(), "hi", &opts).unwrap();
         let i = spec.args.iter().position(|a| a == "--model").unwrap();
         assert_eq!(spec.args[i + 1], "claude-opus-4-7");
     }
@@ -318,7 +330,9 @@ mod tests {
             permission_mode: PermissionMode::BypassPermissions,
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let i = spec
             .args
             .iter()
@@ -333,7 +347,7 @@ mod tests {
             reasoning: Some(ReasoningLevel::Medium),
             ..Default::default()
         };
-        let spec = Claude::new().command(nil(), "hi", &opts);
+        let spec = Claude::new().command(nil(), "hi", &opts).unwrap();
         let i = spec.args.iter().position(|a| a == "--effort").unwrap();
         assert_eq!(spec.args[i + 1], "medium");
     }
@@ -344,7 +358,9 @@ mod tests {
             auth: Auth::ApiKey(secrecy::SecretString::from("sk-test-XYZ")),
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let (_, v) = spec
             .env
             .iter()
@@ -360,7 +376,7 @@ mod tests {
             raw_args: vec!["--add-dir".into(), "/tmp".into()],
             ..Default::default()
         };
-        let spec = Claude::new().command(nil(), "p", &opts);
+        let spec = Claude::new().command(nil(), "p", &opts).unwrap();
         let add = spec.args.iter().position(|a| a == "--add-dir").unwrap();
         let prompt = spec.args.iter().rposition(|a| a == "p").unwrap();
         assert!(add < prompt);
@@ -391,7 +407,9 @@ mod tests {
 
     #[test]
     fn resume_command_uses_resume_flag_not_session_id() {
-        let spec = Claude::new().resume_command(nil(), "next", &TurnOptions::default());
+        let spec = Claude::new()
+            .resume_command(nil(), "next", &TurnOptions::default())
+            .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
     }

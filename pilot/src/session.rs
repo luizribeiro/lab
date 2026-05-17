@@ -83,10 +83,16 @@ impl Session {
         let guard = crate::turn::BusyGuard {
             flag: self.busy.clone(),
         };
-        let spec = if self.turns_completed.load(Ordering::SeqCst) == 0 {
+        let spec = match if self.turns_completed.load(Ordering::SeqCst) == 0 {
             self.driver.command(self.id, prompt, &opts)
         } else {
             self.driver.resume_command(self.id, prompt, &opts)
+        } {
+            Ok(s) => s,
+            Err(e) => {
+                self.busy.store(false, Ordering::SeqCst);
+                return Err(e);
+            }
         };
         let (handle, rx) = spawn_jsonl(spec, self.workdir.clone()).await?;
         let stream = TurnStream::new(self.id, handle, rx, self.driver.clone())
@@ -142,12 +148,17 @@ mod tests {
         fn name(&self) -> &'static str {
             "script"
         }
-        fn command(&self, _session_id: Uuid, _prompt: &str, _opts: &TurnOptions) -> CommandSpec {
-            CommandSpec {
+        fn command(
+            &self,
+            _session_id: Uuid,
+            _prompt: &str,
+            _opts: &TurnOptions,
+        ) -> crate::Result<CommandSpec> {
+            Ok(CommandSpec {
                 program: fake_agent(),
                 args: vec!["--script".into(), self.script.to_string_lossy().into()],
                 env: vec![],
-            }
+            })
         }
         fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
             Ok(vec![Event::Raw {
@@ -251,13 +262,13 @@ mod tests {
             fn name(&self) -> &'static str {
                 "uuid-cap"
             }
-            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> CommandSpec {
+            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> crate::Result<CommandSpec> {
                 *self.seen.lock().unwrap() = Some(sid);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
                 Ok(vec![Event::Raw {
@@ -360,7 +371,7 @@ mod tests {
             fn name(&self) -> &'static str {
                 "never-spawn"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
                 panic!("command() must not be called by resume()");
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
@@ -386,21 +397,26 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
-            fn resume_command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn resume_command(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
                 Ok(vec![Event::Raw {
@@ -459,21 +475,26 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
-            fn resume_command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn resume_command(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
                 Ok(vec![Event::Raw {
@@ -525,21 +546,26 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
-            fn resume_command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+            fn resume_command(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
                 Ok(vec![Event::Raw {
@@ -576,13 +602,13 @@ mod tests {
             fn name(&self) -> &'static str {
                 "uuid-cap"
             }
-            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> CommandSpec {
+            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> crate::Result<CommandSpec> {
                 *self.seen.lock().unwrap() = Some(sid);
-                CommandSpec {
+                Ok(CommandSpec {
                     program: fake_agent(),
                     args: vec!["--script".into(), self.script.to_string_lossy().into()],
                     env: vec![],
-                }
+                })
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
                 Ok(vec![Event::Raw {

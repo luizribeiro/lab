@@ -34,6 +34,12 @@ pub enum Error {
     /// in flight on the same session.
     #[error("session is already executing a turn")]
     Busy,
+    /// A configuration option was set on a driver that does not support it.
+    #[error("driver {driver}: option {option} is not supported by this CLI")]
+    UnsupportedOption {
+        driver: &'static str,
+        option: &'static str,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -91,6 +97,16 @@ mod tests {
         for (e, prefix) in cases.iter().zip(prefixes.iter()) {
             assert!(format!("{e}").contains(prefix), "{e}");
         }
+    }
+
+    #[test]
+    fn unsupported_option_displays() {
+        let e = Error::UnsupportedOption {
+            driver: "x",
+            option: "foo",
+        };
+        assert!(format!("{e}").contains("driver x"));
+        assert!(format!("{e}").contains("option foo"));
     }
 
     #[test]

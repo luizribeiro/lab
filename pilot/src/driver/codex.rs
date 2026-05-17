@@ -100,7 +100,12 @@ impl Driver for Codex {
         "codex"
     }
 
-    fn command(&self, _session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn command(
+        &self,
+        _session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let program = self
             .config
             .binary
@@ -151,7 +156,7 @@ impl Driver for Codex {
             env.push(("OPENAI_API_KEY".into(), secret.expose_secret().to_string()));
         }
 
-        CommandSpec { program, args, env }
+        Ok(CommandSpec { program, args, env })
     }
 
     /// Build the codex resume invocation.
@@ -172,7 +177,12 @@ impl Driver for Codex {
     /// will need to persist the thread_id themselves (e.g., logged from
     /// `Driver::observe` output) and reconstruct the codex driver state
     /// at startup.
-    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let thread_id = self
             .thread_ids
             .lock()
@@ -200,12 +210,12 @@ impl Driver for Codex {
             return self.command(session_id, prompt, opts);
         };
 
-        let mut spec = self.command(session_id, "", opts);
+        let mut spec = self.command(session_id, "", opts)?;
         spec.args.pop();
         spec.args.push("resume".into());
         spec.args.push(thread_id);
         spec.args.push(prompt.to_string());
-        spec
+        Ok(spec)
     }
 
     fn observe(&self, session_id: Uuid, raw: &serde_json::Value) {
@@ -391,7 +401,9 @@ mod tests {
 
     #[test]
     fn default_command_argv_snapshot() {
-        let spec = Codex::new().command(nil(), "hello", &TurnOptions::default());
+        let spec = Codex::new()
+            .command(nil(), "hello", &TurnOptions::default())
+            .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
             codex exec --json --sandbox read-only --skip-git-repo-check hello
@@ -405,7 +417,9 @@ mod tests {
             sandbox: SandboxMode::WorkspaceWrite,
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "--sandbox").unwrap();
         assert_eq!(spec.args[i + 1], "workspace-write");
     }
@@ -416,7 +430,9 @@ mod tests {
             skip_git_repo_check: false,
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         assert!(!spec.args.iter().any(|a| a == "--skip-git-repo-check"));
     }
 
@@ -426,7 +442,9 @@ mod tests {
             auth: Auth::ApiKey(secrecy::SecretString::from("sk-codex-test")),
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let (_, v) = spec
             .env
             .iter()
@@ -442,7 +460,9 @@ mod tests {
             config_overrides: vec![("model".into(), "o3".into())],
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "-c").unwrap();
         assert_eq!(spec.args[i + 1], "model=o3");
     }
@@ -473,7 +493,9 @@ mod tests {
         });
         codex.observe(sid, &raw);
 
-        let spec = codex.resume_command(sid, "follow-up", &TurnOptions::default());
+        let spec = codex
+            .resume_command(sid, "follow-up", &TurnOptions::default())
+            .unwrap();
         let resume_idx = spec.args.iter().position(|a| a == "resume").unwrap();
         assert_eq!(
             spec.args[resume_idx + 1],
@@ -486,7 +508,9 @@ mod tests {
     fn resume_command_without_observation_falls_back_to_command() {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
-        let spec = codex.resume_command(sid, "no thread id yet", &TurnOptions::default());
+        let spec = codex
+            .resume_command(sid, "no thread id yet", &TurnOptions::default())
+            .unwrap();
         assert!(!spec.args.iter().any(|a| a == "resume"));
     }
 
@@ -494,8 +518,10 @@ mod tests {
     fn resume_command_fallback_is_identical_to_command() {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
-        let resumed = codex.resume_command(sid, "x", &TurnOptions::default());
-        let fresh = codex.command(sid, "x", &TurnOptions::default());
+        let resumed = codex
+            .resume_command(sid, "x", &TurnOptions::default())
+            .unwrap();
+        let fresh = codex.command(sid, "x", &TurnOptions::default()).unwrap();
         assert_eq!(resumed.args, fresh.args);
         assert_eq!(resumed.program, fresh.program);
         assert_eq!(resumed.env, fresh.env);
@@ -536,7 +562,9 @@ mod tests {
             ..Default::default()
         };
         let second = Codex::with_config(cfg);
-        let spec = second.resume_command(sid, "follow-up", &TurnOptions::default());
+        let spec = second
+            .resume_command(sid, "follow-up", &TurnOptions::default())
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "resume").unwrap();
         assert_eq!(spec.args[i + 1], "019e0000-0000-0000-0000-000000000abc");
         assert_eq!(spec.args[i + 2], "follow-up");
@@ -546,8 +574,10 @@ mod tests {
     fn persistence_disabled_falls_back_when_state_missing() {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
-        let resumed = codex.resume_command(sid, "x", &TurnOptions::default());
-        let fresh = codex.command(sid, "x", &TurnOptions::default());
+        let resumed = codex
+            .resume_command(sid, "x", &TurnOptions::default())
+            .unwrap();
+        let fresh = codex.command(sid, "x", &TurnOptions::default()).unwrap();
         assert_eq!(resumed.args, fresh.args);
     }
 

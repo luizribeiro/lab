@@ -75,7 +75,12 @@ impl Driver for Gemini {
         "gemini"
     }
 
-    fn command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+    fn command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
         let program = self
             .config
             .binary
@@ -127,15 +132,20 @@ impl Driver for Gemini {
 
         args.extend(opts.raw_args.iter().cloned());
 
-        CommandSpec { program, args, env }
+        Ok(CommandSpec { program, args, env })
     }
 
-    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
-        let mut spec = self.command(session_id, prompt, opts);
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        let mut spec = self.command(session_id, prompt, opts)?;
         if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
             spec.args[i] = "--resume".to_string();
         }
-        spec
+        Ok(spec)
     }
 
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
@@ -202,7 +212,9 @@ mod tests {
 
     #[test]
     fn default_command_argv_snapshot() {
-        let spec = Gemini::new().command(nil(), "hello", &TurnOptions::default());
+        let spec = Gemini::new()
+            .command(nil(), "hello", &TurnOptions::default())
+            .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
             gemini -p hello --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 --skip-trust
@@ -217,7 +229,9 @@ mod tests {
             approval_mode: ApprovalMode::Yolo,
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let i = spec
             .args
             .iter()
@@ -232,7 +246,9 @@ mod tests {
             skip_trust: false,
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         assert!(!spec.args.iter().any(|a| a == "--skip-trust"));
     }
 
@@ -242,7 +258,9 @@ mod tests {
             auth: Auth::ApiKey(secrecy::SecretString::from("ai-test-XYZ")),
             ..Default::default()
         });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
+        let spec = driver
+            .command(nil(), "hi", &TurnOptions::default())
+            .unwrap();
         let (_, v) = spec
             .env
             .iter()
@@ -270,7 +288,9 @@ mod tests {
 
     #[test]
     fn resume_command_uses_resume_flag_not_session_id() {
-        let spec = Gemini::new().resume_command(nil(), "next", &TurnOptions::default());
+        let spec = Gemini::new()
+            .resume_command(nil(), "next", &TurnOptions::default())
+            .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
     }
