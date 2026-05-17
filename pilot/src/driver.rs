@@ -44,7 +44,7 @@ pub struct TurnOptions {
 pub trait Driver: Send + Sync {
     fn name(&self) -> &'static str;
     fn command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec;
-    fn parse(&self, line: serde_json::Value) -> std::result::Result<Event, ParseError>;
+    fn parse(&self, line: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError>;
 }
 
 #[cfg(test)]

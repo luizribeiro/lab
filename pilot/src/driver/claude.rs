@@ -102,11 +102,11 @@ impl Driver for Claude {
         CommandSpec { program, args, env }
     }
 
-    fn parse(&self, value: serde_json::Value) -> Result<Event, ParseError> {
-        Ok(Event::Raw {
+    fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
+        Ok(vec![Event::Raw {
             driver: "claude",
             value,
-        })
+        }])
     }
 }
 

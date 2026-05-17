@@ -40,11 +40,11 @@ impl Driver for TestDriver {
         }
     }
 
-    fn parse(&self, value: serde_json::Value) -> std::result::Result<Event, ParseError> {
-        Ok(Event::Raw {
+    fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+        Ok(vec![Event::Raw {
             driver: self.name,
             value,
-        })
+        }])
     }
 }
 
@@ -63,7 +63,8 @@ mod tests {
     #[test]
     fn parse_returns_raw() {
         let d = TestDriver::new("t", "/bin/echo");
-        let ev = d.parse(serde_json::json!({"x": 1})).unwrap();
-        assert!(matches!(ev, Event::Raw { driver: "t", .. }));
+        let evs = d.parse(serde_json::json!({"x": 1})).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], Event::Raw { driver: "t", .. }));
     }
 }
