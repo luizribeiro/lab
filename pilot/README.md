@@ -66,12 +66,17 @@ pub enum Event {
     ToolResult    { call_id: String, ok: bool, output: String },
     Thinking      { delta: String },
     Usage         { input_tokens: u64, output_tokens: u64 },
-    TurnComplete  { ok: bool, final_text: Option<String> },
+    TurnComplete  { ok: bool },
     Raw           { driver: &'static str, value: serde_json::Value },
 }
 
 pub fn driver(name: &str) -> Result<Arc<dyn Driver>>; // built-in factory
 ```
+
+For the canonical agent response text, use `Turn::final_text()`, which
+concatenates all `AssistantText` deltas observed during the turn. Drivers
+that don't stream deltas (e.g. claude's error-result path) emit a
+synthetic `AssistantText` so this still returns usable text.
 
 The `TurnInput` enum is the input type accepted by `Session::send`. Today
 only `Text(String)` exists; future multimodal variants (image, file) can

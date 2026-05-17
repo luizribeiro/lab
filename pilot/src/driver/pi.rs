@@ -225,26 +225,7 @@ impl Driver for Pi {
                     value,
                 }])
             }
-            Some("turn_end") => {
-                let final_text = value
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter(|item| {
-                                item.get("type").and_then(|v| v.as_str()) == Some("text")
-                            })
-                            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-                            .collect::<Vec<_>>()
-                            .join("")
-                    })
-                    .filter(|s| !s.is_empty());
-                Ok(vec![Event::TurnComplete {
-                    ok: true,
-                    final_text,
-                }])
-            }
+            Some("turn_end") => Ok(vec![Event::TurnComplete { ok: true }]),
             _ => Ok(vec![Event::Raw {
                 driver: "pi",
                 value,
@@ -417,26 +398,6 @@ mod tests {
         let v = serde_json::json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta"}});
         let err = Pi::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("delta")));
-    }
-
-    #[test]
-    fn turn_end_joins_multiple_text_content_blocks() {
-        let v = serde_json::json!({
-            "type": "turn_end",
-            "message": {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "Hello "},
-                    {"type": "text", "text": "world"}
-                ]
-            },
-            "toolResults": []
-        });
-        let evs = Pi::new().parse(v).expect("parse ok");
-        assert_eq!(evs.len(), 1);
-        assert!(
-            matches!(&evs[0], Event::TurnComplete { final_text: Some(s), .. } if s == "Hello world")
-        );
     }
 
     #[test]

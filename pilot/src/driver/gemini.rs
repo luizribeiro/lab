@@ -224,10 +224,7 @@ impl Driver for Gemini {
                         });
                     }
                 }
-                events.push(Event::TurnComplete {
-                    ok,
-                    final_text: None,
-                });
+                events.push(Event::TurnComplete { ok });
                 Ok(events)
             }
             _ => Ok(vec![Event::Raw {

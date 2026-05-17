@@ -40,13 +40,10 @@ pub enum Event {
 
     /// Sentinel emitted exactly once per turn when the agent has finished.
     /// `ok` is false when the underlying CLI reported an error for this turn
-    /// (e.g. claude's `is_error: true`); `final_text` is the canonical final
-    /// message text if the agent surfaces one separately from the streamed
-    /// AssistantText deltas, otherwise None.
-    TurnComplete {
-        ok: bool,
-        final_text: Option<String>,
-    },
+    /// (e.g. claude's `is_error: true`). For the canonical agent response
+    /// text, use [`crate::Turn::final_text`], which concatenates all
+    /// `AssistantText` deltas observed during the turn.
+    TurnComplete { ok: bool },
 
     /// Catch-all for agent JSON events that the driver did not normalize to
     /// one of the variants above. Preserves provenance (driver name) plus the
@@ -84,15 +81,9 @@ mod tests {
     }
 
     #[test]
-    fn turn_complete_with_and_without_text() {
-        let a = Event::TurnComplete {
-            ok: true,
-            final_text: None,
-        };
-        let b = Event::TurnComplete {
-            ok: true,
-            final_text: Some("ok".into()),
-        };
+    fn turn_complete_ok_field_distinguishes_success_and_failure() {
+        let a = Event::TurnComplete { ok: true };
+        let b = Event::TurnComplete { ok: false };
         assert_ne!(a, b);
     }
 

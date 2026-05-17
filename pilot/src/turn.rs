@@ -50,6 +50,25 @@ pub struct Turn {
     pub events: Vec<Event>,
 }
 
+impl Turn {
+    /// The canonical final text of this turn — the concatenation of all
+    /// `Event::AssistantText` deltas in the order they were observed.
+    ///
+    /// Drivers without streamed deltas (e.g. claude's error-result path)
+    /// emit a synthetic `AssistantText` so this method still returns
+    /// usable text. Empty string when the turn produced no text at all
+    /// (e.g. a turn that errored before any model output).
+    pub fn final_text(&self) -> String {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                Event::AssistantText { delta } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Item yielded by [`TurnStream`]. Either a streamed [`Event`], or the
 /// terminal [`Turn`] containing the full accumulated event list.
 #[derive(Debug)]
@@ -265,6 +284,39 @@ impl Stream for TurnStream {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod final_text_tests {
+    use super::*;
+
+    #[test]
+    fn final_text_accumulates_assistant_text_deltas() {
+        let turn = Turn {
+            events: vec![
+                Event::AssistantText {
+                    delta: "hello ".into(),
+                },
+                Event::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                Event::AssistantText {
+                    delta: "world".into(),
+                },
+                Event::TurnComplete { ok: true },
+            ],
+        };
+        assert_eq!(turn.final_text(), "hello world");
+    }
+
+    #[test]
+    fn final_text_empty_when_no_assistant_deltas() {
+        let turn = Turn {
+            events: vec![Event::TurnComplete { ok: false }],
+        };
+        assert_eq!(turn.final_text(), "");
     }
 }
 

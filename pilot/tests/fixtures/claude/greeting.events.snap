@@ -28,8 +28,5 @@
     },
     TurnComplete {
         ok: true,
-        final_text: Some(
-            "hello",
-        ),
     },
 ]

@@ -159,7 +159,7 @@ impl Driver for Claude {
         match value.get("type").and_then(serde_json::Value::as_str) {
             Some("assistant") => parse_assistant(&value),
             Some("user") => parse_user(&value),
-            Some("result") => Ok(vec![parse_result(&value)]),
+            Some("result") => Ok(parse_result(&value)),
             _ => Ok(vec![raw(value)]),
         }
     }
@@ -303,19 +303,23 @@ fn stringify_tool_result_content(content: Option<&serde_json::Value>) -> String 
     }
 }
 
-fn parse_result(value: &serde_json::Value) -> Event {
-    let final_text = value
-        .get("result")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
+fn parse_result(value: &serde_json::Value) -> Vec<Event> {
     let is_error = value
         .get("is_error")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    Event::TurnComplete {
-        ok: !is_error,
-        final_text,
+    let result_text = value
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let mut events = Vec::new();
+    if is_error {
+        if let Some(text) = result_text {
+            events.push(Event::AssistantText { delta: text });
+        }
     }
+    events.push(Event::TurnComplete { ok: !is_error });
+    events
 }
 
 #[cfg(test)]
@@ -518,10 +522,11 @@ mod tests {
             "result": "context limit exceeded"
         });
         let evs = Claude::new().parse(v).expect("parse ok");
-        assert_eq!(evs.len(), 1);
+        assert_eq!(evs.len(), 2);
         assert!(matches!(
             &evs[0],
-            Event::TurnComplete { ok: false, final_text: Some(s) } if s == "context limit exceeded"
+            Event::AssistantText { delta } if delta == "context limit exceeded"
         ));
+        assert!(matches!(&evs[1], Event::TurnComplete { ok: false }));
     }
 }

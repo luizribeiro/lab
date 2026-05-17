@@ -323,10 +323,7 @@ impl Driver for Codex {
                         });
                     }
                 }
-                events.push(Event::TurnComplete {
-                    ok: true,
-                    final_text: None,
-                });
+                events.push(Event::TurnComplete { ok: true });
                 Ok(events)
             }
             _ => Ok(vec![Event::Raw {
