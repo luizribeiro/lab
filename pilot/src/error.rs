@@ -16,11 +16,12 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
-    #[error("driver {driver} could not parse event: {reason}")]
+    #[error("driver {driver} could not parse event: {source}")]
     DriverParse {
         driver: &'static str,
         value: serde_json::Value,
-        reason: String,
+        #[source]
+        source: ParseError,
     },
     #[error("turn cancelled")]
     Cancelled,
@@ -77,7 +78,7 @@ mod tests {
             Error::DriverParse {
                 driver: "claude",
                 value: serde_json::json!({}),
-                reason: "nope".into(),
+                source: ParseError::Custom("nope".into()),
             },
             Error::Cancelled,
             Error::Timeout(Duration::from_secs(1)),
@@ -138,6 +139,17 @@ mod tests {
             source: serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
         };
         assert!(e.source().is_some());
+    }
+
+    #[test]
+    fn driver_parse_preserves_typed_source() {
+        let e = Error::DriverParse {
+            driver: "test",
+            value: serde_json::json!({"x": 1}),
+            source: ParseError::MissingField("y"),
+        };
+        let src = e.source().expect("source set");
+        assert!(src.downcast_ref::<ParseError>().is_some());
     }
 
     #[test]

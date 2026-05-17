@@ -309,7 +309,7 @@ impl Stream for TurnStream {
                             return Poll::Ready(Some(Err(Error::DriverParse {
                                 driver: this.driver.name(),
                                 value,
-                                reason: reason.to_string(),
+                                source: reason,
                             })));
                         }
                     }
