@@ -55,14 +55,13 @@ pub struct CodexPilotState {
     /// (also logged via `tracing::warn!`).
     ///
     /// # Cross-process safety
-    /// Each in-process `Codex` instance serializes its own writes via an
-    /// internal mutex. Multiple PROCESSES writing to the same path are NOT
-    /// fully synchronized — a last-writer-wins race is possible, in which
-    /// the losing writer's update is silently dropped. File integrity is
-    /// preserved (atomic rename + unique temp names mean no torn writes or
-    /// corrupted JSON), but if you need stronger guarantees, scope the
-    /// path per-process. A future commit may add OS-level file locking
-    /// (Rust 1.89+ exposes portable `File::try_lock`; pilot's MSRV is 1.85).
+    /// All persistence operations across ALL `Codex` instances in this
+    /// process are serialized through a single internal mutex, so the
+    /// "concurrent observe()s drop a mapping" race is impossible within
+    /// a single process. Two PROCESSES writing to the same path remain
+    /// unsafe (no OS file lock); use distinct paths per process if you
+    /// need that. A future commit may add `File::try_lock` (stable in
+    /// Rust 1.89+; pilot's MSRV is 1.85).
     pub thread_store_path: Option<PathBuf>,
 }
 
@@ -249,8 +248,13 @@ impl Driver for Codex {
         }
 
         if let Some(path) = &self.config.state.thread_store_path {
-            let path_lock = lock_for_path(path);
-            let _guard = path_lock.lock().unwrap_or_else(|e| e.into_inner());
+            // Process-wide serialization for all codex persistence operations.
+            // Strictly less throughput than per-path locking, but the writes are
+            // infrequent and tiny, and this is provably race-free across all
+            // `Codex` instances in a single process.
+            static PERSIST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = PERSIST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
             let mut on_disk = load_thread_map(path);
             on_disk.insert(session_id, tid.to_string());
             if let Err(e) = save_thread_map(path, &on_disk) {
@@ -346,66 +350,6 @@ fn save_thread_map(
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
-}
-
-/// Best-effort path normalization that doesn't require the target file
-/// (or even its parent) to exist. We use this to key our process-wide
-/// lock registry so different spellings of the same logical file
-/// (`threads.json` / `./threads.json` / absolute path) share the same
-/// mutex.
-fn normalize_for_key(path: &std::path::Path) -> std::path::PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
-        return canonical;
-    }
-
-    let absolute: std::path::PathBuf = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::new())
-            .join(path)
-    };
-    let stripped: std::path::PathBuf = absolute
-        .components()
-        .filter(|c| !matches!(c, std::path::Component::CurDir))
-        .collect();
-
-    let mut existing: &std::path::Path = &stripped;
-    let mut tail: Vec<std::ffi::OsString> = Vec::new();
-    while !existing.exists() {
-        match (existing.parent(), existing.file_name()) {
-            (Some(p), Some(name)) => {
-                tail.push(name.to_os_string());
-                existing = p;
-            }
-            _ => break,
-        }
-    }
-
-    let mut result = std::fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
-    for name in tail.iter().rev() {
-        result.push(name);
-    }
-    result
-}
-
-/// Returns a process-wide mutex shared by all `Codex` instances writing
-/// to the same canonical path. Without this, two `Codex::with_config(...)`
-/// instances pointed at the same store would race their
-/// load-modify-save sequences in `observe()`.
-fn lock_for_path(path: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<()>> {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
-    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-
-    let key = normalize_for_key(path);
-    let mut map = registry.lock().unwrap_or_else(|e| e.into_inner());
-    map.entry(key)
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
 }
 
 #[cfg(test)]
@@ -629,32 +573,6 @@ mod tests {
             &[(Uuid::nil(), "abc".to_string())].into_iter().collect(),
         )
         .expect("save with bare filename must succeed");
-    }
-
-    #[test]
-    fn lock_for_path_dedups_equivalent_spellings_for_missing_files() {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let base = tmp_dir.path().to_path_buf();
-        let a = base.join("missing").join("threads.json");
-        let b = base.join(".").join("missing").join("threads.json");
-        let c = {
-            let mut p = base.clone();
-            p.push("./missing/./threads.json");
-            p
-        };
-
-        let la = lock_for_path(&a);
-        let lb = lock_for_path(&b);
-        let lc = lock_for_path(&c);
-
-        assert!(
-            std::sync::Arc::ptr_eq(&la, &lb),
-            "a and b must share a lock"
-        );
-        assert!(
-            std::sync::Arc::ptr_eq(&la, &lc),
-            "a and c must share a lock"
-        );
     }
 
     #[test]
