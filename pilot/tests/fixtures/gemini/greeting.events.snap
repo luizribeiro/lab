@@ -1,0 +1,31 @@
+[
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "model": String("auto-gemini-3"),
+            "session_id": String("22222222-2222-2222-2222-222222222222"),
+            "timestamp": String("2026-05-17T17:00:00.000Z"),
+            "type": String("init"),
+        },
+    },
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "content": String("Say only the word: hello"),
+            "role": String("user"),
+            "timestamp": String("2026-05-17T17:00:00.001Z"),
+            "type": String("message"),
+        },
+    },
+    AssistantText {
+        delta: "hello",
+    },
+    Usage {
+        input_tokens: 13579,
+        output_tokens: 43,
+    },
+    TurnComplete {
+        ok: true,
+        final_text: None,
+    },
+]

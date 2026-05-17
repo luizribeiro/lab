@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{Event, ParseError};
 
 pub mod claude;
+pub mod gemini;
 
 #[derive(Debug, Clone)]
 pub struct CommandSpec {

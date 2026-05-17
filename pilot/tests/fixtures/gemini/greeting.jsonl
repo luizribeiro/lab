@@ -1,0 +1,4 @@
+{"type":"init","timestamp":"2026-05-17T17:00:00.000Z","session_id":"22222222-2222-2222-2222-222222222222","model":"auto-gemini-3"}
+{"type":"message","timestamp":"2026-05-17T17:00:00.001Z","role":"user","content":"Say only the word: hello"}
+{"type":"message","timestamp":"2026-05-17T17:00:00.500Z","role":"assistant","content":"hello","delta":true}
+{"type":"result","timestamp":"2026-05-17T17:00:00.600Z","status":"success","stats":{"input_tokens":13579,"output_tokens":43}}

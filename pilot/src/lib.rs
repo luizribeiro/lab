@@ -14,6 +14,7 @@ mod turn;
 pub mod test_support;
 
 pub use driver::claude::{Claude, ClaudeConfig, PermissionMode};
+pub use driver::gemini::{ApprovalMode, Gemini, GeminiConfig};
 pub use driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 pub use error::{Error, ParseError, Result};
 pub use event::Event;
@@ -26,9 +27,11 @@ pub use turn::{Turn, TurnItem, TurnStream};
 /// Names are matched case-sensitively against the value returned by
 /// [`Driver::name()`]. Currently registered:
 ///   - `"claude"` — Anthropic Claude Code (`claude` CLI)
+///   - `"gemini"` — Google Gemini (`gemini` CLI)
 pub fn driver(name: &str) -> Result<std::sync::Arc<dyn Driver>> {
     match name {
         "claude" => Ok(std::sync::Arc::new(driver::claude::Claude::new())),
+        "gemini" => Ok(std::sync::Arc::new(driver::gemini::Gemini::new())),
         _ => Err(Error::UnknownAgent(name.to_string())),
     }
 }
@@ -39,6 +42,12 @@ mod tests {
     fn driver_claude_returns_named_claude() {
         let d = super::driver("claude").expect("registered");
         assert_eq!(d.name(), "claude");
+    }
+
+    #[test]
+    fn driver_gemini_returns_named_gemini() {
+        let d = super::driver("gemini").expect("registered");
+        assert_eq!(d.name(), "gemini");
     }
 
     #[test]
