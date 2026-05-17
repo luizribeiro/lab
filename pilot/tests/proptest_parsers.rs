@@ -153,6 +153,11 @@ fn arb_value_with_typed_keys() -> impl Strategy<Value = serde_json::Value> {
         Just("message_start"),
         Just("message_end"),
         Just("message_update"),
+        // codex events
+        Just("thread.started"),
+        Just("turn.started"),
+        Just("turn.completed"),
+        Just("item.completed"),
         // unknown
         Just("nope_definitely_unknown"),
     ];
