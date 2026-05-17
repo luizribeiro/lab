@@ -35,6 +35,22 @@ impl Session {
         }
     }
 
+    /// Rehydrate a session from a previously-persisted UUID. Use this when
+    /// your program stored the [`Self::id`] of an earlier session and wants
+    /// to continue that conversation — the underlying CLI keeps its own
+    /// conversation state on disk keyed by this UUID.
+    ///
+    /// This is a pure constructor: no process is spawned and no IO occurs.
+    pub fn resume(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self {
+        Self {
+            id,
+            driver,
+            workdir: workdir.into(),
+            recorded_turns: Vec::new(),
+            busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
     /// This session's UUID, the key under which the underlying CLI persists
     /// conversation state on disk.
     pub fn id(&self) -> Uuid {
@@ -316,5 +332,79 @@ mod tests {
             .send("second", TurnOptions::default())
             .await
             .expect("send 2 should succeed after first dropped");
+    }
+
+    #[tokio::test]
+    async fn resume_preserves_supplied_uuid() {
+        let id = Uuid::new_v4();
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: PathBuf::new(),
+        });
+        let session = Session::resume(driver, id, "/tmp");
+        assert_eq!(session.id(), id);
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_spawn_a_process() {
+        struct NeverSpawnDriver;
+        impl Driver for NeverSpawnDriver {
+            fn name(&self) -> &'static str {
+                "never-spawn"
+            }
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+                panic!("command() must not be called by resume()");
+            }
+            fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+                Ok(vec![Event::Raw {
+                    driver: "never-spawn",
+                    value: v,
+                }])
+            }
+        }
+        let id = Uuid::new_v4();
+        let _session = Session::resume(Arc::new(NeverSpawnDriver), id, "/tmp");
+    }
+
+    #[tokio::test]
+    async fn resumed_session_uses_supplied_uuid_in_send() {
+        struct UuidCapturingDriver {
+            seen: std::sync::Mutex<Option<Uuid>>,
+            script: PathBuf,
+        }
+        impl Driver for UuidCapturingDriver {
+            fn name(&self) -> &'static str {
+                "uuid-cap"
+            }
+            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> CommandSpec {
+                *self.seen.lock().unwrap() = Some(sid);
+                CommandSpec {
+                    program: fake_agent(),
+                    args: vec!["--script".into(), self.script.to_string_lossy().into()],
+                    env: vec![],
+                }
+            }
+            fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+                Ok(vec![Event::Raw {
+                    driver: "uuid-cap",
+                    value: v,
+                }])
+            }
+        }
+        let script = write_script(&["exit 0"]);
+        let driver = Arc::new(UuidCapturingDriver {
+            seen: std::sync::Mutex::new(None),
+            script: script.path().to_path_buf(),
+        });
+        let driver_dyn: Arc<dyn Driver> = driver.clone();
+        let id = Uuid::new_v4();
+        let mut session = Session::resume(driver_dyn, id, std::env::temp_dir());
+
+        let mut stream = session
+            .send("anything", TurnOptions::default())
+            .await
+            .expect("send");
+        while stream.next().await.is_some() {}
+
+        assert_eq!(*driver.seen.lock().unwrap(), Some(id));
     }
 }
