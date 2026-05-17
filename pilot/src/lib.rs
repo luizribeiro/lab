@@ -4,5 +4,7 @@
 //! See the `Session`, `Driver`, and `Event` types for the public API.
 
 mod error;
+mod event;
 
 pub use error::{Error, ParseError, Result};
+pub use event::Event;
