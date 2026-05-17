@@ -7,6 +7,44 @@
 use pilot::{Claude, Driver, Gemini, Pi};
 use proptest::prelude::*;
 
+/// Known field names that real driver parse() implementations look at.
+/// Mixing these into proptest-generated objects exercises the nested
+/// branches that random short strings would never reach.
+const KNOWN_KEYS: &[&str] = &[
+    "type",
+    "message",
+    "content",
+    "text",
+    "role",
+    "delta",
+    "usage",
+    "input_tokens",
+    "output_tokens",
+    "input",
+    "output",
+    "tool_use",
+    "tool_result",
+    "tool_use_id",
+    "id",
+    "name",
+    "args",
+    "thinking",
+    "result",
+    "is_error",
+    "subtype",
+    "stop_reason",
+    "status",
+    "stats",
+    "session_id",
+    "model",
+    "assistantMessageEvent",
+    "contentIndex",
+    "toolResults",
+    "version",
+    "cwd",
+    "timestamp",
+];
+
 /// Recursive strategy for arbitrary JSON values, bounded so tests run fast.
 fn arb_value() -> impl Strategy<Value = serde_json::Value> {
     let leaf = prop_oneof![
@@ -22,8 +60,17 @@ fn arb_value() -> impl Strategy<Value = serde_json::Value> {
         |inner| {
             prop_oneof![
                 prop::collection::vec(inner.clone(), 0..4).prop_map(serde_json::Value::Array),
-                prop::collection::vec((".{0,8}".prop_map(String::from), inner), 0..4)
-                    .prop_map(|kvs| serde_json::Value::Object(kvs.into_iter().collect())),
+                prop::collection::vec(
+                    (
+                        prop_oneof![
+                            prop::sample::select(KNOWN_KEYS).prop_map(String::from),
+                            ".{0,8}".prop_map(String::from),
+                        ],
+                        inner,
+                    ),
+                    0..4,
+                )
+                .prop_map(|kvs| serde_json::Value::Object(kvs.into_iter().collect())),
             ]
         },
     )
