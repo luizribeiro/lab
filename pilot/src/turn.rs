@@ -15,6 +15,18 @@ use crate::driver::Driver;
 use crate::process::ProcessHandle;
 use crate::{Error, Event, Result};
 
+/// RAII guard cleared on drop. Used by `Session::send` to enforce that a
+/// session has at most one turn in flight at a time.
+pub(crate) struct BusyGuard {
+    pub flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// A completed turn: the accumulated normalized events the driver emitted
 /// before the underlying CLI exited.
 #[derive(Debug, Clone)]
@@ -52,6 +64,7 @@ pub struct TurnStream {
     deadline: Option<Instant>,
     timer: Option<Pin<Box<Sleep>>>,
     timeout_dur: Option<Duration>,
+    _busy_guard: Option<BusyGuard>,
 }
 
 impl TurnStream {
@@ -72,7 +85,16 @@ impl TurnStream {
             deadline: None,
             timer: None,
             timeout_dur: None,
+            _busy_guard: None,
         }
+    }
+
+    /// Attach a busy guard whose `Drop` releases the owning session's
+    /// in-flight flag. Called by `Session::send`.
+    #[allow(dead_code)]
+    pub(crate) fn with_busy_guard(mut self, guard: BusyGuard) -> Self {
+        self._busy_guard = Some(guard);
+        self
     }
 
     /// Set a per-turn timeout. After the duration elapses, the stream yields
@@ -95,6 +117,7 @@ impl TurnStream {
     #[allow(dead_code)] // wired into Session in a later commit
     pub async fn cancel(mut self) -> Turn {
         self.handle = None;
+        self._busy_guard = None;
         for e in self.pending.drain(..) {
             self.events.push(e);
         }
@@ -136,6 +159,7 @@ impl Stream for TurnStream {
                 if timer.as_mut().poll(cx).is_ready() {
                     this.handle = None;
                     this.finished = true;
+                    this._busy_guard = None;
                     let d = this.timeout_dur.unwrap_or_default();
                     return Poll::Ready(Some(Err(Error::Timeout(d))));
                 }
@@ -148,6 +172,7 @@ impl Stream for TurnStream {
                     Err(reason) => {
                         this.handle = None;
                         this.finished = true;
+                        this._busy_guard = None;
                         return Poll::Ready(Some(Err(Error::DriverParse {
                             driver: this.driver.name(),
                             value,
@@ -158,16 +183,19 @@ impl Stream for TurnStream {
                 Poll::Ready(Some(Err(err))) => {
                     this.handle = None;
                     this.finished = true;
+                    this._busy_guard = None;
                     return Poll::Ready(Some(Err(err)));
                 }
                 Poll::Ready(None) => {
                     this.handle = None;
                     if this.completed {
                         this.finished = true;
+                        this._busy_guard = None;
                         return Poll::Ready(None);
                     }
                     this.completed = true;
                     this.finished = true;
+                    this._busy_guard = None;
                     let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }

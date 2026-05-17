@@ -30,6 +30,10 @@ pub enum Error {
     Io(#[source] std::io::Error),
     #[error("unknown agent: {0}")]
     UnknownAgent(String),
+    /// A `Session::send` call was rejected because a previous turn is still
+    /// in flight on the same session.
+    #[error("session is already executing a turn")]
+    Busy,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,6 +91,12 @@ mod tests {
         for (e, prefix) in cases.iter().zip(prefixes.iter()) {
             assert!(format!("{e}").contains(prefix), "{e}");
         }
+    }
+
+    #[test]
+    fn busy_variant_displays() {
+        let e = Error::Busy;
+        assert!(format!("{e}").contains("already executing"));
     }
 
     #[test]

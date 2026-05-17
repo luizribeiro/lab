@@ -20,6 +20,7 @@ pub struct Session {
     driver: Arc<dyn Driver>,
     workdir: PathBuf,
     recorded_turns: Vec<Turn>,
+    busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Session {
@@ -30,6 +31,7 @@ impl Session {
             driver,
             workdir: workdir.into(),
             recorded_turns: Vec::new(),
+            busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -51,12 +53,25 @@ impl Session {
     /// `TurnItem::Complete(Turn)` when the child exits, then `None`.
     /// Dropping the stream kills the child.
     pub async fn send(&mut self, prompt: &str, opts: TurnOptions) -> Result<TurnStream> {
+        use std::sync::atomic::Ordering;
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(crate::Error::Busy);
+        }
+        let guard = crate::turn::BusyGuard {
+            flag: self.busy.clone(),
+        };
         let spec = self.driver.command(self.id, prompt, &opts);
         let (handle, rx) = spawn_jsonl(spec, self.workdir.clone()).await?;
-        let mut stream = TurnStream::new(handle, rx, self.driver.clone());
-        if let Some(d) = opts.timeout {
-            stream = stream.with_timeout(d);
-        }
+        let stream = TurnStream::new(handle, rx, self.driver.clone()).with_busy_guard(guard);
+        let stream = if let Some(d) = opts.timeout {
+            stream.with_timeout(d)
+        } else {
+            stream
+        };
         Ok(stream)
     }
 
@@ -244,5 +259,62 @@ mod tests {
         }
         let seen = *driver.seen.lock().unwrap();
         assert_eq!(seen, Some(expected_id));
+    }
+
+    #[tokio::test]
+    async fn second_send_while_first_in_flight_is_rejected() {
+        let script = write_script(&["sleep 30000"]);
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script.path().to_path_buf(),
+        });
+        let mut session = Session::new(driver, std::env::temp_dir());
+
+        let _first = session
+            .send("hi", TurnOptions::default())
+            .await
+            .expect("first send");
+        let err = match session.send("hi again", TurnOptions::default()).await {
+            Ok(_) => panic!("second send must be rejected"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Busy));
+    }
+
+    #[tokio::test]
+    async fn second_send_works_after_first_completes() {
+        let script = write_script(&[r#"emit {"n":1}"#, "exit 0"]);
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script.path().to_path_buf(),
+        });
+        let mut session = Session::new(driver, std::env::temp_dir());
+
+        let mut s1 = session
+            .send("first", TurnOptions::default())
+            .await
+            .expect("send 1");
+        while s1.next().await.is_some() {}
+        let _s2 = session
+            .send("second", TurnOptions::default())
+            .await
+            .expect("send 2 should succeed after first completes");
+    }
+
+    #[tokio::test]
+    async fn second_send_works_after_first_dropped() {
+        let script = write_script(&["sleep 30000"]);
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script.path().to_path_buf(),
+        });
+        let mut session = Session::new(driver, std::env::temp_dir());
+
+        let s1 = session
+            .send("first", TurnOptions::default())
+            .await
+            .expect("send 1");
+        drop(s1);
+        let _s2 = session
+            .send("second", TurnOptions::default())
+            .await
+            .expect("send 2 should succeed after first dropped");
     }
 }
