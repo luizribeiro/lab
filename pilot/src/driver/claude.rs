@@ -377,4 +377,20 @@ mod tests {
         let err = Claude::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("message")));
     }
+
+    #[test]
+    fn result_with_is_error_true_yields_ok_false() {
+        let v = serde_json::json!({
+            "type": "result",
+            "subtype": "error",
+            "is_error": true,
+            "result": "context limit exceeded"
+        });
+        let evs = Claude::new().parse(v).expect("parse ok");
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(
+            &evs[0],
+            Event::TurnComplete { ok: false, final_text: Some(s) } if s == "context limit exceeded"
+        ));
+    }
 }
