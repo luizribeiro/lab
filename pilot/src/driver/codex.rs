@@ -1,15 +1,14 @@
 //! OpenAI Codex driver.
 //!
-//! # Multi-turn limitation
-//! Codex's CLI auto-generates a thread id on the first turn rather than
-//! accepting a caller-supplied one. The pilot `Driver` trait does not
-//! currently surface a hook to capture that generated id, so this driver
-//! treats every `send()` as a fresh first turn — subsequent sends on the
-//! same `Session` start new codex threads rather than resuming. Tracking
-//! enhancement: add `Driver::observe()` so the driver can intercept the
-//! `thread.started` event and remember the id for `resume_command()`.
+//! # Multi-turn
+//! Codex's CLI auto-generates a thread id on the first turn and emits it as
+//! a `thread.started` event. This driver overrides [`Driver::observe`] to
+//! capture that id (keyed by pilot's session UUID) and reuses it as the
+//! positional `resume <thread_id>` argument on subsequent turns.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use secrecy::ExposeSecret;
 use uuid::Uuid;
@@ -54,17 +53,24 @@ impl Default for CodexConfig {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Codex {
     pub config: CodexConfig,
+    thread_ids: Arc<Mutex<HashMap<Uuid, String>>>,
 }
 
 impl Codex {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            config: CodexConfig::default(),
+            thread_ids: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
     pub fn with_config(config: CodexConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            thread_ids: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -125,6 +131,35 @@ impl Driver for Codex {
         }
 
         CommandSpec { program, args, env }
+    }
+
+    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+        let thread_id = self
+            .thread_ids
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&session_id).cloned());
+
+        let Some(thread_id) = thread_id else {
+            return self.command(session_id, prompt, opts);
+        };
+
+        let mut spec = self.command(session_id, "", opts);
+        spec.args.pop();
+        spec.args.push("resume".into());
+        spec.args.push(thread_id);
+        spec.args.push(prompt.to_string());
+        spec
+    }
+
+    fn observe(&self, session_id: Uuid, raw: &serde_json::Value) {
+        if raw.get("type").and_then(|v| v.as_str()) == Some("thread.started") {
+            if let Some(tid) = raw.get("thread_id").and_then(|v| v.as_str()) {
+                if let Ok(mut map) = self.thread_ids.lock() {
+                    map.insert(session_id, tid.to_string());
+                }
+            }
+        }
     }
 
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
@@ -257,6 +292,43 @@ mod tests {
         }
         expect_test::expect_file!["../../tests/fixtures/codex/greeting.events.snap"]
             .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
+    fn observe_captures_thread_id_for_resume() {
+        let codex = Codex::new();
+        let sid = Uuid::new_v4();
+        let raw = serde_json::json!({
+            "type": "thread.started",
+            "thread_id": "019e3733-d3a7-7c12-9a36-759558b89551"
+        });
+        codex.observe(sid, &raw);
+
+        let spec = codex.resume_command(sid, "follow-up", &TurnOptions::default());
+        let resume_idx = spec.args.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(
+            spec.args[resume_idx + 1],
+            "019e3733-d3a7-7c12-9a36-759558b89551"
+        );
+        assert_eq!(spec.args[resume_idx + 2], "follow-up");
+    }
+
+    #[test]
+    fn resume_command_without_observation_falls_back_to_command() {
+        let codex = Codex::new();
+        let sid = Uuid::new_v4();
+        let spec = codex.resume_command(sid, "no thread id yet", &TurnOptions::default());
+        assert!(!spec.args.iter().any(|a| a == "resume"));
+    }
+
+    #[test]
+    fn observe_ignores_non_thread_started_events() {
+        let codex = Codex::new();
+        let sid = Uuid::new_v4();
+        let raw = serde_json::json!({"type": "turn.started"});
+        codex.observe(sid, &raw);
+        let map = codex.thread_ids.lock().unwrap();
+        assert!(map.is_empty());
     }
 
     #[test]

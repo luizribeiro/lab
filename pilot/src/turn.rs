@@ -11,6 +11,7 @@ use std::time::Duration;
 use futures_core::Stream;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Sleep};
+use uuid::Uuid;
 
 use crate::driver::Driver;
 use crate::process::ProcessHandle;
@@ -56,6 +57,7 @@ pub struct TurnStream {
     // waiting for the outer stream to be dropped.
     #[allow(dead_code)]
     handle: Option<ProcessHandle>,
+    session_id: Uuid,
     rx: mpsc::Receiver<Result<serde_json::Value>>,
     driver: Arc<dyn Driver>,
     events: Vec<Event>,
@@ -72,11 +74,13 @@ pub struct TurnStream {
 impl TurnStream {
     #[allow(dead_code)] // wired into Session in a later commit
     pub(crate) fn new(
+        session_id: Uuid,
         handle: ProcessHandle,
         rx: mpsc::Receiver<Result<serde_json::Value>>,
         driver: Arc<dyn Driver>,
     ) -> Self {
         Self {
+            session_id,
             handle: Some(handle),
             rx,
             driver,
@@ -179,19 +183,22 @@ impl Stream for TurnStream {
 
             match this.rx.poll_recv(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Ok(value))) => match this.driver.parse(value.clone()) {
-                    Ok(events) => this.pending.extend(events),
-                    Err(reason) => {
-                        this.handle = None;
-                        this.finished = true;
-                        this._busy_guard = None;
-                        return Poll::Ready(Some(Err(Error::DriverParse {
-                            driver: this.driver.name(),
-                            value,
-                            reason: reason.to_string(),
-                        })));
+                Poll::Ready(Some(Ok(value))) => {
+                    this.driver.observe(this.session_id, &value);
+                    match this.driver.parse(value.clone()) {
+                        Ok(events) => this.pending.extend(events),
+                        Err(reason) => {
+                            this.handle = None;
+                            this.finished = true;
+                            this._busy_guard = None;
+                            return Poll::Ready(Some(Err(Error::DriverParse {
+                                driver: this.driver.name(),
+                                value,
+                                reason: reason.to_string(),
+                            })));
+                        }
                     }
-                },
+                }
                 Poll::Ready(Some(Err(err))) => {
                     this.handle = None;
                     this.finished = true;
@@ -263,7 +270,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let mut event_count = 0;
         let mut saw_complete = false;
@@ -292,7 +299,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let first = stream.next().await.expect("first item").expect("ok");
         assert!(matches!(first, TurnItem::Event(_)));
@@ -339,7 +346,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(AlwaysErrParse);
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let item = stream.next().await.expect("first").expect_err("err");
         assert!(matches!(item, crate::Error::DriverParse { .. }));
@@ -366,7 +373,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let stream = TurnStream::new(handle, rx, driver);
+        let stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let start = std::time::Instant::now();
         let turn = stream.cancel().await;
@@ -386,7 +393,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let first = stream.next().await.expect("first").expect("ok");
         assert!(matches!(first, TurnItem::Event(_)));
@@ -407,7 +414,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let mut event_count = 0;
         while let Some(item) = stream.next().await {
@@ -435,7 +442,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let stream = TurnStream::new(handle, rx, driver);
+        let stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while stream.rx.len() < 3 {
@@ -468,8 +475,8 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream =
-            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_millis(150));
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver)
+            .with_timeout(std::time::Duration::from_millis(150));
 
         let start = std::time::Instant::now();
         let item = stream.next().await.expect("first").expect_err("timeout");
@@ -490,8 +497,8 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream =
-            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_secs(30));
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver)
+            .with_timeout(std::time::Duration::from_secs(30));
 
         let mut events = 0;
         let mut completed = false;
@@ -518,7 +525,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream = TurnStream::new(handle, rx, driver);
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let mut events = 0;
         while let Some(item) = stream.next().await {
@@ -544,7 +551,7 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let stream = TurnStream::new(handle, rx, driver);
+        let stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
 
         let start = std::time::Instant::now();
         let _turn = stream.cancel().await;
@@ -565,8 +572,8 @@ mod tests {
             .await
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
-        let mut stream =
-            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_secs(60));
+        let mut stream = TurnStream::new(Uuid::nil(), handle, rx, driver)
+            .with_timeout(std::time::Duration::from_secs(60));
 
         let mut saw_complete = false;
         while let Some(item) = stream.next().await {

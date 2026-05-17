@@ -9,7 +9,7 @@ Drive headless AI coding-agent CLIs (claude, gemini, pi) from Rust over their st
 | claude | `-p --output-format stream-json --verbose --session-id <uuid>` | yes (same flag) | `ANTHROPIC_API_KEY` | first-class |
 | gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | first-class |
 | pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | `PI_API_KEY` | first-class |
-| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` | first-turn only (see driver docs) | `OPENAI_API_KEY` | first-class (single-turn) |
+| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured from `thread.started` event via `Driver::observe`) | `OPENAI_API_KEY` | first-class |
 
 ## Quick start
 
@@ -95,7 +95,7 @@ PILOT_AGENT_KEY=sk-... cargo run --example with_api_key
 - **CommandSpec** is structured (`program`, `args`, `env`) so the library owns subprocess lifecycle invariants; drivers only describe what to invoke.
 - **Bounded backpressure**: a 256-slot mpsc channel between the reader task and the consumer. Slow consumers stall the child via stdout pipe back-pressure rather than buffering unboundedly.
 - **Cancellation**: every terminal path (`Complete`, `Err`, `Timeout`, `cancel()`, `Drop`) releases the underlying `ProcessHandle` immediately. `kill_on_drop(true)` on the tokio command ensures the child gets SIGTERM/SIGKILL even if a caller forgets to drain.
-- **First-turn vs resume**: drivers whose CLI uses different flags (gemini, pi) override `resume_command`. `Session` tracks the number of `TurnItem::Complete`s actually yielded by the stream. A stream that ends in an error, a `Timeout`, or never reaches `Complete` does NOT bump the counter — retrying on the same `Session` re-uses `command()`. A turn that yields `Complete` with an agent-reported failure (`Event::TurnComplete { ok: false }`) DOES bump the counter, because the CLI's on-disk session was still established — the next call correctly uses `resume_command()`.
+- **First-turn vs resume**: drivers whose CLI uses different flags (gemini, pi) override `resume_command`. `Session` tracks the number of `TurnItem::Complete`s actually yielded by the stream. A stream that ends in an error, a `Timeout`, or never reaches `Complete` does NOT bump the counter — retrying on the same `Session` re-uses `command()`. A turn that yields `Complete` with an agent-reported failure (`Event::TurnComplete { ok: false }`) DOES bump the counter, because the CLI's on-disk session was still established — the next call correctly uses `resume_command()`. Codex auto-generates its thread_id on the first turn and emits it as a `thread.started` event; the codex driver overrides `Driver::observe` to capture that id and reuse it as the positional `resume <thread_id>` argument on subsequent turns.
 - **Secrets**: API keys are stored in `secrecy::SecretString`. `Debug` of any config redacts the inner value. A `tests/secret_hygiene.rs` integration test scans `tests/fixtures/` for common vendor key prefixes (`sk-`, `AIza`, `ghp_`, etc.) so a fixture refresh can't accidentally commit a real key.
 
 ## Testing strategy

@@ -58,6 +58,15 @@ pub trait Driver: Send + Sync {
         self.command(session_id, prompt, opts)
     }
 
+    /// Inspect the raw JSON line emitted by the child BEFORE it is normalized
+    /// by [`Driver::parse`]. Drivers with per-session state (e.g. codex,
+    /// where the CLI auto-generates a thread_id on the first turn) can
+    /// override this and use interior mutability (an `Arc<Mutex<...>>`
+    /// field) to remember information for future `resume_command` calls.
+    ///
+    /// Default implementation: no-op. Drivers that don't need it pay nothing.
+    fn observe(&self, _session_id: Uuid, _raw: &serde_json::Value) {}
+
     fn parse(&self, line: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError>;
 }
 

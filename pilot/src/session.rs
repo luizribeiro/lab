@@ -89,7 +89,7 @@ impl Session {
             self.driver.resume_command(self.id, prompt, &opts)
         };
         let (handle, rx) = spawn_jsonl(spec, self.workdir.clone()).await?;
-        let stream = TurnStream::new(handle, rx, self.driver.clone())
+        let stream = TurnStream::new(self.id, handle, rx, self.driver.clone())
             .with_completion_counter(self.turns_completed.clone())
             .with_busy_guard(guard);
         let stream = if let Some(d) = opts.timeout {
