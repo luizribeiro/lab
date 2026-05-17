@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::driver::{CommandSpec, Driver, TurnOptions};
+use crate::driver::{CommandSpec, Driver, TurnInput, TurnOptions};
 use crate::{Event, ParseError};
 
 pub struct TestDriver {
@@ -30,9 +30,19 @@ impl Driver for TestDriver {
     fn command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         _opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name,
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         Ok(CommandSpec {
             program: self.program.clone(),
             args: vec![
@@ -61,7 +71,11 @@ mod tests {
     fn command_carries_session_and_prompt() {
         let d = TestDriver::new("t", "/bin/echo");
         let spec = d
-            .command(Uuid::nil(), "hi", &TurnOptions::default())
+            .command(
+                Uuid::nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(spec.args.iter().any(|a| a == &Uuid::nil().to_string()));
         assert!(spec.args.iter().any(|a| a == "hi"));

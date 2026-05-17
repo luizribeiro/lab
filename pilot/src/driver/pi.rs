@@ -1,6 +1,8 @@
 //! Pi (Inflection) driver.
 
-use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{
+    AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
+};
 use crate::{Event, ParseError};
 use secrecy::ExposeSecret;
 use std::path::PathBuf;
@@ -109,9 +111,19 @@ impl Driver for Pi {
     fn command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         let program = self
             .config
             .binary
@@ -130,9 +142,19 @@ impl Driver for Pi {
     fn resume_command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         let program = self
             .config
             .binary
@@ -242,7 +264,11 @@ mod tests {
     #[test]
     fn default_command_includes_required_flags() {
         let spec = Pi::new()
-            .command(nil(), "hello", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hello".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert_eq!(spec.args.last().unwrap(), "hello");
         assert!(spec.args.contains(&"-p".to_string()));
@@ -254,10 +280,18 @@ mod tests {
     #[test]
     fn resume_command_adds_continue_flag() {
         let cspec = Pi::new()
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let rspec = Pi::new()
-            .resume_command(nil(), "hi", &TurnOptions::default())
+            .resume_command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(!cspec.args.iter().any(|a| a == "--continue"));
         assert!(rspec.args.iter().any(|a| a == "--continue"));
@@ -269,7 +303,9 @@ mod tests {
             extra_args: vec!["--my-flag".into()],
             ..Default::default()
         };
-        let spec = Pi::new().resume_command(nil(), "hi", &opts).unwrap();
+        let spec = Pi::new()
+            .resume_command(nil(), &TurnInput::Text("hi".into()), &opts)
+            .unwrap();
         let cont = spec.args.iter().position(|a| a == "--continue").unwrap();
         let extra = spec.args.iter().position(|a| a == "--my-flag").unwrap();
         let prompt = spec.args.iter().rposition(|a| a == "hi").unwrap();
@@ -284,7 +320,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec.args.iter().position(|a| a == "--provider").unwrap();
         assert_eq!(spec.args[i + 1], "github-copilot");
@@ -296,7 +336,9 @@ mod tests {
             reasoning: Some(ReasoningLevel::Medium),
             ..Default::default()
         };
-        let spec = Pi::new().command(nil(), "hi", &opts).unwrap();
+        let spec = Pi::new()
+            .command(nil(), &TurnInput::Text("hi".into()), &opts)
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "--thinking").unwrap();
         assert_eq!(spec.args[i + 1], "medium");
     }
@@ -308,7 +350,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -328,7 +374,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env

@@ -17,7 +17,7 @@ pub use driver::claude::{Claude, ClaudeConfig, PermissionMode};
 pub use driver::codex::{Codex, CodexConfig, CodexPilotState, SandboxMode};
 pub use driver::gemini::{ApprovalMode, Gemini, GeminiConfig};
 pub use driver::pi::{Pi, PiConfig, PiPilotState};
-pub use driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+pub use driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions};
 pub use error::{Error, ParseError, Result};
 pub use event::Event;
 pub use session::Session;

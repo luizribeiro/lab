@@ -363,7 +363,7 @@ mod tests {
             fn command(
                 &self,
                 _: uuid::Uuid,
-                _: &str,
+                _: &crate::driver::TurnInput,
                 _: &crate::driver::TurnOptions,
             ) -> crate::Result<crate::driver::CommandSpec> {
                 unreachable!("not invoked in this test")

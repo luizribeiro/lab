@@ -49,7 +49,7 @@ impl Session {
     pub fn resume(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self;
     pub fn id(&self) -> Uuid;
     pub fn workdir(&self) -> &Path;
-    pub async fn send(&mut self, prompt: &str, opts: TurnOptions) -> Result<TurnStream>;
+    pub async fn send(&mut self, input: impl Into<TurnInput>, opts: TurnOptions) -> Result<TurnStream>;
 }
 
 pub struct TurnStream;          // impl Stream<Item = Result<TurnItem>>
@@ -72,6 +72,10 @@ pub enum Event {
 
 pub fn driver(name: &str) -> Result<Arc<dyn Driver>>; // built-in factory
 ```
+
+The `TurnInput` enum is the input type accepted by `Session::send`. Today
+only `Text(String)` exists; future multimodal variants (image, file) can
+be added without breaking SemVer because the enum is `#[non_exhaustive]`.
 
 ## Examples
 

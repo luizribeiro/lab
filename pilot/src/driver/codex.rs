@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{
+    AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
+};
 use crate::{Event, ParseError};
 
 #[non_exhaustive]
@@ -114,9 +116,19 @@ impl Driver for Codex {
     fn command(
         &self,
         _session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         let program = self
             .config
             .binary
@@ -199,9 +211,19 @@ impl Driver for Codex {
     fn resume_command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         let thread_id = self
             .thread_ids
             .lock()
@@ -227,10 +249,10 @@ impl Driver for Codex {
                 "codex resume_command: no captured thread_id for this session (in-memory or persisted); falling back to a fresh `codex exec`. \
                  Set CodexConfig.state.thread_store_path to enable cross-process resume."
             );
-            return self.command(session_id, prompt, opts);
+            return self.command(session_id, input, opts);
         };
 
-        let mut spec = self.command(session_id, "", opts)?;
+        let mut spec = self.command(session_id, &TurnInput::Text(String::new()), opts)?;
         spec.args.pop();
         spec.args.push("resume".into());
         spec.args.push(thread_id);
@@ -367,7 +389,11 @@ mod tests {
     #[test]
     fn default_command_argv_snapshot() {
         let spec = Codex::new()
-            .command(nil(), "hello", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hello".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
@@ -383,7 +409,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec.args.iter().position(|a| a == "--sandbox").unwrap();
         assert_eq!(spec.args[i + 1], "workspace-write");
@@ -396,7 +426,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(!spec.args.iter().any(|a| a == "--skip-git-repo-check"));
     }
@@ -408,7 +442,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -426,7 +464,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec.args.iter().position(|a| a == "-c").unwrap();
         assert_eq!(spec.args[i + 1], "model=o3");
@@ -459,7 +501,11 @@ mod tests {
         codex.observe(sid, &raw);
 
         let spec = codex
-            .resume_command(sid, "follow-up", &TurnOptions::default())
+            .resume_command(
+                sid,
+                &TurnInput::Text("follow-up".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let resume_idx = spec.args.iter().position(|a| a == "resume").unwrap();
         assert_eq!(
@@ -474,7 +520,11 @@ mod tests {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
         let spec = codex
-            .resume_command(sid, "no thread id yet", &TurnOptions::default())
+            .resume_command(
+                sid,
+                &TurnInput::Text("no thread id yet".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(!spec.args.iter().any(|a| a == "resume"));
     }
@@ -484,9 +534,11 @@ mod tests {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
         let resumed = codex
-            .resume_command(sid, "x", &TurnOptions::default())
+            .resume_command(sid, &TurnInput::Text("x".into()), &TurnOptions::default())
             .unwrap();
-        let fresh = codex.command(sid, "x", &TurnOptions::default()).unwrap();
+        let fresh = codex
+            .command(sid, &TurnInput::Text("x".into()), &TurnOptions::default())
+            .unwrap();
         assert_eq!(resumed.args, fresh.args);
         assert_eq!(resumed.program, fresh.program);
         assert_eq!(resumed.env, fresh.env);
@@ -532,7 +584,11 @@ mod tests {
         };
         let second = Codex::with_config(cfg);
         let spec = second
-            .resume_command(sid, "follow-up", &TurnOptions::default())
+            .resume_command(
+                sid,
+                &TurnInput::Text("follow-up".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec.args.iter().position(|a| a == "resume").unwrap();
         assert_eq!(spec.args[i + 1], "019e0000-0000-0000-0000-000000000abc");
@@ -544,9 +600,11 @@ mod tests {
         let codex = Codex::new();
         let sid = Uuid::new_v4();
         let resumed = codex
-            .resume_command(sid, "x", &TurnOptions::default())
+            .resume_command(sid, &TurnInput::Text("x".into()), &TurnOptions::default())
             .unwrap();
-        let fresh = codex.command(sid, "x", &TurnOptions::default()).unwrap();
+        let fresh = codex
+            .command(sid, &TurnInput::Text("x".into()), &TurnOptions::default())
+            .unwrap();
         assert_eq!(resumed.args, fresh.args);
     }
 
@@ -587,7 +645,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -604,7 +666,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let positions: Vec<usize> = spec
             .args

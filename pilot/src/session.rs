@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use uuid::Uuid;
 
 use crate::Result;
-use crate::driver::{Driver, TurnOptions};
+use crate::driver::{Driver, TurnInput, TurnOptions};
 use crate::process::spawn_jsonl;
 use crate::turn::{Turn, TurnStream};
 
@@ -91,7 +91,12 @@ impl Session {
     /// yields each [`crate::Event`] as it arrives, then exactly one
     /// `TurnItem::Complete(Turn)` when the child exits, then `None`.
     /// Dropping the stream kills the child.
-    pub async fn send(&mut self, prompt: &str, opts: TurnOptions) -> Result<TurnStream> {
+    pub async fn send(
+        &mut self,
+        input: impl Into<TurnInput>,
+        opts: TurnOptions,
+    ) -> Result<TurnStream> {
+        let input = input.into();
         if self
             .busy
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -114,9 +119,9 @@ impl Session {
             _owned_lock: owned_guard,
         };
         let spec = match if self.turns_completed.load(Ordering::SeqCst) == 0 {
-            self.driver.command(self.id, prompt, &opts)
+            self.driver.command(self.id, &input, &opts)
         } else {
-            self.driver.resume_command(self.id, prompt, &opts)
+            self.driver.resume_command(self.id, &input, &opts)
         } {
             Ok(s) => s,
             Err(e) => {
@@ -182,7 +187,7 @@ mod tests {
         fn command(
             &self,
             _session_id: Uuid,
-            _prompt: &str,
+            _prompt: &TurnInput,
             _opts: &TurnOptions,
         ) -> crate::Result<CommandSpec> {
             Ok(CommandSpec {
@@ -306,7 +311,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "uuid-cap"
             }
-            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                sid: Uuid,
+                _p: &TurnInput,
+                _o: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 *self.seen.lock().unwrap() = Some(sid);
                 Ok(CommandSpec {
                     program: fake_agent(),
@@ -415,7 +425,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "never-spawn"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                _: Uuid,
+                _: &TurnInput,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 panic!("command() must not be called by resume()");
             }
             fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
@@ -441,7 +456,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                _: Uuid,
+                _: &TurnInput,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(CommandSpec {
                     program: fake_agent(),
@@ -452,7 +472,7 @@ mod tests {
             fn resume_command(
                 &self,
                 _: Uuid,
-                _: &str,
+                _: &TurnInput,
                 _: &TurnOptions,
             ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
@@ -519,7 +539,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                _: Uuid,
+                _: &TurnInput,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(CommandSpec {
                     program: fake_agent(),
@@ -530,7 +555,7 @@ mod tests {
             fn resume_command(
                 &self,
                 _: Uuid,
-                _: &str,
+                _: &TurnInput,
                 _: &TurnOptions,
             ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
@@ -590,7 +615,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "counting"
             }
-            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                _: Uuid,
+                _: &TurnInput,
+                _: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 self.command_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(CommandSpec {
                     program: fake_agent(),
@@ -601,7 +631,7 @@ mod tests {
             fn resume_command(
                 &self,
                 _: Uuid,
-                _: &str,
+                _: &TurnInput,
                 _: &TurnOptions,
             ) -> crate::Result<CommandSpec> {
                 self.resume_calls.fetch_add(1, Ordering::SeqCst);
@@ -646,7 +676,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "uuid-cap"
             }
-            fn command(&self, sid: Uuid, _p: &str, _o: &TurnOptions) -> crate::Result<CommandSpec> {
+            fn command(
+                &self,
+                sid: Uuid,
+                _p: &TurnInput,
+                _o: &TurnOptions,
+            ) -> crate::Result<CommandSpec> {
                 *self.seen.lock().unwrap() = Some(sid);
                 Ok(CommandSpec {
                     program: fake_agent(),

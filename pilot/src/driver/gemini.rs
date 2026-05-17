@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{
+    AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
+};
 use crate::{Event, ParseError};
 
 #[non_exhaustive]
@@ -84,9 +86,19 @@ impl Driver for Gemini {
     fn command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         if self.config.paths.config_home.is_some() {
             return Err(crate::Error::UnsupportedOption {
                 driver: "gemini",
@@ -163,10 +175,10 @@ impl Driver for Gemini {
     fn resume_command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
-        let mut spec = self.command(session_id, prompt, opts)?;
+        let mut spec = self.command(session_id, input, opts)?;
         if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
             spec.args[i] = "--resume".to_string();
         }
@@ -238,7 +250,11 @@ mod tests {
     #[test]
     fn default_command_argv_snapshot() {
         let spec = Gemini::new()
-            .command(nil(), "hello", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hello".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
@@ -255,7 +271,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec
             .args
@@ -272,7 +292,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(!spec.args.iter().any(|a| a == "--skip-trust"));
     }
@@ -284,7 +308,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -314,7 +342,11 @@ mod tests {
     #[test]
     fn resume_command_uses_resume_flag_not_session_id() {
         let spec = Gemini::new()
-            .resume_command(nil(), "next", &TurnOptions::default())
+            .resume_command(
+                nil(),
+                &TurnInput::Text("next".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
@@ -329,7 +361,11 @@ mod tests {
             ..Default::default()
         });
         let err = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap_err();
         assert!(matches!(
             err,
@@ -347,7 +383,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec
             .args

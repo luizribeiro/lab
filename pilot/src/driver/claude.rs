@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
+use crate::driver::{
+    AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
+};
 use crate::{Event, ParseError};
 
 #[non_exhaustive]
@@ -49,9 +51,19 @@ impl Driver for Claude {
     fn command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        #[allow(unreachable_patterns)]
+        let prompt = match input {
+            TurnInput::Text(s) => s.as_str(),
+            _ => {
+                return Err(crate::Error::UnsupportedOption {
+                    driver: self.name(),
+                    option: "non-text TurnInput",
+                });
+            }
+        };
         let program = self
             .config
             .binary
@@ -130,13 +142,13 @@ impl Driver for Claude {
     fn resume_command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
         // Claude rejects re-use of --session-id with an existing UUID
         // ("Session ID is already in use"). Subsequent turns use --resume
         // to attach to the previously-created session.
-        let mut spec = self.command(session_id, prompt, opts)?;
+        let mut spec = self.command(session_id, input, opts)?;
         if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
             spec.args[i] = "--resume".to_string();
         }
@@ -319,7 +331,11 @@ mod tests {
     #[test]
     fn default_command_argv_snapshot() {
         let spec = Claude::new()
-            .command(nil(), "hello", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hello".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
@@ -339,7 +355,9 @@ mod tests {
             model: Some("claude-opus-4-7".into()),
             ..Default::default()
         };
-        let spec = driver.command(nil(), "hi", &opts).unwrap();
+        let spec = driver
+            .command(nil(), &TurnInput::Text("hi".into()), &opts)
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "--model").unwrap();
         assert_eq!(spec.args[i + 1], "claude-opus-4-7");
     }
@@ -351,7 +369,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec
             .args
@@ -367,7 +389,9 @@ mod tests {
             reasoning: Some(ReasoningLevel::Medium),
             ..Default::default()
         };
-        let spec = Claude::new().command(nil(), "hi", &opts).unwrap();
+        let spec = Claude::new()
+            .command(nil(), &TurnInput::Text("hi".into()), &opts)
+            .unwrap();
         let i = spec.args.iter().position(|a| a == "--effort").unwrap();
         assert_eq!(spec.args[i + 1], "medium");
     }
@@ -379,7 +403,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -396,7 +424,9 @@ mod tests {
             extra_args: vec!["--add-dir".into(), "/tmp".into()],
             ..Default::default()
         };
-        let spec = Claude::new().command(nil(), "p", &opts).unwrap();
+        let spec = Claude::new()
+            .command(nil(), &TurnInput::Text("p".into()), &opts)
+            .unwrap();
         let add = spec.args.iter().position(|a| a == "--add-dir").unwrap();
         let prompt = spec.args.iter().rposition(|a| a == "p").unwrap();
         assert!(add < prompt);
@@ -428,7 +458,11 @@ mod tests {
     #[test]
     fn resume_command_uses_resume_flag_not_session_id() {
         let spec = Claude::new()
-            .resume_command(nil(), "next", &TurnOptions::default())
+            .resume_command(
+                nil(),
+                &TurnInput::Text("next".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         assert!(spec.args.iter().any(|a| a == "--resume"));
         assert!(!spec.args.iter().any(|a| a == "--session-id"));
@@ -443,7 +477,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let (_, v) = spec
             .env
@@ -460,7 +498,11 @@ mod tests {
             ..Default::default()
         });
         let spec = driver
-            .command(nil(), "hi", &TurnOptions::default())
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
             .unwrap();
         let i = spec.args.iter().position(|a| a == "--add-dir").unwrap();
         assert_eq!(spec.args[i + 1], "/tmp/a");

@@ -76,6 +76,36 @@ pub struct TurnOptions {
     pub extra_args: Vec<String>,
 }
 
+/// Input to a single turn.
+///
+/// Currently has only the `Text` variant. Future variants will represent
+/// multimodal inputs (images, files, structured tool responses) — the
+/// enum is `#[non_exhaustive]` so callers must include a catch-all arm
+/// when matching, and adding variants is a minor-version change.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum TurnInput {
+    Text(String),
+}
+
+impl From<&str> for TurnInput {
+    fn from(s: &str) -> Self {
+        TurnInput::Text(s.to_string())
+    }
+}
+
+impl From<&String> for TurnInput {
+    fn from(s: &String) -> Self {
+        TurnInput::Text(s.clone())
+    }
+}
+
+impl From<String> for TurnInput {
+    fn from(s: String) -> Self {
+        TurnInput::Text(s)
+    }
+}
+
 pub trait Driver: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -83,7 +113,7 @@ pub trait Driver: Send + Sync {
     fn command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec>;
 
@@ -94,10 +124,10 @@ pub trait Driver: Send + Sync {
     fn resume_command(
         &self,
         session_id: Uuid,
-        prompt: &str,
+        input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
-        self.command(session_id, prompt, opts)
+        self.command(session_id, input, opts)
     }
 
     /// Inspect the raw JSON line emitted by the child BEFORE it is normalized
