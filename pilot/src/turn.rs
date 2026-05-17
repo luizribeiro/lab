@@ -99,9 +99,12 @@ pub enum TurnItem {
 ///   also released.
 /// * **Drop does NOT increment the turns-completed counter.** A
 ///   `TurnStream` that's dropped before yielding [`TurnItem::Complete`]
-///   is treated as if the turn never ran — the next [`crate::Session::send`]
-///   uses [`crate::Driver::command`] (first-turn dispatch), not
-///   [`crate::Driver::resume_command`].
+///   leaves the owning session's dispatch state unchanged. For a
+///   session created via [`crate::Session::new`] whose first turn never
+///   completed, that means the next `send` again uses
+///   [`crate::Driver::command`]. For a session created via
+///   [`crate::Session::resume`] (counter starts at 1), the next `send`
+///   continues to use [`crate::Driver::resume_command`].
 /// * **[`TurnStream::cancel`] is a controlled drop.** Same as drop, but
 ///   additionally drains any events already buffered in the channel
 ///   and returns them inside the partial [`Turn`].
@@ -205,7 +208,9 @@ impl TurnStream {
     /// `Err(Error::Timeout(duration))` and then `None`. The child process
     /// is killed, the busy guard is released, and the session is
     /// immediately reusable. The turns-completed counter is NOT
-    /// incremented (the next send uses [`crate::Driver::command`]).
+    /// incremented; the next send dispatches via whichever of
+    /// [`crate::Driver::command`] / [`crate::Driver::resume_command`]
+    /// matches the current counter state (see [`TurnStream`] docs).
     ///
     /// Timeouts do NOT fire after [`TurnItem::Complete`] has been yielded —
     /// once the stream is finished, subsequent polls return `None`
@@ -231,8 +236,10 @@ impl TurnStream {
     ///   events if the agent had not emitted any yet.
     /// * The session this stream came from is immediately available for
     ///   another [`crate::Session::send`].
-    /// * The turns-completed counter is NOT incremented (the next send
-    ///   uses [`crate::Driver::command`], not [`crate::Driver::resume_command`]).
+    /// * The turns-completed counter is NOT incremented; the next send
+    ///   dispatches via whichever of [`crate::Driver::command`] /
+    ///   [`crate::Driver::resume_command`] matches the current counter
+    ///   state (see [`TurnStream`] docs).
     /// * Equivalent to dropping the stream, plus the channel drain and
     ///   the returned [`Turn`] value.
     #[allow(dead_code)] // wired into Session in a later commit

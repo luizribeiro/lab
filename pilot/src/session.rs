@@ -116,8 +116,11 @@ impl Session {
     /// yields `Complete`, subsequent sends use
     /// [`Driver::resume_command`](crate::Driver::resume_command). A stream
     /// that errors, times out, or is dropped before reaching `Complete`
-    /// does NOT advance this counter — retrying on the same `Session`
-    /// re-uses `command()`.
+    /// does NOT advance this counter. Retrying on the same `Session`
+    /// uses whichever dispatch matches the current counter state:
+    /// `command()` for fresh sessions whose first turn never completed,
+    /// `resume_command()` for sessions created via
+    /// [`Self::resume`].
     ///
     /// # Errors
     ///
