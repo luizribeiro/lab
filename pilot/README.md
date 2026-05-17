@@ -82,11 +82,13 @@ Runnable examples live in `examples/`:
 | `examples/greeting.rs` | Minimal one-turn invocation against any registered driver. |
 | `examples/multi_turn.rs` | Two turns on the same `Session`; the second auto-dispatches through `resume_command()`. |
 | `examples/with_api_key.rs` | Explicit `Auth::ApiKey(SecretString)` configuration. |
+| `examples/with_paths.rs` | `AgentPaths::config_home` + `ClaudeConfig.additional_dirs` + `TurnOptions.timeout`. |
 
 ```sh
 cargo run --example greeting -- claude
 cargo run --example multi_turn -- gemini
 PILOT_AGENT_KEY=sk-... cargo run --example with_api_key
+cargo run --example with_paths
 ```
 
 ## Design notes
