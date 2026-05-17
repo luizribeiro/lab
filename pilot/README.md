@@ -126,6 +126,16 @@ cargo run --example with_paths
 
 Pre-1.0. Public API may still shift as more drivers are added.
 
+## Minimum Supported Rust Version
+
+Currently `1.85.0` (set in `Cargo.toml`). After 1.0, MSRV bumps will be
+treated as a **minor** version change (per Cargo team guidance and the
+broader ecosystem norm). Users who pin to an older Rust toolchain should
+pin their `pilot` minor version too.
+
 ## License
 
 MIT OR Apache-2.0
+
+The full license texts live in `LICENSE-MIT` and `LICENSE-APACHE` at the
+crate root.
