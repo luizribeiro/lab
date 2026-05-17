@@ -46,6 +46,16 @@ pub struct CodexConfig {
     /// When `None` (default), only the in-memory map is used; resuming
     /// across processes silently degrades to a fresh first-turn command
     /// (also logged via `tracing::warn!`).
+    ///
+    /// # Cross-process safety
+    /// Each in-process `Codex` instance serializes its own writes via an
+    /// internal mutex. Multiple PROCESSES writing to the same path are NOT
+    /// fully synchronized — a last-writer-wins race is possible, in which
+    /// the losing writer's update is silently dropped. File integrity is
+    /// preserved (atomic rename + unique temp names mean no torn writes or
+    /// corrupted JSON), but if you need stronger guarantees, scope the
+    /// path per-process. A future commit may add OS-level file locking
+    /// (Rust 1.89+ exposes portable `File::try_lock`; pilot's MSRV is 1.85).
     pub thread_store_path: Option<PathBuf>,
 }
 
@@ -68,6 +78,7 @@ impl Default for CodexConfig {
 pub struct Codex {
     pub config: CodexConfig,
     thread_ids: Arc<Mutex<HashMap<Uuid, String>>>,
+    persist_lock: Arc<Mutex<()>>,
 }
 
 impl Codex {
@@ -75,12 +86,14 @@ impl Codex {
         Self {
             config: CodexConfig::default(),
             thread_ids: Arc::new(Mutex::new(HashMap::new())),
+            persist_lock: Arc::new(Mutex::new(())),
         }
     }
     pub fn with_config(config: CodexConfig) -> Self {
         Self {
             config,
             thread_ids: Arc::new(Mutex::new(HashMap::new())),
+            persist_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -211,6 +224,7 @@ impl Driver for Codex {
         }
 
         if let Some(path) = &self.config.thread_store_path {
+            let _guard = self.persist_lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut on_disk = load_thread_map(path);
             on_disk.insert(session_id, tid.to_string());
             if let Err(e) = save_thread_map(path, &on_disk) {
@@ -287,14 +301,22 @@ fn save_thread_map(
     map: &std::collections::HashMap<Uuid, String>,
 ) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
     }
     let serializable: std::collections::HashMap<String, &str> = map
         .iter()
         .map(|(u, t)| (u.to_string(), t.as_str()))
         .collect();
     let text = serde_json::to_string_pretty(&serializable).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("tmp");
+    let unique = uuid::Uuid::new_v4();
+    let mut tmp_name = path
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("threads.json"));
+    tmp_name.push(format!(".tmp.{unique}"));
+    let tmp = path.with_file_name(&tmp_name);
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -469,6 +491,19 @@ mod tests {
         let resumed = codex.resume_command(sid, "x", &TurnOptions::default());
         let fresh = codex.command(sid, "x", &TurnOptions::default());
         assert_eq!(resumed.args, fresh.args);
+    }
+
+    #[test]
+    fn save_with_bare_filename_does_not_error() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp_dir).unwrap();
+        let result = save_thread_map(
+            std::path::Path::new("threads.json"),
+            &[(Uuid::nil(), "abc".to_string())].into_iter().collect(),
+        );
+        std::env::set_current_dir(&original_cwd).unwrap();
+        result.expect("save with bare filename must succeed");
     }
 
     #[test]
