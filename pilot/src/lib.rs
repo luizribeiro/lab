@@ -3,8 +3,13 @@
 //!
 //! See the `Session`, `Driver`, and `Event` types for the public API.
 
+mod driver;
 mod error;
 mod event;
 
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
+pub use driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 pub use error::{Error, ParseError, Result};
 pub use event::Event;

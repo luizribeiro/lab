@@ -1,0 +1,69 @@
+//! Test utilities for downstream crates. Gated behind the `test-support`
+//! Cargo feature.
+
+use std::path::PathBuf;
+
+use uuid::Uuid;
+
+use crate::driver::{CommandSpec, Driver, TurnOptions};
+use crate::{Event, ParseError};
+
+pub struct TestDriver {
+    pub name: &'static str,
+    pub program: PathBuf,
+}
+
+impl TestDriver {
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            program: PathBuf::from("/bin/cat"),
+        }
+    }
+}
+
+impl Driver for TestDriver {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn command(&self, session_id: Uuid, prompt: &str, _opts: &TurnOptions) -> CommandSpec {
+        CommandSpec {
+            program: self.program.clone(),
+            args: vec![
+                "--session".into(),
+                session_id.to_string(),
+                "--prompt".into(),
+                prompt.into(),
+            ],
+            env: Vec::new(),
+        }
+    }
+
+    fn parse(&self, value: serde_json::Value) -> std::result::Result<Event, ParseError> {
+        Ok(Event::Raw {
+            driver: self.name,
+            value,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_carries_session_and_prompt() {
+        let d = TestDriver::new("t");
+        let spec = d.command(Uuid::nil(), "hi", &TurnOptions::default());
+        assert!(spec.args.iter().any(|a| a == &Uuid::nil().to_string()));
+        assert!(spec.args.iter().any(|a| a == "hi"));
+    }
+
+    #[test]
+    fn parse_returns_raw() {
+        let d = TestDriver::new("t");
+        let ev = d.parse(serde_json::json!({"x": 1})).unwrap();
+        assert!(matches!(ev, Event::Raw { driver: "t", .. }));
+    }
+}
