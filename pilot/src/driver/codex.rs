@@ -320,6 +320,33 @@ fn save_thread_map(
     Ok(())
 }
 
+/// Best-effort path normalization that doesn't require the target file
+/// to already exist. We use this to key our process-wide lock registry
+/// so two configs pointing at the same logical file (`threads.json` vs
+/// `./threads.json` vs `/abs/path/threads.json`) share the same mutex.
+fn normalize_for_key(path: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
+    };
+    let file_name = path.file_name().unwrap_or_default();
+    if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+        return canonical_parent.join(file_name);
+    }
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::new())
+            .join(path)
+    }
+}
+
 /// Returns a process-wide mutex shared by all `Codex` instances writing
 /// to the same canonical path. Without this, two `Codex::with_config(...)`
 /// instances pointed at the same store would race their
@@ -332,7 +359,7 @@ fn lock_for_path(path: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<()>>
     static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
 
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = normalize_for_key(path);
     let mut map = registry.lock().unwrap_or_else(|e| e.into_inner());
     map.entry(key)
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -536,6 +563,18 @@ mod tests {
             &[(Uuid::nil(), "abc".to_string())].into_iter().collect(),
         )
         .expect("save with bare filename must succeed");
+    }
+
+    #[test]
+    fn lock_for_path_canonicalizes_equivalent_paths_to_same_mutex() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let abs = tmp_dir.path().join("threads.json");
+        let lock_a = lock_for_path(&abs);
+        let lock_b = lock_for_path(&abs.canonicalize().unwrap_or(abs.clone()));
+        assert!(
+            std::sync::Arc::ptr_eq(&lock_a, &lock_b),
+            "equivalent paths must yield the same lock instance"
+        );
     }
 
     #[test]
