@@ -1,12 +1,15 @@
 //! Per-turn stream and accumulated record.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures_core::Stream;
 use tokio::sync::mpsc;
+use tokio::time::{Instant, Sleep};
 
 use crate::driver::Driver;
 use crate::process::ProcessHandle;
@@ -46,6 +49,9 @@ pub struct TurnStream {
     pending: VecDeque<Event>,
     finished: bool,
     completed: bool,
+    deadline: Option<Instant>,
+    timer: Option<Pin<Box<Sleep>>>,
+    timeout_dur: Option<Duration>,
 }
 
 impl TurnStream {
@@ -63,7 +69,20 @@ impl TurnStream {
             pending: VecDeque::new(),
             finished: false,
             completed: false,
+            deadline: None,
+            timer: None,
+            timeout_dur: None,
         }
+    }
+
+    /// Set a per-turn timeout. After the duration elapses, the stream yields
+    /// exactly one `Err(Error::Timeout(duration))`, drops the child process,
+    /// and ends.
+    #[allow(dead_code)] // wired into Session in a later commit
+    pub fn with_timeout(mut self, duration: Duration) -> Self {
+        self.deadline = Some(Instant::now() + duration);
+        self.timeout_dur = Some(duration);
+        self
     }
 
     /// Cancel the running turn. Kills the child process immediately and
@@ -95,44 +114,60 @@ impl TurnStream {
 impl Stream for TurnStream {
     type Item = Result<TurnItem>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.finished {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.finished {
             return Poll::Ready(None);
         }
 
         loop {
-            if let Some(e) = self.pending.pop_front() {
-                self.events.push(e.clone());
+            if let Some(e) = this.pending.pop_front() {
+                this.events.push(e.clone());
                 return Poll::Ready(Some(Ok(TurnItem::Event(e))));
             }
 
-            match self.rx.poll_recv(cx) {
+            if let Some(deadline) = this.deadline {
+                if this.timer.is_none() {
+                    this.timer = Some(Box::pin(tokio::time::sleep_until(deadline)));
+                }
+            }
+
+            if let Some(timer) = this.timer.as_mut() {
+                if timer.as_mut().poll(cx).is_ready() {
+                    this.handle = None;
+                    this.finished = true;
+                    let d = this.timeout_dur.unwrap_or_default();
+                    return Poll::Ready(Some(Err(Error::Timeout(d))));
+                }
+            }
+
+            match this.rx.poll_recv(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Ok(value))) => match self.driver.parse(value.clone()) {
-                    Ok(events) => self.pending.extend(events),
+                Poll::Ready(Some(Ok(value))) => match this.driver.parse(value.clone()) {
+                    Ok(events) => this.pending.extend(events),
                     Err(reason) => {
-                        self.finished = true;
-                        self.handle = None;
+                        this.handle = None;
+                        this.finished = true;
                         return Poll::Ready(Some(Err(Error::DriverParse {
-                            driver: self.driver.name(),
+                            driver: this.driver.name(),
                             value,
                             reason: reason.to_string(),
                         })));
                     }
                 },
                 Poll::Ready(Some(Err(err))) => {
-                    self.finished = true;
-                    self.handle = None;
+                    this.handle = None;
+                    this.finished = true;
                     return Poll::Ready(Some(Err(err)));
                 }
                 Poll::Ready(None) => {
-                    if self.completed {
-                        self.finished = true;
+                    this.handle = None;
+                    if this.completed {
+                        this.finished = true;
                         return Poll::Ready(None);
                     }
-                    self.completed = true;
-                    self.handle = None;
-                    let events = self.events.clone();
+                    this.completed = true;
+                    let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }
             }
@@ -374,6 +409,81 @@ mod tests {
             "cancel must include channel-buffered events; got {:?}",
             turn.events.len()
         );
+    }
+
+    #[tokio::test]
+    async fn timeout_fires_when_child_blocks() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream =
+            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_millis(150));
+
+        let start = std::time::Instant::now();
+        let item = stream.next().await.expect("first").expect_err("timeout");
+        assert!(matches!(item, Error::Timeout(_)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn timeout_does_not_fire_when_completion_is_fast() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        writeln!(script, "exit 0").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream =
+            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_secs(30));
+
+        let mut events = 0;
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("ok") {
+                TurnItem::Event(_) => events += 1,
+                TurnItem::Complete(_) => completed = true,
+            }
+        }
+        assert_eq!(events, 1);
+        assert!(completed);
+    }
+
+    #[tokio::test]
+    async fn slow_consumer_does_not_drop_events() {
+        let mut script = NamedTempFile::new().unwrap();
+        for i in 0..50 {
+            writeln!(script, r#"emit {{"n":{i}}}"#).unwrap();
+        }
+        writeln!(script, "exit 0").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream = TurnStream::new(handle, rx, driver);
+
+        let mut events = 0;
+        while let Some(item) = stream.next().await {
+            match item.expect("ok") {
+                TurnItem::Event(_) => {
+                    events += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                }
+                TurnItem::Complete(_) => {}
+            }
+        }
+        assert_eq!(events, 50);
     }
 
     #[tokio::test]
