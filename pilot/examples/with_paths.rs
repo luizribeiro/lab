@@ -1,46 +1,55 @@
-//! Path overrides + per-turn options.
+//! Per-driver workspace overrides + per-turn options.
 //!
-//! This example shows the knobs you reach for when running pilot inside a
+//! Demonstrates two knobs you reach for when running pilot inside a
 //! larger system (CI, test harness, sandboxed eval):
 //!
-//!   * `AgentPaths::config_home` isolates the claude CLI's config/state to
-//!     a dedicated directory instead of `~/.claude` — useful when you don't
-//!     want pilot runs to share session history with your interactive claude.
 //!   * `ClaudeConfig.additional_dirs` grants the agent read access to extra
 //!     workspace directories beyond `Session::workdir`.
 //!   * `TurnOptions.timeout` caps wall-clock per turn — the stream yields
 //!     `Err(Error::Timeout(...))` if the agent stalls past the deadline.
 //!
+//! The third knob, `AgentPaths::config_home`, is shown commented-out
+//! inside `main` because pointing `CLAUDE_CONFIG_DIR` at a fresh dir means
+//! claude has no credentials there. See the inline comment for how to
+//! enable it.
+//!
 //! Run with:
 //!     cargo run --example with_paths
 
 use futures_util::StreamExt;
-use pilot::{AgentPaths, Claude, ClaudeConfig, Driver, Event, Session, TurnItem, TurnOptions};
+use pilot::{Claude, ClaudeConfig, Driver, Event, Session, TurnItem, TurnOptions};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Per-run temp dirs so concurrent runs don't share state.
-    let config_dir = tempfile::tempdir()?;
+    // An "extra" directory the agent can read but `Session::workdir`
+    // doesn't include. Real use: grant the agent access to a vendor
+    // directory, a generated artifact path, etc.
     let extra_dir = tempfile::tempdir()?;
     std::fs::write(
         extra_dir.path().join("README"),
         "hello from pilot example\n",
     )?;
 
+    // Per-run isolated claude config dir is COMMENTED OUT below because
+    // pointing `CLAUDE_CONFIG_DIR` at a fresh empty directory means claude
+    // has no auth credentials there. To try it: set ANTHROPIC_API_KEY in
+    // your environment (so `Auth::Ambient` picks it up inside the new
+    // config home), or switch to `Auth::ApiKey(SecretString::from(...))`,
+    // then uncomment the lines below.
+    //
+    //     let config_dir = tempfile::tempdir()?;
+    //     paths: pilot::AgentPaths { config_home: Some(config_dir.path().to_path_buf()) },
+
     let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(ClaudeConfig {
-        paths: AgentPaths {
-            config_home: Some(config_dir.path().to_path_buf()),
-        },
         additional_dirs: vec![extra_dir.path().to_path_buf()],
         ..Default::default()
     }));
 
     let mut session = Session::new(driver, std::env::current_dir()?);
 
-    // 3. Per-turn timeout cap.
     let prompt = format!(
         "Read the file at {}/README and tell me its contents in one short line.",
         extra_dir.path().display()
