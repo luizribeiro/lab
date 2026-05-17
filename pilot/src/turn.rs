@@ -236,6 +236,10 @@ mod tests {
 
         let item = stream.next().await.expect("first").expect_err("err");
         assert!(matches!(item, crate::Error::DriverParse { .. }));
+        assert!(
+            stream.handle.is_none(),
+            "handle must be dropped on terminal parse error"
+        );
 
         assert!(stream.next().await.is_none());
 
