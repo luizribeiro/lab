@@ -1,0 +1,83 @@
+name: pilot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pilot/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/pilot.yml"
+  pull_request:
+    paths:
+      - "pilot/**"
+      - "shared/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/pilot.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+        with:
+          determinate: true
+
+      - uses: DeterminateSystems/magic-nix-cache-action@c6a5746789488c8753af0d61fc6b5d79a80391f3
+        with:
+          use-flakehub: false
+
+      - name: Build
+        run: |
+          nix develop .#fittings --impure -L --command \
+            cargo build --manifest-path pilot/Cargo.toml --all-features
+
+      - name: Test
+        run: |
+          nix develop .#fittings --impure -L --command \
+            cargo test --manifest-path pilot/Cargo.toml --features test-support
+
+      - name: Clippy
+        run: |
+          nix develop .#fittings --impure -L --command \
+            cargo clippy --manifest-path pilot/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Format
+        run: |
+          nix develop .#fittings --impure -L --command \
+            cargo fmt --manifest-path pilot/Cargo.toml --check
+
+      - name: Docs
+        run: |
+          nix develop .#fittings --impure -L --command \
+            env RUSTDOCFLAGS="-D warnings" \
+            cargo doc --manifest-path pilot/Cargo.toml --no-deps --features test-support
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan fixtures for known secret patterns
+        run: |
+          set -euo pipefail
+          FIXTURES=pilot/tests/fixtures
+          # Common vendor key prefixes. If any of these show up in a
+          # committed fixture, it's almost certainly a leaked credential.
+          PATTERN='sk-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,}|sk_live_[a-zA-Z0-9_-]+|sk-proj-[a-zA-Z0-9_-]{20,}|AIza[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{20,}|ghs_[a-zA-Z0-9]{20,}|gho_[a-zA-Z0-9]{20,}|ya29\.[a-zA-Z0-9_-]+'
+          if grep -rEn "$PATTERN" "$FIXTURES" 2>/dev/null; then
+            echo "::error::Found secret-shaped string(s) in pilot/tests/fixtures — sanitize before merging."
+            exit 1
+          fi
+          echo "No known secret patterns found in $FIXTURES"
