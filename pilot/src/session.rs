@@ -57,12 +57,21 @@ impl Session {
         }
     }
 
-    /// Rehydrate a session from a previously-persisted UUID. Use this when
-    /// your program stored the [`Self::id`] of an earlier session and wants
-    /// to continue that conversation — the underlying CLI keeps its own
-    /// conversation state on disk keyed by this UUID.
+    /// Reconstruct a `Session` from an existing UUID.
     ///
-    /// This is a pure constructor: no process is spawned and no IO occurs.
+    /// Use this when your program persisted a [`Self::id`] and wants to
+    /// continue that conversation across program restarts. The first
+    /// subsequent [`Self::send`] dispatches via
+    /// [`Driver::resume_command`](crate::Driver::resume_command) rather
+    /// than [`Driver::command`](crate::Driver::command).
+    ///
+    /// Pure constructor: no IO, no process spawn. Whether the agent CLI
+    /// actually has on-disk state for this UUID is up to the user to
+    /// arrange — most drivers persist state automatically when given a
+    /// stable UUID. Notably, the codex driver requires
+    /// `CodexConfig.state.thread_store_path` to be set if you want
+    /// `Session::resume` to recover an existing codex thread; otherwise
+    /// it will fall back to a new-thread command (logged via `tracing`).
     pub fn resume(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self {
         Self {
             id,
@@ -85,12 +94,41 @@ impl Session {
         &self.workdir
     }
 
-    /// Send a prompt and return a stream over the resulting events.
+    /// Send a prompt and stream the resulting events.
     ///
-    /// Spawns a fresh child process per call. The returned `TurnStream`
-    /// yields each [`crate::Event`] as it arrives, then exactly one
-    /// `TurnItem::Complete(Turn)` when the child exits, then `None`.
-    /// Dropping the stream kills the child.
+    /// Spawns a fresh child process for this turn. Returns a [`TurnStream`]
+    /// that yields events as they arrive.
+    ///
+    /// # Concurrency
+    ///
+    /// `Session::send` takes `&mut self`, so you cannot call it twice on
+    /// the same `Session` instance concurrently. ADDITIONALLY, pilot keeps
+    /// a process-wide lock keyed by `(driver_name, Session::id)` — two
+    /// `Session` instances constructed with the SAME id (e.g. via
+    /// [`Self::resume`]) cannot have in-flight turns at the same time.
+    /// The second `send` returns `Err(Error::Busy)`.
+    ///
+    /// # First-turn vs resume dispatch
+    ///
+    /// `Session` tracks [`crate::TurnItem::Complete`] yields. The first
+    /// `send` on a freshly-[`new`](Self::new)-ed `Session` uses
+    /// [`Driver::command`](crate::Driver::command). After the first stream
+    /// yields `Complete`, subsequent sends use
+    /// [`Driver::resume_command`](crate::Driver::resume_command). A stream
+    /// that errors, times out, or is dropped before reaching `Complete`
+    /// does NOT advance this counter — retrying on the same `Session`
+    /// re-uses `command()`.
+    ///
+    /// # Errors
+    ///
+    /// * `Error::Busy` if another in-flight turn (on this or another
+    ///   `Session` with the same id) is still running.
+    /// * `Error::UnsupportedOption { .. }` if `opts` requests something
+    ///   the driver doesn't support (e.g. `paths.config_home` on gemini).
+    /// * Any error from [`Driver::command`](crate::Driver::command) /
+    ///   [`Driver::resume_command`](crate::Driver::resume_command)
+    ///   propagates immediately; the busy guard is released before
+    ///   returning so the session remains usable.
     pub async fn send(
         &mut self,
         input: impl Into<TurnInput>,
@@ -387,6 +425,26 @@ mod tests {
             .send("second", TurnOptions::default())
             .await
             .expect("send 2 should succeed after first completes");
+    }
+
+    #[tokio::test]
+    async fn session_is_reusable_after_cancel() {
+        let script = write_script(&["sleep 30000"]);
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script.path().to_path_buf(),
+        });
+        let mut session = Session::new(driver, std::env::temp_dir());
+
+        let s1 = session
+            .send("first", TurnOptions::default())
+            .await
+            .expect("send 1");
+        let _partial = s1.cancel().await;
+
+        let _s2 = session
+            .send("second", TurnOptions::default())
+            .await
+            .expect("second send after cancel should succeed");
     }
 
     #[tokio::test]

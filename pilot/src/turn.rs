@@ -42,8 +42,11 @@ impl std::fmt::Debug for SessionGuard {
     }
 }
 
-/// A completed turn: the accumulated normalized events the driver emitted
-/// before the underlying CLI exited.
+/// A completed (or cancelled) turn's accumulated events.
+///
+/// Constructed by [`TurnStream`] and yielded inside [`TurnItem::Complete`]
+/// at successful turn end, or returned by [`TurnStream::cancel`].
+/// Use [`Turn::final_text`] for the canonical assistant response.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Turn {
@@ -78,11 +81,41 @@ pub enum TurnItem {
     Complete(Turn),
 }
 
-/// Stream of [`TurnItem`]s for a single turn. Yields each [`Event`] in
-/// order, then yields exactly one [`TurnItem::Complete`] when the child
-/// exits, then `None`.
+/// Stream of [`TurnItem`]s for a single in-flight turn.
 ///
-/// Dropping the stream aborts the underlying child process.
+/// Yields each [`Event`] in order as the child agent CLI emits it, then
+/// exactly one [`TurnItem::Complete`] when the turn ends successfully,
+/// then `None`. Errors during the turn are yielded as `Some(Err(_))`
+/// items and terminate the stream.
+///
+/// # Lifecycle guarantees
+///
+/// * **Drop kills the child.** When a `TurnStream` is dropped — including
+///   panic unwind — the underlying child process is terminated via
+///   tokio's `kill_on_drop(true)`. There is no zombie process risk.
+/// * **Drop releases the busy guard.** The owning [`crate::Session`]
+///   becomes available for another [`crate::Session::send`] immediately.
+///   Any cross-`Session` lock keyed by `(driver_name, Session::id)` is
+///   also released.
+/// * **Drop does NOT increment the turns-completed counter.** A
+///   `TurnStream` that's dropped before yielding [`TurnItem::Complete`]
+///   is treated as if the turn never ran — the next [`crate::Session::send`]
+///   uses [`crate::Driver::command`] (first-turn dispatch), not
+///   [`crate::Driver::resume_command`].
+/// * **[`TurnStream::cancel`] is a controlled drop.** Same as drop, but
+///   additionally drains any events already buffered in the channel
+///   and returns them inside the partial [`Turn`].
+/// * **Stream errors are terminal.** Once `poll_next` yields
+///   `Some(Err(_))`, subsequent polls return `None`. The handle has
+///   already been released; the stream is safe to keep around or drop.
+/// * **[`TurnStream::with_timeout`]-triggered errors are equivalent to
+///   errors:** yields `Some(Err(Error::Timeout(_)))`, then `None`.
+///   Counter not incremented; session is reusable.
+/// * **Successful completion increments the counter.** When `poll_next`
+///   yields [`TurnItem::Complete`], the session's turns-completed
+///   counter increments BEFORE the busy guard releases. Subsequent
+///   [`crate::Session::send`] correctly dispatches via
+///   [`crate::Driver::resume_command`].
 pub struct TurnStream {
     // Held solely so its Drop aborts the reader task, which in turn drops
     // the owned `Child` (spawned with kill_on_drop) and SIGKILLs the CLI.
@@ -165,9 +198,18 @@ impl TurnStream {
         self
     }
 
-    /// Set a per-turn timeout. After the duration elapses, the stream yields
-    /// exactly one `Err(Error::Timeout(duration))`, drops the child process,
-    /// and ends.
+    /// Set a per-turn wall-clock deadline.
+    ///
+    /// When the duration elapses before the stream yields
+    /// [`TurnItem::Complete`], the stream yields exactly one
+    /// `Err(Error::Timeout(duration))` and then `None`. The child process
+    /// is killed, the busy guard is released, and the session is
+    /// immediately reusable. The turns-completed counter is NOT
+    /// incremented (the next send uses [`crate::Driver::command`]).
+    ///
+    /// Timeouts do NOT fire after [`TurnItem::Complete`] has been yielded —
+    /// once the stream is finished, subsequent polls return `None`
+    /// regardless of how much wall time has elapsed.
     #[allow(dead_code)] // wired into Session in a later commit
     pub fn with_timeout(mut self, duration: Duration) -> Self {
         self.deadline = Some(Instant::now() + duration);
@@ -175,13 +217,24 @@ impl TurnStream {
         self
     }
 
-    /// Cancel the running turn. Kills the child process immediately and
-    /// returns a `Turn` containing whatever events were accumulated before
-    /// cancellation. Any buffered-but-not-yet-yielded events are flushed
-    /// into the returned `Turn`.
+    /// Cancel the running turn.
     ///
-    /// Equivalent to dropping the stream, but lets the caller recover the
-    /// partial event list.
+    /// Kills the child process and returns a [`Turn`] holding whatever
+    /// events were accumulated before cancellation, including any that
+    /// arrived in the channel but had not yet been polled.
+    ///
+    /// Semantics (consumed-self):
+    ///
+    /// * Returns synchronously after a small drain — no waiting on the
+    ///   child to actually exit (`kill_on_drop` handles that asynchronously).
+    /// * The returned [`Turn`] may have ZERO [`Event::AssistantText`](crate::Event)
+    ///   events if the agent had not emitted any yet.
+    /// * The session this stream came from is immediately available for
+    ///   another [`crate::Session::send`].
+    /// * The turns-completed counter is NOT incremented (the next send
+    ///   uses [`crate::Driver::command`], not [`crate::Driver::resume_command`]).
+    /// * Equivalent to dropping the stream, plus the channel drain and
+    ///   the returned [`Turn`] value.
     #[allow(dead_code)] // wired into Session in a later commit
     pub async fn cancel(mut self) -> Turn {
         self.handle = None;

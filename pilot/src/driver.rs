@@ -106,6 +106,17 @@ impl From<String> for TurnInput {
     }
 }
 
+/// A per-CLI driver implementation.
+///
+/// Pilot routes each [`crate::Session::send`] through one of the trait's
+/// command builders ([`Driver::command`] for first turn,
+/// [`Driver::resume_command`] for follow-ups) and pipes the resulting
+/// child's JSONL stdout through [`Driver::parse`]. The optional
+/// [`Driver::observe`] hook lets drivers with per-session state (e.g.
+/// codex's auto-generated thread id) capture raw events before parsing.
+///
+/// `Driver` is `Send + Sync + 'static`-compatible: implementations are
+/// shared as `Arc<dyn Driver>` and used across tokio tasks.
 pub trait Driver: Send + Sync {
     fn name(&self) -> &'static str;
 
