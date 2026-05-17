@@ -99,6 +99,9 @@ impl Driver for Claude {
 
         args.extend(opts.raw_args.iter().cloned());
 
+        // `--` terminates any preceding variadic flag (e.g. `--add-dir`) so
+        // the prompt is unambiguously the trailing positional.
+        args.push("--".into());
         args.push(prompt.to_string());
 
         let mut env = self.config.extra_env.clone();
@@ -318,7 +321,7 @@ mod tests {
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
-            claude -p --verbose --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 hello
+            claude -p --verbose --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 -- hello
         "#]]
         .assert_eq(&format!("{}\n", rendered));
         assert!(spec.env.is_empty());

@@ -22,23 +22,19 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Isolated claude config dir — no shared state with `~/.claude`.
-    let config_dir = std::env::temp_dir().join("pilot-example-claude-home");
-    std::fs::create_dir_all(&config_dir)?;
-
-    // 2. An "extra" directory the agent can read but `Session::workdir`
-    //    doesn't include. Real use: grant the agent access to a vendor
-    //    directory, a generated artifact path, etc.
-    let extra_dir = std::env::temp_dir().join("pilot-example-extra-dir");
-    std::fs::create_dir_all(&extra_dir)?;
-    // Seed a file so there's something to find.
-    std::fs::write(extra_dir.join("README"), "hello from pilot example\n")?;
+    // Per-run temp dirs so concurrent runs don't share state.
+    let config_dir = tempfile::tempdir()?;
+    let extra_dir = tempfile::tempdir()?;
+    std::fs::write(
+        extra_dir.path().join("README"),
+        "hello from pilot example\n",
+    )?;
 
     let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(ClaudeConfig {
         paths: AgentPaths {
-            config_home: Some(config_dir),
+            config_home: Some(config_dir.path().to_path_buf()),
         },
-        additional_dirs: vec![extra_dir.clone()],
+        additional_dirs: vec![extra_dir.path().to_path_buf()],
         ..Default::default()
     }));
 
@@ -47,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Per-turn timeout cap.
     let prompt = format!(
         "Read the file at {}/README and tell me its contents in one short line.",
-        extra_dir.display()
+        extra_dir.path().display()
     );
     let mut stream = session
         .send(
