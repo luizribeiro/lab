@@ -37,6 +37,11 @@ pub struct CodexConfig {
     /// `codex -c key=value` config overrides.
     pub config_overrides: Vec<(String, String)>,
     pub extra_env: Vec<(String, String)>,
+    pub state: CodexPilotState,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct CodexPilotState {
     /// Optional path to a JSON file mapping pilot session UUIDs to
     /// captured codex thread ids. When set, [`Driver::observe`] persists
     /// each `thread.started` to this file and [`Driver::resume_command`]
@@ -69,7 +74,7 @@ impl Default for CodexConfig {
             skip_git_repo_check: true,
             config_overrides: Vec::new(),
             extra_env: Vec::new(),
-            thread_store_path: None,
+            state: CodexPilotState::default(),
         }
     }
 }
@@ -191,6 +196,7 @@ impl Driver for Codex {
 
         let thread_id = thread_id.or_else(|| {
             self.config
+                .state
                 .thread_store_path
                 .as_ref()
                 .and_then(|p| load_thread_map(p).get(&session_id).cloned())
@@ -205,7 +211,7 @@ impl Driver for Codex {
             tracing::warn!(
                 session_id = %session_id,
                 "codex resume_command: no captured thread_id for this session (in-memory or persisted); falling back to a fresh `codex exec`. \
-                 Set CodexConfig.thread_store_path to enable cross-process resume."
+                 Set CodexConfig.state.thread_store_path to enable cross-process resume."
             );
             return self.command(session_id, prompt, opts);
         };
@@ -230,7 +236,7 @@ impl Driver for Codex {
             map.insert(session_id, tid.to_string());
         }
 
-        if let Some(path) = &self.config.thread_store_path {
+        if let Some(path) = &self.config.state.thread_store_path {
             let path_lock = lock_for_path(path);
             let _guard = path_lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut on_disk = load_thread_map(path);
@@ -545,7 +551,9 @@ mod tests {
         let sid = Uuid::new_v4();
 
         let cfg = CodexConfig {
-            thread_store_path: Some(path.clone()),
+            state: CodexPilotState {
+                thread_store_path: Some(path.clone()),
+            },
             ..Default::default()
         };
         let first = Codex::with_config(cfg);
@@ -558,7 +566,9 @@ mod tests {
         );
 
         let cfg = CodexConfig {
-            thread_store_path: Some(path.clone()),
+            state: CodexPilotState {
+                thread_store_path: Some(path.clone()),
+            },
             ..Default::default()
         };
         let second = Codex::with_config(cfg);

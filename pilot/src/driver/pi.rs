@@ -16,11 +16,16 @@ pub struct PiConfig {
     /// out-of-band authentication. Set explicitly for headless reliability.
     pub provider: Option<String>,
     pub default_model: Option<String>,
+    pub extra_env: Vec<(String, String)>,
+    pub state: PiPilotState,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct PiPilotState {
     /// Root directory under which per-session storage dirs are created.
     /// Pilot derives a unique subdirectory per session UUID. Default:
     /// `$HOME/.pilot/pi-sessions`.
     pub session_root: Option<PathBuf>,
-    pub extra_env: Vec<(String, String)>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -37,7 +42,7 @@ impl Pi {
     }
 
     fn session_dir_for(&self, session_id: Uuid) -> PathBuf {
-        let root = self.config.session_root.clone().unwrap_or_else(|| {
+        let root = self.config.state.session_root.clone().unwrap_or_else(|| {
             let home = std::env::var("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/tmp"));

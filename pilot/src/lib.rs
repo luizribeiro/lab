@@ -14,9 +14,9 @@ mod turn;
 pub mod test_support;
 
 pub use driver::claude::{Claude, ClaudeConfig, PermissionMode};
-pub use driver::codex::{Codex, CodexConfig, SandboxMode};
+pub use driver::codex::{Codex, CodexConfig, CodexPilotState, SandboxMode};
 pub use driver::gemini::{ApprovalMode, Gemini, GeminiConfig};
-pub use driver::pi::{Pi, PiConfig};
+pub use driver::pi::{Pi, PiConfig, PiPilotState};
 pub use driver::{Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 pub use error::{Error, ParseError, Result};
 pub use event::Event;
