@@ -79,7 +79,6 @@ impl Pi {
             args.push("--thinking".into());
             args.push(s.into());
         }
-        args.extend(opts.extra_args.iter().cloned());
         args
     }
 
@@ -119,6 +118,7 @@ impl Driver for Pi {
             .clone()
             .unwrap_or_else(|| PathBuf::from("pi"));
         let mut args = self.base_args(session_id, opts);
+        args.extend(opts.extra_args.iter().cloned());
         args.push(prompt.to_string());
         Ok(CommandSpec {
             program,
@@ -140,6 +140,7 @@ impl Driver for Pi {
             .unwrap_or_else(|| PathBuf::from("pi"));
         let mut args = self.base_args(session_id, opts);
         args.push("--continue".into());
+        args.extend(opts.extra_args.iter().cloned());
         args.push(prompt.to_string());
         Ok(CommandSpec {
             program,
@@ -260,6 +261,20 @@ mod tests {
             .unwrap();
         assert!(!cspec.args.iter().any(|a| a == "--continue"));
         assert!(rspec.args.iter().any(|a| a == "--continue"));
+    }
+
+    #[test]
+    fn extra_args_appear_after_continue_in_resume() {
+        let opts = TurnOptions {
+            extra_args: vec!["--my-flag".into()],
+            ..Default::default()
+        };
+        let spec = Pi::new().resume_command(nil(), "hi", &opts).unwrap();
+        let cont = spec.args.iter().position(|a| a == "--continue").unwrap();
+        let extra = spec.args.iter().position(|a| a == "--my-flag").unwrap();
+        let prompt = spec.args.iter().rposition(|a| a == "hi").unwrap();
+        assert!(cont < extra, "--continue must come before extra_args");
+        assert!(extra < prompt, "extra_args must come before prompt");
     }
 
     #[test]
