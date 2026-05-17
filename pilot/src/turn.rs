@@ -79,6 +79,13 @@ impl TurnStream {
         for e in self.pending.drain(..) {
             self.events.push(e);
         }
+        while let Ok(item) = self.rx.try_recv() {
+            if let Ok(value) = item {
+                if let Ok(events) = self.driver.parse(value) {
+                    self.events.extend(events);
+                }
+            }
+        }
         Turn {
             events: self.events,
         }
@@ -331,6 +338,33 @@ mod tests {
 
         let turn = stream.cancel().await;
         assert_eq!(turn.events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cancel_includes_queued_but_unpolled_events() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        writeln!(script, r#"emit {{"n":2}}"#).unwrap();
+        writeln!(script, r#"emit {{"n":3}}"#).unwrap();
+        writeln!(script, "exit 0").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let stream = TurnStream::new(handle, rx, driver);
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let turn = stream.cancel().await;
+
+        assert_eq!(
+            turn.events.len(),
+            3,
+            "cancel must include channel-buffered events; got {:?}",
+            turn.events.len()
+        );
     }
 
     #[tokio::test]
