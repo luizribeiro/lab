@@ -103,11 +103,159 @@ impl Driver for Claude {
     }
 
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
-        Ok(vec![Event::Raw {
-            driver: "claude",
-            value,
-        }])
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("assistant") => parse_assistant(&value),
+            Some("user") => parse_user(&value),
+            Some("result") => Ok(vec![parse_result(&value)]),
+            _ => Ok(vec![raw(value)]),
+        }
     }
+}
+
+fn raw(value: serde_json::Value) -> Event {
+    Event::Raw {
+        driver: "claude",
+        value,
+    }
+}
+
+fn parse_assistant(value: &serde_json::Value) -> Result<Vec<Event>, ParseError> {
+    let message = value
+        .get("message")
+        .and_then(serde_json::Value::as_object)
+        .ok_or(ParseError::MissingField("message"))?;
+
+    let mut events = Vec::new();
+    if let Some(content) = message.get("content").and_then(serde_json::Value::as_array) {
+        for block in content {
+            events.push(parse_assistant_block(block)?);
+        }
+    }
+    if let Some(usage) = message.get("usage") {
+        events.push(parse_usage(usage)?);
+    }
+    Ok(events)
+}
+
+fn parse_assistant_block(block: &serde_json::Value) -> Result<Event, ParseError> {
+    match block.get("type").and_then(serde_json::Value::as_str) {
+        Some("text") => {
+            let text = block
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ParseError::MissingField("text"))?;
+            Ok(Event::AssistantText {
+                delta: text.to_string(),
+            })
+        }
+        Some("thinking") => {
+            let thinking = block
+                .get("thinking")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ParseError::MissingField("thinking"))?;
+            Ok(Event::Thinking {
+                delta: thinking.to_string(),
+            })
+        }
+        Some("tool_use") => {
+            let id = block
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ParseError::MissingField("id"))?;
+            let name = block
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ParseError::MissingField("name"))?;
+            let args = block
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Ok(Event::ToolCall {
+                call_id: id.to_string(),
+                name: name.to_string(),
+                args,
+            })
+        }
+        _ => Ok(raw(block.clone())),
+    }
+}
+
+fn parse_usage(usage: &serde_json::Value) -> Result<Event, ParseError> {
+    let input_tokens = usage
+        .get("input_tokens")
+        .ok_or(ParseError::MissingField("input_tokens"))?
+        .as_u64()
+        .ok_or(ParseError::InvalidFieldType {
+            field: "input_tokens",
+            expected: "u64",
+        })?;
+    let output_tokens = usage
+        .get("output_tokens")
+        .ok_or(ParseError::MissingField("output_tokens"))?
+        .as_u64()
+        .ok_or(ParseError::InvalidFieldType {
+            field: "output_tokens",
+            expected: "u64",
+        })?;
+    Ok(Event::Usage {
+        input_tokens,
+        output_tokens,
+    })
+}
+
+fn parse_user(value: &serde_json::Value) -> Result<Vec<Event>, ParseError> {
+    let Some(content) = value
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(vec![raw(value.clone())]);
+    };
+
+    content.iter().map(parse_user_block).collect()
+}
+
+fn parse_user_block(block: &serde_json::Value) -> Result<Event, ParseError> {
+    match block.get("type").and_then(serde_json::Value::as_str) {
+        Some("tool_result") => {
+            let call_id = block
+                .get("tool_use_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ParseError::MissingField("tool_use_id"))?;
+            let ok = !block
+                .get("is_error")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let output = stringify_tool_result_content(block.get("content"));
+            Ok(Event::ToolResult {
+                call_id: call_id.to_string(),
+                ok,
+                output,
+            })
+        }
+        _ => Ok(raw(block.clone())),
+    }
+}
+
+fn stringify_tool_result_content(content: Option<&serde_json::Value>) -> String {
+    match content {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join(""),
+        Some(other) => other.to_string(),
+    }
+}
+
+fn parse_result(value: &serde_json::Value) -> Event {
+    let final_text = value
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    Event::TurnComplete { final_text }
 }
 
 #[cfg(test)]
@@ -198,5 +346,28 @@ mod tests {
         let add = spec.args.iter().position(|a| a == "--add-dir").unwrap();
         let prompt = spec.args.iter().rposition(|a| a == "p").unwrap();
         assert!(add < prompt);
+    }
+
+    #[test]
+    fn greeting_fixture_parses_to_expected_events() {
+        let raw = include_str!("../../tests/fixtures/claude/greeting.jsonl");
+        let claude = Claude::new();
+        let mut events: Vec<Event> = Vec::new();
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+            events.extend(claude.parse(value).expect("parse ok"));
+        }
+        expect_test::expect_file!["../../tests/fixtures/claude/greeting.events.snap"]
+            .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
+    fn assistant_missing_message_errors() {
+        let v = serde_json::json!({"type":"assistant"});
+        let err = Claude::new().parse(v).unwrap_err();
+        assert!(matches!(err, ParseError::MissingField("message")));
     }
 }
