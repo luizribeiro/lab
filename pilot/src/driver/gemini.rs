@@ -99,6 +99,14 @@ impl Driver for Gemini {
         CommandSpec { program, args, env }
     }
 
+    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+        let mut spec = self.command(session_id, prompt, opts);
+        if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
+            spec.args[i] = "--resume".to_string();
+        }
+        spec
+    }
+
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
         let event_type = value.get("type").and_then(|v| v.as_str());
         match event_type {
@@ -227,6 +235,13 @@ mod tests {
         }
         expect_test::expect_file!["../../tests/fixtures/gemini/greeting.events.snap"]
             .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
+    fn resume_command_uses_resume_flag_not_session_id() {
+        let spec = Gemini::new().resume_command(nil(), "next", &TurnOptions::default());
+        assert!(spec.args.iter().any(|a| a == "--resume"));
+        assert!(!spec.args.iter().any(|a| a == "--session-id"));
     }
 
     #[test]
