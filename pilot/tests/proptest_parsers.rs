@@ -4,7 +4,7 @@
 //! return either `Ok(Vec<Event>)` or `Err(ParseError)`. It must NEVER
 //! panic, overflow the stack, or otherwise diverge.
 
-use pilot::{Claude, Driver, Gemini, Pi};
+use pilot::{Claude, Codex, Driver, Gemini, Pi};
 use proptest::prelude::*;
 
 /// Known field names that real driver parse() implementations look at.
@@ -43,6 +43,10 @@ const KNOWN_KEYS: &[&str] = &[
     "version",
     "cwd",
     "timestamp",
+    "thread_id",
+    "item",
+    "cached_input_tokens",
+    "reasoning_output_tokens",
 ];
 
 /// String values that act as discriminators inside parse() match arms.
@@ -82,6 +86,14 @@ const KNOWN_DISCRIMINATORS: &[&str] = &[
     // roles (already in event types but explicit here for clarity)
     "assistant",
     "user",
+    // codex event types
+    "thread.started",
+    "turn.started",
+    "turn.completed",
+    "item.completed",
+    "agent_message",
+    "function_call",
+    "function_call_output",
 ];
 
 /// Recursive strategy for arbitrary JSON values, bounded so tests run fast.
@@ -165,6 +177,11 @@ proptest! {
     }
 
     #[test]
+    fn codex_parse_never_panics(v in arb_value()) {
+        let _ = Codex::new().parse(v);
+    }
+
+    #[test]
     fn gemini_parse_never_panics(v in arb_value()) {
         let _ = Gemini::new().parse(v);
     }
@@ -177,6 +194,11 @@ proptest! {
     #[test]
     fn claude_parse_never_panics_with_typed_keys(v in arb_value_with_typed_keys()) {
         let _ = Claude::new().parse(v);
+    }
+
+    #[test]
+    fn codex_parse_never_panics_with_typed_keys(v in arb_value_with_typed_keys()) {
+        let _ = Codex::new().parse(v);
     }
 
     #[test]
