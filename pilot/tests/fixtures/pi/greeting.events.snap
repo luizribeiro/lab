@@ -1,0 +1,89 @@
+[
+    Raw {
+        driver: "pi",
+        value: Object {
+            "cwd": String("/test"),
+            "id": String("33333333-3333-3333-3333-333333333333"),
+            "timestamp": String("2026-05-17T17:00:00.000Z"),
+            "type": String("session"),
+            "version": Number(3),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("agent_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("turn_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [
+                    Object {
+                        "text": String("Say only the word: hello"),
+                        "type": String("text"),
+                    },
+                ],
+                "role": String("user"),
+                "timestamp": Number(0),
+            },
+            "type": String("message_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [
+                    Object {
+                        "text": String("Say only the word: hello"),
+                        "type": String("text"),
+                    },
+                ],
+                "role": String("user"),
+                "timestamp": Number(0),
+            },
+            "type": String("message_end"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [],
+                "role": String("assistant"),
+                "usage": Object {
+                    "input": Number(3),
+                    "output": Number(4),
+                },
+            },
+            "type": String("message_start"),
+        },
+    },
+    AssistantText {
+        delta: "hello",
+    },
+    Usage {
+        input_tokens: 3,
+        output_tokens: 4,
+    },
+    TurnComplete {
+        ok: true,
+        final_text: Some(
+            "hello",
+        ),
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("agent_end"),
+        },
+    },
+]

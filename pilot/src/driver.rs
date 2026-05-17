@@ -11,6 +11,7 @@ use crate::{Event, ParseError};
 
 pub mod claude;
 pub mod gemini;
+pub mod pi;
 
 #[derive(Debug, Clone)]
 pub struct CommandSpec {

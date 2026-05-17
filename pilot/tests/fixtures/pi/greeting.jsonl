@@ -1,0 +1,10 @@
+{"type":"session","version":3,"id":"33333333-3333-3333-3333-333333333333","timestamp":"2026-05-17T17:00:00.000Z","cwd":"/test"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Say only the word: hello"}],"timestamp":0}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Say only the word: hello"}],"timestamp":0}}
+{"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input":3,"output":4}}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"hello"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input":3,"output":4}}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"toolResults":[]}
+{"type":"agent_end"}
