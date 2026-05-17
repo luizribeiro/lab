@@ -41,7 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // then uncomment the lines below.
     //
     //     let config_dir = tempfile::tempdir()?;
-    //     paths: pilot::AgentPaths { config_home: Some(config_dir.path().to_path_buf()) },
+    //     config.paths.config_home = Some(config_dir.path().to_path_buf());
+    //
+    // (The struct-literal form is not available for `AgentPaths` here because
+    // it's `#[non_exhaustive]` — examples live in a separate compilation unit
+    // and must mutate the default value.)
 
     let mut config = ClaudeConfig::default();
     config.additional_dirs = vec![extra_dir.path().to_path_buf()];
