@@ -207,10 +207,13 @@ impl Stream for TurnStream {
                     }
                     this.completed = true;
                     this.finished = true;
-                    this._busy_guard = None;
+                    // Increment completion counter BEFORE releasing the busy guard so
+                    // any concurrent send past the busy CAS observes the completion
+                    // and dispatches resume_command, not command.
                     if let Some(counter) = &this.completion_counter {
                         counter.fetch_add(1, Ordering::SeqCst);
                     }
+                    this._busy_guard = None;
                     let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }

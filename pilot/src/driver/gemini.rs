@@ -22,10 +22,19 @@ pub struct GeminiConfig {
     pub default_model: Option<String>,
     pub approval_mode: ApprovalMode,
     /// Pass `--skip-trust` to bypass gemini's untrusted-folder prompt.
-    /// Defaults to `true` because pilot is a headless driver — without this,
-    /// gemini refuses to run in workdirs that haven't been explicitly trusted
-    /// in interactive mode. Set to `false` if you trust gemini will only be
-    /// invoked from workdirs the user has approved interactively.
+    ///
+    /// # Default
+    /// `true`. Pilot is a headless driver: without skipping the trust
+    /// prompt, every `Session::new(...).send(...)` against `pilot::driver("gemini")?`
+    /// would fail in any workdir that hasn't been trusted in an
+    /// interactive gemini session first. We chose ergonomics over a
+    /// fail-closed default. Callers who want gemini's trust gate to
+    /// remain active MUST set this to `false` explicitly via `GeminiConfig`.
+    ///
+    /// # Security
+    /// `skip_trust: true` means gemini will read/execute project-level
+    /// gemini config from the workdir without prompting. Pass only paths
+    /// you trust to `Session::new(_, workdir)`.
     pub skip_trust: bool,
     pub extra_env: Vec<(String, String)>,
 }
@@ -37,6 +46,10 @@ impl Default for GeminiConfig {
             auth: Auth::default(),
             default_model: None,
             approval_mode: ApprovalMode::default(),
+            // Default true: pilot is a headless driver, and gemini refuses to run
+            // in untrusted folders without this flag. Callers who want gemini's
+            // fail-closed trust prompt to apply should set `skip_trust: false`
+            // explicitly. (See ../../docs/security.md once we have one.)
             skip_trust: true,
             extra_env: Vec::new(),
         }
