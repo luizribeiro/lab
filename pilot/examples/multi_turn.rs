@@ -15,15 +15,9 @@ use std::time::Duration;
 
 async fn drain(session: &mut Session, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("--- turn: {prompt}");
-    let mut stream = session
-        .send(
-            prompt,
-            TurnOptions {
-                timeout: Some(Duration::from_secs(60)),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(Duration::from_secs(60));
+    let mut stream = session.send(prompt, opts).await?;
     while let Some(item) = stream.next().await {
         match item? {
             TurnItem::Event(Event::AssistantText { delta }) => {

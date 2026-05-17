@@ -48,14 +48,10 @@ async fn smoke(agent: &str) {
     let driver = pilot::driver(agent).expect("driver registered");
     let mut session = Session::new(driver, std::env::temp_dir());
 
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(std::time::Duration::from_secs(60));
     let mut stream = session
-        .send(
-            "Say only the word: hi",
-            TurnOptions {
-                timeout: Some(std::time::Duration::from_secs(60)),
-                ..Default::default()
-            },
-        )
+        .send("Say only the word: hi", opts)
         .await
         .unwrap_or_else(|e| panic!("send failed for {agent}: {e:?}"));
 

@@ -21,15 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = Session::new(driver, std::env::current_dir()?);
     println!("session id: {}", session.id());
 
-    let mut stream = session
-        .send(
-            "Say only the word: hello",
-            TurnOptions {
-                timeout: Some(Duration::from_secs(60)),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(Duration::from_secs(60));
+    let mut stream = session.send("Say only the word: hello", opts).await?;
 
     while let Some(item) = stream.next().await {
         match item? {

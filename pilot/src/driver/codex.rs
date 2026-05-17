@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxMode {
     #[default]
@@ -24,6 +25,7 @@ pub enum SandboxMode {
     DangerFullAccess,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
     pub binary: Option<PathBuf>,
@@ -42,6 +44,7 @@ pub struct CodexConfig {
     pub state: CodexPilotState,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct CodexPilotState {
     /// Optional path to a JSON file mapping pilot session UUIDs to

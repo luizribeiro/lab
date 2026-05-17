@@ -44,6 +44,7 @@ impl std::fmt::Debug for SessionGuard {
 
 /// A completed turn: the accumulated normalized events the driver emitted
 /// before the underlying CLI exited.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Turn {
     pub events: Vec<Event>,

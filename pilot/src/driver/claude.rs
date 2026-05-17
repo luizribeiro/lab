@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionMode {
     #[default]
@@ -14,6 +15,7 @@ pub enum PermissionMode {
     BypassPermissions,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct ClaudeConfig {
     pub binary: Option<PathBuf>,

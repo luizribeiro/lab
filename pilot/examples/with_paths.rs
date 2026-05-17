@@ -43,10 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     let config_dir = tempfile::tempdir()?;
     //     paths: pilot::AgentPaths { config_home: Some(config_dir.path().to_path_buf()) },
 
-    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(ClaudeConfig {
-        additional_dirs: vec![extra_dir.path().to_path_buf()],
-        ..Default::default()
-    }));
+    let mut config = ClaudeConfig::default();
+    config.additional_dirs = vec![extra_dir.path().to_path_buf()];
+    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(config));
 
     let mut session = Session::new(driver, std::env::current_dir()?);
 
@@ -54,15 +53,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Read the file at {}/README and tell me its contents in one short line.",
         extra_dir.path().display()
     );
-    let mut stream = session
-        .send(
-            &prompt,
-            TurnOptions {
-                timeout: Some(Duration::from_secs(90)),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(Duration::from_secs(90));
+    let mut stream = session.send(&prompt, opts).await?;
 
     while let Some(item) = stream.next().await {
         match item? {

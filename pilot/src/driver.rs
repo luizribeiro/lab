@@ -14,6 +14,7 @@ pub mod codex;
 pub mod gemini;
 pub mod pi;
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
     pub program: PathBuf,
@@ -26,6 +27,7 @@ pub struct CommandSpec {
 /// (flag or env var). Drivers that don't support a given override
 /// must return `Error::UnsupportedOption` from `command()` /
 /// `resume_command()` rather than silently ignoring it.
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct AgentPaths {
     /// Override the CLI's config home directory.
@@ -37,6 +39,7 @@ pub struct AgentPaths {
     pub config_home: Option<std::path::PathBuf>,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningLevel {
     Low,
@@ -44,6 +47,7 @@ pub enum ReasoningLevel {
     High,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub enum Auth {
     #[default]
@@ -51,6 +55,7 @@ pub enum Auth {
     ApiKey(SecretString),
 }
 
+#[non_exhaustive]
 #[derive(Debug, Default, Clone)]
 pub struct TurnOptions {
     pub model: Option<String>,

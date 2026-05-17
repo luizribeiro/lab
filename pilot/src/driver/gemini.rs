@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnOptions};
 use crate::{Event, ParseError};
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalMode {
     #[default]
@@ -15,6 +16,7 @@ pub enum ApprovalMode {
     Plan,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GeminiConfig {
     pub binary: Option<PathBuf>,

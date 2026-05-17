@@ -16,21 +16,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key =
         std::env::var("PILOT_AGENT_KEY").expect("set PILOT_AGENT_KEY to your provider API key");
 
-    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(ClaudeConfig {
-        auth: Auth::ApiKey(SecretString::from(key)),
-        ..Default::default()
-    }));
+    let mut config = ClaudeConfig::default();
+    config.auth = Auth::ApiKey(SecretString::from(key));
+    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(config));
 
     let mut session = Session::new(driver, std::env::current_dir()?);
-    let mut stream = session
-        .send(
-            "Say only the word: hi",
-            TurnOptions {
-                timeout: Some(Duration::from_secs(60)),
-                ..Default::default()
-            },
-        )
-        .await?;
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(Duration::from_secs(60));
+    let mut stream = session.send("Say only the word: hi", opts).await?;
 
     while let Some(item) = stream.next().await {
         if let TurnItem::Complete(turn) = item? {

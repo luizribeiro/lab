@@ -10,18 +10,12 @@ const TEST_SECRET: &str = "sk-pilot-test-DO-NOT-LEAK-XYZ123";
 /// Returns the configs we cover. Add new drivers' configs here.
 fn redactable_configs_debug() -> Vec<String> {
     let secret = SecretString::from(TEST_SECRET);
-    let claude = ClaudeConfig {
-        auth: Auth::ApiKey(secret.clone()),
-        ..Default::default()
-    };
-    let gemini = GeminiConfig {
-        auth: Auth::ApiKey(secret.clone()),
-        ..Default::default()
-    };
-    let pi = PiConfig {
-        auth: Auth::ApiKey(secret),
-        ..Default::default()
-    };
+    let mut claude = ClaudeConfig::default();
+    claude.auth = Auth::ApiKey(secret.clone());
+    let mut gemini = GeminiConfig::default();
+    gemini.auth = Auth::ApiKey(secret.clone());
+    let mut pi = PiConfig::default();
+    pi.auth = Auth::ApiKey(secret);
     vec![
         format!("{claude:?}"),
         format!("{gemini:?}"),

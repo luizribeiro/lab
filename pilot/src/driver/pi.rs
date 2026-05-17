@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Configuration for the pi driver.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct PiConfig {
     pub binary: Option<PathBuf>,
@@ -21,6 +22,7 @@ pub struct PiConfig {
     pub state: PiPilotState,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct PiPilotState {
     /// Root directory under which per-session storage dirs are created.
