@@ -91,11 +91,6 @@ impl Driver for Claude {
         env.extend(opts.env.iter().cloned());
         match &self.config.auth {
             Auth::Ambient => {}
-            Auth::Env(name) => {
-                if let Ok(val) = std::env::var(name) {
-                    env.push(("ANTHROPIC_API_KEY".into(), val));
-                }
-            }
             Auth::ApiKey(secret) => {
                 env.push((
                     "ANTHROPIC_API_KEY".into(),
@@ -191,23 +186,6 @@ mod tests {
             .expect("env set");
         assert_eq!(v, "sk-test-XYZ");
         assert!(!format!("{driver:?}").contains("sk-test-XYZ"));
-    }
-
-    #[test]
-    fn env_auth_renames_named_var_to_anthropic_api_key() {
-        // Use PATH because it is guaranteed to be set on Unix and won't
-        // race other tests since we never mutate it.
-        let driver = Claude::with_config(ClaudeConfig {
-            auth: Auth::Env("PATH"),
-            ..Default::default()
-        });
-        let spec = driver.command(nil(), "hi", &TurnOptions::default());
-        let (_, v) = spec
-            .env
-            .iter()
-            .find(|(k, _)| k == "ANTHROPIC_API_KEY")
-            .expect("Auth::Env should inject ANTHROPIC_API_KEY");
-        assert!(!v.is_empty());
     }
 
     #[test]

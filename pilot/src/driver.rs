@@ -29,7 +29,6 @@ pub enum ReasoningLevel {
 pub enum Auth {
     #[default]
     Ambient,
-    Env(&'static str),
     ApiKey(SecretString),
 }
 
