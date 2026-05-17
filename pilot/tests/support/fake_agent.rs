@@ -15,6 +15,8 @@ fn main() {
     let contents = fs::read_to_string(&path).expect("read script");
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    let stderr = io::stderr();
+    let mut err = stderr.lock();
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -23,6 +25,9 @@ fn main() {
         if let Some(rest) = line.strip_prefix("emit ") {
             writeln!(out, "{rest}").unwrap();
             out.flush().unwrap();
+        } else if let Some(rest) = line.strip_prefix("stderr ") {
+            writeln!(err, "{rest}").unwrap();
+            err.flush().unwrap();
         } else if let Some(rest) = line.strip_prefix("exit ") {
             let code: i32 = rest.trim().parse().unwrap_or(0);
             process::exit(code);
