@@ -155,8 +155,18 @@ impl Driver for Pi {
                     .unwrap_or("");
                 if role == "assistant" {
                     if let Some(usage) = value.get("message").and_then(|m| m.get("usage")) {
-                        let input = usage.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let output = usage.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let input = usage.get("input").and_then(|v| v.as_u64()).ok_or(
+                            ParseError::InvalidFieldType {
+                                field: "message.usage.input",
+                                expected: "u64",
+                            },
+                        )?;
+                        let output = usage.get("output").and_then(|v| v.as_u64()).ok_or(
+                            ParseError::InvalidFieldType {
+                                field: "message.usage.output",
+                                expected: "u64",
+                            },
+                        )?;
                         return Ok(vec![Event::Usage {
                             input_tokens: input,
                             output_tokens: output,
@@ -173,13 +183,16 @@ impl Driver for Pi {
                     .get("message")
                     .and_then(|m| m.get("content"))
                     .and_then(|c| c.as_array())
-                    .and_then(|arr| {
+                    .map(|arr| {
                         arr.iter()
-                            .find(|item| item.get("type").and_then(|v| v.as_str()) == Some("text"))
+                            .filter(|item| {
+                                item.get("type").and_then(|v| v.as_str()) == Some("text")
+                            })
+                            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("")
                     })
-                    .and_then(|item| item.get("text"))
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_string());
+                    .filter(|s| !s.is_empty());
                 Ok(vec![Event::TurnComplete {
                     ok: true,
                     final_text,
@@ -286,5 +299,45 @@ mod tests {
         let v = serde_json::json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta"}});
         let err = Pi::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("delta")));
+    }
+
+    #[test]
+    fn turn_end_joins_multiple_text_content_blocks() {
+        let v = serde_json::json!({
+            "type": "turn_end",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"}
+                ]
+            },
+            "toolResults": []
+        });
+        let evs = Pi::new().parse(v).expect("parse ok");
+        assert_eq!(evs.len(), 1);
+        assert!(
+            matches!(&evs[0], Event::TurnComplete { final_text: Some(s), .. } if s == "Hello world")
+        );
+    }
+
+    #[test]
+    fn message_end_with_malformed_usage_errors() {
+        let v = serde_json::json!({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [],
+                "usage": {"input": "not-a-number", "output": 5}
+            }
+        });
+        let err = Pi::new().parse(v).unwrap_err();
+        assert!(matches!(
+            err,
+            ParseError::InvalidFieldType {
+                field: "message.usage.input",
+                ..
+            }
+        ));
     }
 }
