@@ -1,0 +1,26 @@
+[
+    Raw {
+        driver: "codex",
+        value: Object {
+            "thread_id": String("44444444-4444-4444-4444-444444444444"),
+            "type": String("thread.started"),
+        },
+    },
+    Raw {
+        driver: "codex",
+        value: Object {
+            "type": String("turn.started"),
+        },
+    },
+    AssistantText {
+        delta: "hello",
+    },
+    Usage {
+        input_tokens: 13455,
+        output_tokens: 2,
+    },
+    TurnComplete {
+        ok: true,
+        final_text: None,
+    },
+]

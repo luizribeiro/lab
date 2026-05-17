@@ -9,7 +9,7 @@ Drive headless AI coding-agent CLIs (claude, gemini, pi) from Rust over their st
 | claude | `-p --output-format stream-json --verbose --session-id <uuid>` | yes (same flag) | `ANTHROPIC_API_KEY` | first-class |
 | gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | first-class |
 | pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | `PI_API_KEY` | first-class |
-| codex  | — | — | — | not yet (CLI doesn't accept a pre-specified session UUID on first turn; tracking) |
+| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` | first-turn only (see driver docs) | `OPENAI_API_KEY` | first-class (single-turn) |
 
 ## Quick start
 

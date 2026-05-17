@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{Event, ParseError};
 
 pub mod claude;
+pub mod codex;
 pub mod gemini;
 pub mod pi;
 

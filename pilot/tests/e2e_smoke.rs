@@ -83,6 +83,12 @@ async fn e2e_claude_smoke() {
 }
 
 #[tokio::test]
+#[ignore = "E2E: needs codex CLI + PILOT_E2E=1"]
+async fn e2e_codex_smoke() {
+    smoke("codex").await;
+}
+
+#[tokio::test]
 #[ignore = "E2E: needs gemini CLI + PILOT_E2E=1"]
 async fn e2e_gemini_smoke() {
     smoke("gemini").await;
