@@ -37,6 +37,16 @@ pub struct CodexConfig {
     /// `codex -c key=value` config overrides.
     pub config_overrides: Vec<(String, String)>,
     pub extra_env: Vec<(String, String)>,
+    /// Optional path to a JSON file mapping pilot session UUIDs to
+    /// captured codex thread ids. When set, [`Driver::observe`] persists
+    /// each `thread.started` to this file and [`Driver::resume_command`]
+    /// looks it up — enabling `Session::resume(...)` to actually continue
+    /// a previous codex thread across program restarts.
+    ///
+    /// When `None` (default), only the in-memory map is used; resuming
+    /// across processes silently degrades to a fresh first-turn command
+    /// (also logged via `tracing::warn!`).
+    pub thread_store_path: Option<PathBuf>,
 }
 
 impl Default for CodexConfig {
@@ -49,6 +59,7 @@ impl Default for CodexConfig {
             skip_git_repo_check: true,
             config_overrides: Vec::new(),
             extra_env: Vec::new(),
+            thread_store_path: None,
         }
     }
 }
@@ -158,11 +169,23 @@ impl Driver for Codex {
             .ok()
             .and_then(|m| m.get(&session_id).cloned());
 
+        let thread_id = thread_id.or_else(|| {
+            self.config
+                .thread_store_path
+                .as_ref()
+                .and_then(|p| load_thread_map(p).get(&session_id).cloned())
+                .inspect(|tid| {
+                    if let Ok(mut m) = self.thread_ids.lock() {
+                        m.insert(session_id, tid.clone());
+                    }
+                })
+        });
+
         let Some(thread_id) = thread_id else {
             tracing::warn!(
                 session_id = %session_id,
-                "codex resume_command: no captured thread_id for this session; falling back to a fresh `codex exec` (NEW thread). \
-                 Drain previous turns to capture thread.started, or persist thread_id externally for cross-process resume."
+                "codex resume_command: no captured thread_id for this session (in-memory or persisted); falling back to a fresh `codex exec`. \
+                 Set CodexConfig.thread_store_path to enable cross-process resume."
             );
             return self.command(session_id, prompt, opts);
         };
@@ -176,11 +199,22 @@ impl Driver for Codex {
     }
 
     fn observe(&self, session_id: Uuid, raw: &serde_json::Value) {
-        if raw.get("type").and_then(|v| v.as_str()) == Some("thread.started") {
-            if let Some(tid) = raw.get("thread_id").and_then(|v| v.as_str()) {
-                if let Ok(mut map) = self.thread_ids.lock() {
-                    map.insert(session_id, tid.to_string());
-                }
+        if raw.get("type").and_then(|v| v.as_str()) != Some("thread.started") {
+            return;
+        }
+        let Some(tid) = raw.get("thread_id").and_then(|v| v.as_str()) else {
+            return;
+        };
+
+        if let Ok(mut map) = self.thread_ids.lock() {
+            map.insert(session_id, tid.to_string());
+        }
+
+        if let Some(path) = &self.config.thread_store_path {
+            let mut on_disk = load_thread_map(path);
+            on_disk.insert(session_id, tid.to_string());
+            if let Err(e) = save_thread_map(path, &on_disk) {
+                tracing::warn!(error = %e, path = %path.display(), "failed to persist codex thread map");
             }
         }
     }
@@ -232,6 +266,38 @@ impl Driver for Codex {
             }]),
         }
     }
+}
+
+fn load_thread_map(path: &std::path::Path) -> std::collections::HashMap<Uuid, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<std::collections::HashMap<String, String>>(&text)
+    else {
+        return std::collections::HashMap::new();
+    };
+    parsed
+        .into_iter()
+        .filter_map(|(k, v)| Uuid::parse_str(&k).ok().map(|u| (u, v)))
+        .collect()
+}
+
+fn save_thread_map(
+    path: &std::path::Path,
+    map: &std::collections::HashMap<Uuid, String>,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serializable: std::collections::HashMap<String, &str> = map
+        .iter()
+        .map(|(u, t)| (u.to_string(), t.as_str()))
+        .collect();
+    let text = serde_json::to_string_pretty(&serializable).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -363,6 +429,46 @@ mod tests {
         codex.observe(sid, &raw);
         let map = codex.thread_ids.lock().unwrap();
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn persistence_enables_cross_instance_resume() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let sid = Uuid::new_v4();
+
+        let cfg = CodexConfig {
+            thread_store_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let first = Codex::with_config(cfg);
+        first.observe(
+            sid,
+            &serde_json::json!({
+                "type": "thread.started",
+                "thread_id": "019e0000-0000-0000-0000-000000000abc"
+            }),
+        );
+
+        let cfg = CodexConfig {
+            thread_store_path: Some(path.clone()),
+            ..Default::default()
+        };
+        let second = Codex::with_config(cfg);
+        let spec = second.resume_command(sid, "follow-up", &TurnOptions::default());
+        let i = spec.args.iter().position(|a| a == "resume").unwrap();
+        assert_eq!(spec.args[i + 1], "019e0000-0000-0000-0000-000000000abc");
+        assert_eq!(spec.args[i + 2], "follow-up");
+    }
+
+    #[test]
+    fn persistence_disabled_falls_back_when_state_missing() {
+        let codex = Codex::new();
+        let sid = Uuid::new_v4();
+        let resumed = codex.resume_command(sid, "x", &TurnOptions::default());
+        let fresh = codex.command(sid, "x", &TurnOptions::default());
+        assert_eq!(resumed.args, fresh.args);
     }
 
     #[test]
