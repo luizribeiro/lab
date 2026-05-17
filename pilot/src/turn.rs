@@ -167,6 +167,7 @@ impl Stream for TurnStream {
                         return Poll::Ready(None);
                     }
                     this.completed = true;
+                    this.finished = true;
                     let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }
@@ -504,6 +505,39 @@ mod tests {
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
             "cancel hung"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_poll_after_completion_does_not_timeout() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"n":1}}"#).unwrap();
+        writeln!(script, "exit 0").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let mut stream =
+            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_millis(500));
+
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("ok") {
+                TurnItem::Event(_) => {}
+                TurnItem::Complete(_) => {
+                    completed = true;
+                    break;
+                }
+            }
+        }
+        assert!(completed);
+
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        assert!(
+            stream.next().await.is_none(),
+            "post-completion timeout must not spuriously fire"
         );
     }
 }
