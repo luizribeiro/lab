@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -65,6 +66,7 @@ pub struct TurnStream {
     timer: Option<Pin<Box<Sleep>>>,
     timeout_dur: Option<Duration>,
     _busy_guard: Option<BusyGuard>,
+    completion_counter: Option<Arc<AtomicUsize>>,
 }
 
 impl TurnStream {
@@ -86,7 +88,17 @@ impl TurnStream {
             timer: None,
             timeout_dur: None,
             _busy_guard: None,
+            completion_counter: None,
         }
+    }
+
+    /// Attach a counter incremented each time the stream yields
+    /// [`TurnItem::Complete`]. Used by `Session` to dispatch the next turn to
+    /// `command()` vs `resume_command()` based on observed completions.
+    #[allow(dead_code)]
+    pub(crate) fn with_completion_counter(mut self, counter: Arc<AtomicUsize>) -> Self {
+        self.completion_counter = Some(counter);
+        self
     }
 
     /// Attach a busy guard whose `Drop` releases the owning session's
@@ -196,6 +208,9 @@ impl Stream for TurnStream {
                     this.completed = true;
                     this.finished = true;
                     this._busy_guard = None;
+                    if let Some(counter) = &this.completion_counter {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
                     let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }

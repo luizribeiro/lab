@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use uuid::Uuid;
 
@@ -21,7 +22,7 @@ pub struct Session {
     workdir: PathBuf,
     recorded_turns: Vec<Turn>,
     busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    turns_started: usize,
+    turns_completed: Arc<AtomicUsize>,
 }
 
 impl Session {
@@ -33,7 +34,7 @@ impl Session {
             workdir: workdir.into(),
             recorded_turns: Vec::new(),
             busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            turns_started: 0,
+            turns_completed: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -50,7 +51,7 @@ impl Session {
             workdir: workdir.into(),
             recorded_turns: Vec::new(),
             busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            turns_started: 1,
+            turns_completed: Arc::new(AtomicUsize::new(1)),
         }
     }
 
@@ -72,7 +73,6 @@ impl Session {
     /// `TurnItem::Complete(Turn)` when the child exits, then `None`.
     /// Dropping the stream kills the child.
     pub async fn send(&mut self, prompt: &str, opts: TurnOptions) -> Result<TurnStream> {
-        use std::sync::atomic::Ordering;
         if self
             .busy
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -83,14 +83,15 @@ impl Session {
         let guard = crate::turn::BusyGuard {
             flag: self.busy.clone(),
         };
-        let spec = if self.turns_started == 0 {
+        let spec = if self.turns_completed.load(Ordering::SeqCst) == 0 {
             self.driver.command(self.id, prompt, &opts)
         } else {
             self.driver.resume_command(self.id, prompt, &opts)
         };
         let (handle, rx) = spawn_jsonl(spec, self.workdir.clone()).await?;
-        self.turns_started += 1;
-        let stream = TurnStream::new(handle, rx, self.driver.clone()).with_busy_guard(guard);
+        let stream = TurnStream::new(handle, rx, self.driver.clone())
+            .with_completion_counter(self.turns_completed.clone())
+            .with_busy_guard(guard);
         let stream = if let Some(d) = opts.timeout {
             stream.with_timeout(d)
         } else {
@@ -444,6 +445,72 @@ mod tests {
             2,
             "resume on turns 2 and 3"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_first_turn_still_uses_command_on_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct CountingDriver {
+            command_calls: AtomicUsize,
+            resume_calls: AtomicUsize,
+            script: PathBuf,
+        }
+        impl Driver for CountingDriver {
+            fn name(&self) -> &'static str {
+                "counting"
+            }
+            fn command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+                self.command_calls.fetch_add(1, Ordering::SeqCst);
+                CommandSpec {
+                    program: fake_agent(),
+                    args: vec!["--script".into(), self.script.to_string_lossy().into()],
+                    env: vec![],
+                }
+            }
+            fn resume_command(&self, _: Uuid, _: &str, _: &TurnOptions) -> CommandSpec {
+                self.resume_calls.fetch_add(1, Ordering::SeqCst);
+                CommandSpec {
+                    program: fake_agent(),
+                    args: vec!["--script".into(), self.script.to_string_lossy().into()],
+                    env: vec![],
+                }
+            }
+            fn parse(&self, v: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+                Ok(vec![Event::Raw {
+                    driver: "counting",
+                    value: v,
+                }])
+            }
+        }
+
+        let script = write_script(&["exit 1"]);
+        let driver = Arc::new(CountingDriver {
+            command_calls: AtomicUsize::new(0),
+            resume_calls: AtomicUsize::new(0),
+            script: script.path().to_path_buf(),
+        });
+        let driver_dyn: Arc<dyn Driver> = driver.clone();
+        let mut session = Session::new(driver_dyn, std::env::temp_dir());
+
+        let mut s1 = session
+            .send("turn1", TurnOptions::default())
+            .await
+            .expect("send 1");
+        while s1.next().await.is_some() {}
+        drop(s1);
+
+        let mut s2 = session
+            .send("turn2", TurnOptions::default())
+            .await
+            .expect("send 2");
+        while s2.next().await.is_some() {}
+
+        assert_eq!(
+            driver.command_calls.load(Ordering::SeqCst),
+            2,
+            "both turns use command on retry"
+        );
+        assert_eq!(driver.resume_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

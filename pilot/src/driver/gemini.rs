@@ -15,14 +15,32 @@ pub enum ApprovalMode {
     Plan,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct GeminiConfig {
     pub binary: Option<PathBuf>,
     pub auth: Auth,
     pub default_model: Option<String>,
     pub approval_mode: ApprovalMode,
+    /// Pass `--skip-trust` to bypass gemini's untrusted-folder prompt.
+    /// Defaults to `true` because pilot is a headless driver — without this,
+    /// gemini refuses to run in workdirs that haven't been explicitly trusted
+    /// in interactive mode. Set to `false` if you trust gemini will only be
+    /// invoked from workdirs the user has approved interactively.
     pub skip_trust: bool,
     pub extra_env: Vec<(String, String)>,
+}
+
+impl Default for GeminiConfig {
+    fn default() -> Self {
+        Self {
+            binary: None,
+            auth: Auth::default(),
+            default_model: None,
+            approval_mode: ApprovalMode::default(),
+            skip_trust: true,
+            extra_env: Vec::new(),
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -174,7 +192,7 @@ mod tests {
         let spec = Gemini::new().command(nil(), "hello", &TurnOptions::default());
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
-            gemini -p hello --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000
+            gemini -p hello --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 --skip-trust
         "#]]
         .assert_eq(&format!("{}\n", rendered));
         assert!(spec.env.is_empty());
@@ -196,13 +214,13 @@ mod tests {
     }
 
     #[test]
-    fn skip_trust_flag_appears_when_configured() {
+    fn skip_trust_can_be_disabled() {
         let driver = Gemini::with_config(GeminiConfig {
-            skip_trust: true,
+            skip_trust: false,
             ..Default::default()
         });
         let spec = driver.command(nil(), "hi", &TurnOptions::default());
-        assert!(spec.args.iter().any(|a| a == "--skip-trust"));
+        assert!(!spec.args.iter().any(|a| a == "--skip-trust"));
     }
 
     #[test]
