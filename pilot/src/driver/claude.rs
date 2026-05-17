@@ -102,6 +102,17 @@ impl Driver for Claude {
         CommandSpec { program, args, env }
     }
 
+    fn resume_command(&self, session_id: Uuid, prompt: &str, opts: &TurnOptions) -> CommandSpec {
+        // Claude rejects re-use of --session-id with an existing UUID
+        // ("Session ID is already in use"). Subsequent turns use --resume
+        // to attach to the previously-created session.
+        let mut spec = self.command(session_id, prompt, opts);
+        if let Some(i) = spec.args.iter().position(|a| a == "--session-id") {
+            spec.args[i] = "--resume".to_string();
+        }
+        spec
+    }
+
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
         match value.get("type").and_then(serde_json::Value::as_str) {
             Some("assistant") => parse_assistant(&value),
@@ -376,6 +387,13 @@ mod tests {
         let v = serde_json::json!({"type":"assistant"});
         let err = Claude::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("message")));
+    }
+
+    #[test]
+    fn resume_command_uses_resume_flag_not_session_id() {
+        let spec = Claude::new().resume_command(nil(), "next", &TurnOptions::default());
+        assert!(spec.args.iter().any(|a| a == "--resume"));
+        assert!(!spec.args.iter().any(|a| a == "--session-id"));
     }
 
     #[test]
