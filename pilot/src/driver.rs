@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use crate::{Event, ParseError};
 
+pub mod claude;
+
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
     pub program: PathBuf,
