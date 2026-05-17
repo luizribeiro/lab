@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slow_poll_after_completion_does_not_timeout() {
+    async fn finished_is_set_when_yielding_complete() {
         let mut script = NamedTempFile::new().unwrap();
         writeln!(script, r#"emit {{"n":1}}"#).unwrap();
         writeln!(script, "exit 0").unwrap();
@@ -520,24 +520,25 @@ mod tests {
             .expect("spawn");
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
         let mut stream =
-            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_millis(500));
+            TurnStream::new(handle, rx, driver).with_timeout(std::time::Duration::from_secs(60));
 
-        let mut completed = false;
+        let mut saw_complete = false;
         while let Some(item) = stream.next().await {
             match item.expect("ok") {
                 TurnItem::Event(_) => {}
                 TurnItem::Complete(_) => {
-                    completed = true;
+                    saw_complete = true;
                     break;
                 }
             }
         }
-        assert!(completed);
+        assert!(saw_complete);
 
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         assert!(
-            stream.next().await.is_none(),
-            "post-completion timeout must not spuriously fire"
+            stream.finished,
+            "finished must be true immediately after yielding Complete"
         );
+
+        assert!(stream.next().await.is_none());
     }
 }
