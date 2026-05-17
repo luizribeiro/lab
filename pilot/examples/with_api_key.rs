@@ -1,7 +1,9 @@
-//! Explicit API key auth. Pass the key via the `PILOT_AGENT_KEY` env var.
+//! Explicit API key auth via `Auth::ApiKey(SecretString)`. Demonstrated
+//! with the Claude driver; the Gemini and Pi drivers follow the same
+//! pattern with their respective `*Config` types.
 //!
 //! Run with:
-//!     PILOT_AGENT_KEY=sk-... cargo run --example with_api_key -- claude
+//!     PILOT_AGENT_KEY=sk-... cargo run --example with_api_key
 
 use futures_util::StreamExt;
 use pilot::{Auth, Claude, ClaudeConfig, Session, TurnItem, TurnOptions};
