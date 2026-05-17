@@ -45,13 +45,56 @@ const KNOWN_KEYS: &[&str] = &[
     "timestamp",
 ];
 
+/// String values that act as discriminators inside parse() match arms.
+/// Mixing these into proptest-generated strings exercises the
+/// type-dispatching branches across all drivers.
+const KNOWN_DISCRIMINATORS: &[&str] = &[
+    // claude content block types
+    "text",
+    "tool_use",
+    "tool_result",
+    "thinking",
+    // claude / gemini event types
+    "system",
+    "assistant",
+    "user",
+    "result",
+    "rate_limit_event",
+    "init",
+    "message",
+    "tool_use",
+    // pi event types
+    "session",
+    "agent_start",
+    "agent_end",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_end",
+    "message_update",
+    // pi message_update inner types
+    "text_start",
+    "text_delta",
+    "text_end",
+    // statuses / subtypes
+    "success",
+    "error",
+    // roles (already in event types but explicit here for clarity)
+    "assistant",
+    "user",
+];
+
 /// Recursive strategy for arbitrary JSON values, bounded so tests run fast.
 fn arb_value() -> impl Strategy<Value = serde_json::Value> {
     let leaf = prop_oneof![
         Just(serde_json::Value::Null),
         any::<bool>().prop_map(serde_json::Value::Bool),
         any::<i64>().prop_map(|n| serde_json::Value::Number(n.into())),
-        ".{0,16}".prop_map(serde_json::Value::String),
+        prop_oneof![
+            prop::sample::select(KNOWN_DISCRIMINATORS)
+                .prop_map(|s| serde_json::Value::String(s.to_string())),
+            ".{0,16}".prop_map(serde_json::Value::String),
+        ],
     ];
     leaf.prop_recursive(
         4,  // recursion depth
