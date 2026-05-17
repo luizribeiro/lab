@@ -36,8 +36,10 @@ pub enum TurnItem {
 pub struct TurnStream {
     // Held solely so its Drop aborts the reader task, which in turn drops
     // the owned `Child` (spawned with kill_on_drop) and SIGKILLs the CLI.
+    // Cleared on terminal paths to kill the child promptly rather than
+    // waiting for the outer stream to be dropped.
     #[allow(dead_code)]
-    handle: ProcessHandle,
+    handle: Option<ProcessHandle>,
     rx: mpsc::Receiver<Result<serde_json::Value>>,
     driver: Arc<dyn Driver>,
     events: Vec<Event>,
@@ -54,7 +56,7 @@ impl TurnStream {
         driver: Arc<dyn Driver>,
     ) -> Self {
         Self {
-            handle,
+            handle: Some(handle),
             rx,
             driver,
             events: Vec::new(),
@@ -85,6 +87,7 @@ impl Stream for TurnStream {
                     Ok(events) => self.pending.extend(events),
                     Err(reason) => {
                         self.finished = true;
+                        self.handle = None;
                         return Poll::Ready(Some(Err(Error::DriverParse {
                             driver: self.driver.name(),
                             value,
@@ -94,6 +97,7 @@ impl Stream for TurnStream {
                 },
                 Poll::Ready(Some(Err(err))) => {
                     self.finished = true;
+                    self.handle = None;
                     return Poll::Ready(Some(Err(err)));
                 }
                 Poll::Ready(None) => {
@@ -102,6 +106,7 @@ impl Stream for TurnStream {
                         return Poll::Ready(None);
                     }
                     self.completed = true;
+                    self.handle = None;
                     let events = self.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }
@@ -193,5 +198,49 @@ mod tests {
             start.elapsed() < Duration::from_secs(3),
             "drop did not return promptly (would have meant child still blocking)"
         );
+    }
+
+    #[tokio::test]
+    async fn driver_parse_error_kills_child_promptly() {
+        struct AlwaysErrParse;
+        impl crate::driver::Driver for AlwaysErrParse {
+            fn name(&self) -> &'static str {
+                "err"
+            }
+            fn command(
+                &self,
+                _: uuid::Uuid,
+                _: &str,
+                _: &crate::driver::TurnOptions,
+            ) -> crate::driver::CommandSpec {
+                unreachable!("not invoked in this test")
+            }
+            fn parse(
+                &self,
+                _value: serde_json::Value,
+            ) -> std::result::Result<Vec<Event>, crate::ParseError> {
+                Err(crate::ParseError::Custom("forced".into()))
+            }
+        }
+
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, r#"emit {{"first":true}}"#).unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(AlwaysErrParse);
+        let mut stream = TurnStream::new(handle, rx, driver);
+
+        let item = stream.next().await.expect("first").expect_err("err");
+        assert!(matches!(item, crate::Error::DriverParse { .. }));
+
+        assert!(stream.next().await.is_none());
+
+        let start = Instant::now();
+        drop(stream);
+        assert!(start.elapsed() < Duration::from_millis(500));
     }
 }
