@@ -29,6 +29,19 @@ impl Drop for BusyGuard {
     }
 }
 
+/// Cross-session lock for `(driver_name, session_uuid)`. Held by a
+/// `TurnStream` for the duration of a turn so two `Session` instances
+/// with the same identity cannot run concurrent turns.
+pub(crate) struct SessionGuard {
+    pub _owned_lock: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl std::fmt::Debug for SessionGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SessionGuard")
+    }
+}
+
 /// A completed turn: the accumulated normalized events the driver emitted
 /// before the underlying CLI exited.
 #[derive(Debug, Clone)]
@@ -68,7 +81,17 @@ pub struct TurnStream {
     timer: Option<Pin<Box<Sleep>>>,
     timeout_dur: Option<Duration>,
     _busy_guard: Option<BusyGuard>,
+    _session_guard: Option<SessionGuard>,
     completion_counter: Option<Arc<AtomicUsize>>,
+}
+
+impl std::fmt::Debug for TurnStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnStream")
+            .field("session_id", &self.session_id)
+            .field("finished", &self.finished)
+            .finish()
+    }
 }
 
 impl TurnStream {
@@ -92,6 +115,7 @@ impl TurnStream {
             timer: None,
             timeout_dur: None,
             _busy_guard: None,
+            _session_guard: None,
             completion_counter: None,
         }
     }
@@ -110,6 +134,14 @@ impl TurnStream {
     #[allow(dead_code)]
     pub(crate) fn with_busy_guard(mut self, guard: BusyGuard) -> Self {
         self._busy_guard = Some(guard);
+        self
+    }
+
+    /// Attach a cross-session guard whose `Drop` releases the
+    /// `(driver, uuid)` lock. Called by `Session::send`.
+    #[allow(dead_code)]
+    pub(crate) fn with_session_guard(mut self, guard: SessionGuard) -> Self {
+        self._session_guard = Some(guard);
         self
     }
 
@@ -134,6 +166,7 @@ impl TurnStream {
     pub async fn cancel(mut self) -> Turn {
         self.handle = None;
         self._busy_guard = None;
+        self._session_guard = None;
         for e in self.pending.drain(..) {
             self.events.push(e);
         }
@@ -176,6 +209,7 @@ impl Stream for TurnStream {
                     this.handle = None;
                     this.finished = true;
                     this._busy_guard = None;
+                    this._session_guard = None;
                     let d = this.timeout_dur.unwrap_or_default();
                     return Poll::Ready(Some(Err(Error::Timeout(d))));
                 }
@@ -191,6 +225,7 @@ impl Stream for TurnStream {
                             this.handle = None;
                             this.finished = true;
                             this._busy_guard = None;
+                            this._session_guard = None;
                             return Poll::Ready(Some(Err(Error::DriverParse {
                                 driver: this.driver.name(),
                                 value,
@@ -203,6 +238,7 @@ impl Stream for TurnStream {
                     this.handle = None;
                     this.finished = true;
                     this._busy_guard = None;
+                    this._session_guard = None;
                     return Poll::Ready(Some(Err(err)));
                 }
                 Poll::Ready(None) => {
@@ -210,6 +246,7 @@ impl Stream for TurnStream {
                     if this.completed {
                         this.finished = true;
                         this._busy_guard = None;
+                        this._session_guard = None;
                         return Poll::Ready(None);
                     }
                     this.completed = true;
@@ -221,6 +258,7 @@ impl Stream for TurnStream {
                         counter.fetch_add(1, Ordering::SeqCst);
                     }
                     this._busy_guard = None;
+                    this._session_guard = None;
                     let events = this.events.clone();
                     return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
                 }

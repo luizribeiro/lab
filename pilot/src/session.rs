@@ -12,6 +12,18 @@ use crate::driver::{Driver, TurnOptions};
 use crate::process::spawn_jsonl;
 use crate::turn::{Turn, TurnStream};
 
+fn session_lock_for(driver: &str, id: Uuid) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Registry = Mutex<HashMap<(String, Uuid), std::sync::Arc<tokio::sync::Mutex<()>>>>;
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = registry.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry((driver.to_string(), id))
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
 /// One conversation with an agent CLI, identified by a UUID that the
 /// underlying CLI uses to persist its own state. Spawning a fresh child per
 /// turn (`send`) is the uniform model across all drivers; the CLI's session
@@ -83,6 +95,17 @@ impl Session {
         let guard = crate::turn::BusyGuard {
             flag: self.busy.clone(),
         };
+        let session_lock = session_lock_for(self.driver.name(), self.id);
+        let owned_guard = match session_lock.try_lock_owned() {
+            Ok(g) => g,
+            Err(_) => {
+                self.busy.store(false, Ordering::SeqCst);
+                return Err(crate::Error::Busy);
+            }
+        };
+        let session_guard = crate::turn::SessionGuard {
+            _owned_lock: owned_guard,
+        };
         let spec = match if self.turns_completed.load(Ordering::SeqCst) == 0 {
             self.driver.command(self.id, prompt, &opts)
         } else {
@@ -97,7 +120,8 @@ impl Session {
         let (handle, rx) = spawn_jsonl(spec, self.workdir.clone()).await?;
         let stream = TurnStream::new(self.id, handle, rx, self.driver.clone())
             .with_completion_counter(self.turns_completed.clone())
-            .with_busy_guard(guard);
+            .with_busy_guard(guard)
+            .with_session_guard(session_guard);
         let stream = if let Some(d) = opts.timeout {
             stream.with_timeout(d)
         } else {
@@ -633,5 +657,53 @@ mod tests {
         while stream.next().await.is_some() {}
 
         assert_eq!(*driver.seen.lock().unwrap(), Some(id));
+    }
+
+    #[tokio::test]
+    async fn cross_session_lock_blocks_concurrent_same_uuid() {
+        let script = write_script(&["sleep 30000"]);
+        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script.path().to_path_buf(),
+        });
+        let id = Uuid::new_v4();
+        let mut a = Session::resume(driver.clone(), id, std::env::temp_dir());
+        let mut b = Session::resume(driver, id, std::env::temp_dir());
+
+        let _stream_a = a
+            .send("first", TurnOptions::default())
+            .await
+            .expect("a send");
+        let err = b
+            .send("conflict", TurnOptions::default())
+            .await
+            .expect_err("b must fail");
+        assert!(matches!(err, Error::Busy));
+    }
+
+    #[tokio::test]
+    async fn cross_session_lock_releases_after_first_session_drops_stream() {
+        let script_a = write_script(&[r#"emit {"n":1}"#, "exit 0"]);
+        let script_b = write_script(&["exit 0"]);
+        let driver_a: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script_a.path().to_path_buf(),
+        });
+        let driver_b: Arc<dyn Driver> = Arc::new(ScriptDriver {
+            script: script_b.path().to_path_buf(),
+        });
+        let id = Uuid::new_v4();
+        let mut a = Session::resume(driver_a, id, std::env::temp_dir());
+        let mut b = Session::resume(driver_b, id, std::env::temp_dir());
+
+        let mut s_a = a
+            .send("a-turn", TurnOptions::default())
+            .await
+            .expect("a send");
+        while s_a.next().await.is_some() {}
+        drop(s_a);
+
+        let _s_b = b
+            .send("b-turn", TurnOptions::default())
+            .await
+            .expect("b send should now succeed");
     }
 }
