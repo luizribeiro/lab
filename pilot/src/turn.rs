@@ -355,7 +355,16 @@ mod tests {
         let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
         let stream = TurnStream::new(handle, rx, driver);
 
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while stream.rx.len() < 3 {
+            if std::time::Instant::now() > deadline {
+                panic!(
+                    "timed out waiting for 3 events to queue; got {}",
+                    stream.rx.len()
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
 
         let turn = stream.cancel().await;
 
