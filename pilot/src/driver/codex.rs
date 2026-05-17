@@ -78,7 +78,6 @@ impl Default for CodexConfig {
 pub struct Codex {
     pub config: CodexConfig,
     thread_ids: Arc<Mutex<HashMap<Uuid, String>>>,
-    persist_lock: Arc<Mutex<()>>,
 }
 
 impl Codex {
@@ -86,14 +85,12 @@ impl Codex {
         Self {
             config: CodexConfig::default(),
             thread_ids: Arc::new(Mutex::new(HashMap::new())),
-            persist_lock: Arc::new(Mutex::new(())),
         }
     }
     pub fn with_config(config: CodexConfig) -> Self {
         Self {
             config,
             thread_ids: Arc::new(Mutex::new(HashMap::new())),
-            persist_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -224,7 +221,8 @@ impl Driver for Codex {
         }
 
         if let Some(path) = &self.config.thread_store_path {
-            let _guard = self.persist_lock.lock().unwrap_or_else(|e| e.into_inner());
+            let path_lock = lock_for_path(path);
+            let _guard = path_lock.lock().unwrap_or_else(|e| e.into_inner());
             let mut on_disk = load_thread_map(path);
             on_disk.insert(session_id, tid.to_string());
             if let Err(e) = save_thread_map(path, &on_disk) {
@@ -320,6 +318,25 @@ fn save_thread_map(
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Returns a process-wide mutex shared by all `Codex` instances writing
+/// to the same canonical path. Without this, two `Codex::with_config(...)`
+/// instances pointed at the same store would race their
+/// load-modify-save sequences in `observe()`.
+fn lock_for_path(path: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut map = registry.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 #[cfg(test)]
@@ -493,17 +510,32 @@ mod tests {
         assert_eq!(resumed.args, fresh.args);
     }
 
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn save_with_bare_filename_does_not_error() {
+        let _serial = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
         let tmp_dir = tempfile::tempdir().unwrap();
-        let original_cwd = std::env::current_dir().unwrap();
+        let _guard = CwdGuard {
+            original: std::env::current_dir().unwrap(),
+        };
         std::env::set_current_dir(&tmp_dir).unwrap();
-        let result = save_thread_map(
+
+        save_thread_map(
             std::path::Path::new("threads.json"),
             &[(Uuid::nil(), "abc".to_string())].into_iter().collect(),
-        );
-        std::env::set_current_dir(&original_cwd).unwrap();
-        result.expect("save with bare filename must succeed");
+        )
+        .expect("save with bare filename must succeed");
     }
 
     #[test]
