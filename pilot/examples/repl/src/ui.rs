@@ -66,6 +66,10 @@ fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
         block = block.title(title);
     }
 
+    if let Some(title) = queued_title(app) {
+        block = block.title_bottom(title);
+    }
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -104,6 +108,50 @@ fn draw_search_overlay(frame: &mut Frame, area: Rect, app: &App, search: &crate:
             .add_modifier(Modifier::DIM),
     ));
     frame.render_widget(Paragraph::new(vec![line, hint]), area);
+}
+
+fn queued_title(app: &App) -> Option<Line<'static>> {
+    if app.queue.is_empty() {
+        return None;
+    }
+
+    let mut previews = app
+        .queue
+        .iter()
+        .take(2)
+        .map(|prompt| preview_prompt(prompt))
+        .collect::<Vec<_>>();
+    if app.queue.len() > previews.len() {
+        previews.push(format!("+{}", app.queue.len() - previews.len()));
+    }
+
+    Some(Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("queued {}", app.queue.len()),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(": "),
+        Span::styled(
+            previews.join(" · "),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::raw(" "),
+    ]))
+}
+
+fn preview_prompt(prompt: &str) -> String {
+    let compact = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_CHARS: usize = 48;
+    if compact.chars().count() <= MAX_CHARS {
+        return compact;
+    }
+
+    let mut truncated = compact.chars().take(MAX_CHARS - 3).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn current_tick() -> &'static str {
