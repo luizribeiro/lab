@@ -184,11 +184,15 @@ pub fn commit_header(terminal: &mut Term, agent: AgentKind, resumed: bool) -> io
 pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
     let mut lines: Vec<Line> = prompt
         .lines()
+        .enumerate()
         .map(|l| {
-            Line::from(vec![
-                Span::styled("» ", Style::default().fg(Color::Cyan)),
-                Span::raw(l.to_string()),
-            ])
+            let (idx, l) = l;
+            let prefix = if idx == 0 {
+                Span::styled("» ", Style::default().fg(Color::Cyan))
+            } else {
+                Span::raw("  ")
+            };
+            Line::from(vec![prefix, Span::raw(l.to_string())])
         })
         .collect();
     if lines.is_empty() {
