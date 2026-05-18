@@ -79,26 +79,14 @@ async fn claude_tool_use_writes_file_and_emits_toolcall_toolresult() {
 
 #[tokio::test]
 async fn codex_tool_use_writes_file_and_emits_toolcall_toolresult() {
-    let mut opts = tool_use_opts();
-    // codex defaults to read-only sandbox + approval-required, which
-    // prevents the model from writing the marker file in /tmp. Bypass
-    // both for the recording.
-    opts.extra_args = vec!["--dangerously-bypass-approvals-and-sandbox".into()];
-    tool_use(cassette!(Codex::new()), opts).await;
+    tool_use(cassette!(Codex::new()), tool_use_opts()).await;
 }
 
 #[tokio::test]
 async fn gemini_tool_use_writes_file_and_emits_toolcall_toolresult() {
-    let mut opts = tool_use_opts();
-    // gemini gates tool execution behind an approval prompt; YOLO mode
-    // auto-approves so the recording can complete.
-    opts.extra_args = vec!["--yolo".into()];
-    tool_use(cassette!(Gemini::new()), opts).await;
+    tool_use(cassette!(Gemini::new()), tool_use_opts()).await;
 }
 
-// pi has a documented silent-error limitation and may not run external
-// tools the same way. If recording, this test will succeed or be
-// ignored individually.
 #[tokio::test]
 async fn pi_tool_use_writes_file_and_emits_toolcall_toolresult() {
     tool_use(cassette!(Pi::new()), tool_use_opts()).await;
@@ -124,6 +112,7 @@ async fn tool_use<D: Driver + 'static>(driver: D, opts: TurnOptions) {
 
     let mut saw_tool_call = false;
     let mut saw_tool_result = false;
+    let mut saw_ok_tool_result = false;
     let mut saw_assistant_text = false;
     let mut events: Vec<Event> = Vec::new();
     while let Some(item) = stream.next().await {
@@ -131,6 +120,10 @@ async fn tool_use<D: Driver + 'static>(driver: D, opts: TurnOptions) {
             Ok(TurnItem::Event(e)) => {
                 match &e {
                     Event::ToolCall { .. } => saw_tool_call = true,
+                    Event::ToolResult { ok: true, .. } => {
+                        saw_tool_result = true;
+                        saw_ok_tool_result = true;
+                    }
                     Event::ToolResult { .. } => saw_tool_result = true,
                     Event::AssistantText { .. } => saw_assistant_text = true,
                     _ => {}
@@ -147,6 +140,10 @@ async fn tool_use<D: Driver + 'static>(driver: D, opts: TurnOptions) {
     assert!(
         saw_tool_result,
         "no ToolResult observed. events: {events:?}"
+    );
+    assert!(
+        saw_ok_tool_result,
+        "no successful ToolResult observed (all failures?). events: {events:?}"
     );
     assert!(
         saw_assistant_text,

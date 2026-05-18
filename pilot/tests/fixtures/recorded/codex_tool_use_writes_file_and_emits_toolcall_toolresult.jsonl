@@ -1,9 +1,7 @@
 {"thread_id":"<UUID:1>","type":"thread.started"}
 {"type":"turn.started"}
-{"item":{"id":"item_0","text":"I’ll create the marker file directly with the required exact content, then verify it.","type":"agent_message"},"type":"item.completed"}
+{"item":{"id":"item_0","text":"I’ll create the marker file directly with the file editing tool, then verify the content.","type":"agent_message"},"type":"item.completed"}
 {"item":{"changes":[{"kind":"add","path":"/tmp/pilot-tool-marker.txt"}],"id":"item_1","status":"in_progress","type":"file_change"},"type":"item.started"}
 {"item":{"changes":[{"kind":"add","path":"/tmp/pilot-tool-marker.txt"}],"id":"item_1","status":"completed","type":"file_change"},"type":"item.completed"}
-{"item":{"aggregated_output":"","command":"/bin/zsh -lc \"printf '%s' \\\"\"'$(cat /tmp/pilot-tool-marker.txt)\"'","exit_code":null,"id":"item_2","status":"in_progress","type":"command_execution"},"type":"item.started"}
-{"item":{"aggregated_output":"hi","command":"/bin/zsh -lc \"printf '%s' \\\"\"'$(cat /tmp/pilot-tool-marker.txt)\"'","exit_code":0,"id":"item_2","status":"completed","type":"command_execution"},"type":"item.completed"}
-{"item":{"id":"item_3","text":"Created `/tmp/pilot-tool-marker.txt` with exact content `hi`.","type":"agent_message"},"type":"item.completed"}
-{"type":"turn.completed","usage":{"cached_input_tokens":28800,"input_tokens":40733,"output_tokens":128,"reasoning_output_tokens":0}}
+{"item":{"id":"item_2","text":"Created `/tmp/pilot-tool-marker.txt` with the exact content `hi`.","type":"agent_message"},"type":"item.completed"}
+{"type":"turn.completed","usage":{"cached_input_tokens":25344,"input_tokens":27057,"output_tokens":76,"reasoning_output_tokens":0}}

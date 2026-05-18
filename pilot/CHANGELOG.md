@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   responsibility (see `docs/sandboxing.md` once it lands).
 - Sandboxing is the caller's responsibility (see `docs/sandboxing.md` once
   it lands). Use `lockin` or `capsa` for process isolation.
+- Re-recorded `tool_use` fixtures for all four drivers against the new
+  permissive defaults. The fixtures now capture successful tool execution
+  (was permission-denied for claude before). Per-driver `extra_args`
+  workarounds in `tests/recorded_scenarios.rs` are removed.
+- `tool_use` test helper now asserts at least one successful
+  `ToolResult { ok: true }` (was: any `ToolResult` regardless of outcome).
 
 ## [0.2.0] - 2026-05-18
 
