@@ -97,7 +97,6 @@ impl App {
             self.model.as_deref(),
             self.session.workdir(),
             self.session.id(),
-            self.transcript.path(),
             self.resumed,
         )?;
         if self.resumed {

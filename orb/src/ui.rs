@@ -174,10 +174,8 @@ pub fn commit_header(
     model: Option<&str>,
     cwd: &Path,
     session_id: Uuid,
-    transcript_path: &Path,
     resumed: bool,
 ) -> io::Result<()> {
-    let suffix = if resumed { " (resumed)" } else { "" };
     let model_label = model.unwrap_or("(default)");
     let title = Line::from(vec![
         Span::styled("orb", Style::default().add_modifier(Modifier::BOLD)),
@@ -185,12 +183,18 @@ pub fn commit_header(
         Span::styled(agent.label(), Style::default().fg(Color::Cyan)),
         Span::raw(" — "),
         Span::styled(model_label, Style::default().fg(Color::Magenta)),
-        Span::styled(suffix, Style::default().fg(Color::Yellow)),
     ]);
 
     let cwd_line = meta_line("cwd", format_cwd(cwd));
-    let session_line = meta_line("session", session_id.to_string());
-    let transcript_line = meta_line("transcript", abbreviate_home(transcript_path));
+    let mut session_spans = vec![meta_label("session"), Span::raw(session_id.to_string())];
+    if resumed {
+        session_spans.push(Span::raw(" "));
+        session_spans.push(Span::styled(
+            "(resumed)",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    let session_line = Line::from(session_spans);
 
     let hint = Line::from(Span::styled(
         "↑/↓ history · ctrl+r search · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
@@ -205,7 +209,6 @@ pub fn commit_header(
             title,
             cwd_line,
             session_line,
-            transcript_line,
             Line::raw(""),
             hint,
             Line::raw(""),
@@ -214,16 +217,17 @@ pub fn commit_header(
 }
 
 fn meta_line(label: &str, value: String) -> Line<'static> {
+    Line::from(vec![meta_label(label), Span::raw(value)])
+}
+
+fn meta_label(label: &str) -> Span<'static> {
     const LABEL_WIDTH: usize = 12;
-    Line::from(vec![
-        Span::styled(
-            format!("{label:<LABEL_WIDTH$}"),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ),
-        Span::raw(value),
-    ])
+    Span::styled(
+        format!("{label:<LABEL_WIDTH$}"),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    )
 }
 
 fn format_cwd(cwd: &Path) -> String {

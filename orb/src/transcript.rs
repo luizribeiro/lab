@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -29,10 +29,6 @@ impl Transcript {
         Self {
             path: dir.join(format!("{}-{}.jsonl", agent.label(), id)),
         }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     pub fn append_turn(&self, user: &str, entries: &[Entry]) -> io::Result<()> {
