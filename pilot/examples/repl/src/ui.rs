@@ -2,7 +2,7 @@ use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
@@ -27,35 +27,45 @@ impl CommitColor {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-    let status_h = status_height(app);
-    // Composer block fills everything below status. When idle the block
-    // is the whole viewport; when active it's viewport minus 1 row for
-    // the status line. tui-textarea expands to fill the inner area, so
-    // a single-line prompt sits at the top with blank space below — the
-    // same shape codex's composer uses.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(status_h), Constraint::Min(1)])
-        .split(area);
-
-    if status_h > 0 {
-        draw_status(frame, chunks[0], app);
-    }
-    draw_composer_block(frame, chunks[1], app);
+    // The viewport is always 3 rows: top bar + 1 textarea row + bottom
+    // bar. When a turn is in flight, the spinner + "Working… esc to
+    // interrupt" label is rendered as a `Block` title *inside* the top
+    // border (codex-style), so we don't need a separate status row.
+    draw_composer_block(frame, frame.area(), app);
 }
 
 fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
     // codex-style framing: a dim horizontal rule above the composer and one
-    // below, no left/right borders. Block::inner gives us the interior rect
-    // for the textarea / search overlay to draw into.
-    let block = Block::default()
+    // below, no left/right borders. When a turn is active, the top border
+    // doubles as a status line: spinner + "Working…" + "esc to interrupt"
+    // rendered as a `Block` title, so the status doesn't cost a row.
+    let border_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+
+    let mut block = Block::default()
         .borders(Borders::TOP | Borders::BOTTOM)
-        .border_style(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        );
+        .border_style(border_style);
+
+    if app.active.is_some() {
+        let spinner = current_tick();
+        let title = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(spinner, Style::default().fg(Color::Cyan)),
+            Span::raw(" "),
+            Span::styled("Working…", Style::default().add_modifier(Modifier::DIM)),
+            Span::raw("  "),
+            Span::styled(
+                "esc to interrupt",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            Span::raw(" "),
+        ]);
+        block = block.title(title);
+    }
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -64,26 +74,6 @@ fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         draw_composer(frame, inner, app);
     }
-}
-
-pub fn status_height(app: &App) -> u16 {
-    if app.active.is_some() { 1 } else { 0 }
-}
-
-fn draw_status(frame: &mut Frame, area: Rect, _app: &App) {
-    let spinner = current_tick();
-    let line = Line::from(vec![
-        Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
-        Span::styled("Working…", Style::default().add_modifier(Modifier::DIM)),
-        Span::raw("  "),
-        Span::styled(
-            "esc to interrupt",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_composer(frame: &mut Frame, area: Rect, app: &App) {

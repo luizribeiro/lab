@@ -20,18 +20,14 @@ use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
 use crate::ui;
 
-/// Inline-viewport height. Tried dynamic resize (Terminal recreate on
-/// every height change) twice — the cursor-position OSC race against
-/// crossterm's EventStream is unreliable even with the stream dropped
-/// and a small sleep, and bottom-anchoring the new viewport with
-/// `MoveTo` introduces its own glitches: the rows above the old
-/// viewport top get either overwritten (grow) or left blank (shrink).
-/// Fixed height with a layout that lets the composer block fill the
-/// available area sidesteps both problems. 4 rows: 1 status row +
-/// top bar + 2 textarea rows + bottom bar (when idle the status row
-/// becomes the top of the composer block, so it's just top bar + 2
-/// textarea rows + bottom bar = 4 rows).
-pub const VIEWPORT_HEIGHT: u16 = 4;
+/// Inline-viewport height. Always exactly 3 rows: top bar + 1
+/// textarea row + bottom bar. When a turn is in flight, the spinner
+/// label is embedded *inside* the top border (codex-style title), so
+/// the status doesn't need a row of its own. This keeps the composer a
+/// stable visual shape across idle and working states without
+/// needing dynamic viewport resize (which fights crossterm's
+/// EventStream over the cursor-position OSC response).
+pub const VIEWPORT_HEIGHT: u16 = 3;
 
 pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
