@@ -29,7 +29,7 @@ pub struct GeminiConfig {
     ///
     /// # Default
     /// `true`. Pilot is a headless driver: without skipping the trust
-    /// prompt, every `Session::new(...).send(...)` against `Arc::new(Gemini::new())`
+    /// prompt, every `Session::new(Gemini::new(), workdir).send(...)`
     /// would fail in any workdir that hasn't been trusted in an
     /// interactive gemini session first. We chose ergonomics over a
     /// fail-closed default. Callers who want gemini's trust gate to
