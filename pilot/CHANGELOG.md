@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CommandSpec`, `AgentPaths`, `ReasoningLevel`, plus per-driver configs.
 - Built-in drivers: `Claude`, `Codex`, `Gemini`, `Pi`.
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
+- `test_support::Cassette` driver wraps any inner driver and switches
+  between record and replay modes based on fixture-file presence and
+  `PILOT_RECORD`/`PILOT_NO_RECORD` env vars. In Replay mode pilot's
+  normal spawn+parse pipeline reads the fixture via `cat <path>`
+  (Unix-only).
+- `cassette!(inner)` macro auto-derives the fixture path from the
+  calling test function's name: `tests/fixtures/recorded/<test_fn>.jsonl`.
 
 ### Changed
 - All four built-in drivers (claude, codex, gemini, pi) graduate to

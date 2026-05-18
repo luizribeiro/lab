@@ -433,6 +433,243 @@ impl<D: Driver> Driver for RecordingDriver<D> {
     }
 }
 
+/// Whether a [`Cassette`] is replaying a fixture or recording a fresh one.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CassetteMode {
+    Replay,
+    Record,
+}
+
+/// A `Driver` wrapper that switches between replaying a fixture file
+/// (via `cat <fixture>` through pilot's normal spawn pipeline) and
+/// recording a fresh fixture against the inner driver's real CLI.
+///
+/// Mode is resolved at construction by [`Cassette::auto`]:
+/// - `PILOT_NO_RECORD=1`: fixture must exist (else panic) → Replay
+/// - `PILOT_RECORD` matches (per `pilot_record_matches` rules) → Record
+/// - fixture exists → Replay
+/// - fixture missing → Record (first-run capture)
+///
+/// In Record mode, written lines are sanitized (default
+/// [`DefaultSanitizer`]) and buffered to `<fixture_path>.recording`.
+/// On `Drop`, if no failures were flagged AND at least one line was
+/// written, the temp file is atomically renamed to `fixture_path`.
+/// On failure, the `.recording` file is kept for inspection.
+pub struct Cassette<D: Driver> {
+    inner: D,
+    fixture_path: PathBuf,
+    tmp_path: PathBuf,
+    mode: CassetteMode,
+    file: Option<Mutex<File>>,
+    sanitizer: Option<Box<dyn Sanitizer>>,
+    recording_failed: Arc<AtomicBool>,
+    lines_written: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn pilot_record_matches(fixture_path: &std::path::Path) -> bool {
+    let v = std::env::var("PILOT_RECORD").unwrap_or_default();
+    if v.is_empty() {
+        return false;
+    }
+    if v == "1" || v == "all" {
+        return true;
+    }
+    fixture_path.to_string_lossy().contains(&v)
+}
+
+impl<D: Driver> Cassette<D> {
+    /// Build a `Cassette` whose mode is selected automatically (see
+    /// [`Cassette`] doc for the resolution table).
+    ///
+    /// In Record mode this creates the parent directory and opens
+    /// `<fixture_path>.recording` for writing. Panics if either fails —
+    /// this is test infrastructure; test failures should be loud.
+    pub fn auto(inner: D, fixture_path: impl Into<PathBuf>) -> Self {
+        let fixture_path = fixture_path.into();
+        let exists = fixture_path.exists();
+        let no_record = std::env::var("PILOT_NO_RECORD")
+            .ok()
+            .filter(|v| v == "1")
+            .is_some();
+
+        let mode = if no_record {
+            if !exists {
+                panic!(
+                    "fixture not found; PILOT_NO_RECORD prohibits recording. Path: {}",
+                    fixture_path.display()
+                );
+            }
+            CassetteMode::Replay
+        } else if pilot_record_matches(&fixture_path) {
+            CassetteMode::Record
+        } else if exists {
+            CassetteMode::Replay
+        } else {
+            CassetteMode::Record
+        };
+
+        let tmp_path = {
+            let stem = fixture_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let mut p = fixture_path.clone();
+            p.set_file_name(format!(".{stem}.recording"));
+            p
+        };
+
+        let (file, sanitizer): (Option<Mutex<File>>, Option<Box<dyn Sanitizer>>) =
+            if matches!(mode, CassetteMode::Record) {
+                if let Some(parent) = fixture_path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                            panic!(
+                                "Cassette: cannot create parent dir {}: {e}",
+                                parent.display()
+                            )
+                        });
+                    }
+                }
+                let f = File::create(&tmp_path).unwrap_or_else(|e| {
+                    panic!(
+                        "Cassette: cannot open recording temp file {}: {e}",
+                        tmp_path.display()
+                    )
+                });
+                (Some(Mutex::new(f)), Some(Box::new(DefaultSanitizer::new())))
+            } else {
+                (None, None)
+            };
+
+        Self {
+            inner,
+            fixture_path,
+            tmp_path,
+            mode,
+            file,
+            sanitizer,
+            recording_failed: Arc::new(AtomicBool::new(false)),
+            lines_written: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Override the default record-mode sanitizer. No-op in Replay mode.
+    pub fn with_sanitizer(mut self, sanitizer: impl Sanitizer + 'static) -> Self {
+        if matches!(self.mode, CassetteMode::Record) {
+            self.sanitizer = Some(Box::new(sanitizer));
+        }
+        self
+    }
+
+    pub fn mode(&self) -> CassetteMode {
+        self.mode
+    }
+
+    pub fn recording_failed(&self) -> bool {
+        self.recording_failed.load(Ordering::SeqCst)
+    }
+
+    pub fn failure_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.recording_failed)
+    }
+}
+
+impl<D: Driver> Driver for Cassette<D> {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn command(
+        &self,
+        session_id: Uuid,
+        input: &TurnInput,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        match self.mode {
+            CassetteMode::Replay => Ok(CommandSpec {
+                program: PathBuf::from("cat"),
+                args: vec![self.fixture_path.to_string_lossy().into_owned()],
+                env: Vec::new(),
+            }),
+            CassetteMode::Record => self.inner.command(session_id, input, opts),
+        }
+    }
+
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        input: &TurnInput,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        match self.mode {
+            CassetteMode::Replay => Ok(CommandSpec {
+                program: PathBuf::from("cat"),
+                args: vec![self.fixture_path.to_string_lossy().into_owned()],
+                env: Vec::new(),
+            }),
+            CassetteMode::Record => self.inner.resume_command(session_id, input, opts),
+        }
+    }
+
+    fn observe(&self, session_id: Uuid, raw: &serde_json::Value) {
+        if matches!(self.mode, CassetteMode::Record) {
+            self.inner.observe(session_id, raw);
+        }
+    }
+
+    fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+        if matches!(self.mode, CassetteMode::Record) {
+            let to_write = if let Some(s) = &self.sanitizer {
+                let mut clone = value.clone();
+                s.sanitize(&mut clone);
+                clone
+            } else {
+                value.clone()
+            };
+            match serde_json::to_string(&to_write) {
+                Ok(line) => match self.file.as_ref().expect("file open in record mode").lock() {
+                    Ok(mut f) => {
+                        if let Err(e) = writeln!(f, "{line}") {
+                            tracing::warn!(error = %e, "Cassette: file write failed");
+                            self.recording_failed.store(true, Ordering::SeqCst);
+                        } else {
+                            self.lines_written.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Cassette: mutex poisoned");
+                        self.recording_failed.store(true, Ordering::SeqCst);
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "Cassette: serialization failed");
+                    self.recording_failed.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+        self.inner.parse(value)
+    }
+}
+
+impl<D: Driver> Drop for Cassette<D> {
+    fn drop(&mut self) {
+        if !matches!(self.mode, CassetteMode::Record) {
+            return;
+        }
+        self.file = None;
+        if self.recording_failed.load(Ordering::SeqCst) {
+            return;
+        }
+        if self.lines_written.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        if let Err(e) = std::fs::rename(&self.tmp_path, &self.fixture_path) {
+            tracing::warn!(error = %e, "Cassette: rename failed");
+        }
+    }
+}
+
 /// Recorded-test helpers. The `run_or_replay` function switches between
 /// replaying a saved fixture (default) and recording a fresh one against
 /// the real CLI (when `PILOT_RECORD` env var matches).
@@ -996,5 +1233,107 @@ mod tests {
         unsafe {
             std::env::remove_var("PILOT_RECORD");
         }
+    }
+
+    fn clear_pilot_env() {
+        unsafe {
+            std::env::remove_var("PILOT_RECORD");
+            std::env::remove_var("PILOT_NO_RECORD");
+        }
+    }
+
+    #[test]
+    fn cassette_mode_record_when_fixture_missing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("missing.jsonl");
+        let c = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+        assert!(matches!(c.mode(), CassetteMode::Record));
+    }
+
+    #[test]
+    fn cassette_mode_replay_when_fixture_exists() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("exists.jsonl");
+        std::fs::write(&fixture, "{}\n").unwrap();
+        let c = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+        assert!(matches!(c.mode(), CassetteMode::Replay));
+    }
+
+    #[test]
+    fn cassette_no_record_panics_when_fixture_missing() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        unsafe {
+            std::env::set_var("PILOT_NO_RECORD", "1");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("missing.jsonl");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+        }));
+        unsafe {
+            std::env::remove_var("PILOT_NO_RECORD");
+        }
+        assert!(
+            result.is_err(),
+            "expected panic when fixture missing under PILOT_NO_RECORD"
+        );
+    }
+
+    #[test]
+    fn cassette_record_writes_fixture_and_atomically_renames() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("foo.jsonl");
+        let tmp = dir.path().join(".foo.jsonl.recording");
+        {
+            let cassette = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+            assert!(matches!(cassette.mode(), CassetteMode::Record));
+            assert!(tmp.exists(), "expected tmp file to exist during recording");
+            let _ = cassette.parse(serde_json::json!({"a": 1})).unwrap();
+            let _ = cassette.parse(serde_json::json!({"a": 2})).unwrap();
+        }
+        assert!(fixture.exists(), "fixture should exist after drop");
+        assert!(!tmp.exists(), "tmp should be gone after rename");
+        let content = std::fs::read_to_string(&fixture).unwrap();
+        assert_eq!(content.lines().count(), 2);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cassette_replay_runs_fixture_through_pilot_pipeline() {
+        use futures_core::Stream;
+        use std::pin::pin;
+
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("replay.jsonl");
+        std::fs::write(&fixture, "{\"x\":1}\n{\"x\":2}\n").unwrap();
+        let driver = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+        assert!(matches!(driver.mode(), CassetteMode::Replay));
+
+        let mut session = crate::Session::new(driver, "/tmp");
+        let stream = session
+            .send("ignored", TurnOptions::default())
+            .await
+            .unwrap();
+        let mut stream = pin!(stream);
+        let mut events: Vec<Event> = Vec::new();
+        loop {
+            let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+            match next {
+                None => break,
+                Some(Ok(crate::TurnItem::Event(e))) => events.push(e),
+                Some(Ok(crate::TurnItem::Complete(_))) => {}
+                Some(Err(e)) => panic!("stream error: {e:?}"),
+            }
+        }
+        assert_eq!(events.len(), 2);
     }
 }
