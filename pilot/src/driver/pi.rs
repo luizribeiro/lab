@@ -1,4 +1,13 @@
 //! Pi (Inflection) driver.
+//!
+//! # Known limitations
+//!
+//! Pi does not emit a distinct error event when a turn fails (e.g. due
+//! to an invalid model or auth issue). Failed turns produce a normal
+//! stream with empty assistant content — pilot cannot distinguish
+//! "agent chose to say nothing" from "agent errored". `TurnComplete.ok`
+//! is always `true` for pi turns. Callers who need to detect failure
+//! should check `Turn::final_text().is_empty()` after the stream ends.
 
 use crate::driver::{
     AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
@@ -180,20 +189,79 @@ impl Driver for Pi {
                     .get("assistantMessageEvent")
                     .ok_or(ParseError::MissingField("assistantMessageEvent"))?;
                 let kind = inner.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if kind == "text_delta" {
-                    let delta = inner
-                        .get("delta")
-                        .and_then(|v| v.as_str())
-                        .ok_or(ParseError::MissingField("delta"))?;
-                    Ok(vec![Event::AssistantText {
-                        delta: delta.to_string(),
-                    }])
-                } else {
-                    Ok(vec![Event::Raw {
+                match kind {
+                    "text_delta" => {
+                        let delta = inner
+                            .get("delta")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("delta"))?;
+                        Ok(vec![Event::AssistantText {
+                            delta: delta.to_string(),
+                        }])
+                    }
+                    "thinking_delta" => {
+                        let delta = inner
+                            .get("delta")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("delta"))?;
+                        Ok(vec![Event::Thinking {
+                            delta: delta.to_string(),
+                        }])
+                    }
+                    "toolcall_end" => {
+                        let tc = inner
+                            .get("toolCall")
+                            .ok_or(ParseError::MissingField("toolCall"))?;
+                        let call_id = tc
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("toolCall.id"))?;
+                        let name = tc
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("toolCall.name"))?;
+                        let args = tc
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Ok(vec![Event::ToolCall {
+                            call_id: call_id.to_string(),
+                            name: name.to_string(),
+                            args,
+                        }])
+                    }
+                    _ => Ok(vec![Event::Raw {
                         driver: "pi",
                         value,
-                    }])
+                    }]),
                 }
+            }
+            Some("tool_execution_end") => {
+                let call_id = value
+                    .get("toolCallId")
+                    .and_then(|v| v.as_str())
+                    .ok_or(ParseError::MissingField("toolCallId"))?;
+                let is_error = value
+                    .get("isError")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let output = value
+                    .get("result")
+                    .and_then(|r| r.get("content"))
+                    .and_then(|c| c.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter(|i| i.get("type").and_then(|v| v.as_str()) == Some("text"))
+                            .filter_map(|i| i.get("text").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("")
+                    })
+                    .unwrap_or_default();
+                Ok(vec![Event::ToolResult {
+                    call_id: call_id.to_string(),
+                    ok: !is_error,
+                    output,
+                }])
             }
             Some("message_end") => {
                 let role = value
@@ -399,6 +467,93 @@ mod tests {
         let v = serde_json::json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta"}});
         let err = Pi::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("delta")));
+    }
+
+    #[test]
+    fn tool_use_fixture_parses_to_expected_events() {
+        let raw = include_str!("../../tests/fixtures/pi/tool_use.jsonl");
+        let pi = Pi::new();
+        let mut events: Vec<Event> = Vec::new();
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+            events.extend(pi.parse(value).expect("parse ok"));
+        }
+        expect_test::expect_file!["../../tests/fixtures/pi/tool_use.events.snap"]
+            .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
+    fn toolcall_end_message_update_yields_toolcall() {
+        let v = serde_json::json!({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "toolcall_end",
+                "toolCall": {
+                    "id": "tc1",
+                    "name": "bash",
+                    "arguments": {"command": "ls"}
+                }
+            }
+        });
+        let evs = Pi::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ToolCall { call_id, name, args }
+                         if call_id == "tc1" && name == "bash" && args["command"] == "ls"));
+    }
+
+    #[test]
+    fn tool_execution_end_yields_toolresult() {
+        let v = serde_json::json!({
+            "type": "tool_execution_end",
+            "toolCallId": "tc1",
+            "toolName": "bash",
+            "result": {"content": [{"type":"text","text":"hello\n"}]},
+            "isError": false
+        });
+        let evs = Pi::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(
+            matches!(&evs[0], Event::ToolResult { call_id, ok: true, output }
+                         if call_id == "tc1" && output == "hello\n")
+        );
+    }
+
+    #[test]
+    fn tool_execution_end_is_error_yields_ok_false() {
+        let v = serde_json::json!({
+            "type": "tool_execution_end",
+            "toolCallId": "tc1",
+            "toolName": "bash",
+            "result": {"content": []},
+            "isError": true
+        });
+        let evs = Pi::new().parse(v).unwrap();
+        assert!(matches!(&evs[0], Event::ToolResult { ok: false, .. }));
+    }
+
+    #[test]
+    fn thinking_delta_yields_thinking_event() {
+        let v = serde_json::json!({
+            "type": "message_update",
+            "assistantMessageEvent": {"type":"thinking_delta", "delta": "Let me check."}
+        });
+        let evs = Pi::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::Thinking { delta } if delta == "Let me check."));
+    }
+
+    #[test]
+    fn unknown_message_update_subtype_falls_through_to_raw() {
+        let v = serde_json::json!({
+            "type": "message_update",
+            "assistantMessageEvent": {"type":"some_future_subtype"}
+        });
+        let evs = Pi::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::Raw { driver: "pi", .. }));
     }
 
     #[test]

@@ -1,0 +1,14 @@
+{"type":"session","version":3,"id":"99999999-9999-9999-9999-999999999999","cwd":"/test"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Use bash to ls /tmp"}],"timestamp":0}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Use bash to ls /tmp"}],"timestamp":0}}
+{"type":"message_start","message":{"role":"assistant","content":[],"usage":{"input":3,"output":0}}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"I'll use bash."}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"toolu_aaa","name":"bash","arguments":{"command":"ls /tmp | head -3"}}}}
+{"type":"tool_execution_start","toolCallId":"toolu_aaa","toolName":"bash"}
+{"type":"tool_execution_end","toolCallId":"toolu_aaa","toolName":"bash","result":{"content":[{"type":"text","text":"a.txt\nb.txt\nc.txt\n"}]},"isError":false}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Listed three files."}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Listed three files."}],"usage":{"input":3,"output":4}}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"Listed three files."}]},"toolResults":[]}
+{"type":"agent_end"}

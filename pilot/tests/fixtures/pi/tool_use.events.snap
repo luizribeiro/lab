@@ -1,0 +1,108 @@
+[
+    Raw {
+        driver: "pi",
+        value: Object {
+            "cwd": String("/test"),
+            "id": String("99999999-9999-9999-9999-999999999999"),
+            "type": String("session"),
+            "version": Number(3),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("agent_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("turn_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [
+                    Object {
+                        "text": String("Use bash to ls /tmp"),
+                        "type": String("text"),
+                    },
+                ],
+                "role": String("user"),
+                "timestamp": Number(0),
+            },
+            "type": String("message_start"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [
+                    Object {
+                        "text": String("Use bash to ls /tmp"),
+                        "type": String("text"),
+                    },
+                ],
+                "role": String("user"),
+                "timestamp": Number(0),
+            },
+            "type": String("message_end"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "message": Object {
+                "content": Array [],
+                "role": String("assistant"),
+                "usage": Object {
+                    "input": Number(3),
+                    "output": Number(0),
+                },
+            },
+            "type": String("message_start"),
+        },
+    },
+    Thinking {
+        delta: "I'll use bash.",
+    },
+    ToolCall {
+        call_id: "toolu_aaa",
+        name: "bash",
+        args: Object {
+            "command": String("ls /tmp | head -3"),
+        },
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "toolCallId": String("toolu_aaa"),
+            "toolName": String("bash"),
+            "type": String("tool_execution_start"),
+        },
+    },
+    ToolResult {
+        call_id: "toolu_aaa",
+        ok: true,
+        output: "a.txt\nb.txt\nc.txt\n",
+    },
+    AssistantText {
+        delta: "Listed three files.",
+    },
+    Usage {
+        input_tokens: 3,
+        output_tokens: 4,
+    },
+    TurnComplete {
+        ok: true,
+    },
+    Raw {
+        driver: "pi",
+        value: Object {
+            "type": String("agent_end"),
+        },
+    },
+]

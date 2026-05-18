@@ -1,0 +1,6 @@
+{
+  "cli": "pi (Inflection)",
+  "version": "0.73.1",
+  "captured_at": "2026-05-18",
+  "notes": "Fixtures captured live via `pi -p --mode json --no-session --provider github-copilot --model claude-sonnet-4.6`. tool_use.jsonl triggers a bash tool call. error.jsonl intentionally omitted: pi emits no distinct error event for invalid model/auth — failed turns look like empty assistant content. See module docs for the silent-error limitation."
+}
