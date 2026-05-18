@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
-use pilot::{Claude, Codex, CodexConfig, Gemini, Pi, Session, TurnItem, TurnOptions};
+use pilot::{
+    Claude, ClaudeConfig, Codex, CodexConfig, Gemini, GeminiConfig, Pi, PiConfig, Session,
+    TurnItem, TurnOptions,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use uuid::Uuid;
@@ -56,10 +59,22 @@ impl AgentKind {
             AgentKind::Pi => "pi",
         }
     }
+
+    /// `None` for `pi` because its model depends on the configured
+    /// provider — hardcoding one here would break user setups.
+    pub fn default_model(self) -> Option<&'static str> {
+        match self {
+            AgentKind::Claude => Some("claude-opus-4-7"),
+            AgentKind::Codex => Some("gpt-5.5"),
+            AgentKind::Gemini => Some("gemini-3.1-pro-preview"),
+            AgentKind::Pi => None,
+        }
+    }
 }
 
 pub struct App {
     pub agent: AgentKind,
+    pub model: Option<String>,
     pub session: Session,
     pub transcript: Transcript,
     pub composer: Composer,
@@ -78,12 +93,19 @@ enum Step {
 }
 
 impl App {
-    pub fn new(agent: AgentKind, workdir: &Path, resume: Option<Uuid>) -> Self {
-        let session = make_session(agent, workdir, resume);
+    pub fn new(
+        agent: AgentKind,
+        workdir: &Path,
+        resume: Option<Uuid>,
+        model_override: Option<String>,
+    ) -> Self {
+        let model = model_override.or_else(|| agent.default_model().map(String::from));
+        let session = make_session(agent, workdir, resume, model.clone());
         let transcript = Transcript::for_session(agent, session.id());
         let composer = Composer::new(history_path());
         Self {
             agent,
+            model,
             session,
             transcript,
             composer,
@@ -100,7 +122,15 @@ impl App {
     /// first painted. This way the user can scroll up to see their old
     /// conversation.
     pub fn boot(&mut self, terminal: &mut Term) -> io::Result<()> {
-        ui::commit_header(terminal, self.agent, self.resumed)?;
+        ui::commit_header(
+            terminal,
+            self.agent,
+            self.model.as_deref(),
+            self.session.workdir(),
+            self.session.id(),
+            self.transcript.path(),
+            self.resumed,
+        )?;
         if self.resumed {
             self.transcript.replay(terminal, &self.skin)?;
         }
@@ -313,29 +343,50 @@ async fn maybe_tick(enabled: bool) {
     }
 }
 
-fn make_session(agent: AgentKind, workdir: &Path, resume: Option<Uuid>) -> Session {
+fn make_session(
+    agent: AgentKind,
+    workdir: &Path,
+    resume: Option<Uuid>,
+    model: Option<String>,
+) -> Session {
     match agent {
-        AgentKind::Claude => match resume {
-            Some(id) => Session::resume(Claude::new(), id, workdir),
-            None => Session::new(Claude::new(), workdir),
-        },
+        AgentKind::Claude => {
+            let mut cfg = ClaudeConfig::default();
+            cfg.default_model = model;
+            let driver = Claude::with_config(cfg);
+            match resume {
+                Some(id) => Session::resume(driver, id, workdir),
+                None => Session::new(driver, workdir),
+            }
+        }
         AgentKind::Codex => {
             let mut cfg = CodexConfig::default();
             cfg.state.thread_store_path = Some(codex_thread_store());
+            cfg.default_model = model;
             let driver = Codex::with_config(cfg);
             match resume {
                 Some(id) => Session::resume(driver, id, workdir),
                 None => Session::new(driver, workdir),
             }
         }
-        AgentKind::Gemini => match resume {
-            Some(id) => Session::resume(Gemini::new(), id, workdir),
-            None => Session::new(Gemini::new(), workdir),
-        },
-        AgentKind::Pi => match resume {
-            Some(id) => Session::resume(Pi::new(), id, workdir),
-            None => Session::new(Pi::new(), workdir),
-        },
+        AgentKind::Gemini => {
+            let mut cfg = GeminiConfig::default();
+            cfg.default_model = model;
+            let driver = Gemini::with_config(cfg);
+            match resume {
+                Some(id) => Session::resume(driver, id, workdir),
+                None => Session::new(driver, workdir),
+            }
+        }
+        AgentKind::Pi => {
+            let mut cfg = PiConfig::default();
+            cfg.default_model = model;
+            let driver = Pi::with_config(cfg);
+            match resume {
+                Some(id) => Session::resume(driver, id, workdir),
+                None => Session::new(driver, workdir),
+            }
+        }
     }
 }
 
@@ -351,3 +402,4 @@ fn codex_thread_store() -> PathBuf {
     let _ = std::fs::create_dir_all(&dir);
     dir.join("codex-threads.json")
 }
+

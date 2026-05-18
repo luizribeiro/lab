@@ -1,4 +1,5 @@
 use std::io;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::Frame;
@@ -6,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use uuid::Uuid;
 
 use crate::app::{AgentKind, App, Term};
 use crate::markdown::MarkdownSkin;
@@ -164,21 +166,96 @@ fn current_tick() -> &'static str {
 
 // ---------- scrollback commit helpers (use terminal.insert_before) ----------
 
-pub fn commit_header(terminal: &mut Term, agent: AgentKind, resumed: bool) -> io::Result<()> {
+pub fn commit_header(
+    terminal: &mut Term,
+    agent: AgentKind,
+    model: Option<&str>,
+    cwd: &Path,
+    session_id: Uuid,
+    transcript_path: &Path,
+    resumed: bool,
+) -> io::Result<()> {
     let suffix = if resumed { " (resumed)" } else { "" };
-    let bar = Line::from(vec![
+    let model_label = model.unwrap_or("(default)");
+    let title = Line::from(vec![
         Span::styled("orb", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(" — "),
+        Span::raw(" · "),
         Span::styled(agent.label(), Style::default().fg(Color::Cyan)),
+        Span::raw(" — "),
+        Span::styled(model_label, Style::default().fg(Color::Magenta)),
         Span::styled(suffix, Style::default().fg(Color::Yellow)),
     ]);
+
+    let cwd_line = meta_line("cwd", format_cwd(cwd));
+    let session_line = meta_line("session", session_id.to_string());
+    let transcript_line = meta_line("transcript", abbreviate_home(transcript_path));
+
     let hint = Line::from(Span::styled(
         "↑/↓ history · ctrl+r search · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
     ));
-    insert_lines(terminal, vec![bar, hint, Line::raw("")])
+
+    insert_lines(
+        terminal,
+        vec![
+            title,
+            cwd_line,
+            session_line,
+            transcript_line,
+            Line::raw(""),
+            hint,
+            Line::raw(""),
+        ],
+    )
+}
+
+fn meta_line(label: &str, value: String) -> Line<'static> {
+    const LABEL_WIDTH: usize = 12;
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<LABEL_WIDTH$}"),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+        Span::raw(value),
+    ])
+}
+
+fn format_cwd(cwd: &Path) -> String {
+    let pretty = abbreviate_home(cwd);
+    match git_branch(cwd) {
+        Some(branch) => format!("{pretty} on {branch}"),
+        None => pretty,
+    }
+}
+
+fn abbreviate_home(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rel) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rel.display());
+    }
+    path.display().to_string()
+}
+
+fn git_branch(cwd: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if s.is_empty() || s == "HEAD" {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {

@@ -33,6 +33,11 @@ struct Args {
     /// the prompt is mounted.
     #[arg(long)]
     resume: Option<Uuid>,
+
+    /// Model id to pass to the agent CLI. Overrides the per-agent
+    /// default. For `pi`, defaults to whatever pi's own config picks.
+    #[arg(long)]
+    model: Option<String>,
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -70,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut terminal = app::make_terminal(app::VIEWPORT_HEIGHT)?;
 
-    let mut app = App::new(agent, &cwd, args.resume);
+    let mut app = App::new(agent, &cwd, args.resume, args.model);
     app.boot(&mut terminal)?;
     let result = app.run(&mut terminal).await;
 
