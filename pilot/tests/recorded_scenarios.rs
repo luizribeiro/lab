@@ -62,6 +62,92 @@ async fn pi_happy_path_says_hi() {
     happy_path(cassette!(Pi::new())).await;
 }
 
+// Tool-use coverage. NOTE: during recording the CLI actually executes
+// the tool (creates the file). During replay no tool runs; the fixture
+// pins the OBSERVED event stream including the tool_result content the
+// CLI reported at record time.
+#[tokio::test]
+async fn claude_tool_use_writes_file_and_emits_toolcall_toolresult() {
+    tool_use(cassette!(Claude::new()), tool_use_opts()).await;
+}
+
+#[tokio::test]
+async fn codex_tool_use_writes_file_and_emits_toolcall_toolresult() {
+    let mut opts = tool_use_opts();
+    // codex defaults to read-only sandbox + approval-required, which
+    // prevents the model from writing the marker file in /tmp. Bypass
+    // both for the recording.
+    opts.extra_args = vec!["--dangerously-bypass-approvals-and-sandbox".into()];
+    tool_use(cassette!(Codex::new()), opts).await;
+}
+
+#[tokio::test]
+async fn gemini_tool_use_writes_file_and_emits_toolcall_toolresult() {
+    let mut opts = tool_use_opts();
+    // gemini gates tool execution behind an approval prompt; YOLO mode
+    // auto-approves so the recording can complete.
+    opts.extra_args = vec!["--yolo".into()];
+    tool_use(cassette!(Gemini::new()), opts).await;
+}
+
+// pi has a documented silent-error limitation and may not run external
+// tools the same way. If recording, this test will succeed or be
+// ignored individually.
+#[tokio::test]
+async fn pi_tool_use_writes_file_and_emits_toolcall_toolresult() {
+    tool_use(cassette!(Pi::new()), tool_use_opts()).await;
+}
+
+fn tool_use_opts() -> TurnOptions {
+    let mut opts = TurnOptions::default();
+    opts.timeout = Some(std::time::Duration::from_secs(120));
+    opts
+}
+
+async fn tool_use<D: Driver + 'static>(driver: D, opts: TurnOptions) {
+    let mut session = Session::new(driver, "/tmp");
+
+    let mut stream = session
+        .send(
+            "Use your file-writing tool to create /tmp/pilot-tool-marker.txt \
+             with the exact content 'hi'. Then briefly confirm.",
+            opts,
+        )
+        .await
+        .expect("send failed");
+
+    let mut saw_tool_call = false;
+    let mut saw_tool_result = false;
+    let mut saw_assistant_text = false;
+    let mut events: Vec<Event> = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(TurnItem::Event(e)) => {
+                match &e {
+                    Event::ToolCall { .. } => saw_tool_call = true,
+                    Event::ToolResult { .. } => saw_tool_result = true,
+                    Event::AssistantText { .. } => saw_assistant_text = true,
+                    _ => {}
+                }
+                events.push(e);
+            }
+            Ok(TurnItem::Complete(_)) => {}
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+
+    assert!(saw_tool_call, "no ToolCall observed. events: {events:?}");
+    assert!(
+        saw_tool_result,
+        "no ToolResult observed. events: {events:?}"
+    );
+    assert!(
+        saw_assistant_text,
+        "no AssistantText observed. events: {events:?}"
+    );
+}
+
 async fn invalid_model<D: Driver + 'static>(driver: D) {
     let mut session = Session::new(driver, "/tmp");
 

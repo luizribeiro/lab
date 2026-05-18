@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covered). Per-driver behavior is pinned; future CLI regressions
   surface as test failures. pi's invalid_model test is `#[ignore]`d:
   the pi CLI exits silently with no stream-json on invalid `--model`.
+- Recorded tool_use scenarios for all four drivers. Each test asks
+  the CLI to write a small file via its file-writing tool and asserts
+  pilot saw `ToolCall` + `ToolResult` + `AssistantText` events. codex
+  requires `--dangerously-bypass-approvals-and-sandbox` and gemini
+  requires `--yolo` at record time to bypass approval gates.
 
 ### Changed
 - All four built-in drivers (claude, codex, gemini, pi) graduate to

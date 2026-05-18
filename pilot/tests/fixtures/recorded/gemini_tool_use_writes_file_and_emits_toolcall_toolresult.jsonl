@@ -1,0 +1,7 @@
+{"model":"auto-gemini-3","session_id":"<UUID:1>","timestamp":"<TIMESTAMP>","type":"init"}
+{"content":"Use your file-writing tool to create /tmp/pilot-tool-marker.txt with the exact content 'hi'. Then briefly confirm.","role":"user","timestamp":"<TIMESTAMP>","type":"message"}
+{"parameters":{"content":"hi","file_path":"/tmp/pilot-tool-marker.txt"},"timestamp":"<TIMESTAMP>","tool_id":"write_file_1779087155123_0","tool_name":"write_file","type":"tool_use"}
+{"status":"success","timestamp":"<TIMESTAMP>","tool_id":"write_file_1779087155123_0","type":"tool_result"}
+{"content":"Created","delta":true,"role":"assistant","timestamp":"<TIMESTAMP>","type":"message"}
+{"content":" `/tmp/pilot-tool-marker.txt` with the content 'hi'.","delta":true,"role":"assistant","timestamp":"<TIMESTAMP>","type":"message"}
+{"stats":{"cached":7641,"duration_ms":15304,"input":17257,"input_tokens":24898,"models":{"gemini-2.5-flash-lite":{"cached":0,"input":0,"input_tokens":0,"output_tokens":0,"total_tokens":0},"gemini-3-flash-preview":{"cached":7641,"input":14368,"input_tokens":22009,"output_tokens":51,"total_tokens":22162},"gemini-3.1-flash-lite":{"cached":0,"input":2889,"input_tokens":2889,"output_tokens":27,"total_tokens":2992}},"output_tokens":78,"tool_calls":1,"total_tokens":25154},"status":"success","timestamp":"<TIMESTAMP>","type":"result"}
