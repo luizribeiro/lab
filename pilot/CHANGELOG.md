@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `ClaudeConfig::default().permission_mode` is now
+  `PermissionMode::BypassPermissions` (was `Default`). Pilot is a transport
+  library; sandboxing is the caller's responsibility (see
+  `docs/sandboxing.md` once it lands). Callers who want approval gating must
+  opt in via `PermissionMode::Default` or `AcceptEdits`.
+
 ## [0.2.0] - 2026-05-18
 
 ### Added
