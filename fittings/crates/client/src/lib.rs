@@ -969,8 +969,8 @@ mod tests {
         assert_eq!(request.method, "work");
         assert_eq!(request.params, Some(json!({"n": 1})));
 
-        let response = success_response_line(&wire_id, json!({"ok": true}))
-            .expect("encode response");
+        let response =
+            success_response_line(&wire_id, json!({"ok": true})).expect("encode response");
         server_transport
             .send(&response)
             .await
