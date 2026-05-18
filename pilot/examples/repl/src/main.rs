@@ -23,7 +23,10 @@ use uuid::Uuid;
 use crate::app::{AgentKind, App};
 
 #[derive(Parser)]
-#[command(name = "pilot-repl", about = "Interactive REPL example for the pilot crate")]
+#[command(
+    name = "pilot-repl",
+    about = "Interactive REPL example for the pilot crate"
+)]
 struct Args {
     /// Which agent CLI to drive
     #[arg(long, value_enum, default_value_t = AgentKindArg::Claude)]
