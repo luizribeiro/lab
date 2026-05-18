@@ -3,6 +3,7 @@ use std::io;
 use pilot::{Event as PilotEvent, TurnItem, TurnStream};
 
 use crate::app::Term;
+use crate::markdown::MarkdownSkin;
 use crate::ui;
 
 /// A turn that is currently streaming. Owns the stream plus enough state
@@ -11,6 +12,8 @@ pub struct ActiveTurn {
     pub stream: TurnStream,
     pub prompt: String,
     pub text_buffer: String,
+    pub pending_text: String,
+    pub last_rendered_tool_result: bool,
     pub pending_tools: Vec<PendingTool>,
 }
 
@@ -26,6 +29,8 @@ impl ActiveTurn {
             stream,
             prompt,
             text_buffer: String::new(),
+            pending_text: String::new(),
+            last_rendered_tool_result: false,
             pending_tools: Vec::new(),
         }
     }
@@ -33,9 +38,7 @@ impl ActiveTurn {
 
 /// Poll the active turn's stream, parking forever if no turn is in flight.
 /// This is the right-hand side of the main `tokio::select!`.
-pub async fn poll(
-    active: &mut Option<ActiveTurn>,
-) -> Option<Result<TurnItem, pilot::Error>> {
+pub async fn poll(active: &mut Option<ActiveTurn>) -> Option<Result<TurnItem, pilot::Error>> {
     match active {
         Some(a) => Some(futures_util::StreamExt::next(&mut a.stream).await?),
         None => std::future::pending().await,
@@ -49,15 +52,19 @@ pub fn process_event(
     active: &mut ActiveTurn,
     ev: PilotEvent,
     terminal: &mut Term,
+    skin: &MarkdownSkin,
 ) -> io::Result<()> {
     match ev {
         PilotEvent::AssistantText { delta } => {
             active.text_buffer.push_str(&delta);
+            active.pending_text.push_str(&delta);
         }
         PilotEvent::ToolCall { call_id, name, .. } => {
+            flush_pending_text(active, terminal, skin)?;
             active.pending_tools.push(PendingTool { call_id, name });
         }
         PilotEvent::ToolResult { call_id, ok, .. } => {
+            flush_pending_text(active, terminal, skin)?;
             if let Some(pos) = active
                 .pending_tools
                 .iter()
@@ -65,12 +72,31 @@ pub fn process_event(
             {
                 let tool = active.pending_tools.remove(pos);
                 ui::commit_tool_result(terminal, &tool.name, ok)?;
+                active.last_rendered_tool_result = true;
             }
         }
         PilotEvent::TurnComplete { ok: false } => {
+            flush_pending_text(active, terminal, skin)?;
             ui::commit_status_line(terminal, "(turn reported failure)", ui::CommitColor::Err)?;
         }
         _ => {}
     }
+    Ok(())
+}
+
+pub fn flush_pending_text(
+    active: &mut ActiveTurn,
+    terminal: &mut Term,
+    skin: &MarkdownSkin,
+) -> io::Result<()> {
+    let text = active.pending_text.trim();
+    if !text.is_empty() {
+        if active.last_rendered_tool_result {
+            ui::commit_blank_line(terminal)?;
+        }
+        ui::commit_markdown(terminal, skin, text)?;
+        active.last_rendered_tool_result = false;
+    }
+    active.pending_text.clear();
     Ok(())
 }

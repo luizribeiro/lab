@@ -236,6 +236,27 @@ fn find_match(entries: &VecDeque<String>, query: &str, before: usize) -> Option<
     (0..upper).rev().find(|&i| entries[i].contains(query))
 }
 
+fn run_editor(initial: &str) -> io::Result<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let mut tmp = tempfile::Builder::new()
+        .prefix("pilot-prompt-")
+        .suffix(".md")
+        .tempfile()?;
+    tmp.write_all(initial.as_bytes())?;
+    tmp.flush()?;
+    let (file, path) = tmp.keep().map_err(io::Error::other)?;
+    drop(file);
+    let status = std::process::Command::new(&editor).arg(&path).status()?;
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    if !status.success() {
+        return Err(io::Error::other("editor exited non-zero"));
+    }
+    Ok(content.trim_end_matches('\n').to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,25 +300,4 @@ mod tests {
         composer.history_next();
         assert_eq!(text(&composer), "draft");
     }
-}
-
-fn run_editor(initial: &str) -> io::Result<String> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-    let mut tmp = tempfile::Builder::new()
-        .prefix("pilot-prompt-")
-        .suffix(".md")
-        .tempfile()?;
-    tmp.write_all(initial.as_bytes())?;
-    tmp.flush()?;
-    let (file, path) = tmp.keep().map_err(io::Error::other)?;
-    drop(file);
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
-    if !status.success() {
-        return Err(io::Error::other("editor exited non-zero"));
-    }
-    Ok(content.trim_end_matches('\n').to_string())
 }

@@ -270,14 +270,14 @@ impl App {
         match item {
             Ok(TurnItem::Event(ev)) => {
                 if let Some(active) = self.active.as_mut() {
-                    turn::process_event(active, ev, terminal)?;
+                    turn::process_event(active, ev, terminal, &self.skin)?;
                 }
             }
             Ok(TurnItem::Complete(_)) => {
-                if let Some(active) = self.active.take() {
+                if let Some(mut active) = self.active.take() {
+                    turn::flush_pending_text(&mut active, terminal, &self.skin)?;
                     let trimmed = active.text_buffer.trim();
                     if !trimmed.is_empty() {
-                        ui::commit_markdown(terminal, &self.skin, trimmed)?;
                         let _ = self.transcript.append_turn(&active.prompt, trimmed);
                     }
                 }

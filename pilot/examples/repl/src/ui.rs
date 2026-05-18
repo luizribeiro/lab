@@ -195,6 +195,10 @@ pub fn commit_status_line(terminal: &mut Term, msg: &str, color: CommitColor) ->
     insert_lines(terminal, vec![line])
 }
 
+pub fn commit_blank_line(terminal: &mut Term) -> io::Result<()> {
+    insert_lines(terminal, vec![Line::raw("")])
+}
+
 pub fn commit_dim_line(terminal: &mut Term, msg: &str) -> io::Result<()> {
     let line = Line::from(Span::styled(
         msg.to_string(),
