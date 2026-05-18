@@ -9,9 +9,9 @@ use crate::{Event, ParseError};
 #[non_exhaustive]
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalMode {
-    #[default]
     Default,
     AutoEdit,
+    #[default]
     Yolo,
     Plan,
 }
@@ -301,7 +301,7 @@ mod tests {
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
-            gemini -p hello --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 --skip-trust
+            gemini -p hello --output-format stream-json --session-id 00000000-0000-0000-0000-000000000000 --approval-mode yolo --skip-trust
         "#]]
         .assert_eq(&format!("{}\n", rendered));
         assert!(spec.env.is_empty());

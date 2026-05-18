@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CodexConfig::default().dangerously_bypass_approvals` is `true` (new
   field). Pilot drives codex headlessly with
   `--dangerously-bypass-approvals-and-sandbox` by default.
+- `GeminiConfig::default().approval_mode` is now `ApprovalMode::Yolo` (was
+  `Default`). Pilot drives gemini headlessly without per-tool approval
+  prompts. `skip_trust: true` unchanged. Sandboxing is the caller's
+  responsibility (see `docs/sandboxing.md` once it lands).
 - Sandboxing is the caller's responsibility (see `docs/sandboxing.md` once
   it lands). Use `lockin` or `capsa` for process isolation.
 
