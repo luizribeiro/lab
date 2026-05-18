@@ -259,8 +259,8 @@ impl DefaultSanitizer {
             }
             if s[i..].starts_with(&base) {
                 let after_base = i + base.len();
-                let boundary_ok = after_base == s.len()
-                    || matches!(s.as_bytes()[after_base], b'/' | b'\\');
+                let boundary_ok =
+                    after_base == s.len() || matches!(s.as_bytes()[after_base], b'/' | b'\\');
                 if !boundary_ok {
                     continue;
                 }
@@ -416,6 +416,201 @@ impl<D: Driver> Driver for RecordingDriver<D> {
             }
         }
         self.inner.parse(value)
+    }
+}
+
+/// Recorded-test helpers. The `run_or_replay` function switches between
+/// replaying a saved fixture (default) and recording a fresh one against
+/// the real CLI (when `PILOT_RECORD` env var matches).
+pub mod recorded_test {
+    use super::{DefaultSanitizer, RecordingDriver};
+    use crate::driver::{Driver, TurnInput, TurnOptions};
+    use crate::{Session, Turn, TurnItem};
+    use futures_core::Stream;
+    use std::path::{Path, PathBuf};
+    use std::pin::pin;
+
+    /// Whether a scenario should record or replay, based on `PILOT_RECORD`.
+    pub enum ScenarioMode {
+        Replay,
+        Record,
+    }
+
+    /// Compute mode for a given fixture path from `PILOT_RECORD`.
+    /// - "1" or "all" → Record
+    /// - non-empty substring matching fixture_path → Record
+    /// - otherwise → Replay
+    pub fn mode_for(fixture_path: &Path) -> ScenarioMode {
+        let var = std::env::var("PILOT_RECORD").unwrap_or_default();
+        if var.is_empty() {
+            return ScenarioMode::Replay;
+        }
+        if var == "1" || var == "all" {
+            return ScenarioMode::Record;
+        }
+        let path_str = fixture_path.to_string_lossy();
+        if path_str.contains(&var) {
+            ScenarioMode::Record
+        } else {
+            ScenarioMode::Replay
+        }
+    }
+
+    /// Run a single-turn scenario in either replay or record mode.
+    ///
+    /// In **replay** mode (default): read `fixture_path`, parse each line
+    /// through `driver_factory().parse()`, accumulate events into a `Turn`,
+    /// and return it. No CLI process is spawned.
+    ///
+    /// In **record** mode (`PILOT_RECORD` env matches): wrap
+    /// `driver_factory()` in [`RecordingDriver`] + [`DefaultSanitizer`],
+    /// open a real `Session`, send `input` with `opts`, drain the
+    /// `TurnStream`, and atomically rename the temp recording into
+    /// `fixture_path`. Returns the live-captured `Turn`.
+    ///
+    /// Panics on error. This is test infrastructure; test failures should be
+    /// loud.
+    pub async fn run_or_replay<D, F>(
+        driver_factory: F,
+        input: impl Into<TurnInput>,
+        opts: TurnOptions,
+        workdir: impl Into<PathBuf>,
+        fixture_path: impl AsRef<Path>,
+    ) -> Turn
+    where
+        D: Driver + 'static,
+        F: Fn() -> D,
+    {
+        let fixture_path = fixture_path.as_ref();
+        match mode_for(fixture_path) {
+            ScenarioMode::Replay => replay(&driver_factory(), fixture_path),
+            ScenarioMode::Record => {
+                record(
+                    &driver_factory,
+                    input.into(),
+                    opts,
+                    workdir.into(),
+                    fixture_path,
+                )
+                .await
+            }
+        }
+    }
+
+    fn replay<D: Driver>(driver: &D, fixture_path: &Path) -> Turn {
+        let raw = std::fs::read_to_string(fixture_path).unwrap_or_else(|e| {
+            panic!(
+                "run_or_replay: cannot read fixture {}: {}. Set PILOT_RECORD=1 to record.",
+                fixture_path.display(),
+                e
+            )
+        });
+        let mut events: Vec<crate::Event> = Vec::new();
+        for (lineno, line) in raw.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!(
+                    "run_or_replay: fixture line {} in {} is not valid JSON: {}",
+                    lineno + 1,
+                    fixture_path.display(),
+                    e
+                )
+            });
+            let parsed = driver.parse(value).unwrap_or_else(|e| {
+                panic!(
+                    "run_or_replay: parse failed on line {} of {}: {:?}",
+                    lineno + 1,
+                    fixture_path.display(),
+                    e
+                )
+            });
+            events.extend(parsed);
+        }
+        crate::Turn {
+            events,
+            errors: vec![],
+        }
+    }
+
+    async fn record<D, F>(
+        driver_factory: &F,
+        input: TurnInput,
+        opts: TurnOptions,
+        workdir: PathBuf,
+        fixture_path: &Path,
+    ) -> Turn
+    where
+        D: Driver + 'static,
+        F: Fn() -> D,
+    {
+        if let Some(parent) = fixture_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                    panic!(
+                        "run_or_replay: cannot create fixture parent dir {}: {}",
+                        parent.display(),
+                        e
+                    )
+                });
+            }
+        }
+        let tmp_path = {
+            let mut p = fixture_path.to_path_buf();
+            let stem = fixture_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            p.set_file_name(format!(".{stem}.recording"));
+            p
+        };
+
+        let rec = RecordingDriver::new(driver_factory(), &tmp_path)
+            .unwrap_or_else(|e| panic!("run_or_replay: cannot open recording temp file: {e}"))
+            .with_sanitizer(DefaultSanitizer::new());
+        let signal = rec.failure_signal();
+
+        let mut session = Session::new(rec, workdir);
+        let stream = session
+            .send(input, opts)
+            .await
+            .unwrap_or_else(|e| panic!("run_or_replay: session.send failed: {e:?}"));
+
+        let mut events: Vec<crate::Event> = Vec::new();
+        let mut stream = pin!(stream);
+        loop {
+            let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+            match next {
+                None => break,
+                Some(Err(e)) => {
+                    panic!("run_or_replay: stream error during recording: {e:?}")
+                }
+                Some(Ok(TurnItem::Event(e))) => events.push(e),
+                Some(Ok(TurnItem::Complete(_))) => {}
+            }
+        }
+
+        if signal.load(std::sync::atomic::Ordering::SeqCst) {
+            panic!(
+                "run_or_replay: recording reported write/serialization failures (see tracing logs). Temp file kept at {} for inspection.",
+                tmp_path.display()
+            );
+        }
+
+        std::fs::rename(&tmp_path, fixture_path).unwrap_or_else(|e| {
+            panic!(
+                "run_or_replay: cannot rename {} -> {}: {}",
+                tmp_path.display(),
+                fixture_path.display(),
+                e
+            )
+        });
+
+        crate::Turn {
+            events,
+            errors: vec![],
+        }
     }
 }
 
@@ -691,5 +886,87 @@ mod tests {
         let _ = rec.parse(serde_json::json!({"x":1}));
         drop(rec);
         assert!(path.exists());
+    }
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn run_or_replay_replays_fixture_against_test_driver() {
+        use recorded_test::run_or_replay;
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let fixture = tmp_dir.path().join("test.jsonl");
+        std::fs::write(
+            &fixture,
+            r#"{"type":"a","x":1}
+{"type":"b","x":2}
+"#,
+        )
+        .unwrap();
+        unsafe {
+            std::env::remove_var("PILOT_RECORD");
+        }
+
+        let turn = run_or_replay(
+            || TestDriver::new("t", "/bin/echo"),
+            "ignored-input",
+            TurnOptions::default(),
+            "/tmp",
+            &fixture,
+        )
+        .await;
+
+        assert_eq!(turn.events.len(), 2);
+        assert!(matches!(
+            &turn.events[0],
+            crate::Event::Raw { driver: "t", .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn mode_for_respects_pilot_record_substring() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("PILOT_RECORD", "claude/invalid");
+        }
+        assert!(matches!(
+            recorded_test::mode_for(std::path::Path::new("fixtures/claude/invalid_model.jsonl")),
+            recorded_test::ScenarioMode::Record
+        ));
+        assert!(matches!(
+            recorded_test::mode_for(std::path::Path::new("fixtures/codex/greeting.jsonl")),
+            recorded_test::ScenarioMode::Replay
+        ));
+        unsafe {
+            std::env::remove_var("PILOT_RECORD");
+        }
+    }
+
+    #[tokio::test]
+    async fn mode_for_unset_returns_replay() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("PILOT_RECORD");
+        }
+        assert!(matches!(
+            recorded_test::mode_for(std::path::Path::new("fixtures/x.jsonl")),
+            recorded_test::ScenarioMode::Replay
+        ));
+    }
+
+    #[tokio::test]
+    async fn mode_for_all_returns_record() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("PILOT_RECORD", "all");
+        }
+        assert!(matches!(
+            recorded_test::mode_for(std::path::Path::new("fixtures/any.jsonl")),
+            recorded_test::ScenarioMode::Record
+        ));
+        unsafe {
+            std::env::remove_var("PILOT_RECORD");
+        }
     }
 }
