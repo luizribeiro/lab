@@ -19,6 +19,26 @@ limitations are documented in the rustdoc on each driver's module. Pi's
 silent-error behavior is the only one users need to know about — failed
 pi turns produce empty assistant content with no distinct error signal.
 
+## Driver reference
+
+Each built-in driver ships with a dedicated docs page covering its argv, configuration, default behavior, event mapping, and known quirks:
+
+- [claude](docs/claude.md) — drives Anthropic's Claude Code CLI.
+- [codex](docs/codex.md) — drives OpenAI's codex-cli with a built-in sandbox.
+- [gemini](docs/gemini.md) — drives Google's gemini-cli with a per-folder trust gate.
+- [pi](docs/pi.md) — drives Inflection's multi-provider pi CLI.
+
+The matrix below summarizes the defaults that most often surprise headless callers — pick a driver and follow its doc link for the full story.
+
+| Driver | Doc | Default sandbox/approval | Notable defaults | Key escape hatch for tool execution |
+|--------|-----|--------------------------|------------------|-------------------------------------|
+| claude | [docs/claude.md](docs/claude.md) | `PermissionMode::Default` — per-tool prompts | No sandboxing; `Auth::Ambient` | `PermissionMode::BypassPermissions` |
+| codex  | [docs/codex.md](docs/codex.md)  | `SandboxMode::ReadOnly` (no disk writes) plus separate approval gate | `skip_git_repo_check: true`; `Auth::Ambient` | `WorkspaceWrite`/`DangerFullAccess` plus `extra_args: ["--dangerously-bypass-approvals-and-sandbox"]` |
+| gemini | [docs/gemini.md](docs/gemini.md) | `ApprovalMode::Default` — prompts for tool calls | `skip_trust: true` bypasses per-folder trust gate | `ApprovalMode::Yolo` |
+| pi     | [docs/pi.md](docs/pi.md) | Provider-dependent; silent-error on invalid input | No `provider` set by default — set `provider` for reliability | None at pilot level — backend-specific |
+
+Recorded fixtures under `tests/fixtures/recorded/<driver>_*.jsonl` show each driver's real CLI output for greeting, tool-use, and (where supported) error scenarios — they're the ground truth that the defaults above are measured against.
+
 ## Quick start
 
 ```rust
