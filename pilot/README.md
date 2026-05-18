@@ -15,13 +15,11 @@ Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) from Rust over t
 
 ```rust
 use futures_util::StreamExt;
-use pilot::{Claude, Driver, Event, Session, TurnItem, TurnOptions};
-use std::sync::Arc;
+use pilot::{Claude, Event, Session, TurnItem, TurnOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let driver: Arc<dyn Driver> = Arc::new(Claude::new());
-    let mut session = Session::new(driver, "./repo");
+    let mut session = Session::new(Claude::new(), "./repo");
 
     let mut stream = session
         .send("audit the codebase", TurnOptions::default())
@@ -46,8 +44,8 @@ Spawn-per-turn is the uniform model: every `send()` spawns a fresh child of the 
 ```rust
 pub struct Session;
 impl Session {
-    pub fn new(driver: Arc<dyn Driver>, workdir: impl Into<PathBuf>) -> Self;
-    pub fn resume(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self;
+    pub fn new<D: Driver + 'static>(driver: D, workdir: impl Into<PathBuf>) -> Self;
+    pub fn resume<D: Driver + 'static>(driver: D, id: Uuid, workdir: impl Into<PathBuf>) -> Self;
     pub fn id(&self) -> Uuid;
     pub fn workdir(&self) -> &Path;
     pub async fn send(&mut self, input: impl Into<TurnInput>, opts: TurnOptions) -> Result<TurnStream>;
@@ -74,8 +72,9 @@ pub enum Event {
 
 Construct the driver you want via its typed constructor — `Claude::new()`,
 `Codex::new()`, `Gemini::new()`, `Pi::new()`, or the corresponding
-`*::with_config(...)` for custom configuration — then wrap it as
-`Arc<dyn Driver>` and pass to `Session::new`.
+`*::with_config(...)` for custom configuration — and pass it directly to
+`Session::new`. The session takes the driver by value; the `Arc` used to
+share it with the turn-stream is constructed internally.
 
 For the canonical agent response text, use `Turn::final_text()`, which
 concatenates all `AssistantText` deltas observed during the turn. Drivers

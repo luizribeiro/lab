@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in drivers: `Claude`, `Codex`, `Gemini`, `Pi`.
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
 
+### Changed
+- `Session::new` and `Session::resume` now take an owned `Driver` value
+  (`D: Driver + 'static`) instead of `Arc<dyn Driver>`. The Arc is
+  constructed internally. Callers no longer need to import `Arc` or
+  `Driver` for basic use.
+
 ### Removed
 - `pilot::driver(name)` factory and `Error::UnknownAgent` variant. Users
   pick the driver by typed constructor (`Claude::new()`, etc.) and

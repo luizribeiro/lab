@@ -17,9 +17,8 @@
 //!     cargo run --example with_paths
 
 use futures_util::StreamExt;
-use pilot::{Claude, ClaudeConfig, Driver, Event, Session, TurnItem, TurnOptions};
+use pilot::{Claude, ClaudeConfig, Event, Session, TurnItem, TurnOptions};
 use std::io::Write;
-use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -49,9 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (The struct-literal form is not available for `AgentPaths` here because
     // it's `#[non_exhaustive]` — examples live in a separate compilation unit
     // and must mutate the default value.)
-    let driver: Arc<dyn Driver> = Arc::new(Claude::with_config(config));
-
-    let mut session = Session::new(driver, std::env::current_dir()?);
+    let mut session = Session::new(Claude::with_config(config), std::env::current_dir()?);
 
     let prompt = format!(
         "Read the file at {}/README and tell me its contents in one short line.",

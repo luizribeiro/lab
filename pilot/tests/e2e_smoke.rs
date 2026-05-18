@@ -11,8 +11,7 @@
 //!   * asserts at least one `AssistantText` event and exactly one `Complete` arrived.
 
 use futures_util::StreamExt;
-use pilot::{Claude, Codex, Driver, Event, Gemini, Pi, Session, TurnItem, TurnOptions};
-use std::sync::Arc;
+use pilot::{Claude, Codex, Event, Gemini, Pi, Session, TurnItem, TurnOptions};
 
 /// True if the user opted into E2E by setting `PILOT_E2E=1`.
 fn e2e_enabled() -> bool {
@@ -46,14 +45,14 @@ async fn smoke(agent: &str) {
         return;
     }
 
-    let driver: Arc<dyn Driver> = match agent {
-        "claude" => Arc::new(Claude::new()),
-        "codex" => Arc::new(Codex::new()),
-        "gemini" => Arc::new(Gemini::new()),
-        "pi" => Arc::new(Pi::new()),
+    let workdir = std::env::temp_dir();
+    let mut session = match agent {
+        "claude" => Session::new(Claude::new(), workdir),
+        "codex" => Session::new(Codex::new(), workdir),
+        "gemini" => Session::new(Gemini::new(), workdir),
+        "pi" => Session::new(Pi::new(), workdir),
         other => panic!("unknown agent: {other}"),
     };
-    let mut session = Session::new(driver, std::env::temp_dir());
 
     let mut opts = TurnOptions::default();
     opts.timeout = Some(std::time::Duration::from_secs(60));

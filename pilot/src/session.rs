@@ -46,15 +46,11 @@ pub struct Session {
 
 impl Session {
     /// Open a fresh session with a newly-minted UUID.
-    pub fn new(driver: Arc<dyn Driver>, workdir: impl Into<PathBuf>) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            driver,
-            workdir: workdir.into(),
-            recorded_turns: Vec::new(),
-            busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            turns_completed: Arc::new(AtomicUsize::new(0)),
-        }
+    ///
+    /// Takes the driver by value; the `Arc` used for sharing with the
+    /// turn-stream is constructed internally.
+    pub fn new<D: Driver + 'static>(driver: D, workdir: impl Into<PathBuf>) -> Self {
+        Self::with_dyn_driver(Arc::new(driver), Uuid::new_v4(), workdir)
     }
 
     /// Reconstruct a `Session` from an existing UUID.
@@ -72,14 +68,20 @@ impl Session {
     /// `CodexConfig.state.thread_store_path` to be set if you want
     /// `Session::resume` to recover an existing codex thread; otherwise
     /// it will fall back to a new-thread command (logged via `tracing`).
-    pub fn resume(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self {
+    pub fn resume<D: Driver + 'static>(driver: D, id: Uuid, workdir: impl Into<PathBuf>) -> Self {
+        let mut s = Self::with_dyn_driver(Arc::new(driver), id, workdir);
+        s.turns_completed = Arc::new(AtomicUsize::new(1));
+        s
+    }
+
+    fn with_dyn_driver(driver: Arc<dyn Driver>, id: Uuid, workdir: impl Into<PathBuf>) -> Self {
         Self {
             id,
             driver,
             workdir: workdir.into(),
             recorded_turns: Vec::new(),
             busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            turns_completed: Arc::new(AtomicUsize::new(1)),
+            turns_completed: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -270,15 +272,15 @@ mod tests {
     #[tokio::test]
     async fn new_mints_unique_uuids() {
         let s1 = Session::new(
-            Arc::new(ScriptDriver {
+            ScriptDriver {
                 script: PathBuf::new(),
-            }),
+            },
             "/tmp",
         );
         let s2 = Session::new(
-            Arc::new(ScriptDriver {
+            ScriptDriver {
                 script: PathBuf::new(),
-            }),
+            },
             "/tmp",
         );
         assert_ne!(s1.id(), s2.id());
@@ -287,10 +289,12 @@ mod tests {
     #[tokio::test]
     async fn send_streams_events_from_driver_command() {
         let script = write_script(&[r#"emit {"n":1}"#, r#"emit {"n":2}"#, "exit 0"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let mut stream = session
             .send("anything", TurnOptions::default())
@@ -311,10 +315,12 @@ mod tests {
     #[tokio::test]
     async fn send_honors_turnoptions_timeout() {
         let script = write_script(&["sleep 30000"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let opts = TurnOptions {
             timeout: Some(std::time::Duration::from_millis(150)),
@@ -329,10 +335,12 @@ mod tests {
 
     #[tokio::test]
     async fn record_and_recorded_turns_round_trip() {
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: PathBuf::new(),
-        });
-        let mut session = Session::new(driver, "/tmp");
+        let mut session = Session::new(
+            ScriptDriver {
+                script: PathBuf::new(),
+            },
+            "/tmp",
+        );
         assert!(session.recorded_turns().is_empty());
 
         session.record(Turn {
@@ -345,7 +353,7 @@ mod tests {
     #[tokio::test]
     async fn send_uses_session_uuid_as_command_argument() {
         struct UuidCapturingDriver {
-            seen: std::sync::Mutex<Option<Uuid>>,
+            seen: Arc<std::sync::Mutex<Option<Uuid>>>,
             script: PathBuf,
         }
         impl Driver for UuidCapturingDriver {
@@ -373,12 +381,14 @@ mod tests {
             }
         }
         let script = write_script(&["exit 0"]);
-        let driver = Arc::new(UuidCapturingDriver {
-            seen: std::sync::Mutex::new(None),
-            script: script.path().to_path_buf(),
-        });
-        let driver_dyn: Arc<dyn Driver> = driver.clone();
-        let mut session = Session::new(driver_dyn, std::env::temp_dir());
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let mut session = Session::new(
+            UuidCapturingDriver {
+                seen: seen.clone(),
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
         let expected_id = session.id();
 
         for _ in 0..2 {
@@ -388,17 +398,19 @@ mod tests {
                 .expect("send");
             while stream.next().await.is_some() {}
         }
-        let seen = *driver.seen.lock().unwrap();
+        let seen = *seen.lock().unwrap();
         assert_eq!(seen, Some(expected_id));
     }
 
     #[tokio::test]
     async fn second_send_while_first_in_flight_is_rejected() {
         let script = write_script(&["sleep 30000"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let _first = session
             .send("hi", TurnOptions::default())
@@ -414,10 +426,12 @@ mod tests {
     #[tokio::test]
     async fn second_send_works_after_first_completes() {
         let script = write_script(&[r#"emit {"n":1}"#, "exit 0"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let mut s1 = session
             .send("first", TurnOptions::default())
@@ -433,10 +447,12 @@ mod tests {
     #[tokio::test]
     async fn session_is_reusable_after_cancel() {
         let script = write_script(&["sleep 30000"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let s1 = session
             .send("first", TurnOptions::default())
@@ -453,10 +469,12 @@ mod tests {
     #[tokio::test]
     async fn second_send_works_after_first_dropped() {
         let script = write_script(&["sleep 30000"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
-        let mut session = Session::new(driver, std::env::temp_dir());
+        let mut session = Session::new(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let s1 = session
             .send("first", TurnOptions::default())
@@ -472,10 +490,13 @@ mod tests {
     #[tokio::test]
     async fn resume_preserves_supplied_uuid() {
         let id = Uuid::new_v4();
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: PathBuf::new(),
-        });
-        let session = Session::resume(driver, id, "/tmp");
+        let session = Session::resume(
+            ScriptDriver {
+                script: PathBuf::new(),
+            },
+            id,
+            "/tmp",
+        );
         assert_eq!(session.id(), id);
     }
 
@@ -502,15 +523,15 @@ mod tests {
             }
         }
         let id = Uuid::new_v4();
-        let _session = Session::resume(Arc::new(NeverSpawnDriver), id, "/tmp");
+        let _session = Session::resume(NeverSpawnDriver, id, "/tmp");
     }
 
     #[tokio::test]
     async fn first_send_uses_command_subsequent_uses_resume_command() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::Ordering;
         struct CountingDriver {
-            command_calls: AtomicUsize,
-            resume_calls: AtomicUsize,
+            command_calls: Arc<AtomicUsize>,
+            resume_calls: Arc<AtomicUsize>,
             script: PathBuf,
         }
         impl Driver for CountingDriver {
@@ -552,13 +573,16 @@ mod tests {
         }
 
         let script = write_script(&["exit 0"]);
-        let driver = Arc::new(CountingDriver {
-            command_calls: AtomicUsize::new(0),
-            resume_calls: AtomicUsize::new(0),
-            script: script.path().to_path_buf(),
-        });
-        let driver_dyn: Arc<dyn Driver> = driver.clone();
-        let mut session = Session::new(driver_dyn, std::env::temp_dir());
+        let command_calls = Arc::new(AtomicUsize::new(0));
+        let resume_calls = Arc::new(AtomicUsize::new(0));
+        let mut session = Session::new(
+            CountingDriver {
+                command_calls: command_calls.clone(),
+                resume_calls: resume_calls.clone(),
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let mut s = session
             .send("turn1", TurnOptions::default())
@@ -577,12 +601,12 @@ mod tests {
         while s.next().await.is_some() {}
 
         assert_eq!(
-            driver.command_calls.load(Ordering::SeqCst),
+            command_calls.load(Ordering::SeqCst),
             1,
             "command only on first turn"
         );
         assert_eq!(
-            driver.resume_calls.load(Ordering::SeqCst),
+            resume_calls.load(Ordering::SeqCst),
             2,
             "resume on turns 2 and 3"
         );
@@ -590,10 +614,10 @@ mod tests {
 
     #[tokio::test]
     async fn failed_first_turn_still_uses_command_on_retry() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::Ordering;
         struct CountingDriver {
-            command_calls: AtomicUsize,
-            resume_calls: AtomicUsize,
+            command_calls: Arc<AtomicUsize>,
+            resume_calls: Arc<AtomicUsize>,
             script: PathBuf,
         }
         impl Driver for CountingDriver {
@@ -635,13 +659,16 @@ mod tests {
         }
 
         let script = write_script(&["exit 1"]);
-        let driver = Arc::new(CountingDriver {
-            command_calls: AtomicUsize::new(0),
-            resume_calls: AtomicUsize::new(0),
-            script: script.path().to_path_buf(),
-        });
-        let driver_dyn: Arc<dyn Driver> = driver.clone();
-        let mut session = Session::new(driver_dyn, std::env::temp_dir());
+        let command_calls = Arc::new(AtomicUsize::new(0));
+        let resume_calls = Arc::new(AtomicUsize::new(0));
+        let mut session = Session::new(
+            CountingDriver {
+                command_calls: command_calls.clone(),
+                resume_calls: resume_calls.clone(),
+                script: script.path().to_path_buf(),
+            },
+            std::env::temp_dir(),
+        );
 
         let mut s1 = session
             .send("turn1", TurnOptions::default())
@@ -657,19 +684,19 @@ mod tests {
         while s2.next().await.is_some() {}
 
         assert_eq!(
-            driver.command_calls.load(Ordering::SeqCst),
+            command_calls.load(Ordering::SeqCst),
             2,
             "both turns use command on retry"
         );
-        assert_eq!(driver.resume_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resume_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn resumed_session_uses_resume_command_on_first_send() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::Ordering;
         struct CountingDriver {
-            command_calls: AtomicUsize,
-            resume_calls: AtomicUsize,
+            command_calls: Arc<AtomicUsize>,
+            resume_calls: Arc<AtomicUsize>,
             script: PathBuf,
         }
         impl Driver for CountingDriver {
@@ -710,27 +737,31 @@ mod tests {
             }
         }
         let script = write_script(&["exit 0"]);
-        let driver = Arc::new(CountingDriver {
-            command_calls: AtomicUsize::new(0),
-            resume_calls: AtomicUsize::new(0),
-            script: script.path().to_path_buf(),
-        });
-        let driver_dyn: Arc<dyn Driver> = driver.clone();
-        let mut session = Session::resume(driver_dyn, Uuid::new_v4(), std::env::temp_dir());
+        let command_calls = Arc::new(AtomicUsize::new(0));
+        let resume_calls = Arc::new(AtomicUsize::new(0));
+        let mut session = Session::resume(
+            CountingDriver {
+                command_calls: command_calls.clone(),
+                resume_calls: resume_calls.clone(),
+                script: script.path().to_path_buf(),
+            },
+            Uuid::new_v4(),
+            std::env::temp_dir(),
+        );
         let mut s = session
             .send("continuation", TurnOptions::default())
             .await
             .expect("send");
         while s.next().await.is_some() {}
 
-        assert_eq!(driver.command_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(driver.resume_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(command_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resume_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn resumed_session_uses_supplied_uuid_in_send() {
         struct UuidCapturingDriver {
-            seen: std::sync::Mutex<Option<Uuid>>,
+            seen: Arc<std::sync::Mutex<Option<Uuid>>>,
             script: PathBuf,
         }
         impl Driver for UuidCapturingDriver {
@@ -758,13 +789,16 @@ mod tests {
             }
         }
         let script = write_script(&["exit 0"]);
-        let driver = Arc::new(UuidCapturingDriver {
-            seen: std::sync::Mutex::new(None),
-            script: script.path().to_path_buf(),
-        });
-        let driver_dyn: Arc<dyn Driver> = driver.clone();
+        let seen = Arc::new(std::sync::Mutex::new(None));
         let id = Uuid::new_v4();
-        let mut session = Session::resume(driver_dyn, id, std::env::temp_dir());
+        let mut session = Session::resume(
+            UuidCapturingDriver {
+                seen: seen.clone(),
+                script: script.path().to_path_buf(),
+            },
+            id,
+            std::env::temp_dir(),
+        );
 
         let mut stream = session
             .send("anything", TurnOptions::default())
@@ -772,18 +806,27 @@ mod tests {
             .expect("send");
         while stream.next().await.is_some() {}
 
-        assert_eq!(*driver.seen.lock().unwrap(), Some(id));
+        assert_eq!(*seen.lock().unwrap(), Some(id));
     }
 
     #[tokio::test]
     async fn cross_session_lock_blocks_concurrent_same_uuid() {
         let script = write_script(&["sleep 30000"]);
-        let driver: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script.path().to_path_buf(),
-        });
         let id = Uuid::new_v4();
-        let mut a = Session::resume(driver.clone(), id, std::env::temp_dir());
-        let mut b = Session::resume(driver, id, std::env::temp_dir());
+        let mut a = Session::resume(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            id,
+            std::env::temp_dir(),
+        );
+        let mut b = Session::resume(
+            ScriptDriver {
+                script: script.path().to_path_buf(),
+            },
+            id,
+            std::env::temp_dir(),
+        );
 
         let _stream_a = a
             .send("first", TurnOptions::default())
@@ -800,15 +843,21 @@ mod tests {
     async fn cross_session_lock_releases_after_first_session_drops_stream() {
         let script_a = write_script(&[r#"emit {"n":1}"#, "exit 0"]);
         let script_b = write_script(&["exit 0"]);
-        let driver_a: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script_a.path().to_path_buf(),
-        });
-        let driver_b: Arc<dyn Driver> = Arc::new(ScriptDriver {
-            script: script_b.path().to_path_buf(),
-        });
         let id = Uuid::new_v4();
-        let mut a = Session::resume(driver_a, id, std::env::temp_dir());
-        let mut b = Session::resume(driver_b, id, std::env::temp_dir());
+        let mut a = Session::resume(
+            ScriptDriver {
+                script: script_a.path().to_path_buf(),
+            },
+            id,
+            std::env::temp_dir(),
+        );
+        let mut b = Session::resume(
+            ScriptDriver {
+                script: script_b.path().to_path_buf(),
+            },
+            id,
+            std::env::temp_dir(),
+        );
 
         let mut s_a = a
             .send("a-turn", TurnOptions::default())
