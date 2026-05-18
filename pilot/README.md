@@ -125,14 +125,15 @@ Runnable examples live in `examples/`:
 | `examples/multi_turn.rs` | Two turns on the same `Session`; the second auto-dispatches through `resume_command()`. |
 | `examples/with_api_key.rs` | Explicit `Auth::ApiKey(SecretString)` configuration. |
 | `examples/with_paths.rs` | `ClaudeConfig.additional_dirs` + `TurnOptions.timeout`. `AgentPaths::config_home` is shown commented-out (needs auth in the isolated dir). |
-| `examples/chat.rs` | Interactive ratatui chat TUI that drives any of the four agents via `--agent`. Streams assistant deltas, renders tool calls/results, Esc cancels the in-flight turn. Requires the corresponding CLI binary on `PATH`. |
+| `examples/repl/` | Self-contained workspace crate (`pilot-repl`) with a polished REPL: markdown-rendered assistant replies (termimad), Working… spinner with per-tool status lines (indicatif), Esc/Ctrl+C cancels the in-flight turn, Ctrl+D quits. Prompt supports Ctrl+R history search and Ctrl+G edit-in-`$EDITOR`, persists history at `~/.pilothistory`. `--resume <uuid>` continues a previous session; the command to resume the current session is printed on exit. Deps live in its own `Cargo.toml` (kept out of pilot's dev-deps). |
 
 ```sh
 cargo run --example greeting -- claude
 cargo run --example multi_turn -- gemini
 PILOT_AGENT_KEY=sk-... cargo run --example with_api_key
 cargo run --example with_paths
-cargo run --example chat -- --agent claude
+cargo run -p pilot-repl -- --agent claude
+cargo run -p pilot-repl -- --agent claude --resume 6e7c…
 ```
 
 ## Design notes

@@ -1,0 +1,23 @@
+[package]
+name = "pilot-repl"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "pilot-repl"
+path = "src/main.rs"
+
+[dependencies]
+pilot = { path = "../.." }
+crossterm = { version = "0.28", features = ["event-stream"] }
+dirs = "6"
+futures-util = "0.3"
+indicatif = "0.18"
+rustyline = "15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+termimad = "0.34"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+uuid = "1"
