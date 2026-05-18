@@ -1,0 +1,76 @@
+use std::io;
+
+use pilot::{Event as PilotEvent, TurnItem, TurnStream};
+
+use crate::app::Term;
+use crate::ui;
+
+/// A turn that is currently streaming. Owns the stream plus enough state
+/// to render the in-flight UI (pending tool list, buffered assistant text).
+pub struct ActiveTurn {
+    pub stream: TurnStream,
+    pub prompt: String,
+    pub text_buffer: String,
+    pub pending_tools: Vec<PendingTool>,
+}
+
+#[derive(Clone)]
+pub struct PendingTool {
+    pub call_id: String,
+    pub name: String,
+}
+
+impl ActiveTurn {
+    pub fn new(stream: TurnStream, prompt: String) -> Self {
+        Self {
+            stream,
+            prompt,
+            text_buffer: String::new(),
+            pending_tools: Vec::new(),
+        }
+    }
+}
+
+/// Poll the active turn's stream, parking forever if no turn is in flight.
+/// This is the right-hand side of the main `tokio::select!`.
+pub async fn poll(
+    active: &mut Option<ActiveTurn>,
+) -> Option<Result<TurnItem, pilot::Error>> {
+    match active {
+        Some(a) => Some(futures_util::StreamExt::next(&mut a.stream).await?),
+        None => std::future::pending().await,
+    }
+}
+
+/// Apply one pilot::Event to the active turn's state. Tool results are
+/// committed to scrollback (append-only); pending tool lines live inside
+/// the inline viewport and get drawn each frame from `active.pending_tools`.
+pub fn process_event(
+    active: &mut ActiveTurn,
+    ev: PilotEvent,
+    terminal: &mut Term,
+) -> io::Result<()> {
+    match ev {
+        PilotEvent::AssistantText { delta } => {
+            active.text_buffer.push_str(&delta);
+        }
+        PilotEvent::ToolCall { call_id, name, .. } => {
+            active.pending_tools.push(PendingTool { call_id, name });
+        }
+        PilotEvent::ToolResult { call_id, ok, .. } => {
+            if let Some(pos) = active
+                .pending_tools
+                .iter()
+                .position(|t| t.call_id == call_id)
+            {
+                let tool = active.pending_tools.remove(pos);
+                ui::commit_tool_result(terminal, &tool.name, ok)?;
+            }
+        }
+        PilotEvent::TurnComplete { ok: false } => {
+            ui::commit_status_line(terminal, "(turn reported failure)", ui::CommitColor::Err)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}

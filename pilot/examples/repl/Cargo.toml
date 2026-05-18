@@ -10,14 +10,15 @@ path = "src/main.rs"
 
 [dependencies]
 pilot = { path = "../.." }
-crossterm = { version = "0.28", features = ["event-stream"] }
+clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"
 futures-util = "0.3"
-indicatif = "0.18"
-rustyline = "15"
+ratatui = "0.30"
+ratskin = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
-termimad = "0.34"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tui-textarea = { package = "tui-textarea-2", version = "0.11", features = ["search"] }
 uuid = "1"
