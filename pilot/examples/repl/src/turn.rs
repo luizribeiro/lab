@@ -4,6 +4,7 @@ use pilot::{Event as PilotEvent, TurnItem, TurnStream};
 
 use crate::app::Term;
 use crate::markdown::MarkdownSkin;
+use crate::transcript::Entry as TranscriptEntry;
 use crate::ui;
 
 /// A turn that is currently streaming. Owns the stream plus enough state
@@ -14,6 +15,7 @@ pub struct ActiveTurn {
     pub text_buffer: String,
     pub pending_text: String,
     pub last_rendered_tool_result: bool,
+    pub transcript_entries: Vec<TranscriptEntry>,
     pub pending_tools: Vec<PendingTool>,
 }
 
@@ -31,6 +33,7 @@ impl ActiveTurn {
             text_buffer: String::new(),
             pending_text: String::new(),
             last_rendered_tool_result: false,
+            transcript_entries: Vec::new(),
             pending_tools: Vec::new(),
         }
     }
@@ -72,6 +75,10 @@ pub fn process_event(
             {
                 let tool = active.pending_tools.remove(pos);
                 ui::commit_tool_result(terminal, &tool.name, ok)?;
+                active.transcript_entries.push(TranscriptEntry::Tool {
+                    name: tool.name,
+                    ok,
+                });
                 active.last_rendered_tool_result = true;
             }
         }
@@ -95,6 +102,9 @@ pub fn flush_pending_text(
             ui::commit_blank_line(terminal)?;
         }
         ui::commit_markdown(terminal, skin, text)?;
+        active.transcript_entries.push(TranscriptEntry::Assistant {
+            content: text.to_string(),
+        });
         active.last_rendered_tool_result = false;
     }
     active.pending_text.clear();

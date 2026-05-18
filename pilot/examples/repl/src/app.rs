@@ -276,9 +276,10 @@ impl App {
             Ok(TurnItem::Complete(_)) => {
                 if let Some(mut active) = self.active.take() {
                     turn::flush_pending_text(&mut active, terminal, &self.skin)?;
-                    let trimmed = active.text_buffer.trim();
-                    if !trimmed.is_empty() {
-                        let _ = self.transcript.append_turn(&active.prompt, trimmed);
+                    if !active.transcript_entries.is_empty() {
+                        let _ = self
+                            .transcript
+                            .append_turn(&active.prompt, &active.transcript_entries);
                     }
                 }
             }

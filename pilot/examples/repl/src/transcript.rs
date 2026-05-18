@@ -12,11 +12,12 @@ pub struct Transcript {
     path: PathBuf,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Entry {
     User { content: String },
     Assistant { content: String },
+    Tool { name: String, ok: bool },
 }
 
 impl Transcript {
@@ -28,7 +29,7 @@ impl Transcript {
         }
     }
 
-    pub fn append_turn(&self, user: &str, assistant: &str) -> io::Result<()> {
+    pub fn append_turn(&self, user: &str, entries: &[Entry]) -> io::Result<()> {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -41,14 +42,13 @@ impl Transcript {
             })
             .map_err(io::Error::other)?
         )?;
-        writeln!(
-            f,
-            "{}",
-            serde_json::to_string(&Entry::Assistant {
-                content: assistant.to_string()
-            })
-            .map_err(io::Error::other)?
-        )?;
+        for entry in entries {
+            writeln!(
+                f,
+                "{}",
+                serde_json::to_string(entry).map_err(io::Error::other)?
+            )?;
+        }
         Ok(())
     }
 
@@ -69,17 +69,31 @@ impl Transcript {
         }
         let turns = entries
             .iter()
-            .filter(|e| matches!(e, Entry::Assistant { .. }))
+            .filter(|e| matches!(e, Entry::User { .. }))
             .count();
         let label = if turns == 1 { "turn" } else { "turns" };
         ui::commit_dim_line(
             terminal,
             &format!("── conversation so far ({turns} {label}) ──"),
         )?;
+        let mut last_tool = false;
         for entry in entries {
             match entry {
-                Entry::User { content } => ui::commit_user_prompt(terminal, &content)?,
-                Entry::Assistant { content } => ui::commit_markdown(terminal, skin, &content)?,
+                Entry::User { content } => {
+                    ui::commit_user_prompt(terminal, &content)?;
+                    last_tool = false;
+                }
+                Entry::Assistant { content } => {
+                    if last_tool {
+                        ui::commit_blank_line(terminal)?;
+                    }
+                    ui::commit_markdown(terminal, skin, &content)?;
+                    last_tool = false;
+                }
+                Entry::Tool { name, ok } => {
+                    ui::commit_tool_result(terminal, &name, ok)?;
+                    last_tool = true;
+                }
             }
         }
         ui::commit_dim_line(terminal, "── end of history ──")?;
@@ -90,4 +104,50 @@ impl Transcript {
 fn transcripts_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
     home.join(".pilot").join("transcripts")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_round_trips_tool_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = Transcript {
+            path: dir.path().join("session.jsonl"),
+        };
+        let entries = vec![
+            Entry::Assistant {
+                content: "checking".to_string(),
+            },
+            Entry::Tool {
+                name: "command_execution".to_string(),
+                ok: true,
+            },
+            Entry::Assistant {
+                content: "done".to_string(),
+            },
+        ];
+
+        transcript.append_turn("inspect", &entries).unwrap();
+
+        assert_eq!(
+            transcript.load(),
+            vec![
+                Entry::User {
+                    content: "inspect".to_string(),
+                },
+                Entry::Assistant {
+                    content: "checking".to_string(),
+                },
+                Entry::Tool {
+                    name: "command_execution".to_string(),
+                    ok: true,
+                },
+                Entry::Assistant {
+                    content: "done".to_string(),
+                },
+            ]
+        );
+    }
 }
