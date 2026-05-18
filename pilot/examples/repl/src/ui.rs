@@ -29,26 +29,14 @@ impl CommitColor {
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let status_h = status_height(app);
-    // Composer block height = textarea lines (capped) + 2 border rows.
-    // Status sits above the composer; any unused rows become padding
-    // *below* the composer (not above) so the top bar always sits
-    // directly under the most recent scrollback line — otherwise an
-    // extra blank row would appear between scrollback and the top bar
-    // whenever the viewport had unused capacity.
-    let textarea_lines = app.composer.textarea.lines().len().max(1) as u16;
-    let composer_h = (textarea_lines + 2).min(area.height.saturating_sub(status_h));
-    let pad_h = area
-        .height
-        .saturating_sub(status_h)
-        .saturating_sub(composer_h);
-
+    // Composer block fills everything below status. When idle the block
+    // is the whole viewport; when active it's viewport minus 1 row for
+    // the status line. tui-textarea expands to fill the inner area, so
+    // a single-line prompt sits at the top with blank space below — the
+    // same shape codex's composer uses.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(status_h),
-            Constraint::Length(composer_h),
-            Constraint::Length(pad_h),
-        ])
+        .constraints([Constraint::Length(status_h), Constraint::Min(1)])
         .split(area);
 
     if status_h > 0 {
@@ -183,6 +171,15 @@ pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
 pub fn commit_markdown(terminal: &mut Term, skin: &MarkdownSkin, text: &str) -> io::Result<()> {
     let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut lines = skin.render(text, width);
+    // ratskin tends to append a blank line of its own; collapse any
+    // trailing blanks so our explicit between-turn separator below is
+    // always exactly one row.
+    while lines
+        .last()
+        .is_some_and(|l| l.spans.iter().all(|s| s.content.trim().is_empty()))
+    {
+        lines.pop();
+    }
     lines.push(Line::raw(""));
     insert_lines(terminal, lines)
 }
