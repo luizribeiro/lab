@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use uuid::Uuid;
 
@@ -71,6 +72,7 @@ impl Driver for TestDriver {
 pub struct RecordingDriver<D: Driver> {
     inner: D,
     file: Mutex<File>,
+    recording_failed: AtomicBool,
 }
 
 impl<D: Driver> RecordingDriver<D> {
@@ -85,7 +87,15 @@ impl<D: Driver> RecordingDriver<D> {
         Ok(Self {
             inner,
             file: Mutex::new(file),
+            recording_failed: AtomicBool::new(false),
         })
+    }
+
+    /// True if any recording write or lock acquisition failed during this
+    /// session's lifetime. Use this in test wrappers to assert recording was
+    /// complete before treating the captured fixture as authoritative.
+    pub fn recording_failed(&self) -> bool {
+        self.recording_failed.load(Ordering::SeqCst)
     }
 }
 
@@ -117,9 +127,22 @@ impl<D: Driver> Driver for RecordingDriver<D> {
     }
 
     fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
-        if let Ok(line) = serde_json::to_string(&value) {
-            if let Ok(mut f) = self.file.lock() {
-                let _ = writeln!(f, "{line}");
+        match serde_json::to_string(&value) {
+            Ok(line) => match self.file.lock() {
+                Ok(mut f) => {
+                    if let Err(e) = writeln!(f, "{line}") {
+                        tracing::warn!(error = %e, "RecordingDriver: file write failed");
+                        self.recording_failed.store(true, Ordering::SeqCst);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "RecordingDriver: mutex poisoned");
+                    self.recording_failed.store(true, Ordering::SeqCst);
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "RecordingDriver: serialization failed");
+                self.recording_failed.store(true, Ordering::SeqCst);
             }
         }
         self.inner.parse(value)
@@ -204,6 +227,15 @@ mod tests {
             )
             .unwrap();
         assert!(spec.args.contains(&"hi".to_string()));
+    }
+
+    #[test]
+    fn recording_failed_is_false_after_successful_writes() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let inner = TestDriver::new("inner", "/bin/echo");
+        let rec = RecordingDriver::new(inner, tmp.path()).unwrap();
+        let _ = rec.parse(serde_json::json!({"x": 1}));
+        assert!(!rec.recording_failed());
     }
 
     #[test]
