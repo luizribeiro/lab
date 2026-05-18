@@ -259,7 +259,8 @@ impl DefaultSanitizer {
             }
             if s[i..].starts_with(&base) {
                 let after_base = i + base.len();
-                let boundary_ok = after_base == s.len() || s.as_bytes()[after_base] == b'/';
+                let boundary_ok = after_base == s.len()
+                    || matches!(s.as_bytes()[after_base], b'/' | b'\\');
                 if !boundary_ok {
                     continue;
                 }
