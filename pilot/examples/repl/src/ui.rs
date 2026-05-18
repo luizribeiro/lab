@@ -82,10 +82,17 @@ pub fn status_height(app: &App) -> u16 {
 
 fn draw_status(frame: &mut Frame, area: Rect, _app: &App) {
     let spinner = current_tick();
-    let line = Line::from(Span::styled(
-        format!("{spinner} "),
-        Style::default().fg(Color::Cyan),
-    ));
+    let line = Line::from(vec![
+        Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
+        Span::styled("Working…", Style::default().add_modifier(Modifier::DIM)),
+        Span::raw("  "),
+        Span::styled(
+            "esc to interrupt",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ),
+    ]);
     frame.render_widget(Paragraph::new(line), area);
 }
 
