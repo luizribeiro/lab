@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -72,7 +73,7 @@ impl Driver for TestDriver {
 pub struct RecordingDriver<D: Driver> {
     inner: D,
     file: Mutex<File>,
-    recording_failed: AtomicBool,
+    recording_failed: Arc<AtomicBool>,
 }
 
 impl<D: Driver> RecordingDriver<D> {
@@ -87,7 +88,7 @@ impl<D: Driver> RecordingDriver<D> {
         Ok(Self {
             inner,
             file: Mutex::new(file),
-            recording_failed: AtomicBool::new(false),
+            recording_failed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -96,6 +97,13 @@ impl<D: Driver> RecordingDriver<D> {
     /// complete before treating the captured fixture as authoritative.
     pub fn recording_failed(&self) -> bool {
         self.recording_failed.load(Ordering::SeqCst)
+    }
+
+    /// Returns a shared handle to the failure flag. Clone before passing the
+    /// driver into `Session::new`, then check the handle after the session
+    /// completes.
+    pub fn failure_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.recording_failed)
     }
 }
 
@@ -236,6 +244,18 @@ mod tests {
         let rec = RecordingDriver::new(inner, tmp.path()).unwrap();
         let _ = rec.parse(serde_json::json!({"x": 1}));
         assert!(!rec.recording_failed());
+    }
+
+    #[test]
+    fn failure_signal_survives_driver_move() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let inner = TestDriver::new("inner", "/bin/echo");
+        let rec = RecordingDriver::new(inner, tmp.path()).unwrap();
+        let signal = rec.failure_signal();
+        let arc_rec: Arc<dyn Driver> = Arc::new(rec);
+        let _ = arc_rec.parse(serde_json::json!({"x": 1}));
+        drop(arc_rec);
+        assert!(!signal.load(Ordering::SeqCst));
     }
 
     #[test]
