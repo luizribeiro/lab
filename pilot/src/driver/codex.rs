@@ -21,9 +21,9 @@ use crate::{Event, ParseError};
 #[non_exhaustive]
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxMode {
-    #[default]
     ReadOnly,
     WorkspaceWrite,
+    #[default]
     DangerFullAccess,
 }
 
@@ -34,6 +34,11 @@ pub struct CodexConfig {
     pub auth: Auth,
     pub default_model: Option<String>,
     pub sandbox: SandboxMode,
+    /// Pass `--dangerously-bypass-approvals-and-sandbox`. Defaults to `true`
+    /// so pilot can drive codex headlessly without per-tool approval prompts.
+    /// Set to `false` to restore codex's normal approval gate; pair with
+    /// out-of-band sandboxing (lockin / capsa / your own).
+    pub dangerously_bypass_approvals: bool,
     /// Pass `--skip-git-repo-check`. Defaults to `true` — pilot is a
     /// headless driver and codex refuses to run outside a git repo
     /// without this flag.
@@ -77,6 +82,7 @@ impl Default for CodexConfig {
             auth: Auth::default(),
             default_model: None,
             sandbox: SandboxMode::default(),
+            dangerously_bypass_approvals: true,
             skip_git_repo_check: true,
             config_overrides: Vec::new(),
             extra_env: Vec::new(),
@@ -145,6 +151,10 @@ impl Driver for Codex {
         };
         args.push("--sandbox".into());
         args.push(sandbox.into());
+
+        if self.config.dangerously_bypass_approvals {
+            args.push("--dangerously-bypass-approvals-and-sandbox".into());
+        }
 
         if self.config.skip_git_repo_check {
             args.push("--skip-git-repo-check".into());
@@ -478,7 +488,7 @@ mod tests {
             .unwrap();
         let rendered = format!("{} {}", spec.program.display(), spec.args.join(" "));
         expect![[r#"
-            codex exec --json --sandbox read-only --skip-git-repo-check hello
+            codex exec --json --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check hello
         "#]]
         .assert_eq(&format!("{rendered}\n"));
     }
@@ -498,6 +508,47 @@ mod tests {
             .unwrap();
         let i = spec.args.iter().position(|a| a == "--sandbox").unwrap();
         assert_eq!(spec.args[i + 1], "workspace-write");
+    }
+
+    #[test]
+    fn dangerously_bypass_approvals_emits_flag_when_true() {
+        let driver = Codex::with_config(CodexConfig {
+            dangerously_bypass_approvals: true,
+            ..Default::default()
+        });
+        let spec = driver
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
+            .unwrap();
+        assert!(
+            spec.args
+                .iter()
+                .any(|a| a == "--dangerously-bypass-approvals-and-sandbox")
+        );
+    }
+
+    #[test]
+    fn dangerously_bypass_approvals_omits_flag_when_false() {
+        let driver = Codex::with_config(CodexConfig {
+            dangerously_bypass_approvals: false,
+            ..Default::default()
+        });
+        let spec = driver
+            .command(
+                nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
+            .unwrap();
+        assert!(
+            !spec
+                .args
+                .iter()
+                .any(|a| a == "--dangerously-bypass-approvals-and-sandbox")
+        );
     }
 
     #[test]

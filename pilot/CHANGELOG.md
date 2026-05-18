@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   library; sandboxing is the caller's responsibility (see
   `docs/sandboxing.md` once it lands). Callers who want approval gating must
   opt in via `PermissionMode::Default` or `AcceptEdits`.
+- `CodexConfig::default().sandbox` is now `SandboxMode::DangerFullAccess`
+  (was `ReadOnly`).
+- `CodexConfig::default().dangerously_bypass_approvals` is `true` (new
+  field). Pilot drives codex headlessly with
+  `--dangerously-bypass-approvals-and-sandbox` by default.
+- Sandboxing is the caller's responsibility (see `docs/sandboxing.md` once
+  it lands). Use `lockin` or `capsa` for process isolation.
 
 ## [0.2.0] - 2026-05-18
 
