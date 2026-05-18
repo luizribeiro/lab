@@ -1,44 +1,42 @@
 //! Recorded scenario tests captured against real agent CLIs.
 //!
 //! Default mode is REPLAY against checked-in fixtures (no CLI needed).
-//! To re-record after a CLI behavior change:
+//! On a fresh checkout, missing fixtures are auto-recorded against the
+//! real CLI on first run. CI should set `PILOT_NO_RECORD=1` to fail loudly
+//! on missing fixtures instead.
 //!
-//!     PILOT_RECORD=<substring> cargo test --features test-support <test_name>
+//! Force re-record by deleting the fixture or `PILOT_RECORD=1 cargo test`.
 //!
-//! See `pilot::test_support::recorded_test` for the mode-selection rules.
+//! Fixture path is auto-derived from the test function name:
+//!     tests/fixtures/recorded/<fn_name>.jsonl
 
-use pilot::test_support::recorded_test::run_or_replay;
-use pilot::{Claude, Event, TurnOptions};
+use futures_util::StreamExt;
+use pilot::{Claude, Event, Session, TurnItem, TurnOptions, cassette};
 
-/// Sending a request with a clearly-invalid `--model` value should surface
-/// as a failed `TurnComplete` (ok: false) rather than a silent success.
 #[tokio::test]
 async fn claude_invalid_model_yields_failed_turn_complete() {
-    // Use `/tmp` (not std::env::temp_dir()) so the canonical path
-    // `/private/tmp` is stable across machines. macOS per-user
-    // `/var/folders/...` paths leak via tools that slugify cwd into
-    // strings the sanitizer can't see as a path.
-    let workdir = std::path::PathBuf::from("/tmp");
+    let driver = cassette!(Claude::new());
+    let mut session = Session::new(driver, "/tmp");
+
     let mut opts = TurnOptions::default();
     opts.model = Some("definitely-not-a-real-model-xyz".to_string());
     opts.timeout = Some(std::time::Duration::from_secs(30));
 
-    let turn = run_or_replay(
-        Claude::new,
-        "say hi",
-        opts,
-        workdir,
-        "tests/fixtures/recorded/claude/invalid_model.jsonl",
-    )
-    .await;
+    let mut stream = session.send("say hi", opts).await.expect("send failed");
 
-    let last = turn
-        .events
-        .last()
-        .expect("scenario produced no events at all");
+    let mut events: Vec<Event> = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(TurnItem::Event(e)) => events.push(e),
+            Ok(TurnItem::Complete(_)) => {}
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+
+    let last = events.last().expect("no events captured");
     assert!(
         matches!(last, Event::TurnComplete { ok: false }),
-        "expected final event TurnComplete {{ ok: false }}, got: {last:?}\nFull turn events: {:?}",
-        turn.events
+        "expected TurnComplete{{ok:false}}, got {last:?}\nfull events: {events:?}"
     );
 }
