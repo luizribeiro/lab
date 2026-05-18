@@ -5,12 +5,14 @@
 //!     cargo run -- --agent claude
 //!     cargo run -- --agent claude --resume 6e7c...
 
+mod agent;
 mod app;
 mod composer;
 mod markdown;
 mod transcript;
 mod turn;
 mod ui;
+mod utils;
 
 use std::panic;
 use std::path::PathBuf;
@@ -19,7 +21,8 @@ use clap::{Parser, ValueEnum};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use uuid::Uuid;
 
-use crate::app::{AgentKind, App};
+use crate::agent::AgentKind;
+use crate::app::App;
 
 #[derive(Parser)]
 #[command(name = "orb", about = "Terminal workspace for agentic coding sessions")]

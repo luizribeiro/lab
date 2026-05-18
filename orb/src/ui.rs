@@ -9,8 +9,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
-use crate::app::{AgentKind, App, Term};
+use crate::agent::AgentKind;
+use crate::app::{App, Term};
 use crate::markdown::MarkdownSkin;
+use crate::utils::{abbreviate_home, git_branch};
 
 const BRAILLE_TICKS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -229,32 +231,6 @@ fn format_cwd(cwd: &Path) -> String {
     match git_branch(cwd) {
         Some(branch) => format!("{pretty} on {branch}"),
         None => pretty,
-    }
-}
-
-fn abbreviate_home(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(rel) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", rel.display());
-    }
-    path.display().to_string()
-}
-
-fn git_branch(cwd: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    if s.is_empty() || s == "HEAD" {
-        None
-    } else {
-        Some(s)
     }
 }
 

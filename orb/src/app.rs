@@ -1,23 +1,22 @@
 use std::collections::VecDeque;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
-use pilot::{
-    Claude, ClaudeConfig, Codex, CodexConfig, Gemini, GeminiConfig, Pi, PiConfig, Session,
-    TurnItem, TurnOptions,
-};
+use pilot::{Session, TurnItem, TurnOptions};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use uuid::Uuid;
 
+use crate::agent::{self, AgentKind};
 use crate::composer::Composer;
 use crate::markdown::MarkdownSkin;
 use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
 use crate::ui;
+use crate::utils;
 
 /// Inline-viewport height. Always exactly 3 rows: top bar + 1
 /// textarea row + bottom bar. When a turn is in flight, the spinner
@@ -40,36 +39,6 @@ pub fn make_terminal(height: u16) -> io::Result<Term> {
             viewport: ratatui::Viewport::Inline(height),
         },
     )
-}
-
-#[derive(Clone, Copy)]
-pub enum AgentKind {
-    Claude,
-    Codex,
-    Gemini,
-    Pi,
-}
-
-impl AgentKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            AgentKind::Claude => "claude",
-            AgentKind::Codex => "codex",
-            AgentKind::Gemini => "gemini",
-            AgentKind::Pi => "pi",
-        }
-    }
-
-    /// `None` for `pi` because its model depends on the configured
-    /// provider — hardcoding one here would break user setups.
-    pub fn default_model(self) -> Option<&'static str> {
-        match self {
-            AgentKind::Claude => Some("claude-opus-4-7"),
-            AgentKind::Codex => Some("gpt-5.5"),
-            AgentKind::Gemini => Some("gemini-3.1-pro-preview"),
-            AgentKind::Pi => None,
-        }
-    }
 }
 
 pub struct App {
@@ -100,9 +69,9 @@ impl App {
         model_override: Option<String>,
     ) -> Self {
         let model = model_override.or_else(|| agent.default_model().map(String::from));
-        let session = make_session(agent, workdir, resume, model.clone());
+        let session = agent::make_session(agent, workdir, resume, model.clone());
         let transcript = Transcript::for_session(agent, session.id());
-        let composer = Composer::new(history_path());
+        let composer = Composer::new(utils::history_path());
         Self {
             agent,
             model,
@@ -343,63 +312,4 @@ async fn maybe_tick(enabled: bool) {
     }
 }
 
-fn make_session(
-    agent: AgentKind,
-    workdir: &Path,
-    resume: Option<Uuid>,
-    model: Option<String>,
-) -> Session {
-    match agent {
-        AgentKind::Claude => {
-            let mut cfg = ClaudeConfig::default();
-            cfg.default_model = model;
-            let driver = Claude::with_config(cfg);
-            match resume {
-                Some(id) => Session::resume(driver, id, workdir),
-                None => Session::new(driver, workdir),
-            }
-        }
-        AgentKind::Codex => {
-            let mut cfg = CodexConfig::default();
-            cfg.state.thread_store_path = Some(codex_thread_store());
-            cfg.default_model = model;
-            let driver = Codex::with_config(cfg);
-            match resume {
-                Some(id) => Session::resume(driver, id, workdir),
-                None => Session::new(driver, workdir),
-            }
-        }
-        AgentKind::Gemini => {
-            let mut cfg = GeminiConfig::default();
-            cfg.default_model = model;
-            let driver = Gemini::with_config(cfg);
-            match resume {
-                Some(id) => Session::resume(driver, id, workdir),
-                None => Session::new(driver, workdir),
-            }
-        }
-        AgentKind::Pi => {
-            let mut cfg = PiConfig::default();
-            cfg.default_model = model;
-            let driver = Pi::with_config(cfg);
-            match resume {
-                Some(id) => Session::resume(driver, id, workdir),
-                None => Session::new(driver, workdir),
-            }
-        }
-    }
-}
-
-fn history_path() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(".orb").join("history"))
-        .unwrap_or_else(|| PathBuf::from(".orb-history"))
-}
-
-fn codex_thread_store() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    let dir = home.join(".orb");
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("codex-threads.json")
-}
 

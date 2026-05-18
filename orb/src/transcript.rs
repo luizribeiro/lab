@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::app::{AgentKind, Term};
+use crate::agent::AgentKind;
+use crate::app::Term;
 use crate::markdown::MarkdownSkin;
 use crate::ui;
+use crate::utils::transcripts_dir;
 
 pub struct Transcript {
     path: PathBuf,
@@ -103,11 +105,6 @@ impl Transcript {
         ui::commit_dim_line(terminal, "── end of history ──")?;
         Ok(())
     }
-}
-
-fn transcripts_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".orb").join("transcripts")
 }
 
 #[cfg(test)]
