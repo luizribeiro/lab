@@ -151,7 +151,6 @@ impl std::fmt::Debug for TurnStream {
 }
 
 impl TurnStream {
-    #[allow(dead_code)] // wired into Session in a later commit
     pub(crate) fn new(
         session_id: Uuid,
         handle: ProcessHandle,
@@ -179,7 +178,6 @@ impl TurnStream {
     /// Attach a counter incremented each time the stream yields
     /// [`TurnItem::Complete`]. Used by `Session` to dispatch the next turn to
     /// `command()` vs `resume_command()` based on observed completions.
-    #[allow(dead_code)]
     pub(crate) fn with_completion_counter(mut self, counter: Arc<AtomicUsize>) -> Self {
         self.completion_counter = Some(counter);
         self
@@ -187,7 +185,6 @@ impl TurnStream {
 
     /// Attach a busy guard whose `Drop` releases the owning session's
     /// in-flight flag. Called by `Session::send`.
-    #[allow(dead_code)]
     pub(crate) fn with_busy_guard(mut self, guard: BusyGuard) -> Self {
         self._busy_guard = Some(guard);
         self
@@ -195,7 +192,6 @@ impl TurnStream {
 
     /// Attach a cross-session guard whose `Drop` releases the
     /// `(driver, uuid)` lock. Called by `Session::send`.
-    #[allow(dead_code)]
     pub(crate) fn with_session_guard(mut self, guard: SessionGuard) -> Self {
         self._session_guard = Some(guard);
         self
@@ -215,7 +211,6 @@ impl TurnStream {
     /// Timeouts do NOT fire after [`TurnItem::Complete`] has been yielded —
     /// once the stream is finished, subsequent polls return `None`
     /// regardless of how much wall time has elapsed.
-    #[allow(dead_code)] // wired into Session in a later commit
     pub fn with_timeout(mut self, duration: Duration) -> Self {
         self.deadline = Some(Instant::now() + duration);
         self.timeout_dur = Some(duration);
@@ -242,7 +237,6 @@ impl TurnStream {
     ///   state (see [`TurnStream`] docs).
     /// * Equivalent to dropping the stream, plus the channel drain and
     ///   the returned [`Turn`] value.
-    #[allow(dead_code)] // wired into Session in a later commit
     pub async fn cancel(mut self) -> Turn {
         self.handle = None;
         self._busy_guard = None;

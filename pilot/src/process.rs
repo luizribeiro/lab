@@ -17,7 +17,6 @@ impl Drop for ProcessHandle {
     }
 }
 
-#[allow(dead_code)] // wired into Session in a later commit
 pub(crate) async fn spawn_jsonl(
     spec: CommandSpec,
     workdir: std::path::PathBuf,
