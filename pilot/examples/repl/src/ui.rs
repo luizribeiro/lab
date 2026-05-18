@@ -81,12 +81,7 @@ fn draw_composer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(&app.composer.textarea, area);
 }
 
-fn draw_search_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    search: &crate::composer::Search,
-) {
+fn draw_search_overlay(frame: &mut Frame, area: Rect, app: &App, search: &crate::composer::Search) {
     let matched = search
         .match_idx
         .and_then(|i| app.composer.history.entries.get(i))
@@ -124,16 +119,13 @@ fn current_tick() -> &'static str {
 pub fn commit_header(terminal: &mut Term, agent: AgentKind, resumed: bool) -> io::Result<()> {
     let suffix = if resumed { " (resumed)" } else { "" };
     let bar = Line::from(vec![
-        Span::styled(
-            "pilot repl",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("pilot repl", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(" — "),
         Span::styled(agent.label(), Style::default().fg(Color::Cyan)),
         Span::styled(suffix, Style::default().fg(Color::Yellow)),
     ]);
     let hint = Line::from(Span::styled(
-        "ctrl+r history · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
+        "↑/↓ history · ctrl+r search · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
@@ -152,7 +144,10 @@ pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
         })
         .collect();
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled("» ", Style::default().fg(Color::Cyan))));
+        lines.push(Line::from(Span::styled(
+            "» ",
+            Style::default().fg(Color::Cyan),
+        )));
     }
     lines.push(Line::raw(""));
     insert_lines(terminal, lines)

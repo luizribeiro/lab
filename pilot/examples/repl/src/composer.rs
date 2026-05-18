@@ -13,6 +13,8 @@ pub struct Composer {
     pub textarea: TextArea<'static>,
     pub history: History,
     pub search: Option<Search>,
+    history_cursor: Option<usize>,
+    history_draft: Option<Vec<String>>,
 }
 
 pub struct History {
@@ -33,10 +35,13 @@ impl Composer {
             textarea: new_textarea(Vec::new()),
             history,
             search: None,
+            history_cursor: None,
+            history_draft: None,
         }
     }
 
     pub fn input(&mut self, key: KeyEvent) {
+        self.reset_history_navigation();
         self.textarea.input(key);
     }
 
@@ -44,7 +49,40 @@ impl Composer {
         let lines = self.textarea.lines();
         let text = lines.join("\n").trim().to_string();
         self.textarea = new_textarea(Vec::new());
+        self.reset_history_navigation();
         text
+    }
+
+    pub fn history_previous(&mut self) {
+        if self.history.entries.is_empty() {
+            return;
+        }
+
+        let idx = match self.history_cursor {
+            Some(idx) => idx.saturating_sub(1),
+            None => {
+                self.history_draft = Some(self.textarea.lines().to_vec());
+                self.history.entries.len() - 1
+            }
+        };
+        self.history_cursor = Some(idx);
+        self.set_text(self.history.entries[idx].clone());
+    }
+
+    pub fn history_next(&mut self) {
+        let Some(cursor) = self.history_cursor else {
+            return;
+        };
+
+        if cursor + 1 < self.history.entries.len() {
+            let idx = cursor + 1;
+            self.history_cursor = Some(idx);
+            self.set_text(self.history.entries[idx].clone());
+        } else {
+            let draft = self.history_draft.take().unwrap_or_default();
+            self.history_cursor = None;
+            self.textarea = new_textarea(draft);
+        }
     }
 
     pub fn start_search(&mut self) {
@@ -73,31 +111,36 @@ impl Composer {
             (KeyCode::Enter, _) => {
                 if let Some(idx) = search.match_idx {
                     let entry = self.history.entries[idx].clone();
-                    self.textarea =
-                        new_textarea(entry.lines().map(String::from).collect());
+                    self.set_text(entry);
                 }
                 self.search = None;
+                self.reset_history_navigation();
             }
             (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
                 let before = search
                     .match_idx
                     .unwrap_or(self.history.entries.len())
                     .saturating_sub(1);
-                if let Some(new_idx) =
-                    find_match(&self.history.entries, &search.query, before + 1)
+                if let Some(new_idx) = find_match(&self.history.entries, &search.query, before + 1)
                 {
                     search.match_idx = Some(new_idx);
                 }
             }
             (KeyCode::Backspace, _) => {
                 search.query.pop();
-                search.match_idx =
-                    find_match(&self.history.entries, &search.query, self.history.entries.len());
+                search.match_idx = find_match(
+                    &self.history.entries,
+                    &search.query,
+                    self.history.entries.len(),
+                );
             }
             (KeyCode::Char(c), _) => {
                 search.query.push(c);
-                search.match_idx =
-                    find_match(&self.history.entries, &search.query, self.history.entries.len());
+                search.match_idx = find_match(
+                    &self.history.entries,
+                    &search.query,
+                    self.history.entries.len(),
+                );
             }
             _ => {}
         }
@@ -120,9 +163,19 @@ impl Composer {
         *terminal = crate::app::make_terminal(3)?;
 
         if let Ok(new) = result {
-            self.textarea = new_textarea(new.lines().map(String::from).collect());
+            self.set_text(new);
+            self.reset_history_navigation();
         }
         Ok(())
+    }
+
+    fn set_text(&mut self, text: String) {
+        self.textarea = new_textarea(text.lines().map(String::from).collect());
+    }
+
+    fn reset_history_navigation(&mut self) {
+        self.history_cursor = None;
+        self.history_draft = None;
     }
 }
 
@@ -181,6 +234,51 @@ fn find_match(entries: &VecDeque<String>, query: &str, before: usize) -> Option<
         return Some(upper - 1);
     }
     (0..upper).rev().find(|&i| entries[i].contains(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn composer_with_history(entries: &[&str]) -> Composer {
+        let mut composer = Composer::new(PathBuf::from("/tmp/pilot-repl-test-history"));
+        composer.history.entries = entries.iter().map(|entry| entry.to_string()).collect();
+        composer
+    }
+
+    fn text(composer: &Composer) -> String {
+        composer.textarea.lines().join("\n")
+    }
+
+    #[test]
+    fn up_and_down_walk_sent_message_history() {
+        let mut composer = composer_with_history(&["one", "two", "three"]);
+
+        composer.history_previous();
+        assert_eq!(text(&composer), "three");
+
+        composer.history_previous();
+        assert_eq!(text(&composer), "two");
+
+        composer.history_next();
+        assert_eq!(text(&composer), "three");
+    }
+
+    #[test]
+    fn down_after_newest_restores_current_draft() {
+        let mut composer = composer_with_history(&["one", "two"]);
+        composer.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        composer.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        composer.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        composer.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+        composer.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+
+        composer.history_previous();
+        assert_eq!(text(&composer), "two");
+
+        composer.history_next();
+        assert_eq!(text(&composer), "draft");
+    }
 }
 
 fn run_editor(initial: &str) -> io::Result<String> {

@@ -3,13 +3,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crossterm::event::{
-    Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers,
-};
+use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
-use pilot::{
-    Claude, Codex, CodexConfig, Gemini, Pi, Session, TurnItem, TurnOptions,
-};
+use pilot::{Claude, Codex, CodexConfig, Gemini, Pi, Session, TurnItem, TurnOptions};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use uuid::Uuid;
@@ -152,7 +148,9 @@ impl App {
     }
 
     async fn handle_key(&mut self, ev: CtEvent, terminal: &mut Term) -> io::Result<()> {
-        let CtEvent::Key(key) = ev else { return Ok(()); };
+        let CtEvent::Key(key) = ev else {
+            return Ok(());
+        };
         if key.kind != KeyEventKind::Press {
             return Ok(());
         }
@@ -183,6 +181,12 @@ impl App {
             }
             (KeyCode::Enter, _) => {
                 self.submit(terminal).await?;
+            }
+            (KeyCode::Up, KeyModifiers::NONE) => {
+                self.composer.history_previous();
+            }
+            (KeyCode::Down, KeyModifiers::NONE) => {
+                self.composer.history_next();
             }
             _ => {
                 self.composer.input(key);
@@ -220,7 +224,6 @@ impl App {
         Ok(())
     }
 
-
     async fn submit(&mut self, terminal: &mut Term) -> io::Result<()> {
         let text = self.composer.take_input();
         if text.is_empty() {
@@ -240,7 +243,11 @@ impl App {
     /// `self.active = None` so the main loop picks up the next queued prompt.
     async fn start_turn(&mut self, prompt: String, terminal: &mut Term) -> io::Result<()> {
         ui::commit_user_prompt(terminal, &prompt)?;
-        match self.session.send(prompt.clone(), TurnOptions::default()).await {
+        match self
+            .session
+            .send(prompt.clone(), TurnOptions::default())
+            .await
+        {
             Ok(stream) => {
                 self.active = Some(ActiveTurn::new(stream, prompt));
             }
