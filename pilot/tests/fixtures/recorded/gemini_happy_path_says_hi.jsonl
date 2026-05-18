@@ -1,0 +1,4 @@
+{"model":"auto-gemini-3","session_id":"<UUID:1>","timestamp":"<TIMESTAMP>","type":"init"}
+{"content":"Say only the word: hi","role":"user","timestamp":"<TIMESTAMP>","type":"message"}
+{"content":"hi","delta":true,"role":"assistant","timestamp":"<TIMESTAMP>","type":"message"}
+{"stats":{"cached":0,"duration_ms":3256,"input":12395,"input_tokens":12395,"models":{"gemini-3-flash-preview":{"cached":0,"input":9529,"input_tokens":9529,"output_tokens":1,"total_tokens":9666},"gemini-3.1-flash-lite":{"cached":0,"input":2866,"input_tokens":2866,"output_tokens":31,"total_tokens":3010}},"output_tokens":32,"tool_calls":0,"total_tokens":12676},"status":"success","timestamp":"<TIMESTAMP>","type":"result"}

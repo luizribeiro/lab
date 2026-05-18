@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Unix-only).
 - `cassette!(inner)` macro auto-derives the fixture path from the
   calling test function's name: `tests/fixtures/recorded/<test_fn>.jsonl`.
+- Recorded happy-path scenarios for all four drivers (claude, codex,
+  gemini, pi). Each test sends a single short prompt and asserts pilot
+  normalizes the response into at least one `AssistantText` delta and
+  a successful `TurnComplete`.
 
 ### Changed
 - All four built-in drivers (claude, codex, gemini, pi) graduate to
