@@ -29,6 +29,7 @@ pub struct ClaudeConfig {
     pub additional_dirs: Vec<PathBuf>,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct Claude {
     pub config: ClaudeConfig,

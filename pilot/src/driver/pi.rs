@@ -33,6 +33,7 @@ pub struct PiPilotState {
     pub session_root: Option<PathBuf>,
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct Pi {
     pub config: PiConfig,

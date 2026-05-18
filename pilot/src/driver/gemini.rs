@@ -64,6 +64,7 @@ impl Default for GeminiConfig {
     }
 }
 
+#[non_exhaustive]
 #[derive(Default, Debug, Clone)]
 pub struct Gemini {
     pub config: GeminiConfig,

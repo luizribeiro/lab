@@ -87,6 +87,7 @@ impl Default for CodexConfig {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Default, Clone)]
 pub struct Codex {
     pub config: CodexConfig,
