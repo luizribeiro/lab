@@ -54,6 +54,7 @@ Source: `src/driver/pi.rs::PiConfig`. All fields are public; the struct is `#[no
 
 - **Auth:** `Auth::Ambient`. The driver does not set `PI_API_KEY`; the spawned `pi` process inherits whatever credentials the user already configured (per-provider login, env var, etc.).
 - **Provider:** None set. Pi falls back to whatever provider its local config has selected. That selection is unstable across machines and depends on which `pi login <provider>` flows the user has completed — set `PiConfig.provider` explicitly for headless reliability.
+- **Approvals:** Pi has no per-tool approval gate; tools execute without prompts. Pilot does not sandbox; see [docs/sandboxing.md](sandboxing.md) for the recommended approach (lockin / capsa).
 - **Model:** With `default_model = None` and no per-turn override, pi's CLI selects whichever default the configured provider ships with.
 
 ## Providers

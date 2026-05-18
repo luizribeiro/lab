@@ -32,7 +32,7 @@ while let Some(item) = stream.next().await {
 # Ok(()) }
 ```
 
-The driver spawns `gemini -p <prompt> --output-format stream-json --session-id <uuid> --skip-trust` for the first turn and rewrites `--session-id <uuid>` to `--resume <uuid>` for follow-up turns. See `src/driver/gemini.rs` for the exact argv composition.
+The driver spawns `gemini -p <prompt> --output-format stream-json --session-id <uuid> --approval-mode yolo --skip-trust` for the first turn and rewrites `--session-id <uuid>` to `--resume <uuid>` for follow-up turns. See `src/driver/gemini.rs` for the exact argv composition.
 
 ## Configuration: `GeminiConfig`
 
@@ -43,7 +43,7 @@ Source: `src/driver/gemini.rs::GeminiConfig`. All fields are public; the struct 
 | `binary`              | `Option<PathBuf>`       | `None` (uses `gemini`)   | Override the path to the `gemini` executable. Useful for pinned installs or testing against a fork.                      |
 | `auth`                | `Auth`                  | `Auth::Ambient`          | Authentication mode — see [Authentication](#authentication).                                                             |
 | `default_model`       | `Option<String>`        | `None`                   | Sent as `--model` when `TurnOptions::model` is unset. A per-turn `TurnOptions::model` always wins.                       |
-| `approval_mode`       | `ApprovalMode`          | `ApprovalMode::Default`  | Maps to `--approval-mode` — see [Approval modes](#approval-modes).                                                       |
+| `approval_mode`       | `ApprovalMode`          | `ApprovalMode::Yolo`     | Maps to `--approval-mode` — see [Approval modes](#approval-modes).                                                       |
 | `skip_trust`          | `bool`                  | `true`                   | Pass `--skip-trust` to bypass gemini's per-folder trust prompt. See [Default behavior](#default-behavior) for the tradeoff. |
 | `extra_env`           | `Vec<(String, String)>` | empty                    | Extra environment variables merged into every spawned child. `TurnOptions::env` is appended after these.                 |
 | `paths`               | `AgentPaths`            | empty                    | Reserved for future use; setting `paths.config_home` on this driver currently returns `Error::UnsupportedOption`.        |
@@ -55,7 +55,7 @@ Source: `src/driver/gemini.rs::GeminiConfig`. All fields are public; the struct 
 
 - **Auth:** `Auth::Ambient`. The driver does not set `GEMINI_API_KEY`; the spawned `gemini` process inherits whatever credentials the user already configured (keychain login, env var, etc.).
 - **Trust:** `skip_trust: true`. Pilot is a headless driver, so without `--skip-trust` every `Session::new(Gemini::new(), workdir).send(...)` would block on gemini's per-folder trust prompt in any workdir that hasn't been trusted in an interactive gemini session first. The default trades fail-closed safety for ergonomics; `skip_trust: true` means gemini will read and execute project-level gemini config from the workdir without asking. **Pass only paths you trust to `Session::new(_, workdir)`.** To restore the trust gate, set `skip_trust: false` explicitly on `GeminiConfig`.
-- **Approvals:** `ApprovalMode::Default`. Gemini gates tool calls behind an interactive approval prompt. In a non-interactive pilot session there is no human at the prompt, so tool-using turns typically need `ApprovalMode::Yolo` (or the equivalent `--yolo` in `TurnOptions::extra_args`) to make progress.
+- **Approval:** `ApprovalMode::Yolo` — pilot drives gemini headlessly with all approvals bypassed. Tools execute without prompts. `skip_trust: true` unchanged. Pilot does not sandbox; see [docs/sandboxing.md](sandboxing.md) for the recommended approach (lockin / capsa).
 - **Model:** With `default_model = None` and no per-turn override, the CLI selects whichever default the installed `gemini` version ships with.
 
 ## Approval modes
@@ -64,18 +64,18 @@ Source: `src/driver/gemini.rs::GeminiConfig`. All fields are public; the struct 
 
 | Variant                  | CLI value     | Effect                                                                                          |
 |--------------------------|---------------|-------------------------------------------------------------------------------------------------|
-| `ApprovalMode::Default`  | flag omitted  | CLI uses its normal interactive approval flow. Tool calls will block waiting for confirmation.  |
+| `ApprovalMode::Yolo`     | `yolo`        | Auto-approves every tool call (equivalent to passing `--yolo`). This is pilot's default.        |
 | `ApprovalMode::AutoEdit` | `auto_edit`   | Auto-approves file edits. Other sensitive tool calls still prompt.                              |
-| `ApprovalMode::Yolo`     | `yolo`        | Auto-approves every tool call (equivalent to passing `--yolo`).                                 |
+| `ApprovalMode::Default`  | flag omitted  | CLI uses its normal interactive approval flow. Tool calls will block waiting for confirmation.  |
 | `ApprovalMode::Plan`     | `plan`        | Plan-mode: the agent plans but does not execute tool calls.                                     |
 
-Opt in via `Gemini::with_config`:
+To restore approval gating, configure `ApprovalMode::Default` or `AutoEdit` explicitly via `GeminiConfig`. Out-of-process sandboxing should use a dedicated tool — see [docs/sandboxing.md](sandboxing.md).
 
 ```rust
 use pilot::{Gemini, GeminiConfig, ApprovalMode};
 
 let gemini = Gemini::with_config(GeminiConfig {
-    approval_mode: ApprovalMode::Yolo,
+    approval_mode: ApprovalMode::Default,
     ..Default::default()
 });
 ```
@@ -104,7 +104,7 @@ let explicit = Gemini::with_config(GeminiConfig {
 ## Known quirks
 
 - **`skip_trust: true` is the default.** Gemini's vanilla behavior is to prompt before reading or executing any project-level config from an untrusted folder. Pilot flips the flag on by default so headless drivers can target arbitrary workdirs without an interactive prompt blocking the first turn; set `skip_trust: false` in `GeminiConfig` to restore gemini's fail-closed prompt. The tradeoff is documented in the `skip_trust` doc comment in `src/driver/gemini.rs`.
-- **Tool calls require approval in `Default` mode.** Without `ApprovalMode::Yolo` (or `--yolo` in `TurnOptions::extra_args`), gemini will refuse tool calls in a headless session. Pilot's recorded tool-use fixture for gemini was captured with `--yolo` in `extra_args` — see `tests/recorded_scenarios.rs::gemini_tool_use_writes_file_and_emits_toolcall_toolresult`.
+- **Tool calls require approval in `Default` mode.** Without `ApprovalMode::Yolo` (pilot's default, see [Approval modes](#approval-modes)) or `--yolo` in `TurnOptions::extra_args`, gemini will refuse tool calls in a headless session.
 - **`tool_use` / `tool_result` events.** Gemini emits `{"type":"tool_use"}` and `{"type":"tool_result"}` events that pilot normalizes to `Event::ToolCall` and `Event::ToolResult` respectively. A `tool_result` whose `status` is anything other than `"success"` becomes `Event::ToolResult { ok: false, .. }`.
 - **Errors arrive as a synthetic `AssistantText`.** Gemini wraps error messages in the trailing `{"type":"result", "status":"error", "error":{"message":"..."}}` envelope. The driver surfaces the message as `Event::AssistantText` followed by `Event::TurnComplete { ok: false }`, matching the shape Claude and Codex produce on a failed turn.
 

@@ -37,13 +37,14 @@ A first-turn `Claude::new().command(session_id, "hello", TurnOptions::default())
 ```
 claude -p --verbose --output-format stream-json \
     --session-id <uuid> \
+    --permission-mode bypassPermissions \
     -- hello
 ```
 
 Optional fields slot in between `--session-id` and the trailing `--`:
 
 - `--model <name>` when `TurnOptions::model` or `ClaudeConfig::default_model` is set
-- `--permission-mode <acceptEdits|bypassPermissions>` for non-default modes
+- `--permission-mode <acceptEdits|bypassPermissions>` whenever `ClaudeConfig::permission_mode` is non-`Default` (defaults to `BypassPermissions`)
 - `--effort <low|medium|high>` when `TurnOptions::reasoning` is set
 - `--add-dir <dir> [<dir>...]` when `ClaudeConfig::additional_dirs` is non-empty
 - Anything in `TurnOptions::extra_args`, appended verbatim
@@ -59,7 +60,7 @@ Source: `src/driver/claude.rs::ClaudeConfig`. All fields are public; the struct 
 | `binary`          | `Option<PathBuf>`          | `None` (uses `claude`) | Override the path to the `claude` executable. Useful for pinned installs or testing against a fork.      |
 | `auth`            | `Auth`                     | `Auth::Ambient`        | Authentication mode — see [Authentication](#authentication).                                             |
 | `default_model`   | `Option<String>`           | `None`                 | Sent as `--model` when `TurnOptions::model` is unset. A per-turn `TurnOptions::model` always wins.       |
-| `permission_mode` | `PermissionMode`           | `PermissionMode::Default` | Maps to `--permission-mode` — see [Permission modes](#permission-modes).                              |
+| `permission_mode` | `PermissionMode`           | `PermissionMode::BypassPermissions` | Maps to `--permission-mode` — see [Permission modes](#permission-modes).                    |
 | `extra_env`       | `Vec<(String, String)>`    | empty                  | Extra environment variables merged into every spawned child. `TurnOptions::env` is appended after these. |
 | `paths`           | `AgentPaths`               | empty                  | `paths.config_home` is exported as `CLAUDE_CONFIG_DIR` for the child process.                            |
 | `additional_dirs` | `Vec<PathBuf>`             | empty                  | Extra read/write roots passed to `--add-dir`. See the [variadic-flag pitfall](#known-quirks).            |
@@ -69,8 +70,8 @@ Source: `src/driver/claude.rs::ClaudeConfig`. All fields are public; the struct 
 ## Default behavior
 
 - **Auth:** `Auth::Ambient`. The driver does not set `ANTHROPIC_API_KEY`; the spawned `claude` process inherits whatever credentials the user already configured (keychain login, env var, etc.).
-- **Sandboxing:** The Claude Code CLI does not sandbox the working directory, and pilot adds no sandboxing of its own. The child has the same filesystem and network reach as the parent process — choose `workdir` accordingly.
-- **Approvals:** `PermissionMode::Default` lets the CLI prompt for tool calls. In a non-interactive pilot session there is no human at the prompt, so pilot-driven tool execution typically requires opting into `AcceptEdits` or `BypassPermissions` (next section).
+- **Approvals:** `PermissionMode::BypassPermissions` — pilot drives claude headlessly with all approvals bypassed. Tools execute without prompts. Pilot does not sandbox; see [docs/sandboxing.md](sandboxing.md) for the recommended approach (lockin / capsa).
+- **Sandboxing:** The Claude Code CLI does not sandbox the working directory, and pilot adds no sandboxing of its own. The child has the same filesystem and network reach as the parent process — choose `workdir` accordingly, and see [docs/sandboxing.md](sandboxing.md) for the recommended out-of-process restriction.
 - **Model:** With `default_model = None` and no per-turn override, the CLI selects whichever default the installed `claude` version ships with.
 
 ## Permission modes
@@ -79,17 +80,17 @@ Source: `src/driver/claude.rs::ClaudeConfig`. All fields are public; the struct 
 
 | Variant                              | CLI value             | Effect                                                                                          |
 |--------------------------------------|-----------------------|-------------------------------------------------------------------------------------------------|
-| `PermissionMode::Default`            | flag omitted          | CLI uses its normal interactive approval flow. Tool calls will block waiting for confirmation.  |
+| `PermissionMode::BypassPermissions`  | `bypassPermissions`   | Disables the approval flow entirely; the agent runs all tool calls without confirmation. This is pilot's default. |
 | `PermissionMode::AcceptEdits`        | `acceptEdits`         | Auto-approves file edits. Other sensitive tool calls still prompt.                              |
-| `PermissionMode::BypassPermissions`  | `bypassPermissions`   | Disables the approval flow entirely; the agent runs all tool calls without confirmation.        |
+| `PermissionMode::Default`            | flag omitted          | CLI uses its normal interactive approval flow. Tool calls will block waiting for confirmation.  |
 
-Opt in via `Claude::with_config`:
+To restore approval gating, configure `PermissionMode::Default` or `AcceptEdits` explicitly via `ClaudeConfig`. Out-of-process sandboxing should use a dedicated tool — see [docs/sandboxing.md](sandboxing.md).
 
 ```rust
 use pilot::{Claude, ClaudeConfig, PermissionMode};
 
 let claude = Claude::with_config(ClaudeConfig {
-    permission_mode: PermissionMode::BypassPermissions,
+    permission_mode: PermissionMode::Default,
     ..Default::default()
 });
 ```
