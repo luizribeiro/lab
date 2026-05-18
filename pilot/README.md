@@ -7,7 +7,7 @@ Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) from Rust over t
 | Agent  | CLI flag set | Resume support | Auth env var | Status |
 |--------|---|---|---|---|
 | claude | `-p --verbose --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `ANTHROPIC_API_KEY` | **stable** |
-| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured via `Driver::observe`) | `OPENAI_API_KEY` | **stable** |
+| codex  | `codex exec --json --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured via `Driver::observe`) | `OPENAI_API_KEY` | **stable** |
 | gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | **stable** |
 | pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | provider-dependent | **stable** (silent-error limitation; see driver docs) |
 
@@ -30,12 +30,14 @@ Each built-in driver ships with a dedicated docs page covering its argv, configu
 
 The matrix below summarizes the defaults that most often surprise headless callers — pick a driver and follow its doc link for the full story.
 
-| Driver | Doc | Default sandbox/approval | Notable defaults | Key escape hatch for tool execution |
-|--------|-----|--------------------------|------------------|-------------------------------------|
-| claude | [docs/claude.md](docs/claude.md) | `PermissionMode::Default` — per-tool prompts | No sandboxing; `Auth::Ambient` | `PermissionMode::BypassPermissions` |
-| codex  | [docs/codex.md](docs/codex.md)  | `SandboxMode::ReadOnly` (no disk writes) plus separate approval gate | `skip_git_repo_check: true`; `Auth::Ambient` | `WorkspaceWrite`/`DangerFullAccess` plus `extra_args: ["--dangerously-bypass-approvals-and-sandbox"]` |
-| gemini | [docs/gemini.md](docs/gemini.md) | `ApprovalMode::Default` — prompts for tool calls | `skip_trust: true` bypasses per-folder trust gate | `ApprovalMode::Yolo` |
-| pi     | [docs/pi.md](docs/pi.md) | Provider-dependent; silent-error on invalid input | No `provider` set by default — set `provider` for reliability | None at pilot level — backend-specific |
+Pilot is a thin transport — defaults are permissive so the smallest example works headlessly. For real workloads where the agent shouldn't have unrestricted access, see [docs/sandboxing.md](docs/sandboxing.md) for the recommended layering (driver config + lockin/capsa).
+
+| Driver | Doc | Default sandbox/approval | Notable defaults | Native restriction knob |
+|--------|-----|--------------------------|------------------|-------------------------|
+| claude | [docs/claude.md](docs/claude.md) | `PermissionMode::BypassPermissions` — no prompts | No sandboxing; `Auth::Ambient` | `permission_mode: PermissionMode::Default` or `AcceptEdits` |
+| codex  | [docs/codex.md](docs/codex.md)  | `SandboxMode::DangerFullAccess` + `dangerously_bypass_approvals: true` — full access | `skip_git_repo_check: true`; `Auth::Ambient` | `sandbox: SandboxMode::ReadOnly` and `dangerously_bypass_approvals: false` |
+| gemini | [docs/gemini.md](docs/gemini.md) | `ApprovalMode::Yolo` — no prompts | `skip_trust: true` bypasses per-folder trust gate | `approval_mode: ApprovalMode::Default` or `AutoEdit` |
+| pi     | [docs/pi.md](docs/pi.md) | Provider-dependent; silent-error on invalid input | No `provider` set by default — set `provider` for reliability | provider-specific (see [docs/pi.md](docs/pi.md)) |
 
 Recorded fixtures under `tests/fixtures/recorded/<driver>_*.jsonl` show each driver's real CLI output for greeting, tool-use, and (where supported) error scenarios — they're the ground truth that the defaults above are measured against.
 
