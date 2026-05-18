@@ -3,10 +3,10 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use uuid::Uuid;
 
@@ -346,19 +346,93 @@ pub enum CassetteMode {
 /// - fixture missing → Record (first-run capture)
 ///
 /// In Record mode, written lines are sanitized (default
-/// [`DefaultSanitizer`]) and buffered to `<fixture_path>.recording`.
-/// On `Drop`, if no failures were flagged AND at least one line was
-/// written, the temp file is atomically renamed to `fixture_path`.
-/// On failure, the `.recording` file is kept for inspection.
+/// [`DefaultSanitizer`]) and buffered to a `.recording` temp file. On
+/// `Drop`, if no failures were flagged AND at least one line was written,
+/// the temp file is atomically renamed to its final fixture path. On
+/// failure, the `.recording` file is kept for inspection.
+///
+/// # Multi-turn fixtures
+///
+/// The first turn (dispatched via [`Driver::command`]) uses
+/// `fixture_path` directly: `tests/fixtures/recorded/foo.jsonl`.
+/// Subsequent turns (dispatched via [`Driver::resume_command`]) use
+/// `<fixture_path stem>.turn{N}.jsonl` where `N` starts at `1`:
+/// `tests/fixtures/recorded/foo.turn1.jsonl`,
+/// `foo.turn2.jsonl`, and so on. Record mode mirrors the same naming.
+/// Single-turn fixtures stay backward-compatible — no `.turn{N}` files
+/// are read or written when a session never resumes.
 pub struct Cassette<D: Driver> {
     inner: D,
     fixture_path: PathBuf,
-    tmp_path: PathBuf,
     mode: CassetteMode,
-    file: Option<Mutex<File>>,
+    recorder: Mutex<Option<RecorderState>>,
     sanitizer: Option<Box<dyn Sanitizer>>,
     recording_failed: Arc<AtomicBool>,
-    lines_written: Arc<std::sync::atomic::AtomicUsize>,
+    turn: AtomicUsize,
+}
+
+struct RecorderState {
+    turn: usize,
+    fixture_path: PathBuf,
+    tmp_path: PathBuf,
+    file: File,
+    lines_written: usize,
+}
+
+fn tmp_path_for(fixture_path: &Path) -> PathBuf {
+    let stem = fixture_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut p = fixture_path.to_path_buf();
+    p.set_file_name(format!(".{stem}.recording"));
+    p
+}
+
+impl RecorderState {
+    fn open(turn: usize, fixture_path: PathBuf) -> Self {
+        if let Some(parent) = fixture_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                    panic!(
+                        "Cassette: cannot create parent dir {}: {e}",
+                        parent.display()
+                    )
+                });
+            }
+        }
+        let tmp_path = tmp_path_for(&fixture_path);
+        let file = File::create(&tmp_path).unwrap_or_else(|e| {
+            panic!(
+                "Cassette: cannot open recording temp file {}: {e}",
+                tmp_path.display()
+            )
+        });
+        Self {
+            turn,
+            fixture_path,
+            tmp_path,
+            file,
+            lines_written: 0,
+        }
+    }
+
+    fn finalize(self, failed: bool) {
+        let Self {
+            fixture_path,
+            tmp_path,
+            file,
+            lines_written,
+            ..
+        } = self;
+        drop(file);
+        if failed || lines_written == 0 {
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &fixture_path) {
+            tracing::warn!(error = %e, "Cassette: rename failed");
+        }
+    }
 }
 
 fn pilot_record_matches(fixture_path: &std::path::Path) -> bool {
@@ -376,9 +450,12 @@ impl<D: Driver> Cassette<D> {
     /// Build a `Cassette` whose mode is selected automatically (see
     /// [`Cassette`] doc for the resolution table).
     ///
-    /// In Record mode this creates the parent directory and opens
-    /// `<fixture_path>.recording` for writing. Panics if either fails —
-    /// this is test infrastructure; test failures should be loud.
+    /// In Record mode this creates the parent directory and opens a
+    /// `.recording` temp file for the first turn's fixture. Subsequent
+    /// turns (after [`Driver::resume_command`] is called) rotate to
+    /// `<fixture_path stem>.turn{N}.jsonl` automatically. Panics if
+    /// directory creation or file open fails — this is test
+    /// infrastructure; test failures should be loud.
     pub fn auto(inner: D, fixture_path: impl Into<PathBuf>) -> Self {
         let fixture_path = fixture_path.into();
         let exists = fixture_path.exists();
@@ -403,48 +480,25 @@ impl<D: Driver> Cassette<D> {
             CassetteMode::Record
         };
 
-        let tmp_path = {
-            let stem = fixture_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let mut p = fixture_path.clone();
-            p.set_file_name(format!(".{stem}.recording"));
-            p
-        };
-
-        let (file, sanitizer): (Option<Mutex<File>>, Option<Box<dyn Sanitizer>>) =
+        let (recorder, sanitizer): (Mutex<Option<RecorderState>>, Option<Box<dyn Sanitizer>>) =
             if matches!(mode, CassetteMode::Record) {
-                if let Some(parent) = fixture_path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                            panic!(
-                                "Cassette: cannot create parent dir {}: {e}",
-                                parent.display()
-                            )
-                        });
-                    }
-                }
-                let f = File::create(&tmp_path).unwrap_or_else(|e| {
-                    panic!(
-                        "Cassette: cannot open recording temp file {}: {e}",
-                        tmp_path.display()
-                    )
-                });
-                (Some(Mutex::new(f)), Some(Box::new(DefaultSanitizer::new())))
+                let state = RecorderState::open(0, fixture_path.clone());
+                (
+                    Mutex::new(Some(state)),
+                    Some(Box::new(DefaultSanitizer::new())),
+                )
             } else {
-                (None, None)
+                (Mutex::new(None), None)
             };
 
         Self {
             inner,
             fixture_path,
-            tmp_path,
             mode,
-            file,
+            recorder,
             sanitizer,
             recording_failed: Arc::new(AtomicBool::new(false)),
-            lines_written: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            turn: AtomicUsize::new(0),
         }
     }
 
@@ -467,6 +521,21 @@ impl<D: Driver> Cassette<D> {
     pub fn failure_signal(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.recording_failed)
     }
+
+    fn fixture_path_for_turn(&self, turn: usize) -> PathBuf {
+        if turn == 0 {
+            return self.fixture_path.clone();
+        }
+        let stem = self
+            .fixture_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let base = stem.strip_suffix(".jsonl").unwrap_or(&stem);
+        let mut p = self.fixture_path.clone();
+        p.set_file_name(format!("{base}.turn{turn}.jsonl"));
+        p
+    }
 }
 
 impl<D: Driver> Driver for Cassette<D> {
@@ -483,7 +552,11 @@ impl<D: Driver> Driver for Cassette<D> {
         match self.mode {
             CassetteMode::Replay => Ok(CommandSpec {
                 program: PathBuf::from("cat"),
-                args: vec![self.fixture_path.to_string_lossy().into_owned()],
+                args: vec![
+                    self.fixture_path_for_turn(self.turn.load(Ordering::SeqCst))
+                        .to_string_lossy()
+                        .into_owned(),
+                ],
                 env: Vec::new(),
             }),
             CassetteMode::Record => self.inner.command(session_id, input, opts),
@@ -496,10 +569,15 @@ impl<D: Driver> Driver for Cassette<D> {
         input: &TurnInput,
         opts: &TurnOptions,
     ) -> crate::Result<CommandSpec> {
+        let next_turn = self.turn.fetch_add(1, Ordering::SeqCst) + 1;
         match self.mode {
             CassetteMode::Replay => Ok(CommandSpec {
                 program: PathBuf::from("cat"),
-                args: vec![self.fixture_path.to_string_lossy().into_owned()],
+                args: vec![
+                    self.fixture_path_for_turn(next_turn)
+                        .to_string_lossy()
+                        .into_owned(),
+                ],
                 env: Vec::new(),
             }),
             CassetteMode::Record => self.inner.resume_command(session_id, input, opts),
@@ -514,6 +592,7 @@ impl<D: Driver> Driver for Cassette<D> {
 
     fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
         if matches!(self.mode, CassetteMode::Record) {
+            let current_turn = self.turn.load(Ordering::SeqCst);
             let to_write = if let Some(s) = &self.sanitizer {
                 let mut clone = value.clone();
                 s.sanitize(&mut clone);
@@ -522,13 +601,27 @@ impl<D: Driver> Driver for Cassette<D> {
                 value.clone()
             };
             match serde_json::to_string(&to_write) {
-                Ok(line) => match self.file.as_ref().expect("file open in record mode").lock() {
-                    Ok(mut f) => {
-                        if let Err(e) = writeln!(f, "{line}") {
+                Ok(line) => match self.recorder.lock() {
+                    Ok(mut guard) => {
+                        let needs_rotation = match guard.as_ref() {
+                            None => true,
+                            Some(rec) => rec.turn != current_turn,
+                        };
+                        if needs_rotation {
+                            if let Some(prev) = guard.take() {
+                                prev.finalize(false);
+                            }
+                            *guard = Some(RecorderState::open(
+                                current_turn,
+                                self.fixture_path_for_turn(current_turn),
+                            ));
+                        }
+                        let rec = guard.as_mut().expect("recorder just opened");
+                        if let Err(e) = writeln!(rec.file, "{line}") {
                             tracing::warn!(error = %e, "Cassette: file write failed");
                             self.recording_failed.store(true, Ordering::SeqCst);
                         } else {
-                            self.lines_written.fetch_add(1, Ordering::SeqCst);
+                            rec.lines_written += 1;
                         }
                     }
                     Err(e) => {
@@ -551,15 +644,13 @@ impl<D: Driver> Drop for Cassette<D> {
         if !matches!(self.mode, CassetteMode::Record) {
             return;
         }
-        self.file = None;
-        if self.recording_failed.load(Ordering::SeqCst) {
-            return;
-        }
-        if self.lines_written.load(Ordering::SeqCst) == 0 {
-            return;
-        }
-        if let Err(e) = std::fs::rename(&self.tmp_path, &self.fixture_path) {
-            tracing::warn!(error = %e, "Cassette: rename failed");
+        let failed = self.recording_failed.load(Ordering::SeqCst);
+        let state = match self.recorder.get_mut() {
+            Ok(g) => g.take(),
+            Err(e) => e.into_inner().take(),
+        };
+        if let Some(rec) = state {
+            rec.finalize(failed);
         }
     }
 }
@@ -843,5 +934,63 @@ mod tests {
             }
         }
         assert_eq!(events.len(), 2);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cassette_multi_turn_replays_distinct_fixtures_per_turn() {
+        use futures_core::Stream;
+        use std::pin::pin;
+
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_pilot_env();
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = dir.path().join("test.jsonl");
+        std::fs::write(&fixture, "{\"type\":\"first\",\"x\":1}\n").unwrap();
+        let fixture_turn1 = dir.path().join("test.turn1.jsonl");
+        std::fs::write(&fixture_turn1, "{\"type\":\"second\",\"x\":2}\n").unwrap();
+
+        let driver = Cassette::auto(TestDriver::new("t", "/bin/echo"), &fixture);
+        assert!(matches!(driver.mode(), CassetteMode::Replay));
+        let mut session = crate::Session::new(driver, "/tmp");
+
+        async fn drain(stream: crate::TurnStream) -> (Vec<Event>, Option<crate::Turn>) {
+            let mut stream = pin!(stream);
+            let mut events = Vec::new();
+            let mut turn = None;
+            loop {
+                let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
+                match next {
+                    None => break,
+                    Some(Ok(crate::TurnItem::Event(e))) => events.push(e),
+                    Some(Ok(crate::TurnItem::Complete(t))) => turn = Some(t),
+                    Some(Err(e)) => panic!("stream error: {e:?}"),
+                }
+            }
+            (events, turn)
+        }
+
+        let stream = session
+            .send("ignored", TurnOptions::default())
+            .await
+            .unwrap();
+        let (t0, complete0) = drain(stream).await;
+        assert!(complete0.is_some(), "turn 0 must yield Complete");
+        assert_eq!(t0.len(), 1);
+        match &t0[0] {
+            Event::Raw { value, .. } => assert_eq!(value["type"], "first"),
+            other => panic!("expected Raw event, got {other:?}"),
+        }
+
+        let stream = session
+            .send("ignored", TurnOptions::default())
+            .await
+            .unwrap();
+        let (t1, _) = drain(stream).await;
+        assert_eq!(t1.len(), 1);
+        match &t1[0] {
+            Event::Raw { value, .. } => assert_eq!(value["type"], "second"),
+            other => panic!("expected Raw event, got {other:?}"),
+        }
     }
 }

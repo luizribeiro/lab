@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pilot saw `ToolCall` + `ToolResult` + `AssistantText` events. codex
   requires `--dangerously-bypass-approvals-and-sandbox` and gemini
   requires `--yolo` at record time to bypass approval gates.
+- Multi-turn recorded scenario support. `Cassette` now replays
+  subsequent turns from `<fixture>.turn{N}.jsonl` (1-indexed) while
+  keeping the first turn at the original `<fixture>.jsonl` path. Record
+  mode mirrors the same naming, rotating the `.recording` temp file at
+  each turn boundary.
 
 ### Changed
 - All four built-in drivers (claude, codex, gemini, pi) graduate to

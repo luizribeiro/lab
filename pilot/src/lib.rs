@@ -22,6 +22,11 @@ pub mod test_support;
 ///
 /// Uses the `fn f() {} + type_name_of(f)` idiom to extract the calling
 /// function's name at compile time without proc macros.
+///
+/// Multi-turn tests record/replay subsequent turns from
+/// `<test_fn>.turn{N}.jsonl` (1-indexed) — the first turn keeps the
+/// original `<test_fn>.jsonl` path. See [`test_support::Cassette`] for
+/// the full convention.
 #[macro_export]
 #[cfg(feature = "test-support")]
 macro_rules! cassette {
