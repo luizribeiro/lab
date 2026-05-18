@@ -4,11 +4,10 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::style::Style;
 use tui_textarea::TextArea;
 
-use crate::app::{Term, VIEWPORT_HEIGHT};
+use crate::app::Term;
 
 pub struct Composer {
     pub textarea: TextArea<'static>,
@@ -30,10 +29,8 @@ pub struct Search {
 impl Composer {
     pub fn new(history_path: PathBuf) -> Self {
         let history = History::load(history_path);
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(Default::default());
         Self {
-            textarea,
+            textarea: new_textarea(Vec::new()),
             history,
             search: None,
         }
@@ -46,7 +43,7 @@ impl Composer {
     pub fn take_input(&mut self) -> String {
         let lines = self.textarea.lines();
         let text = lines.join("\n").trim().to_string();
-        self.textarea = TextArea::default();
+        self.textarea = new_textarea(Vec::new());
         text
     }
 
@@ -76,7 +73,8 @@ impl Composer {
             (KeyCode::Enter, _) => {
                 if let Some(idx) = search.match_idx {
                     let entry = self.history.entries[idx].clone();
-                    self.textarea = TextArea::new(entry.lines().map(String::from).collect());
+                    self.textarea =
+                        new_textarea(entry.lines().map(String::from).collect());
                 }
                 self.search = None;
             }
@@ -114,22 +112,31 @@ impl Composer {
         let result = run_editor(&initial);
 
         crossterm::terminal::enable_raw_mode()?;
-        // Re-anchor the inline viewport at the current cursor position. The
-        // simplest reliable way to do this in ratatui 0.30 is to drop and
-        // recreate the Terminal.
-        let backend = CrosstermBackend::new(io::stdout());
-        *terminal = Terminal::with_options(
-            backend,
-            ratatui::TerminalOptions {
-                viewport: ratatui::Viewport::Inline(VIEWPORT_HEIGHT),
-            },
-        )?;
+        // Re-anchor the inline viewport at the current cursor position.
+        // Dropping and recreating the Terminal is the simplest way; the
+        // exact viewport height doesn't matter here because the main loop
+        // will resize it on the next iteration to match the actual
+        // composer state.
+        *terminal = crate::app::make_terminal(3)?;
 
         if let Ok(new) = result {
-            self.textarea = TextArea::new(new.lines().map(String::from).collect());
+            self.textarea = new_textarea(new.lines().map(String::from).collect());
         }
         Ok(())
     }
+}
+
+/// Construct a fresh textarea with our preferred display settings — most
+/// importantly, no underline on the cursor line (tui-textarea-2 defaults
+/// to `Modifier::UNDERLINED`, which we don't want for a chat prompt).
+fn new_textarea(lines: Vec<String>) -> TextArea<'static> {
+    let mut textarea = if lines.is_empty() {
+        TextArea::default()
+    } else {
+        TextArea::new(lines)
+    };
+    textarea.set_cursor_line_style(Style::default());
+    textarea
 }
 
 impl History {

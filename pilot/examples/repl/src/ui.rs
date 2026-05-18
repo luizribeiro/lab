@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
 use crate::app::{AgentKind, App, Term};
 use crate::markdown::MarkdownSkin;
@@ -29,55 +29,64 @@ impl CommitColor {
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let status_h = status_height(app);
+    // Composer block height = textarea lines (capped) + 2 border rows,
+    // pinned to the *bottom* of the viewport. Status sits above. The
+    // gap in between is padding (occurs when the textarea is small but
+    // the viewport is the fixed `VIEWPORT_HEIGHT`).
+    let textarea_lines = app.composer.textarea.lines().len().max(1) as u16;
+    let composer_h = (textarea_lines + 2).min(area.height.saturating_sub(status_h));
+    let pad_h = area
+        .height
+        .saturating_sub(status_h)
+        .saturating_sub(composer_h);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(status_h), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(status_h),
+            Constraint::Length(pad_h),
+            Constraint::Length(composer_h),
+        ])
         .split(area);
 
     if status_h > 0 {
         draw_status(frame, chunks[0], app);
     }
-    if let Some(search) = &app.composer.search {
-        draw_search_overlay(frame, chunks[1], app, search);
-    } else {
-        draw_composer(frame, chunks[1], app);
-    }
+    draw_composer_block(frame, chunks[2], app);
 }
 
-fn status_height(app: &App) -> u16 {
-    let active_lines = match &app.active {
-        Some(active) => 1 + active.pending_tools.len() as u16,
-        None => 0,
-    };
-    let queue_line = if app.queue.is_empty() { 0 } else { 1 };
-    active_lines + queue_line
-}
-
-fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = Vec::new();
-    if let Some(active) = &app.active {
-        let spinner = current_tick();
-        lines.push(Line::from(vec![
-            Span::styled(format!("{spinner} "), Style::default().fg(Color::Cyan)),
-            Span::styled("Working…", Style::default().add_modifier(Modifier::DIM)),
-        ]));
-        for tool in &active.pending_tools {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("{spinner} "), Style::default().fg(Color::Yellow)),
-                Span::styled(tool.name.clone(), Style::default().fg(Color::Yellow)),
-            ]));
-        }
-    }
-    if !app.queue.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  {} queued (esc cancels all)", app.queue.len()),
+fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
+    // codex-style framing: a dim horizontal rule above the composer and one
+    // below, no left/right borders. Block::inner gives us the interior rect
+    // for the textarea / search overlay to draw into.
+    let block = Block::default()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_style(
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
-        )));
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some(search) = &app.composer.search {
+        draw_search_overlay(frame, inner, app, search);
+    } else {
+        draw_composer(frame, inner, app);
     }
-    frame.render_widget(Paragraph::new(lines), area);
+}
+
+pub fn status_height(app: &App) -> u16 {
+    if app.active.is_some() { 1 } else { 0 }
+}
+
+fn draw_status(frame: &mut Frame, area: Rect, _app: &App) {
+    let spinner = current_tick();
+    let line = Line::from(Span::styled(
+        format!("{spinner} "),
+        Style::default().fg(Color::Cyan),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_composer(frame: &mut Frame, area: Rect, app: &App) {

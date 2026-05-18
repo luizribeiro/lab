@@ -20,9 +20,31 @@ use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
 use crate::ui;
 
-pub const VIEWPORT_HEIGHT: u16 = 8;
+/// Fixed inline-viewport height. We tried dynamic resizing (recreating
+/// the Terminal whenever the desired height changed) but the cursor-
+/// position query that ratatui issues on every `Terminal::with_options`
+/// races with crossterm's `EventStream` reader — both want to consume
+/// stdin, and the OSC `\x1B[6n` response intermittently lands in the
+/// event reader instead of the cursor query, causing a 2s hang followed
+/// by `"The cursor position could not be read within a normal duration"`.
+/// Fixed height side-steps that entirely. 4 rows fits: spinner row +
+/// top bar + 1 textarea row + bottom bar; multi-line input gets up to
+/// 2 visible rows (rest scrolls inside the textarea).
+pub const VIEWPORT_HEIGHT: u16 = 4;
 
 pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
+
+/// Build a fresh `Terminal` with an inline viewport of `height` rows,
+/// anchored at the current cursor position.
+pub fn make_terminal(height: u16) -> io::Result<Term> {
+    let backend = CrosstermBackend::new(io::stdout());
+    Terminal::with_options(
+        backend,
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Inline(height),
+        },
+    )
+}
 
 #[derive(Clone, Copy)]
 pub enum AgentKind {

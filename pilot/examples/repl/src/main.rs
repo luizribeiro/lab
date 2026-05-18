@@ -13,18 +13,14 @@ mod transcript;
 mod turn;
 mod ui;
 
-use std::io;
 use std::panic;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use ratatui::{TerminalOptions, Viewport};
 use uuid::Uuid;
 
-use crate::app::{AgentKind, App, VIEWPORT_HEIGHT};
+use crate::app::{AgentKind, App};
 
 #[derive(Parser)]
 #[command(name = "pilot-repl", about = "Interactive REPL example for the pilot crate")]
@@ -73,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     enable_raw_mode()?;
-    let mut terminal = make_terminal()?;
+    let mut terminal = app::make_terminal(app::VIEWPORT_HEIGHT)?;
 
     let mut app = App::new(agent, &cwd, args.resume);
     app.boot(&mut terminal)?;
@@ -86,14 +82,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.print_resume_hint();
 
     result.map_err(Into::into)
-}
-
-pub fn make_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    let backend = CrosstermBackend::new(io::stdout());
-    Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(VIEWPORT_HEIGHT),
-        },
-    )
 }
