@@ -95,68 +95,184 @@ impl DefaultSanitizer {
     }
 
     fn replace_string(&self, s: &str) -> Option<String> {
-        if uuid::Uuid::parse_str(s).is_ok() {
-            let mut map = self.uuid_counter.lock().unwrap_or_else(|e| e.into_inner());
-            let next_id = map.len() + 1;
-            let id = *map.entry(s.to_string()).or_insert(next_id);
-            return Some(format!("<UUID:{id}>"));
+        let bytes = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        let mut any_match = false;
+
+        while i < bytes.len() {
+            if let Some((rep, end)) = self.match_at(s, i) {
+                out.push_str(&rep);
+                i = end;
+                any_match = true;
+                continue;
+            }
+            let c_len = s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            out.push_str(&s[i..i + c_len]);
+            i += c_len;
         }
 
-        if Self::looks_like_iso_timestamp(s) {
-            return Some("<TIMESTAMP>".to_string());
-        }
+        if any_match { Some(out) } else { None }
+    }
 
-        if let Some(replaced) = self.replace_path_prefix(s) {
-            return Some(replaced);
+    fn match_at(&self, s: &str, i: usize) -> Option<(String, usize)> {
+        if let Some(end) = Self::scan_uuid(s, i) {
+            let candidate = &s[i..end];
+            return Some((self.uuid_placeholder(candidate), end));
         }
-
-        if Self::looks_like_secret(s) {
-            return Some("<REDACTED>".to_string());
+        if let Some(end) = Self::scan_iso_timestamp(s, i) {
+            return Some(("<TIMESTAMP>".to_string(), end));
         }
-
+        if let Some(end) = Self::scan_secret(s, i) {
+            return Some(("<REDACTED>".to_string(), end));
+        }
+        if let Some((replacement, end)) = self.scan_path(s, i) {
+            return Some((replacement, end));
+        }
         None
     }
 
-    fn looks_like_iso_timestamp(s: &str) -> bool {
-        if s.len() < 10 {
-            return false;
-        }
-        let bytes = s.as_bytes();
-        bytes[4] == b'-'
-            && bytes[7] == b'-'
-            && s[..4].chars().all(|c| c.is_ascii_digit())
-            && s[5..7].chars().all(|c| c.is_ascii_digit())
-            && s[8..10].chars().all(|c| c.is_ascii_digit())
-            && (s.len() == 10 || bytes[10] == b'T' || bytes[10] == b' ')
+    fn uuid_placeholder(&self, candidate: &str) -> String {
+        let mut map = self.uuid_counter.lock().unwrap_or_else(|e| e.into_inner());
+        let next_id = map.len() + 1;
+        let id = *map.entry(candidate.to_string()).or_insert(next_id);
+        format!("<UUID:{id}>")
     }
 
-    fn looks_like_secret(s: &str) -> bool {
+    fn scan_uuid(s: &str, i: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if i + 36 > bytes.len() {
+            return None;
+        }
+        let positions = [8, 13, 18, 23];
+        for &p in &positions {
+            if bytes[i + p] != b'-' {
+                return None;
+            }
+        }
+        let hex_positions: [(usize, usize); 5] = [(0, 8), (9, 13), (14, 18), (19, 23), (24, 36)];
+        for (start, end) in hex_positions {
+            for b in &bytes[i + start..i + end] {
+                if !(b.is_ascii_hexdigit()) {
+                    return None;
+                }
+            }
+        }
+        Some(i + 36)
+    }
+
+    fn scan_iso_timestamp(s: &str, i: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if i + 10 > bytes.len() {
+            return None;
+        }
+        if !(bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+        if bytes[i + 4] != b'-' {
+            return None;
+        }
+        if !(bytes[i + 5..i + 7].iter().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+        if bytes[i + 7] != b'-' {
+            return None;
+        }
+        if !(bytes[i + 8..i + 10].iter().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+
+        let mut end = i + 10;
+        if end < bytes.len()
+            && (bytes[end] == b'T' || bytes[end] == b' ')
+            && end + 9 <= bytes.len()
+            && bytes[end + 1..end + 3].iter().all(|b| b.is_ascii_digit())
+            && bytes[end + 3] == b':'
+            && bytes[end + 4..end + 6].iter().all(|b| b.is_ascii_digit())
+            && bytes[end + 6] == b':'
+            && bytes[end + 7..end + 9].iter().all(|b| b.is_ascii_digit())
+        {
+            end += 9;
+            if end < bytes.len() && bytes[end] == b'.' {
+                let mut e = end + 1;
+                while e < bytes.len() && bytes[e].is_ascii_digit() {
+                    e += 1;
+                }
+                end = e;
+            }
+            if end < bytes.len() {
+                match bytes[end] {
+                    b'Z' => end += 1,
+                    b'+' | b'-' => {
+                        if end + 6 <= bytes.len()
+                            && bytes[end + 1..end + 3].iter().all(|b| b.is_ascii_digit())
+                            && bytes[end + 3] == b':'
+                            && bytes[end + 4..end + 6].iter().all(|b| b.is_ascii_digit())
+                        {
+                            end += 6;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(end)
+    }
+
+    fn scan_secret(s: &str, i: usize) -> Option<usize> {
         const PREFIXES: &[&str] = &[
             "sk-ant-", "sk_live_", "sk-proj-", "sk-", "AIza", "ghp_", "ghs_", "gho_", "ya29.",
         ];
+        let rest = &s[i..];
         for p in PREFIXES {
-            if s.starts_with(p) && s.len() >= p.len() + 20 {
-                return true;
+            if rest.starts_with(p) {
+                let mut e = i + p.len();
+                while e < s.len() {
+                    let c = s.as_bytes()[e];
+                    if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.' {
+                        e += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if e - i >= p.len() + 20 {
+                    return Some(e);
+                }
             }
         }
-        false
+        None
     }
 
-    fn replace_path_prefix(&self, s: &str) -> Option<String> {
-        for (placeholder, base) in [
+    fn scan_path(&self, s: &str, i: usize) -> Option<(String, usize)> {
+        let candidates: [(&str, Option<&std::path::Path>); 3] = [
             ("<CWD>", self.cwd.as_deref()),
             ("<HOME>", self.home_dir.as_deref()),
             ("<TMP>", self.tmp_dir.as_deref()),
-        ] {
+        ];
+        for (placeholder, base) in candidates {
             let base = match base {
-                Some(b) => b.to_string_lossy(),
+                Some(b) => b.to_string_lossy().into_owned(),
                 None => continue,
             };
             if base.is_empty() {
                 continue;
             }
-            if s.starts_with(base.as_ref()) {
-                return Some(format!("{placeholder}{}", &s[base.len()..]));
+            if s[i..].starts_with(&base) {
+                let after_base = i + base.len();
+                let boundary_ok = after_base == s.len() || s.as_bytes()[after_base] == b'/';
+                if !boundary_ok {
+                    continue;
+                }
+                let mut e = after_base;
+                while e < s.len() {
+                    let c = s.as_bytes()[e];
+                    if c == b' ' || c == b'\t' || c == b'\n' || c == b'"' || c == b'\'' {
+                        break;
+                    }
+                    e += 1;
+                }
+                let suffix = &s[after_base..e];
+                return Some((format!("{placeholder}{suffix}"), e));
             }
         }
         None
@@ -491,6 +607,63 @@ mod tests {
         } else {
             panic!("expected Raw event");
         }
+    }
+
+    #[test]
+    fn default_sanitizer_handles_embedded_uuid() {
+        let s = DefaultSanitizer::new();
+        let mut v =
+            serde_json::json!("error at session 11111111-1111-1111-1111-111111111111 happened");
+        s.sanitize(&mut v);
+        assert_eq!(v, serde_json::json!("error at session <UUID:1> happened"));
+    }
+
+    #[test]
+    fn default_sanitizer_handles_embedded_timestamp() {
+        let s = DefaultSanitizer::new();
+        let mut v = serde_json::json!("started at 2026-05-18T12:34:56.789Z and finished");
+        s.sanitize(&mut v);
+        assert_eq!(v, serde_json::json!("started at <TIMESTAMP> and finished"));
+    }
+
+    #[test]
+    fn default_sanitizer_handles_embedded_secret() {
+        let s = DefaultSanitizer::new();
+        let mut v =
+            serde_json::json!("Authorization: Bearer sk-ant-abcdefghijklmnopqrstuvwxyz0123");
+        s.sanitize(&mut v);
+        assert_eq!(v, serde_json::json!("Authorization: Bearer <REDACTED>"));
+    }
+
+    #[test]
+    fn default_sanitizer_handles_embedded_path() {
+        let mut s = DefaultSanitizer::new();
+        s.home_dir = Some(std::path::PathBuf::from("/Users/test"));
+        s.tmp_dir = None;
+        s.cwd = None;
+        let mut v = serde_json::json!("file is at /Users/test/project/foo.rs in the repo");
+        s.sanitize(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!("file is at <HOME>/project/foo.rs in the repo")
+        );
+    }
+
+    #[test]
+    fn default_sanitizer_path_boundary_prevents_partial_match() {
+        let mut s = DefaultSanitizer::new();
+        s.home_dir = Some(std::path::PathBuf::from("/Users/test"));
+        s.tmp_dir = None;
+        s.cwd = None;
+        let mut v = serde_json::json!({
+            "exact": "/Users/test",
+            "subpath": "/Users/test/foo",
+            "looks_similar": "/Users/tester/foo",
+        });
+        s.sanitize(&mut v);
+        assert_eq!(v["exact"], "<HOME>");
+        assert_eq!(v["subpath"], "<HOME>/foo");
+        assert_eq!(v["looks_similar"], "/Users/tester/foo");
     }
 
     #[test]
