@@ -1,4 +1,10 @@
+#![cfg(feature = "test-support")]
+
 //! Recorded scenario tests captured against real agent CLIs.
+//!
+//! Requires the `test-support` feature for the `cassette!` macro and
+//! `Cassette` driver. Without it, this file is excluded from compilation
+//! so plain `cargo test` works.
 //!
 //! Default mode is REPLAY against checked-in fixtures (no CLI needed).
 //! On a fresh checkout, missing fixtures are auto-recorded against the
