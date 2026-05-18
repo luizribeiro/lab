@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CommandSpec`, `AgentPaths`, `ReasoningLevel`, plus per-driver configs.
 - Built-in drivers: `Claude`, `Codex`, `Gemini`, `Pi`.
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
+- `examples/chat.rs`: ratatui-based interactive chat TUI that drives
+  any of the four built-in agents via `--agent`. Demonstrates streaming
+  `AssistantText` deltas, tool-call rendering, and per-turn cancel.
 - `test_support::Cassette` driver wraps any inner driver and switches
   between record and replay modes based on fixture-file presence and
   `PILOT_RECORD`/`PILOT_NO_RECORD` env vars. In Replay mode pilot's
