@@ -6,10 +6,18 @@ Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) from Rust over t
 
 | Agent  | CLI flag set | Resume support | Auth env var | Status |
 |--------|---|---|---|---|
-| claude | `-p --output-format stream-json --verbose --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `ANTHROPIC_API_KEY` | first-class |
-| gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | first-class |
-| pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | `PI_API_KEY` | first-class |
-| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured from `thread.started` event via `Driver::observe`) | `OPENAI_API_KEY` | first-class |
+| claude | `-p --verbose --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `ANTHROPIC_API_KEY` | **stable** |
+| codex  | `codex exec --json --sandbox read-only --skip-git-repo-check <prompt>` (first) / `+ resume <thread_id> <prompt>` (later) | yes (auto-captured via `Driver::observe`) | `OPENAI_API_KEY` | experimental |
+| gemini | `-p --output-format stream-json --session-id <uuid>` (first) / `--resume <uuid>` (later) | yes | `GEMINI_API_KEY` | experimental |
+| pi     | `-p --mode json --session-dir <dir>` (first) / `+ --continue` (later) | yes | `PI_API_KEY` | experimental |
+
+**What "experimental" means:** the underlying CLI's stream-JSON schema
+isn't a stable public contract from its vendor. Pilot's parser
+expectations could break with a CLI update we don't control. Claude has
+the deepest fixture coverage and the most-validated parse paths; codex/
+gemini/pi work today against the versions we tested but should be
+considered subject to schema drift. We'll promote to stable as we add
+version metadata to fixtures and gain confidence.
 
 ## Quick start
 
@@ -127,7 +135,8 @@ cargo run --example with_paths
 
 ## Status
 
-Pre-1.0. Public API may still shift as more drivers are added.
+Pre-1.0. Public API is approaching stability. The four built-in
+drivers vary in maturity — see the table above.
 
 ## Minimum Supported Rust Version
 

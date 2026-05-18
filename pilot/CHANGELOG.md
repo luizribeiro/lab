@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Marked codex/gemini/pi drivers as experimental in the README. Claude
+  is the only driver with stable schema/parse coverage at this point.
+
 ### Added
 - Initial public API: `Session`, `TurnStream`, `Driver`, `Event`, `TurnItem`,
   `Turn`, `TurnInput`, `TurnOptions`, `Error`, `ParseError`, `Auth`,
