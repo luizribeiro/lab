@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::driver::{
-    AgentPaths, Auth, CommandSpec, Driver, ReasoningLevel, TurnInput, TurnOptions,
-};
+use crate::driver::{AgentPaths, Auth, CommandSpec, Driver, TurnInput, TurnOptions};
 use crate::{Event, ParseError};
 
 #[non_exhaustive]
@@ -106,6 +104,12 @@ impl Driver for Gemini {
                 option: "paths.config_home",
             });
         }
+        if opts.reasoning.is_some() {
+            return Err(crate::Error::UnsupportedOption {
+                driver: "gemini",
+                option: "TurnOptions.reasoning",
+            });
+        }
 
         let program = self
             .config
@@ -144,14 +148,6 @@ impl Driver for Gemini {
 
         let mut env = self.config.extra_env.clone();
         env.extend(opts.env.iter().cloned());
-        if let Some(level) = opts.reasoning {
-            let s = match level {
-                ReasoningLevel::Low => "low",
-                ReasoningLevel::Medium => "medium",
-                ReasoningLevel::High => "high",
-            };
-            env.push(("GEMINI_REASONING".into(), s.into()));
-        }
         if let Auth::ApiKey(secret) = &self.config.auth {
             env.push(("GEMINI_API_KEY".into(), secret.expose_secret().to_string()));
         }
@@ -209,11 +205,59 @@ impl Driver for Gemini {
                     }])
                 }
             }
+            Some("tool_use") => {
+                let tool_id = value
+                    .get("tool_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or(ParseError::MissingField("tool_id"))?;
+                let tool_name = value
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .ok_or(ParseError::MissingField("tool_name"))?;
+                let parameters = value
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Ok(vec![Event::ToolCall {
+                    call_id: tool_id.to_string(),
+                    name: tool_name.to_string(),
+                    args: parameters,
+                }])
+            }
+            Some("tool_result") => {
+                let tool_id = value
+                    .get("tool_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or(ParseError::MissingField("tool_id"))?;
+                let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let output = value
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(vec![Event::ToolResult {
+                    call_id: tool_id.to_string(),
+                    ok: status == "success",
+                    output,
+                }])
+            }
             Some("result") => {
                 let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
                 let ok = status == "success";
-
                 let mut events = Vec::new();
+
+                if !ok {
+                    if let Some(msg) = value
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|v| v.as_str())
+                    {
+                        events.push(Event::AssistantText {
+                            delta: msg.to_string(),
+                        });
+                    }
+                }
+
                 if let Some(stats) = value.get("stats") {
                     if let (Some(it), Some(ot)) = (
                         stats.get("input_tokens").and_then(|v| v.as_u64()),
@@ -239,6 +283,7 @@ impl Driver for Gemini {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::driver::ReasoningLevel;
     use expect_test::expect;
 
     fn nil() -> Uuid {
@@ -400,5 +445,119 @@ mod tests {
         let v = serde_json::json!({"type":"message","role":"assistant"});
         let err = Gemini::new().parse(v).unwrap_err();
         assert!(matches!(err, ParseError::MissingField("content")));
+    }
+
+    #[test]
+    fn reasoning_option_returns_unsupported_error() {
+        let driver = Gemini::new();
+        let opts = TurnOptions {
+            reasoning: Some(ReasoningLevel::High),
+            ..Default::default()
+        };
+        let input = TurnInput::Text("hi".into());
+        let err = driver.command(nil(), &input, &opts).unwrap_err();
+        assert!(matches!(
+            err,
+            crate::Error::UnsupportedOption {
+                driver: "gemini",
+                option: "TurnOptions.reasoning",
+            }
+        ));
+    }
+
+    #[test]
+    fn tool_use_event_maps_to_toolcall() {
+        let v = serde_json::json!({
+            "type": "tool_use",
+            "tool_id": "id1",
+            "tool_name": "write_file",
+            "parameters": {"x": 1},
+        });
+        let evs = Gemini::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ToolCall { call_id, name, args }
+                         if call_id == "id1" && name == "write_file" && args["x"] == 1));
+    }
+
+    #[test]
+    fn tool_result_event_maps_to_toolresult() {
+        let v = serde_json::json!({
+            "type": "tool_result",
+            "tool_id": "id1",
+            "status": "success",
+            "output": "ok",
+        });
+        let evs = Gemini::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(
+            matches!(&evs[0], Event::ToolResult { call_id, ok: true, output }
+                         if call_id == "id1" && output == "ok")
+        );
+    }
+
+    #[test]
+    fn tool_result_status_error_yields_ok_false() {
+        let v = serde_json::json!({"type":"tool_result","tool_id":"id1","status":"error"});
+        let evs = Gemini::new().parse(v).unwrap();
+        assert!(matches!(&evs[0], Event::ToolResult { ok: false, .. }));
+    }
+
+    #[test]
+    fn result_with_status_error_emits_assistant_text_and_failed_turncomplete() {
+        let v = serde_json::json!({
+            "type":"result","status":"error",
+            "error":{"type":"x","message":"the message"},
+            "stats":{"input_tokens":0,"output_tokens":0},
+        });
+        let evs = Gemini::new().parse(v).unwrap();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Event::AssistantText { delta } if delta == "the message"))
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, Event::TurnComplete { ok: false }))
+        );
+    }
+
+    #[test]
+    fn tool_use_fixture_parses_to_expected_events() {
+        let raw = include_str!("../../tests/fixtures/gemini/tool_use.jsonl");
+        let gemini = Gemini::new();
+        let mut events: Vec<Event> = Vec::new();
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+            events.extend(gemini.parse(value).expect("parse ok"));
+        }
+        expect_test::expect_file!["../../tests/fixtures/gemini/tool_use.events.snap"]
+            .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
+    fn error_fixture_parses_to_expected_events() {
+        let raw = include_str!("../../tests/fixtures/gemini/error.jsonl");
+        let gemini = Gemini::new();
+        let mut events: Vec<Event> = Vec::new();
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+            events.extend(gemini.parse(value).expect("parse ok"));
+        }
+        expect_test::expect_file!["../../tests/fixtures/gemini/error.events.snap"]
+            .assert_eq(&format!("{events:#?}\n"));
+
+        let final_text: String = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::AssistantText { delta } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(final_text.contains("Requested entity was not found"));
     }
 }

@@ -1,0 +1,8 @@
+{"type":"init","timestamp":"2026-05-18T05:00:00.000Z","session_id":"77777777-7777-7777-7777-777777777777","model":"auto-gemini-3"}
+{"type":"message","timestamp":"2026-05-18T05:00:00.001Z","role":"user","content":"Create a file /tmp/x with the content 'hi'. Then read it back."}
+{"type":"tool_use","timestamp":"2026-05-18T05:00:00.100Z","tool_name":"write_file","tool_id":"write_file_aaa","parameters":{"content":"hi\n","file_path":"/tmp/x"}}
+{"type":"tool_use","timestamp":"2026-05-18T05:00:00.101Z","tool_name":"read_file","tool_id":"read_file_bbb","parameters":{"file_path":"/tmp/x"}}
+{"type":"tool_result","timestamp":"2026-05-18T05:00:00.200Z","tool_id":"write_file_aaa","status":"success"}
+{"type":"tool_result","timestamp":"2026-05-18T05:00:00.201Z","tool_id":"read_file_bbb","status":"success","output":""}
+{"type":"message","timestamp":"2026-05-18T05:00:00.500Z","role":"assistant","content":"Done.","delta":true}
+{"type":"result","timestamp":"2026-05-18T05:00:00.600Z","status":"success","stats":{"input_tokens":42,"output_tokens":5}}

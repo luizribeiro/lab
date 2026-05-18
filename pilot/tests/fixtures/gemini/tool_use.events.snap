@@ -1,0 +1,55 @@
+[
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "model": String("auto-gemini-3"),
+            "session_id": String("77777777-7777-7777-7777-777777777777"),
+            "timestamp": String("2026-05-18T05:00:00.000Z"),
+            "type": String("init"),
+        },
+    },
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "content": String("Create a file /tmp/x with the content 'hi'. Then read it back."),
+            "role": String("user"),
+            "timestamp": String("2026-05-18T05:00:00.001Z"),
+            "type": String("message"),
+        },
+    },
+    ToolCall {
+        call_id: "write_file_aaa",
+        name: "write_file",
+        args: Object {
+            "content": String("hi\n"),
+            "file_path": String("/tmp/x"),
+        },
+    },
+    ToolCall {
+        call_id: "read_file_bbb",
+        name: "read_file",
+        args: Object {
+            "file_path": String("/tmp/x"),
+        },
+    },
+    ToolResult {
+        call_id: "write_file_aaa",
+        ok: true,
+        output: "",
+    },
+    ToolResult {
+        call_id: "read_file_bbb",
+        ok: true,
+        output: "",
+    },
+    AssistantText {
+        delta: "Done.",
+    },
+    Usage {
+        input_tokens: 42,
+        output_tokens: 5,
+    },
+    TurnComplete {
+        ok: true,
+    },
+]

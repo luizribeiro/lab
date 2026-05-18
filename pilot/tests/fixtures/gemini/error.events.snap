@@ -1,0 +1,30 @@
+[
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "model": String("definitely-not-a-real-model"),
+            "session_id": String("88888888-8888-8888-8888-888888888888"),
+            "timestamp": String("2026-05-18T05:01:00.000Z"),
+            "type": String("init"),
+        },
+    },
+    Raw {
+        driver: "gemini",
+        value: Object {
+            "content": String("say hi"),
+            "role": String("user"),
+            "timestamp": String("2026-05-18T05:01:00.001Z"),
+            "type": String("message"),
+        },
+    },
+    AssistantText {
+        delta: "[API Error: Requested entity was not found.]",
+    },
+    Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+    },
+    TurnComplete {
+        ok: false,
+    },
+]

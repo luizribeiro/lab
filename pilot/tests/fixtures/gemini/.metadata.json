@@ -1,0 +1,6 @@
+{
+  "cli": "gemini",
+  "version": "0.42.0",
+  "captured_at": "2026-05-18",
+  "notes": "Fixtures captured live. tool_use.jsonl: triggered write_file+read_file via prompt. error.jsonl: passed an invalid --model. Stream JSON via --output-format stream-json."
+}
