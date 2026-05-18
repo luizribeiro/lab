@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gemini, pi). Each test sends a single short prompt and asserts pilot
   normalizes the response into at least one `AssistantText` delta and
   a successful `TurnComplete`.
+- Recorded invalid_model scenarios for codex and gemini (claude already
+  covered). Per-driver behavior is pinned; future CLI regressions
+  surface as test failures. pi's invalid_model test is `#[ignore]`d:
+  the pi CLI exits silently with no stream-json on invalid `--model`.
 
 ### Changed
 - All four built-in drivers (claude, codex, gemini, pi) graduate to

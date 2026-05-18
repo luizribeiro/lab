@@ -9,13 +9,60 @@
 //!
 //! Fixture path is auto-derived from the test function name:
 //!     tests/fixtures/recorded/<fn_name>.jsonl
+//!
+//! Note on the `cassette!()` macro: it derives the fixture path from the
+//! enclosing function's name via `type_name`. Always call `cassette!(...)`
+//! at the per-test call site, not inside a shared helper — otherwise all
+//! tests collapse onto the same fixture path.
 
 use futures_util::StreamExt;
 use pilot::{Claude, Codex, Driver, Event, Gemini, Pi, Session, TurnItem, TurnOptions, cassette};
 
 #[tokio::test]
 async fn claude_invalid_model_yields_failed_turn_complete() {
-    let driver = cassette!(Claude::new());
+    invalid_model(cassette!(Claude::new())).await;
+}
+
+#[tokio::test]
+async fn codex_invalid_model_yields_failed_turn_complete() {
+    invalid_model(cassette!(Codex::new())).await;
+}
+
+#[tokio::test]
+async fn gemini_invalid_model_yields_failed_turn_complete() {
+    invalid_model(cassette!(Gemini::new())).await;
+}
+
+// pi exits silently with no stream-json on invalid --model (documented
+// silent-error limitation, see Pi driver rustdoc). No events to pin,
+// so there's nothing useful to record.
+#[ignore = "pi emits no events on invalid model (silent-error limitation)"]
+#[tokio::test]
+async fn pi_invalid_model_yields_failed_turn_complete() {
+    invalid_model(cassette!(Pi::new())).await;
+}
+
+#[tokio::test]
+async fn claude_happy_path_says_hi() {
+    happy_path(cassette!(Claude::new())).await;
+}
+
+#[tokio::test]
+async fn codex_happy_path_says_hi() {
+    happy_path(cassette!(Codex::new())).await;
+}
+
+#[tokio::test]
+async fn gemini_happy_path_says_hi() {
+    happy_path(cassette!(Gemini::new())).await;
+}
+
+#[tokio::test]
+async fn pi_happy_path_says_hi() {
+    happy_path(cassette!(Pi::new())).await;
+}
+
+async fn invalid_model<D: Driver + 'static>(driver: D) {
     let mut session = Session::new(driver, "/tmp");
 
     let mut opts = TurnOptions::default();
@@ -39,30 +86,6 @@ async fn claude_invalid_model_yields_failed_turn_complete() {
         matches!(last, Event::TurnComplete { ok: false }),
         "expected TurnComplete{{ok:false}}, got {last:?}\nfull events: {events:?}"
     );
-}
-
-#[tokio::test]
-async fn claude_happy_path_says_hi() {
-    let driver = cassette!(Claude::new());
-    happy_path(driver).await;
-}
-
-#[tokio::test]
-async fn codex_happy_path_says_hi() {
-    let driver = cassette!(Codex::new());
-    happy_path(driver).await;
-}
-
-#[tokio::test]
-async fn gemini_happy_path_says_hi() {
-    let driver = cassette!(Gemini::new());
-    happy_path(driver).await;
-}
-
-#[tokio::test]
-async fn pi_happy_path_says_hi() {
-    let driver = cassette!(Pi::new());
-    happy_path(driver).await;
 }
 
 async fn happy_path<D: Driver + 'static>(driver: D) {
