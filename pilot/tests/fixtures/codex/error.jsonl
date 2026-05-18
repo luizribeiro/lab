@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"66666666-6666-6666-6666-666666666666"}
+{"type":"turn.started"}
+{"type":"error","message":"The 'nonexistent-model-12345' model is not supported when using Codex with a ChatGPT account."}
+{"type":"turn.failed","error":{"message":"The 'nonexistent-model-12345' model is not supported when using Codex with a ChatGPT account."}}

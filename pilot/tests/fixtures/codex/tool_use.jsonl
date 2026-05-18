@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"55555555-5555-5555-5555-555555555555"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I'll create the marker file in the workspace, then read it back."}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/tmp/pilot-test-marker.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/tmp/pilot-test-marker.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"cat pilot-test-marker.txt","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"cat pilot-test-marker.txt","aggregated_output":"hello from codex\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Created pilot-test-marker.txt with the content \"hello from codex\"."}}
+{"type":"turn.completed","usage":{"input_tokens":1500,"cached_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":40}}

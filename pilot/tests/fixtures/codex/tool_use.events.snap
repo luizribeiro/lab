@@ -1,0 +1,86 @@
+[
+    Raw {
+        driver: "codex",
+        value: Object {
+            "thread_id": String("55555555-5555-5555-5555-555555555555"),
+            "type": String("thread.started"),
+        },
+    },
+    Raw {
+        driver: "codex",
+        value: Object {
+            "type": String("turn.started"),
+        },
+    },
+    AssistantText {
+        delta: "I'll create the marker file in the workspace, then read it back.",
+    },
+    Raw {
+        driver: "codex",
+        value: Object {
+            "item": Object {
+                "changes": Array [
+                    Object {
+                        "kind": String("add"),
+                        "path": String("/tmp/pilot-test-marker.txt"),
+                    },
+                ],
+                "id": String("item_1"),
+                "status": String("in_progress"),
+                "type": String("file_change"),
+            },
+            "type": String("item.started"),
+        },
+    },
+    ToolCall {
+        call_id: "item_1",
+        name: "file_change",
+        args: Object {
+            "changes": Array [
+                Object {
+                    "kind": String("add"),
+                    "path": String("/tmp/pilot-test-marker.txt"),
+                },
+            ],
+        },
+    },
+    ToolResult {
+        call_id: "item_1",
+        ok: true,
+        output: "",
+    },
+    Raw {
+        driver: "codex",
+        value: Object {
+            "item": Object {
+                "command": String("cat pilot-test-marker.txt"),
+                "id": String("item_2"),
+                "status": String("in_progress"),
+                "type": String("command_execution"),
+            },
+            "type": String("item.started"),
+        },
+    },
+    ToolCall {
+        call_id: "item_2",
+        name: "command_execution",
+        args: Object {
+            "command": String("cat pilot-test-marker.txt"),
+        },
+    },
+    ToolResult {
+        call_id: "item_2",
+        ok: true,
+        output: "hello from codex\n",
+    },
+    AssistantText {
+        delta: "Created pilot-test-marker.txt with the content \"hello from codex\".",
+    },
+    Usage {
+        input_tokens: 1500,
+        output_tokens: 50,
+    },
+    TurnComplete {
+        ok: true,
+    },
+]
