@@ -78,18 +78,33 @@ pub trait Sanitizer: Send + Sync {
 /// Built-in sanitizer that scrubs UUIDs, timestamps, absolute paths, and
 /// common secret patterns.
 pub struct DefaultSanitizer {
-    home_dir: Option<std::path::PathBuf>,
-    tmp_dir: Option<std::path::PathBuf>,
-    cwd: Option<std::path::PathBuf>,
+    home_dirs: Vec<std::path::PathBuf>,
+    tmp_dirs: Vec<std::path::PathBuf>,
+    cwds: Vec<std::path::PathBuf>,
     uuid_counter: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+}
+
+fn canonicalized_pair(p: Option<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let Some(p) = p else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(2);
+    let canon = std::fs::canonicalize(&p).ok();
+    if let Some(c) = canon.as_ref() {
+        if c != &p {
+            out.push(c.clone());
+        }
+    }
+    out.push(p);
+    out
 }
 
 impl DefaultSanitizer {
     pub fn new() -> Self {
         Self {
-            home_dir: std::env::var("HOME").ok().map(std::path::PathBuf::from),
-            tmp_dir: Some(std::env::temp_dir()),
-            cwd: std::env::current_dir().ok(),
+            home_dirs: canonicalized_pair(std::env::var("HOME").ok().map(std::path::PathBuf::from)),
+            tmp_dirs: canonicalized_pair(Some(std::env::temp_dir())),
+            cwds: canonicalized_pair(std::env::current_dir().ok()),
             uuid_counter: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -244,36 +259,35 @@ impl DefaultSanitizer {
     }
 
     fn scan_path(&self, s: &str, i: usize) -> Option<(String, usize)> {
-        let candidates: [(&str, Option<&std::path::Path>); 3] = [
-            ("<CWD>", self.cwd.as_deref()),
-            ("<HOME>", self.home_dir.as_deref()),
-            ("<TMP>", self.tmp_dir.as_deref()),
+        let candidates: [(&str, &[std::path::PathBuf]); 3] = [
+            ("<CWD>", &self.cwds),
+            ("<HOME>", &self.home_dirs),
+            ("<TMP>", &self.tmp_dirs),
         ];
-        for (placeholder, base) in candidates {
-            let base = match base {
-                Some(b) => b.to_string_lossy().into_owned(),
-                None => continue,
-            };
-            if base.is_empty() {
-                continue;
-            }
-            if s[i..].starts_with(&base) {
-                let after_base = i + base.len();
-                let boundary_ok =
-                    after_base == s.len() || matches!(s.as_bytes()[after_base], b'/' | b'\\');
-                if !boundary_ok {
+        for (placeholder, bases) in candidates {
+            for base in bases {
+                let base = base.to_string_lossy();
+                if base.is_empty() {
                     continue;
                 }
-                let mut e = after_base;
-                while e < s.len() {
-                    let c = s.as_bytes()[e];
-                    if c == b' ' || c == b'\t' || c == b'\n' || c == b'"' || c == b'\'' {
-                        break;
+                if s[i..].starts_with(base.as_ref()) {
+                    let after_base = i + base.len();
+                    let boundary_ok =
+                        after_base == s.len() || matches!(s.as_bytes()[after_base], b'/' | b'\\');
+                    if !boundary_ok {
+                        continue;
                     }
-                    e += 1;
+                    let mut e = after_base;
+                    while e < s.len() {
+                        let c = s.as_bytes()[e];
+                        if c == b' ' || c == b'\t' || c == b'\n' || c == b'"' || c == b'\'' {
+                            break;
+                        }
+                        e += 1;
+                    }
+                    let suffix = &s[after_base..e];
+                    return Some((format!("{placeholder}{suffix}"), e));
                 }
-                let suffix = &s[after_base..e];
-                return Some((format!("{placeholder}{suffix}"), e));
             }
         }
         None
@@ -764,9 +778,9 @@ mod tests {
     #[test]
     fn default_sanitizer_replaces_home_path_prefix() {
         let mut s = DefaultSanitizer::new();
-        s.home_dir = Some(std::path::PathBuf::from("/Users/test"));
-        s.tmp_dir = None;
-        s.cwd = None;
+        s.home_dirs = vec![std::path::PathBuf::from("/Users/test")];
+        s.tmp_dirs = Vec::new();
+        s.cwds = Vec::new();
         let mut v = serde_json::json!({
             "path": "/Users/test/.claude/config.toml",
             "external": "/etc/passwd",
@@ -834,9 +848,9 @@ mod tests {
     #[test]
     fn default_sanitizer_handles_embedded_path() {
         let mut s = DefaultSanitizer::new();
-        s.home_dir = Some(std::path::PathBuf::from("/Users/test"));
-        s.tmp_dir = None;
-        s.cwd = None;
+        s.home_dirs = vec![std::path::PathBuf::from("/Users/test")];
+        s.tmp_dirs = Vec::new();
+        s.cwds = Vec::new();
         let mut v = serde_json::json!("file is at /Users/test/project/foo.rs in the repo");
         s.sanitize(&mut v);
         assert_eq!(
@@ -848,9 +862,9 @@ mod tests {
     #[test]
     fn default_sanitizer_path_boundary_prevents_partial_match() {
         let mut s = DefaultSanitizer::new();
-        s.home_dir = Some(std::path::PathBuf::from("/Users/test"));
-        s.tmp_dir = None;
-        s.cwd = None;
+        s.home_dirs = vec![std::path::PathBuf::from("/Users/test")];
+        s.tmp_dirs = Vec::new();
+        s.cwds = Vec::new();
         let mut v = serde_json::json!({
             "exact": "/Users/test",
             "subpath": "/Users/test/foo",
@@ -865,9 +879,9 @@ mod tests {
     #[test]
     fn default_sanitizer_accepts_backslash_as_path_separator() {
         let mut s = DefaultSanitizer::new();
-        s.home_dir = Some(std::path::PathBuf::from(r"C:\Users\test"));
-        s.tmp_dir = None;
-        s.cwd = None;
+        s.home_dirs = vec![std::path::PathBuf::from(r"C:\Users\test")];
+        s.tmp_dirs = Vec::new();
+        s.cwds = Vec::new();
         let mut v = serde_json::json!({
             "subpath": r"C:\Users\test\project\foo.rs",
             "looks_similar": r"C:\Users\tester\foo.rs",
@@ -875,6 +889,24 @@ mod tests {
         s.sanitize(&mut v);
         assert_eq!(v["subpath"], r"<HOME>\project\foo.rs");
         assert_eq!(v["looks_similar"], r"C:\Users\tester\foo.rs");
+    }
+
+    #[test]
+    fn default_sanitizer_matches_canonical_paths_on_macos_style_links() {
+        let mut s = DefaultSanitizer::new();
+        s.home_dirs = Vec::new();
+        s.cwds = Vec::new();
+        s.tmp_dirs = vec![
+            std::path::PathBuf::from("/private/var/folders/5k/abc/T"),
+            std::path::PathBuf::from("/var/folders/5k/abc/T"),
+        ];
+        let mut v = serde_json::json!({
+            "canonical": "/private/var/folders/5k/abc/T/foo",
+            "symlinked": "/var/folders/5k/abc/T/bar",
+        });
+        s.sanitize(&mut v);
+        assert_eq!(v["canonical"], "<TMP>/foo");
+        assert_eq!(v["symlinked"], "<TMP>/bar");
     }
 
     #[test]

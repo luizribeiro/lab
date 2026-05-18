@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructed internally. Callers no longer need to import `Arc` or
   `Driver` for basic use.
 
+### Fixed
+- `test_support::DefaultSanitizer` now matches both the raw and canonical
+  forms of `$HOME`, `$TMPDIR`, and the current working directory.
+  Previously, macOS canonical paths (`/private/var/folders/...`) leaked
+  through unsanitized.
+
 ### Removed
 - `TurnStream::with_timeout` from the public API. Use
   `TurnOptions.timeout` when calling `Session::send`. The internal
