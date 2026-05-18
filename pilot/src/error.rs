@@ -29,8 +29,6 @@ pub enum Error {
     Timeout(Duration),
     #[error("I/O error")]
     Io(#[source] std::io::Error),
-    #[error("unknown agent: {0}")]
-    UnknownAgent(String),
     /// A `Session::send` call was rejected because a previous turn is still
     /// in flight on the same session.
     #[error("session is already executing a turn")]
@@ -83,7 +81,6 @@ mod tests {
             Error::Cancelled,
             Error::Timeout(Duration::from_secs(1)),
             Error::Io(io::Error::other("x")),
-            Error::UnknownAgent("zed".into()),
         ];
         let prefixes = [
             "failed to spawn agent process",
@@ -93,7 +90,6 @@ mod tests {
             "turn cancelled",
             "turn timed out after",
             "I/O error",
-            "unknown agent: zed",
         ];
         for (e, prefix) in cases.iter().zip(prefixes.iter()) {
             assert!(format!("{e}").contains(prefix), "{e}");

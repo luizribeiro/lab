@@ -7,8 +7,9 @@
 //!     cargo run --example greeting -- pi
 
 use futures_util::StreamExt;
-use pilot::{Event, Session, TurnItem, TurnOptions};
+use pilot::{Claude, Codex, Driver, Event, Gemini, Pi, Session, TurnItem, TurnOptions};
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
@@ -17,7 +18,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .expect("usage: greeting <claude|codex|gemini|pi>");
 
-    let driver = pilot::driver(&agent)?;
+    let driver: Arc<dyn Driver> = match agent.as_str() {
+        "claude" => Arc::new(Claude::new()),
+        "codex" => Arc::new(Codex::new()),
+        "gemini" => Arc::new(Gemini::new()),
+        "pi" => Arc::new(Pi::new()),
+        other => return Err(format!("unknown agent: {other}").into()),
+    };
     let mut session = Session::new(driver, std::env::current_dir()?);
     println!("session id: {}", session.id());
 

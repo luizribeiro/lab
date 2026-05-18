@@ -12,8 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Turn`, `TurnInput`, `TurnOptions`, `Error`, `ParseError`, `Auth`,
   `CommandSpec`, `AgentPaths`, `ReasoningLevel`, plus per-driver configs.
 - Built-in drivers: `Claude`, `Codex`, `Gemini`, `Pi`.
-- `pilot::driver(name)` factory for built-in drivers.
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
+
+### Removed
+- `pilot::driver(name)` factory and `Error::UnknownAgent` variant. Users
+  pick the driver by typed constructor (`Claude::new()`, etc.) and
+  dispatch via their own match if the agent name comes from CLI args
+  or config.
 
 ### Lifecycle guarantees
 - `TurnStream` Drop kills the child; `cancel().await` returns partial Turn.

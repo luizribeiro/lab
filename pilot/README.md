@@ -15,11 +15,12 @@ Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) from Rust over t
 
 ```rust
 use futures_util::StreamExt;
-use pilot::{Event, Session, TurnItem, TurnOptions};
+use pilot::{Claude, Driver, Event, Session, TurnItem, TurnOptions};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let driver = pilot::driver("claude")?;
+    let driver: Arc<dyn Driver> = Arc::new(Claude::new());
     let mut session = Session::new(driver, "./repo");
 
     let mut stream = session
@@ -69,9 +70,12 @@ pub enum Event {
     TurnComplete  { ok: bool },
     Raw           { driver: &'static str, value: serde_json::Value },
 }
-
-pub fn driver(name: &str) -> Result<Arc<dyn Driver>>; // built-in factory
 ```
+
+Construct the driver you want via its typed constructor — `Claude::new()`,
+`Codex::new()`, `Gemini::new()`, `Pi::new()`, or the corresponding
+`*::with_config(...)` for custom configuration — then wrap it as
+`Arc<dyn Driver>` and pass to `Session::new`.
 
 For the canonical agent response text, use `Turn::final_text()`, which
 concatenates all `AssistantText` deltas observed during the turn. Drivers
