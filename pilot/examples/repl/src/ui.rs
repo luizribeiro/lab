@@ -29,10 +29,12 @@ impl CommitColor {
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let status_h = status_height(app);
-    // Composer block height = textarea lines (capped) + 2 border rows,
-    // pinned to the *bottom* of the viewport. Status sits above. The
-    // gap in between is padding (occurs when the textarea is small but
-    // the viewport is the fixed `VIEWPORT_HEIGHT`).
+    // Composer block height = textarea lines (capped) + 2 border rows.
+    // Status sits above the composer; any unused rows become padding
+    // *below* the composer (not above) so the top bar always sits
+    // directly under the most recent scrollback line — otherwise an
+    // extra blank row would appear between scrollback and the top bar
+    // whenever the viewport had unused capacity.
     let textarea_lines = app.composer.textarea.lines().len().max(1) as u16;
     let composer_h = (textarea_lines + 2).min(area.height.saturating_sub(status_h));
     let pad_h = area
@@ -44,15 +46,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(status_h),
-            Constraint::Length(pad_h),
             Constraint::Length(composer_h),
+            Constraint::Length(pad_h),
         ])
         .split(area);
 
     if status_h > 0 {
         draw_status(frame, chunks[0], app);
     }
-    draw_composer_block(frame, chunks[2], app);
+    draw_composer_block(frame, chunks[1], app);
 }
 
 fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
