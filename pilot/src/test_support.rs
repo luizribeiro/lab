@@ -668,6 +668,21 @@ mod tests {
     }
 
     #[test]
+    fn default_sanitizer_accepts_backslash_as_path_separator() {
+        let mut s = DefaultSanitizer::new();
+        s.home_dir = Some(std::path::PathBuf::from(r"C:\Users\test"));
+        s.tmp_dir = None;
+        s.cwd = None;
+        let mut v = serde_json::json!({
+            "subpath": r"C:\Users\test\project\foo.rs",
+            "looks_similar": r"C:\Users\tester\foo.rs",
+        });
+        s.sanitize(&mut v);
+        assert_eq!(v["subpath"], r"<HOME>\project\foo.rs");
+        assert_eq!(v["looks_similar"], r"C:\Users\tester\foo.rs");
+    }
+
+    #[test]
     fn recording_driver_creates_parent_dir() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/sub/recording.jsonl");
