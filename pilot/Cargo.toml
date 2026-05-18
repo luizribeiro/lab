@@ -1,6 +1,6 @@
 [package]
 name = "pilot"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Drive headless AI coding-agent CLIs (claude, codex, gemini, pi) over their stream-JSON modes"
