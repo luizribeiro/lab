@@ -14,7 +14,11 @@ use pilot::{Claude, Event, TurnOptions};
 /// as a failed `TurnComplete` (ok: false) rather than a silent success.
 #[tokio::test]
 async fn claude_invalid_model_yields_failed_turn_complete() {
-    let workdir = std::env::temp_dir();
+    // Use `/tmp` (not std::env::temp_dir()) so the canonical path
+    // `/private/tmp` is stable across machines. macOS per-user
+    // `/var/folders/...` paths leak via tools that slugify cwd into
+    // strings the sanitizer can't see as a path.
+    let workdir = std::path::PathBuf::from("/tmp");
     let mut opts = TurnOptions::default();
     opts.model = Some("definitely-not-a-real-model-xyz".to_string());
     opts.timeout = Some(std::time::Duration::from_secs(30));

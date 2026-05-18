@@ -592,14 +592,13 @@ pub mod recorded_test {
             .unwrap_or_else(|e| panic!("run_or_replay: session.send failed: {e:?}"));
 
         let mut events: Vec<crate::Event> = Vec::new();
+        let mut errors: Vec<crate::Error> = Vec::new();
         let mut stream = pin!(stream);
         loop {
             let next = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await;
             match next {
                 None => break,
-                Some(Err(e)) => {
-                    panic!("run_or_replay: stream error during recording: {e:?}")
-                }
+                Some(Err(e)) => errors.push(e),
                 Some(Ok(TurnItem::Event(e))) => events.push(e),
                 Some(Ok(TurnItem::Complete(_))) => {}
             }
@@ -621,10 +620,7 @@ pub mod recorded_test {
             )
         });
 
-        crate::Turn {
-            events,
-            errors: vec![],
-        }
+        crate::Turn { events, errors }
     }
 }
 
