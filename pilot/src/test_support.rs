@@ -1,7 +1,10 @@
 //! Test utilities for downstream crates. Gated behind the `test-support`
 //! Cargo feature.
 
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use uuid::Uuid;
 
@@ -63,6 +66,66 @@ impl Driver for TestDriver {
     }
 }
 
+/// A `Driver` wrapper that tees every raw JSON value to a file before
+/// forwarding to the inner driver's `parse`.
+pub struct RecordingDriver<D: Driver> {
+    inner: D,
+    file: Mutex<File>,
+}
+
+impl<D: Driver> RecordingDriver<D> {
+    pub fn new(inner: D, path: impl Into<PathBuf>) -> std::io::Result<Self> {
+        let path = path.into();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let file = File::create(&path)?;
+        Ok(Self {
+            inner,
+            file: Mutex::new(file),
+        })
+    }
+}
+
+impl<D: Driver> Driver for RecordingDriver<D> {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn command(
+        &self,
+        session_id: Uuid,
+        input: &TurnInput,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        self.inner.command(session_id, input, opts)
+    }
+
+    fn resume_command(
+        &self,
+        session_id: Uuid,
+        input: &TurnInput,
+        opts: &TurnOptions,
+    ) -> crate::Result<CommandSpec> {
+        self.inner.resume_command(session_id, input, opts)
+    }
+
+    fn observe(&self, session_id: Uuid, raw: &serde_json::Value) {
+        self.inner.observe(session_id, raw);
+    }
+
+    fn parse(&self, value: serde_json::Value) -> std::result::Result<Vec<Event>, ParseError> {
+        if let Ok(line) = serde_json::to_string(&value) {
+            if let Ok(mut f) = self.file.lock() {
+                let _ = writeln!(f, "{line}");
+            }
+        }
+        self.inner.parse(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +150,70 @@ mod tests {
         let evs = d.parse(serde_json::json!({"x": 1})).unwrap();
         assert_eq!(evs.len(), 1);
         assert!(matches!(evs[0], Event::Raw { driver: "t", .. }));
+    }
+
+    #[test]
+    fn recording_driver_writes_raw_lines() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let inner = TestDriver::new("t", "/bin/echo");
+        let rec = RecordingDriver::new(inner, &path).unwrap();
+
+        let v1 = serde_json::json!({"type":"a","n":1});
+        let v2 = serde_json::json!({"type":"b","n":2});
+        let _ = rec.parse(v1.clone()).unwrap();
+        let _ = rec.parse(v2.clone()).unwrap();
+        drop(rec);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let parsed1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let parsed2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(parsed1, v1);
+        assert_eq!(parsed2, v2);
+    }
+
+    #[test]
+    fn recording_driver_forwards_to_inner_parse() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let inner = TestDriver::new("inner", "/bin/echo");
+        let rec = RecordingDriver::new(inner, tmp.path()).unwrap();
+        let v = serde_json::json!({"x": 1});
+        let evs = rec.parse(v.clone()).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(
+            &evs[0],
+            Event::Raw {
+                driver: "inner",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn recording_driver_forwards_command() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let inner = TestDriver::new("inner", "/bin/echo");
+        let rec = RecordingDriver::new(inner, tmp.path()).unwrap();
+        let spec = rec
+            .command(
+                Uuid::nil(),
+                &TurnInput::Text("hi".into()),
+                &TurnOptions::default(),
+            )
+            .unwrap();
+        assert!(spec.args.contains(&"hi".to_string()));
+    }
+
+    #[test]
+    fn recording_driver_creates_parent_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/sub/recording.jsonl");
+        let inner = TestDriver::new("inner", "/bin/echo");
+        let rec = RecordingDriver::new(inner, &path).unwrap();
+        let _ = rec.parse(serde_json::json!({"x":1}));
+        drop(rec);
+        assert!(path.exists());
     }
 }
