@@ -298,7 +298,7 @@ impl App {
 
     pub fn print_resume_hint(&self) {
         println!(
-            "\nResume this session with: cargo run -p pilot-repl -- --agent {} --resume {}",
+            "\nResume this session with: orb --agent {} --resume {}",
             self.agent.label(),
             self.session.id()
         );
@@ -341,13 +341,13 @@ fn make_session(agent: AgentKind, workdir: &Path, resume: Option<Uuid>) -> Sessi
 
 fn history_path() -> PathBuf {
     dirs::home_dir()
-        .map(|h| h.join(".pilothistory"))
-        .unwrap_or_else(|| PathBuf::from(".pilothistory"))
+        .map(|h| h.join(".orb").join("history"))
+        .unwrap_or_else(|| PathBuf::from(".orb-history"))
 }
 
 fn codex_thread_store() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    let dir = home.join(".pilot");
+    let dir = home.join(".orb");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("codex-threads.json")
 }

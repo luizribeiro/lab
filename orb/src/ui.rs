@@ -167,7 +167,7 @@ fn current_tick() -> &'static str {
 pub fn commit_header(terminal: &mut Term, agent: AgentKind, resumed: bool) -> io::Result<()> {
     let suffix = if resumed { " (resumed)" } else { "" };
     let bar = Line::from(vec![
-        Span::styled("pilot repl", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled("orb", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(" — "),
         Span::styled(agent.label(), Style::default().fg(Color::Cyan)),
         Span::styled(suffix, Style::default().fg(Color::Yellow)),

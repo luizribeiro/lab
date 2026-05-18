@@ -103,7 +103,7 @@ impl Transcript {
 
 fn transcripts_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".pilot").join("transcripts")
+    home.join(".orb").join("transcripts")
 }
 
 #[cfg(test)]

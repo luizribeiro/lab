@@ -1,15 +1,15 @@
 [package]
-name = "pilot-repl"
+name = "orb"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [[bin]]
-name = "pilot-repl"
+name = "orb"
 path = "src/main.rs"
 
 [dependencies]
-pilot = { path = "../.." }
+pilot = { path = "../pilot" }
 clap = { version = "4", features = ["derive"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"

@@ -53,6 +53,10 @@
             inherit pkgs;
           };
 
+          orb = import ./orb/nix {
+            inherit pkgs;
+          };
+
           tempo = import ./tempo/nix {
             inherit pkgs;
           };
@@ -62,13 +66,13 @@
           };
         in
         {
-          lib = capsa.lib // lockin.lib // outpost.lib // tempo.lib // scope.lib;
+          lib = capsa.lib // lockin.lib // outpost.lib // orb.lib // tempo.lib // scope.lib;
 
-          packages = capsa.packages // lockin.packages // outpost.packages // tempo.packages // scope.packages // {
+          packages = capsa.packages // lockin.packages // outpost.packages // orb.packages // tempo.packages // scope.packages // {
             default = capsa.packages.capsa;
           };
 
-          checks = capsa.checks // lockin.checks // outpost.checks // tempo.checks // scope.checks;
+          checks = capsa.checks // lockin.checks // outpost.checks // orb.checks // tempo.checks // scope.checks;
 
           devShells = {
             default = devenv.lib.mkShell {
@@ -112,6 +116,13 @@
             };
 
             outpost = devenv.lib.mkShell {
+              inherit inputs pkgs;
+              modules = [
+                ./shared/nix/devenv/base.nix
+              ];
+            };
+
+            orb = devenv.lib.mkShell {
               inherit inputs pkgs;
               modules = [
                 ./shared/nix/devenv/base.nix

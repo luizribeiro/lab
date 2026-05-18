@@ -194,6 +194,9 @@ fn new_textarea(lines: Vec<String>) -> TextArea<'static> {
 
 impl History {
     pub fn load(path: PathBuf) -> Self {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let entries = std::fs::read_to_string(&path)
             .map(|content| content.lines().map(String::from).collect::<VecDeque<_>>())
             .unwrap_or_default();
@@ -241,7 +244,7 @@ fn run_editor(initial: &str) -> io::Result<String> {
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
     let mut tmp = tempfile::Builder::new()
-        .prefix("pilot-prompt-")
+        .prefix("orb-prompt-")
         .suffix(".md")
         .tempfile()?;
     tmp.write_all(initial.as_bytes())?;
@@ -262,7 +265,7 @@ mod tests {
     use super::*;
 
     fn composer_with_history(entries: &[&str]) -> Composer {
-        let mut composer = Composer::new(PathBuf::from("/tmp/pilot-repl-test-history"));
+        let mut composer = Composer::new(PathBuf::from("/tmp/orb-test-history"));
         composer.history.entries = entries.iter().map(|entry| entry.to_string()).collect();
         composer
     }

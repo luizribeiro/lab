@@ -1,10 +1,9 @@
-//! Interactive REPL example for the pilot crate, built on ratatui's
-//! inline viewport so the prompt stays visible while turns stream and
-//! the terminal's native scrollback keeps working.
+//! Orb is a terminal workspace for agentic coding sessions, built on
+//! pilot and ratatui's inline viewport.
 //!
 //! Run with:
-//!     cargo run -p pilot-repl -- --agent claude
-//!     cargo run -p pilot-repl -- --agent claude --resume 6e7c…
+//!     cargo run -- --agent claude
+//!     cargo run -- --agent claude --resume 6e7c...
 
 mod app;
 mod composer;
@@ -23,17 +22,14 @@ use uuid::Uuid;
 use crate::app::{AgentKind, App};
 
 #[derive(Parser)]
-#[command(
-    name = "pilot-repl",
-    about = "Interactive REPL example for the pilot crate"
-)]
+#[command(name = "orb", about = "Terminal workspace for agentic coding sessions")]
 struct Args {
     /// Which agent CLI to drive
     #[arg(long, value_enum, default_value_t = AgentKindArg::Claude)]
     agent: AgentKindArg,
 
     /// Resume a previous session by UUID. The transcript at
-    /// ~/.pilot/transcripts/<agent>-<uuid>.jsonl is replayed before
+    /// ~/.orb/transcripts/<agent>-<uuid>.jsonl is replayed before
     /// the prompt is mounted.
     #[arg(long)]
     resume: Option<Uuid>,

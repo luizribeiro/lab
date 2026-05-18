@@ -1,6 +1,3 @@
-[workspace]
-members = ["examples/repl"]
-
 [package]
 name = "pilot"
 version = "0.3.0"
@@ -11,7 +8,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/luizribeiro/lab"
 keywords = ["agent", "claude", "codex", "gemini", "ai"]
 categories = ["api-bindings", "command-line-utilities"]
-exclude = ["examples/repl"]
 
 [features]
 default = []
