@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::Result;
 use crate::driver::{Driver, TurnInput, TurnOptions};
 use crate::process::spawn_jsonl;
-use crate::turn::{Turn, TurnStream};
+use crate::turn::TurnStream;
 
 fn session_lock_for(driver: &str, id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
     use std::collections::HashMap;
@@ -39,7 +39,6 @@ pub struct Session {
     id: Uuid,
     driver: Arc<dyn Driver>,
     workdir: PathBuf,
-    recorded_turns: Vec<Turn>,
     busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
     turns_completed: Arc<AtomicUsize>,
 }
@@ -79,7 +78,6 @@ impl Session {
             id,
             driver,
             workdir: workdir.into(),
-            recorded_turns: Vec::new(),
             busy: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             turns_completed: Arc::new(AtomicUsize::new(0)),
         }
@@ -183,19 +181,6 @@ impl Session {
             stream
         };
         Ok(stream)
-    }
-
-    /// Record a completed [`Turn`] in this session's local history. The
-    /// CLI itself is the authoritative store (keyed by [`Self::id`]); this
-    /// history is observational and exists only because callers find it
-    /// convenient.
-    pub fn record(&mut self, turn: Turn) {
-        self.recorded_turns.push(turn);
-    }
-
-    /// Read the locally-recorded turn history.
-    pub fn recorded_turns(&self) -> &[Turn] {
-        &self.recorded_turns
     }
 }
 
@@ -331,23 +316,6 @@ mod tests {
         let item = stream.next().await.expect("first").expect_err("timeout");
         assert!(matches!(item, Error::Timeout(_)));
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
-    }
-
-    #[tokio::test]
-    async fn record_and_recorded_turns_round_trip() {
-        let mut session = Session::new(
-            ScriptDriver {
-                script: PathBuf::new(),
-            },
-            "/tmp",
-        );
-        assert!(session.recorded_turns().is_empty());
-
-        session.record(Turn {
-            events: vec![Event::AssistantText { delta: "hi".into() }],
-        });
-        session.record(Turn { events: vec![] });
-        assert_eq!(session.recorded_turns().len(), 2);
     }
 
     #[tokio::test]
