@@ -1,0 +1,6 @@
+{
+  "cli": "claude (Claude Code)",
+  "version": "2.1.143",
+  "captured_at": "2026-05-18",
+  "notes": "Fixtures captured live via `claude -p --output-format stream-json --verbose`. greeting.jsonl: single 'hello' response. tool_use.jsonl: Write + Read tool round-trip via prompt asking to create+read a marker file."
+}

@@ -454,6 +454,22 @@ mod tests {
     }
 
     #[test]
+    fn tool_use_fixture_parses_to_expected_events() {
+        let raw = include_str!("../../tests/fixtures/claude/tool_use.jsonl");
+        let claude = Claude::new();
+        let mut events: Vec<Event> = Vec::new();
+        for line in raw.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
+            events.extend(claude.parse(value).expect("parse ok"));
+        }
+        expect_test::expect_file!["../../tests/fixtures/claude/tool_use.events.snap"]
+            .assert_eq(&format!("{events:#?}\n"));
+    }
+
+    #[test]
     fn assistant_missing_message_errors() {
         let v = serde_json::json!({"type":"assistant"});
         let err = Claude::new().parse(v).unwrap_err();

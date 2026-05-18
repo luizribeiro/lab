@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
 
 ### Changed
+- All four built-in drivers (claude, codex, gemini, pi) graduate to
+  **stable** status. Each has fixture coverage for greeting + tool-use,
+  a `.metadata.json` pinning the CLI version, and a documented
+  error-handling path. Pi's silent-error limitation is documented
+  in its module rustdoc.
 - `TurnStream::cancel().await` now surfaces errors encountered during
   channel drain via the new `Turn::errors: Vec<Error>` field. Previously
   these were silently dropped. The field is empty for natural

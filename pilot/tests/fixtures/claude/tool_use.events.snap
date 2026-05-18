@@ -1,0 +1,62 @@
+[
+    Raw {
+        driver: "claude",
+        value: Object {
+            "cwd": String("/test"),
+            "model": String("claude-opus-4-7"),
+            "session_id": String("11111111-aaaa-bbbb-cccc-111111111111"),
+            "subtype": String("init"),
+            "type": String("system"),
+        },
+    },
+    AssistantText {
+        delta: "I'll create the file then read it back.",
+    },
+    Usage {
+        input_tokens: 50,
+        output_tokens: 10,
+    },
+    ToolCall {
+        call_id: "toolu_aaa",
+        name: "Write",
+        args: Object {
+            "content": String("hi from claude"),
+            "file_path": String("/tmp/pilot-claude-marker.txt"),
+        },
+    },
+    Usage {
+        input_tokens: 50,
+        output_tokens: 30,
+    },
+    ToolResult {
+        call_id: "toolu_aaa",
+        ok: true,
+        output: "File created successfully at: /tmp/pilot-claude-marker.txt",
+    },
+    ToolCall {
+        call_id: "toolu_bbb",
+        name: "Read",
+        args: Object {
+            "file_path": String("/tmp/pilot-claude-marker.txt"),
+        },
+    },
+    Usage {
+        input_tokens: 60,
+        output_tokens: 20,
+    },
+    ToolResult {
+        call_id: "toolu_bbb",
+        ok: true,
+        output: "1\thi from claude",
+    },
+    AssistantText {
+        delta: "Done.",
+    },
+    Usage {
+        input_tokens: 70,
+        output_tokens: 3,
+    },
+    TurnComplete {
+        ok: true,
+    },
+]
