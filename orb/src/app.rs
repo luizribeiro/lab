@@ -146,8 +146,17 @@ impl App {
     }
 
     async fn handle_key(&mut self, ev: CtEvent, terminal: &mut Term) -> io::Result<()> {
-        let CtEvent::Key(key) = ev else {
-            return Ok(());
+        let key = match ev {
+            CtEvent::FocusGained => {
+                self.composer.set_focused(true);
+                return Ok(());
+            }
+            CtEvent::FocusLost => {
+                self.composer.set_focused(false);
+                return Ok(());
+            }
+            CtEvent::Key(k) => k,
+            _ => return Ok(()),
         };
         if key.kind != KeyEventKind::Press {
             return Ok(());

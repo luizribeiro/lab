@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use tui_textarea::TextArea;
 
 use crate::app::Term;
@@ -15,6 +15,7 @@ pub struct Composer {
     pub search: Option<Search>,
     history_cursor: Option<usize>,
     history_draft: Option<Vec<String>>,
+    focused: bool,
 }
 
 pub struct History {
@@ -32,11 +33,12 @@ impl Composer {
     pub fn new(history_path: PathBuf) -> Self {
         let history = History::load(history_path);
         Self {
-            textarea: new_textarea(Vec::new()),
+            textarea: new_textarea(Vec::new(), true),
             history,
             search: None,
             history_cursor: None,
             history_draft: None,
+            focused: true,
         }
     }
 
@@ -48,9 +50,17 @@ impl Composer {
     pub fn take_input(&mut self) -> String {
         let lines = self.textarea.lines();
         let text = lines.join("\n").trim().to_string();
-        self.textarea = new_textarea(Vec::new());
+        self.textarea = new_textarea(Vec::new(), self.focused);
         self.reset_history_navigation();
         text
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        if self.focused == focused {
+            return;
+        }
+        self.focused = focused;
+        self.textarea.set_cursor_style(cursor_style(focused));
     }
 
     pub fn history_previous(&mut self) {
@@ -81,7 +91,7 @@ impl Composer {
         } else {
             let draft = self.history_draft.take().unwrap_or_default();
             self.history_cursor = None;
-            self.textarea = new_textarea(draft);
+            self.textarea = new_textarea(draft, self.focused);
         }
     }
 
@@ -170,7 +180,7 @@ impl Composer {
     }
 
     fn set_text(&mut self, text: String) {
-        self.textarea = new_textarea(text.lines().map(String::from).collect());
+        self.textarea = new_textarea(text.lines().map(String::from).collect(), self.focused);
     }
 
     fn reset_history_navigation(&mut self) {
@@ -182,14 +192,23 @@ impl Composer {
 /// Construct a fresh textarea with our preferred display settings — most
 /// importantly, no underline on the cursor line (tui-textarea-2 defaults
 /// to `Modifier::UNDERLINED`, which we don't want for a chat prompt).
-fn new_textarea(lines: Vec<String>) -> TextArea<'static> {
+fn new_textarea(lines: Vec<String>, focused: bool) -> TextArea<'static> {
     let mut textarea = if lines.is_empty() {
         TextArea::default()
     } else {
         TextArea::new(lines)
     };
     textarea.set_cursor_line_style(Style::default());
+    textarea.set_cursor_style(cursor_style(focused));
     textarea
+}
+
+fn cursor_style(focused: bool) -> Style {
+    if focused {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    }
 }
 
 impl History {
