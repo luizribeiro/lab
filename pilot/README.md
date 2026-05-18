@@ -53,9 +53,9 @@ impl Session {
 
 pub struct TurnStream;          // impl Stream<Item = Result<TurnItem>>
 impl TurnStream {
-    pub fn with_timeout(self, duration: Duration) -> Self;
     pub async fn cancel(self) -> Turn;
 }
+// Per-turn timeout is configured via `TurnOptions.timeout` passed to `send()`.
 
 pub enum TurnItem { Event(Event), Complete(Turn) }
 

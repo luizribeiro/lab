@@ -111,9 +111,10 @@ pub enum TurnItem {
 /// * **Stream errors are terminal.** Once `poll_next` yields
 ///   `Some(Err(_))`, subsequent polls return `None`. The handle has
 ///   already been released; the stream is safe to keep around or drop.
-/// * **[`TurnStream::with_timeout`]-triggered errors are equivalent to
-///   errors:** yields `Some(Err(Error::Timeout(_)))`, then `None`.
-///   Counter not incremented; session is reusable.
+/// * **Timeout-triggered errors are equivalent to errors:** yields
+///   `Some(Err(Error::Timeout(_)))`, then `None`. Counter not
+///   incremented; session is reusable. Timeouts are set via
+///   [`crate::TurnOptions::timeout`] when calling [`crate::Session::send`].
 /// * **Successful completion increments the counter.** When `poll_next`
 ///   yields [`TurnItem::Complete`], the session's turns-completed
 ///   counter increments BEFORE the busy guard releases. Subsequent
@@ -197,21 +198,9 @@ impl TurnStream {
         self
     }
 
-    /// Set a per-turn wall-clock deadline.
-    ///
-    /// When the duration elapses before the stream yields
-    /// [`TurnItem::Complete`], the stream yields exactly one
-    /// `Err(Error::Timeout(duration))` and then `None`. The child process
-    /// is killed, the busy guard is released, and the session is
-    /// immediately reusable. The turns-completed counter is NOT
-    /// incremented; the next send dispatches via whichever of
-    /// [`crate::Driver::command`] / [`crate::Driver::resume_command`]
-    /// matches the current counter state (see [`TurnStream`] docs).
-    ///
-    /// Timeouts do NOT fire after [`TurnItem::Complete`] has been yielded —
-    /// once the stream is finished, subsequent polls return `None`
-    /// regardless of how much wall time has elapsed.
-    pub fn with_timeout(mut self, duration: Duration) -> Self {
+    /// Set a per-turn wall-clock deadline. Crate-internal: called by
+    /// `Session::send` when `TurnOptions.timeout` is set.
+    pub(crate) fn with_timeout(mut self, duration: Duration) -> Self {
         self.deadline = Some(Instant::now() + duration);
         self.timeout_dur = Some(duration);
         self

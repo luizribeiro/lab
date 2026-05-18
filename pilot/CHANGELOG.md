@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Driver` for basic use.
 
 ### Removed
+- `TurnStream::with_timeout` from the public API. Use
+  `TurnOptions.timeout` when calling `Session::send`. The internal
+  method is now `pub(crate)`.
 - `pilot::driver(name)` factory and `Error::UnknownAgent` variant. Users
   pick the driver by typed constructor (`Claude::new()`, etc.) and
   dispatch via their own match if the agent name comes from CLI args
