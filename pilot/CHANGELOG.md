@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through unsanitized.
 
 ### Removed
+- `test_support::RecordingDriver` (replaced by `test_support::Cassette`).
+- `test_support::recorded_test::run_or_replay` and related helpers
+  (`mode_for`, `ScenarioMode`) — replaced by the `cassette!()` macro.
 - `TurnStream::with_timeout` from the public API. Use
   `TurnOptions.timeout` when calling `Session::send`. The internal
   method is now `pub(crate)`.
