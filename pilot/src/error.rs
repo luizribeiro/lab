@@ -23,8 +23,6 @@ pub enum Error {
         #[source]
         source: ParseError,
     },
-    #[error("turn cancelled")]
-    Cancelled,
     #[error("turn timed out after {0:?}")]
     Timeout(Duration),
     #[error("I/O error")]
@@ -78,7 +76,6 @@ mod tests {
                 value: serde_json::json!({}),
                 source: ParseError::Custom("nope".into()),
             },
-            Error::Cancelled,
             Error::Timeout(Duration::from_secs(1)),
             Error::Io(io::Error::other("x")),
         ];
@@ -87,7 +84,6 @@ mod tests {
             "agent exited with",
             "failed to parse JSON line",
             "driver claude could not parse event",
-            "turn cancelled",
             "turn timed out after",
             "I/O error",
         ];
