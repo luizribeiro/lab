@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Examples: `greeting`, `multi_turn`, `with_api_key`, `with_paths`.
 
 ### Changed
+- `TurnStream::cancel().await` now surfaces errors encountered during
+  channel drain via the new `Turn::errors: Vec<Error>` field. Previously
+  these were silently dropped. The field is empty for natural
+  completion via `TurnItem::Complete`.
 - `Session::new` and `Session::resume` now take an owned `Driver` value
   (`D: Driver + 'static`) instead of `Arc<dyn Driver>`. The Arc is
   constructed internally. Callers no longer need to import `Arc` or

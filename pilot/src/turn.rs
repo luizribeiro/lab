@@ -48,9 +48,14 @@ impl std::fmt::Debug for SessionGuard {
 /// at successful turn end, or returned by [`TurnStream::cancel`].
 /// Use [`Turn::final_text`] for the canonical assistant response.
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Turn {
     pub events: Vec<Event>,
+    /// Errors observed during a [`TurnStream::cancel`] drain. Empty for
+    /// natural completion (the stream's terminal error is yielded as
+    /// `Some(Err(_))` before completion). Populated when a `cancel()`
+    /// race finds errors still in the channel.
+    pub errors: Vec<Error>,
 }
 
 impl Turn {
@@ -233,15 +238,25 @@ impl TurnStream {
         for e in self.pending.drain(..) {
             self.events.push(e);
         }
+        let mut errors = Vec::new();
         while let Ok(item) = self.rx.try_recv() {
-            if let Ok(value) = item {
-                if let Ok(events) = self.driver.parse(value) {
-                    self.events.extend(events);
-                }
+            match item {
+                Ok(value) => match self.driver.parse(value.clone()) {
+                    Ok(events) => self.events.extend(events),
+                    Err(reason) => {
+                        errors.push(Error::DriverParse {
+                            driver: self.driver.name(),
+                            value,
+                            source: reason,
+                        });
+                    }
+                },
+                Err(e) => errors.push(e),
             }
         }
         Turn {
             events: self.events,
+            errors,
         }
     }
 }
@@ -323,7 +338,10 @@ impl Stream for TurnStream {
                     this._busy_guard = None;
                     this._session_guard = None;
                     let events = this.events.clone();
-                    return Poll::Ready(Some(Ok(TurnItem::Complete(Turn { events }))));
+                    return Poll::Ready(Some(Ok(TurnItem::Complete(Turn {
+                        events,
+                        errors: Vec::new(),
+                    }))));
                 }
             }
         }
@@ -350,6 +368,7 @@ mod final_text_tests {
                 },
                 Event::TurnComplete { ok: true },
             ],
+            errors: Vec::new(),
         };
         assert_eq!(turn.final_text(), "hello world");
     }
@@ -358,6 +377,7 @@ mod final_text_tests {
     fn final_text_empty_when_no_assistant_deltas() {
         let turn = Turn {
             events: vec![Event::TurnComplete { ok: false }],
+            errors: Vec::new(),
         };
         assert_eq!(turn.final_text(), "");
     }
@@ -692,6 +712,39 @@ mod tests {
         assert!(
             start.elapsed() < std::time::Duration::from_secs(2),
             "cancel hung"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_surfaces_channel_errors_on_turn() {
+        let mut script = NamedTempFile::new().unwrap();
+        writeln!(script, "emit not-json").unwrap();
+        writeln!(script, "sleep 30000").unwrap();
+        script.flush().unwrap();
+
+        let (handle, rx) = spawn_jsonl(spec(script.path()), std::env::temp_dir())
+            .await
+            .expect("spawn");
+        let driver: Arc<dyn Driver> = Arc::new(TestDriver::new("t", fake_agent()));
+        let stream = TurnStream::new(Uuid::nil(), handle, rx, driver);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while stream.rx.is_empty() {
+            if std::time::Instant::now() > deadline {
+                panic!("timed out waiting for error to queue");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let turn = stream.cancel().await;
+        assert!(
+            !turn.errors.is_empty(),
+            "cancel must surface drained errors"
+        );
+        assert!(
+            matches!(turn.errors[0], crate::Error::Parse { .. }),
+            "got: {:?}",
+            turn.errors[0]
         );
     }
 
