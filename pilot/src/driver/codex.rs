@@ -292,6 +292,49 @@ impl Driver for Codex {
     fn parse(&self, value: serde_json::Value) -> Result<Vec<Event>, ParseError> {
         let event_type = value.get("type").and_then(|v| v.as_str());
         match event_type {
+            Some("item.started") => {
+                let item = value.get("item").ok_or(ParseError::MissingField("item"))?;
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match item_type {
+                    "command_execution" => {
+                        let id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("item.id"))?
+                            .to_string();
+                        let command = item
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("item.command"))?
+                            .to_string();
+                        Ok(vec![Event::ToolCall {
+                            call_id: id,
+                            name: "command_execution".to_string(),
+                            args: serde_json::json!({ "command": command }),
+                        }])
+                    }
+                    "file_change" => {
+                        let id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .ok_or(ParseError::MissingField("item.id"))?
+                            .to_string();
+                        let changes = item
+                            .get("changes")
+                            .cloned()
+                            .ok_or(ParseError::MissingField("item.changes"))?;
+                        Ok(vec![Event::ToolCall {
+                            call_id: id,
+                            name: "file_change".to_string(),
+                            args: serde_json::json!({ "changes": changes }),
+                        }])
+                    }
+                    _ => Ok(vec![Event::Raw {
+                        driver: "codex",
+                        value,
+                    }]),
+                }
+            }
             Some("item.completed") => {
                 let item = value.get("item").ok_or(ParseError::MissingField("item"))?;
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -311,11 +354,6 @@ impl Driver for Codex {
                             .and_then(|v| v.as_str())
                             .ok_or(ParseError::MissingField("item.id"))?
                             .to_string();
-                        let command = item
-                            .get("command")
-                            .and_then(|v| v.as_str())
-                            .ok_or(ParseError::MissingField("item.command"))?
-                            .to_string();
                         let exit_code =
                             item.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
                         let output = item
@@ -323,18 +361,11 @@ impl Driver for Codex {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        Ok(vec![
-                            Event::ToolCall {
-                                call_id: id.clone(),
-                                name: "command_execution".to_string(),
-                                args: serde_json::json!({ "command": command }),
-                            },
-                            Event::ToolResult {
-                                call_id: id,
-                                ok: exit_code == 0,
-                                output,
-                            },
-                        ])
+                        Ok(vec![Event::ToolResult {
+                            call_id: id,
+                            ok: exit_code == 0,
+                            output,
+                        }])
                     }
                     "file_change" => {
                         let id = item
@@ -342,22 +373,11 @@ impl Driver for Codex {
                             .and_then(|v| v.as_str())
                             .ok_or(ParseError::MissingField("item.id"))?
                             .to_string();
-                        let changes = item
-                            .get("changes")
-                            .cloned()
-                            .ok_or(ParseError::MissingField("item.changes"))?;
-                        Ok(vec![
-                            Event::ToolCall {
-                                call_id: id.clone(),
-                                name: "file_change".to_string(),
-                                args: serde_json::json!({ "changes": changes }),
-                            },
-                            Event::ToolResult {
-                                call_id: id,
-                                ok: true,
-                                output: String::new(),
-                            },
-                        ])
+                        Ok(vec![Event::ToolResult {
+                            call_id: id,
+                            ok: true,
+                            output: String::new(),
+                        }])
                     }
                     _ => Ok(vec![Event::Raw {
                         driver: "codex",
@@ -787,7 +807,24 @@ mod tests {
     }
 
     #[test]
-    fn command_execution_item_yields_toolcall_and_toolresult() {
+    fn command_execution_started_yields_toolcall() {
+        let v = serde_json::json!({
+            "type": "item.started",
+            "item": {
+                "id": "item_x",
+                "type": "command_execution",
+                "command": "ls /tmp",
+                "status": "in_progress",
+            },
+        });
+        let evs = Codex::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ToolCall { call_id, name, .. }
+                         if call_id == "item_x" && name == "command_execution"));
+    }
+
+    #[test]
+    fn command_execution_completed_yields_only_toolresult() {
         let v = serde_json::json!({
             "type": "item.completed",
             "item": {
@@ -800,12 +837,10 @@ mod tests {
             },
         });
         let evs = Codex::new().parse(v).unwrap();
-        assert_eq!(evs.len(), 2);
+        assert_eq!(evs.len(), 1);
         assert!(
-            matches!(&evs[0], Event::ToolCall { call_id, name, .. } if call_id == "item_x" && name == "command_execution")
-        );
-        assert!(
-            matches!(&evs[1], Event::ToolResult { call_id, ok: true, output } if call_id == "item_x" && output == "a\nb\n")
+            matches!(&evs[0], Event::ToolResult { call_id, ok: true, output }
+                         if call_id == "item_x" && output == "a\nb\n")
         );
     }
 
@@ -823,12 +858,29 @@ mod tests {
             },
         });
         let evs = Codex::new().parse(v).unwrap();
-        assert_eq!(evs.len(), 2);
-        assert!(matches!(&evs[1], Event::ToolResult { ok: false, .. }));
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ToolResult { ok: false, .. }));
     }
 
     #[test]
-    fn file_change_item_yields_toolcall_and_empty_toolresult() {
+    fn file_change_started_yields_toolcall() {
+        let v = serde_json::json!({
+            "type": "item.started",
+            "item": {
+                "id": "item_y",
+                "type": "file_change",
+                "changes": [{"path":"/tmp/x","kind":"add"}],
+                "status": "in_progress",
+            },
+        });
+        let evs = Codex::new().parse(v).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(&evs[0], Event::ToolCall { call_id, name, .. }
+                         if call_id == "item_y" && name == "file_change"));
+    }
+
+    #[test]
+    fn file_change_completed_yields_toolresult() {
         let v = serde_json::json!({
             "type": "item.completed",
             "item": {
@@ -839,9 +891,11 @@ mod tests {
             },
         });
         let evs = Codex::new().parse(v).unwrap();
-        assert_eq!(evs.len(), 2);
-        assert!(matches!(&evs[0], Event::ToolCall { .. }));
-        assert!(matches!(&evs[1], Event::ToolResult { ok: true, output, .. } if output.is_empty()));
+        assert_eq!(evs.len(), 1);
+        assert!(
+            matches!(&evs[0], Event::ToolResult { call_id, ok: true, output }
+                         if call_id == "item_y" && output.is_empty())
+        );
     }
 
     #[test]
