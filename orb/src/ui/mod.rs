@@ -9,9 +9,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
+pub mod markdown;
+
 use crate::agent::AgentKind;
 use crate::app::{App, COMPOSER_HEIGHT, Term};
-use crate::markdown::MarkdownSkin;
+use crate::ui::markdown::MarkdownSkin;
 use crate::utils::{abbreviate_home, git_branch};
 
 const BRAILLE_TICKS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

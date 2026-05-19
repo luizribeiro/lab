@@ -6,8 +6,7 @@ use uuid::Uuid;
 
 use crate::agent::AgentKind;
 use crate::app::Term;
-use crate::markdown::MarkdownSkin;
-use crate::ui;
+use crate::ui::{self, markdown::MarkdownSkin};
 use crate::utils::transcripts_dir;
 
 pub struct Transcript {

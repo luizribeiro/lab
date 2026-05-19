@@ -13,11 +13,10 @@ use uuid::Uuid;
 use crate::agent::{self, AgentKind};
 use crate::commands::{self, CommandResult};
 use crate::composer::Composer;
-use crate::markdown::MarkdownSkin;
 use crate::modal::{ModalEffect, ModalResult, ModalStack};
 use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
-use crate::ui;
+use crate::ui::{self, markdown::MarkdownSkin};
 use crate::utils;
 
 /// Height of the composer block: top bar + 1 textarea row + bottom bar.
@@ -484,5 +483,4 @@ async fn maybe_tick(enabled: bool) {
         std::future::pending::<()>().await;
     }
 }
-
 
