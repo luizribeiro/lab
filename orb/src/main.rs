@@ -9,6 +9,7 @@ mod agent;
 mod app;
 mod composer;
 mod markdown;
+mod modal;
 mod transcript;
 mod turn;
 mod ui;
