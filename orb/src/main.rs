@@ -9,6 +9,7 @@ mod agent;
 mod app;
 mod commands;
 mod composer;
+mod help_modal;
 mod markdown;
 mod modal;
 mod transcript;

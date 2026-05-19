@@ -8,6 +8,7 @@
 //! the static [`registry`].
 
 use crate::app::App;
+use crate::help_modal::HelpModal;
 
 /// Outcome of a slash-command handler. The run loop dispatches on this after
 /// the handler returns so command bodies stay short and side-effect-free.
@@ -64,12 +65,18 @@ fn cmd_redraw(_app: &mut App) -> CommandResult {
     CommandResult::Redraw
 }
 
+fn cmd_help(app: &mut App) -> CommandResult {
+    app.modals.push(Box::new(HelpModal::new()));
+    CommandResult::Continue
+}
+
 static NEW: Command = slash_command!("new", "Start a fresh session", cmd_new);
 static EXIT: Command = slash_command!("exit", "Quit orb", cmd_exit);
 static REDRAW: Command = slash_command!("redraw", "Force a full viewport rebuild", cmd_redraw);
+static HELP: Command = slash_command!("help", "Show available commands", cmd_help);
 
 pub fn registry() -> &'static [&'static Command] {
-    static REGISTRY: &[&Command] = &[&NEW, &EXIT, &REDRAW];
+    static REGISTRY: &[&Command] = &[&NEW, &EXIT, &REDRAW, &HELP];
     REGISTRY
 }
 
