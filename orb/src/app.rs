@@ -121,11 +121,7 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut Term) -> io::Result<()> {
-        // Events live inside an Option so we can drop the EventStream
-        // around viewport resizes — ratatui's inline-viewport resize calls
-        // `crossterm::cursor::position()` (ESC[6n), and EventStream would
-        // otherwise eat the response from stdin.
-        let mut events = Some(EventStream::new());
+        let mut events = EventStream::new();
         loop {
             // Drain a queued prompt whenever we're idle. Doing this here
             // (instead of recursively calling dispatch from handlers) keeps
@@ -136,23 +132,20 @@ impl App {
                 self.start_turn(next, terminal).await?;
             }
 
-            self.sync_viewport_height(terminal, &mut events)?;
+            self.sync_viewport_height(terminal)?;
             terminal.draw(|f| ui::draw(f, self))?;
 
             let tick_active = self.active.is_some();
-            let step = {
-                let stream = events.as_mut().expect("events always present here");
-                tokio::select! {
-                    ev = stream.next() => match ev {
-                        Some(Ok(ev)) => Step::Key(ev),
-                        _ => Step::Nothing,
-                    },
-                    item = turn::poll(&mut self.active) => match item {
-                        Some(it) => Step::Item(it),
-                        None => Step::Nothing,
-                    },
-                    _ = maybe_tick(tick_active) => Step::Tick,
-                }
+            let step = tokio::select! {
+                ev = events.next() => match ev {
+                    Some(Ok(ev)) => Step::Key(ev),
+                    _ => Step::Nothing,
+                },
+                item = turn::poll(&mut self.active) => match item {
+                    Some(it) => Step::Item(it),
+                    None => Step::Nothing,
+                },
+                _ = maybe_tick(tick_active) => Step::Tick,
             };
 
             match step {
@@ -171,27 +164,24 @@ impl App {
     /// Resize the inline viewport whenever the modal stack's desired height
     /// differs from the current viewport height.
     ///
-    /// The viewport resize path inside ratatui sends an `ESC[6n` cursor query
-    /// to the terminal and reads its reply from stdin. If crossterm's
-    /// EventStream is still attached, it races for that reply and the reported
-    /// cursor row comes back stale, leaving the new viewport painted at the
-    /// wrong row. We work around that by dropping the EventStream before the
-    /// resize and recreating it afterwards.
-    fn sync_viewport_height(
-        &mut self,
-        terminal: &mut Term,
-        events: &mut Option<EventStream>,
-    ) -> io::Result<()> {
+    /// We intentionally leave the EventStream alive during the resize. ratatui's
+    /// inline-viewport recompute sends an `ESC[6n` cursor query and reads the
+    /// reply from stdin; crossterm's `cursor::position()` and EventStream both
+    /// share a global mutex-guarded event reader, so the two serialize cleanly
+    /// while the stream is running. The dangerous moment is the *transition*
+    /// when EventStream is dropped — the worker thread exits asynchronously and
+    /// can eat the cursor reply on its way out, which is what causes the
+    /// "cursor position could not be read" timeout. Keeping the stream alive
+    /// avoids that window entirely.
+    fn sync_viewport_height(&mut self, terminal: &mut Term) -> io::Result<()> {
         let desired = self.desired_viewport_height();
         if desired == self.viewport_height && !self.force_resync {
             return Ok(());
         }
         self.force_resync = false;
-        events.take();
         // Clear the old viewport so cells freed by a shrink don't linger.
         let _ = terminal.clear();
         *terminal = make_terminal(desired)?;
-        *events = Some(EventStream::new());
         self.viewport_height = desired;
         Ok(())
     }
