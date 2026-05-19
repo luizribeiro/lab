@@ -167,8 +167,14 @@ impl Modal for SlashAutocompleteModal {
         if !text.starts_with('/') {
             return true;
         }
+        // Only react to *real* filter changes. We get a broadcast after every
+        // key, including Up/Down arrows that the modal itself consumed — and
+        // resetting `selected` on those would clobber the navigation we just
+        // performed.
+        if text == self.filter {
+            return false;
+        }
         self.filter = text.to_string();
-        // Reset selection so it doesn't point past the new (likely shorter) match list.
         self.selected = 0;
         false
     }
