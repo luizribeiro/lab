@@ -7,6 +7,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
+use crate::transcript::Entry as TranscriptEntry;
 use crate::ui::markdown::MarkdownSkin;
 use crate::ui::terminal::Term;
 use crate::utils::{abbreviate_home, git_branch};
@@ -173,6 +174,47 @@ pub fn commit_dim_line(terminal: &mut Term, msg: &str) -> io::Result<()> {
             .add_modifier(Modifier::DIM),
     ));
     insert_lines(terminal, vec![line])
+}
+
+pub fn replay_transcript(
+    terminal: &mut Term,
+    skin: &MarkdownSkin,
+    entries: &[TranscriptEntry],
+) -> io::Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let turns = entries
+        .iter()
+        .filter(|e| matches!(e, TranscriptEntry::User { .. }))
+        .count();
+    let label = if turns == 1 { "turn" } else { "turns" };
+    commit_dim_line(
+        terminal,
+        &format!("── conversation so far ({turns} {label}) ──"),
+    )?;
+    let mut last_tool = false;
+    for entry in entries {
+        match entry {
+            TranscriptEntry::User { content } => {
+                commit_user_prompt(terminal, content)?;
+                last_tool = false;
+            }
+            TranscriptEntry::Assistant { content } => {
+                if last_tool {
+                    commit_blank_line(terminal)?;
+                }
+                commit_markdown(terminal, skin, content)?;
+                last_tool = false;
+            }
+            TranscriptEntry::Tool { name, ok } => {
+                commit_tool_result(terminal, name, *ok)?;
+                last_tool = true;
+            }
+        }
+    }
+    commit_dim_line(terminal, "── end of history ──")?;
+    Ok(())
 }
 
 fn insert_lines(terminal: &mut Term, lines: Vec<Line<'_>>) -> io::Result<()> {

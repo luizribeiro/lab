@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
-use crate::ui::{self, markdown::MarkdownSkin};
-use crate::ui::terminal::Term;
 use crate::utils::transcripts_dir;
 
 pub struct Transcript {
@@ -63,43 +61,6 @@ impl Transcript {
             .collect()
     }
 
-    pub fn replay(&self, terminal: &mut Term, skin: &MarkdownSkin) -> io::Result<()> {
-        let entries = self.load();
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let turns = entries
-            .iter()
-            .filter(|e| matches!(e, Entry::User { .. }))
-            .count();
-        let label = if turns == 1 { "turn" } else { "turns" };
-        ui::commit_dim_line(
-            terminal,
-            &format!("── conversation so far ({turns} {label}) ──"),
-        )?;
-        let mut last_tool = false;
-        for entry in entries {
-            match entry {
-                Entry::User { content } => {
-                    ui::commit_user_prompt(terminal, &content)?;
-                    last_tool = false;
-                }
-                Entry::Assistant { content } => {
-                    if last_tool {
-                        ui::commit_blank_line(terminal)?;
-                    }
-                    ui::commit_markdown(terminal, skin, &content)?;
-                    last_tool = false;
-                }
-                Entry::Tool { name, ok } => {
-                    ui::commit_tool_result(terminal, &name, ok)?;
-                    last_tool = true;
-                }
-            }
-        }
-        ui::commit_dim_line(terminal, "── end of history ──")?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -7,5 +7,5 @@ pub mod terminal;
 pub use live_viewport::draw;
 pub use scrollback::{
     CommitColor, commit_blank_line, commit_dim_line, commit_header, commit_markdown,
-    commit_status_line, commit_tool_result, commit_user_prompt,
+    commit_status_line, commit_tool_result, commit_user_prompt, replay_transcript,
 };

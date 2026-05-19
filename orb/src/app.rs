@@ -92,7 +92,8 @@ impl App {
             self.resumed,
         )?;
         if self.resumed {
-            self.transcript.replay(terminal, &self.skin)?;
+            let entries = self.transcript.load();
+            ui::replay_transcript(terminal, &self.skin, &entries)?;
         }
         Ok(())
     }
