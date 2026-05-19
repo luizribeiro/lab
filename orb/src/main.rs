@@ -11,7 +11,6 @@ mod autocomplete_modal;
 mod commands;
 mod composer;
 mod help_modal;
-mod modal;
 mod transcript;
 mod turn;
 mod ui;

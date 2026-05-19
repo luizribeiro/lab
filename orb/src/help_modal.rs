@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::commands;
-use crate::modal::{Modal, ModalResult};
+use crate::ui::components::modal::{Modal, ModalResult};
 
 const NAME_COLUMN_WIDTH: usize = 12;
 

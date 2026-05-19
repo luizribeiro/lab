@@ -1,3 +1,4 @@
+pub mod components;
 pub mod live_viewport;
 pub mod markdown;
 pub mod scrollback;

@@ -16,7 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::commands::{self, Command};
-use crate::modal::{Modal, ModalEffect, ModalResult};
+use crate::ui::components::modal::{Modal, ModalEffect, ModalResult};
 
 const MAX_VISIBLE_ROWS: usize = 6;
 const NAME_COLUMN_WIDTH: usize = 12;
