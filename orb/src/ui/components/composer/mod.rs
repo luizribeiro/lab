@@ -1,6 +1,4 @@
-use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -9,6 +7,15 @@ use tui_textarea::TextArea;
 
 use crate::ui::terminal::{Term, make_terminal};
 
+mod editor;
+mod history;
+mod search;
+
+use editor::run_editor;
+pub use history::History;
+pub use search::Search;
+use search::find_match;
+
 pub struct Composer {
     pub textarea: TextArea<'static>,
     pub history: History,
@@ -16,17 +23,6 @@ pub struct Composer {
     history_cursor: Option<usize>,
     history_draft: Option<Vec<String>>,
     focused: bool,
-}
-
-pub struct History {
-    pub entries: VecDeque<String>,
-    pub path: PathBuf,
-    pub max: usize,
-}
-
-pub struct Search {
-    pub query: String,
-    pub match_idx: Option<usize>,
 }
 
 impl Composer {
@@ -229,74 +225,6 @@ fn cursor_style(focused: bool) -> Style {
     } else {
         Style::default()
     }
-}
-
-impl History {
-    pub fn load(path: PathBuf) -> Self {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let entries = std::fs::read_to_string(&path)
-            .map(|content| content.lines().map(String::from).collect::<VecDeque<_>>())
-            .unwrap_or_default();
-        Self {
-            entries,
-            path,
-            max: 2000,
-        }
-    }
-
-    pub fn push(&mut self, entry: String) {
-        if entry.is_empty() {
-            return;
-        }
-        if self.entries.back().is_some_and(|s| s == &entry) {
-            return;
-        }
-        self.entries.push_back(entry.clone());
-        while self.entries.len() > self.max {
-            self.entries.pop_front();
-        }
-        let _ = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .and_then(|mut f| writeln!(f, "{}", entry.replace('\n', " ")));
-    }
-}
-
-/// Find the most recent (highest-index) history entry strictly before
-/// `before` that contains `query`. Empty query matches the most recent entry.
-fn find_match(entries: &VecDeque<String>, query: &str, before: usize) -> Option<usize> {
-    let upper = before.min(entries.len());
-    if upper == 0 {
-        return None;
-    }
-    if query.is_empty() {
-        return Some(upper - 1);
-    }
-    (0..upper).rev().find(|&i| entries[i].contains(query))
-}
-
-fn run_editor(initial: &str) -> io::Result<String> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-    let mut tmp = tempfile::Builder::new()
-        .prefix("orb-prompt-")
-        .suffix(".md")
-        .tempfile()?;
-    tmp.write_all(initial.as_bytes())?;
-    tmp.flush()?;
-    let (file, path) = tmp.keep().map_err(io::Error::other)?;
-    drop(file);
-    let status = std::process::Command::new(&editor).arg(&path).status()?;
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
-    if !status.success() {
-        return Err(io::Error::other("editor exited non-zero"));
-    }
-    Ok(content.trim_end_matches('\n').to_string())
 }
 
 #[cfg(test)]
