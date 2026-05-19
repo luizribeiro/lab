@@ -13,19 +13,21 @@ use uuid::Uuid;
 use crate::agent::{self, AgentKind};
 use crate::composer::Composer;
 use crate::markdown::MarkdownSkin;
+use crate::modal::{ModalEffect, ModalResult, ModalStack};
 use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
 use crate::ui;
 use crate::utils;
 
-/// Inline-viewport height. Always exactly 3 rows: top bar + 1
-/// textarea row + bottom bar. When a turn is in flight, the spinner
-/// label is embedded *inside* the top border (codex-style title), so
-/// the status doesn't need a row of its own. This keeps the composer a
-/// stable visual shape across idle and working states without
-/// needing dynamic viewport resize (which fights crossterm's
-/// EventStream over the cursor-position OSC response).
-pub const VIEWPORT_HEIGHT: u16 = 3;
+/// Height of the composer block: top bar + 1 textarea row + bottom bar.
+/// When a turn is in flight, the spinner label is embedded *inside* the
+/// top border (codex-style title), so the status doesn't need a row of
+/// its own.
+pub const COMPOSER_HEIGHT: u16 = 3;
+
+/// Default inline-viewport height when no modals are stacked. Equal to
+/// COMPOSER_HEIGHT; modals push the viewport taller on demand.
+pub const VIEWPORT_HEIGHT: u16 = COMPOSER_HEIGHT;
 
 pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -50,7 +52,12 @@ pub struct App {
     pub active: Option<ActiveTurn>,
     pub queue: VecDeque<String>,
     pub skin: MarkdownSkin,
+    pub modals: ModalStack,
     pub resumed: bool,
+    /// Current inline-viewport height (rows). Tracked here so the run loop
+    /// can spot when modal pushes/pops change the desired height and resync
+    /// the terminal — see `sync_viewport_height`.
+    viewport_height: u16,
     quit: bool,
 }
 
@@ -81,7 +88,9 @@ impl App {
             active: None,
             queue: VecDeque::new(),
             skin: MarkdownSkin::new(),
+            modals: ModalStack::default(),
             resumed: resume.is_some(),
+            viewport_height: VIEWPORT_HEIGHT,
             quit: false,
         }
     }
@@ -106,7 +115,11 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut Term) -> io::Result<()> {
-        let mut events = EventStream::new();
+        // Events live inside an Option so we can drop the EventStream
+        // around viewport resizes — ratatui's inline-viewport resize calls
+        // `crossterm::cursor::position()` (ESC[6n), and EventStream would
+        // otherwise eat the response from stdin.
+        let mut events = Some(EventStream::new());
         loop {
             // Drain a queued prompt whenever we're idle. Doing this here
             // (instead of recursively calling dispatch from handlers) keeps
@@ -117,19 +130,23 @@ impl App {
                 self.start_turn(next, terminal).await?;
             }
 
+            self.sync_viewport_height(terminal, &mut events)?;
             terminal.draw(|f| ui::draw(f, self))?;
 
             let tick_active = self.active.is_some();
-            let step = tokio::select! {
-                ev = events.next() => match ev {
-                    Some(Ok(ev)) => Step::Key(ev),
-                    _ => Step::Nothing,
-                },
-                item = turn::poll(&mut self.active) => match item {
-                    Some(it) => Step::Item(it),
-                    None => Step::Nothing,
-                },
-                _ = maybe_tick(tick_active) => Step::Tick,
+            let step = {
+                let stream = events.as_mut().expect("events always present here");
+                tokio::select! {
+                    ev = stream.next() => match ev {
+                        Some(Ok(ev)) => Step::Key(ev),
+                        _ => Step::Nothing,
+                    },
+                    item = turn::poll(&mut self.active) => match item {
+                        Some(it) => Step::Item(it),
+                        None => Step::Nothing,
+                    },
+                    _ = maybe_tick(tick_active) => Step::Tick,
+                }
             };
 
             match step {
@@ -143,6 +160,49 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Resize the inline viewport whenever the modal stack's desired height
+    /// differs from the current viewport height.
+    ///
+    /// The viewport resize path inside ratatui sends an `ESC[6n` cursor query
+    /// to the terminal and reads its reply from stdin. If crossterm's
+    /// EventStream is still attached, it races for that reply and the reported
+    /// cursor row comes back stale, leaving the new viewport painted at the
+    /// wrong row. We work around that by dropping the EventStream before the
+    /// resize and recreating it afterwards.
+    fn sync_viewport_height(
+        &mut self,
+        terminal: &mut Term,
+        events: &mut Option<EventStream>,
+    ) -> io::Result<()> {
+        let desired = self.desired_viewport_height();
+        if desired == self.viewport_height {
+            return Ok(());
+        }
+        events.take();
+        // Clear the old viewport so cells freed by a shrink don't linger.
+        let _ = terminal.clear();
+        *terminal = make_terminal(desired)?;
+        *events = Some(EventStream::new());
+        self.viewport_height = desired;
+        Ok(())
+    }
+
+    pub fn desired_viewport_height(&self) -> u16 {
+        // The frame width isn't known to App, but modal heights are typically
+        // computed from row count rather than width. Pass a permissive width;
+        // height() implementations clamp themselves later in the renderer.
+        let modal_height = self.modals.total_height(u16::MAX);
+        COMPOSER_HEIGHT.saturating_add(modal_height)
+    }
+
+    fn apply_modal_effect(&mut self, effect: ModalEffect) {
+        match effect {
+            ModalEffect::ReplaceComposer(text) => {
+                self.composer.replace_text(text);
+            }
+        }
     }
 
     async fn handle_key(&mut self, ev: CtEvent, terminal: &mut Term) -> io::Result<()> {
@@ -167,6 +227,22 @@ impl App {
             return Ok(());
         }
 
+        // Top-of-stack modal sees keys first. Consumed/Dismiss short-circuit;
+        // Forward falls through to the normal composer routing below.
+        if !self.modals.is_empty() {
+            let (result, effect) = self.modals.handle_key(key);
+            if let Some(effect) = effect {
+                self.apply_modal_effect(effect);
+            }
+            match result {
+                ModalResult::Consumed | ModalResult::Dismiss => {
+                    self.broadcast_composer_change();
+                    return Ok(());
+                }
+                ModalResult::Forward => {}
+            }
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Char('d'), m) | (KeyCode::Char('c'), m)
                 if m.contains(KeyModifiers::CONTROL) =>
@@ -185,21 +261,33 @@ impl App {
             (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => {
                 // Shift+Enter inserts a literal newline into the textarea.
                 self.composer.input(key);
+                self.broadcast_composer_change();
             }
             (KeyCode::Enter, _) => {
                 self.submit(terminal).await?;
             }
             (KeyCode::Up, KeyModifiers::NONE) => {
                 self.composer.history_previous();
+                self.broadcast_composer_change();
             }
             (KeyCode::Down, KeyModifiers::NONE) => {
                 self.composer.history_next();
+                self.broadcast_composer_change();
             }
             _ => {
                 self.composer.input(key);
+                self.broadcast_composer_change();
             }
         }
         Ok(())
+    }
+
+    fn broadcast_composer_change(&mut self) {
+        if self.modals.is_empty() {
+            return;
+        }
+        let text = self.composer.textarea.lines().join("\n");
+        self.modals.on_composer_change(&text);
     }
 
     async fn handle_esc(&mut self, terminal: &mut Term) -> io::Result<()> {

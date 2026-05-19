@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
-use crate::app::{App, Term};
+use crate::app::{App, COMPOSER_HEIGHT, Term};
 use crate::markdown::MarkdownSkin;
 use crate::utils::{abbreviate_home, git_branch};
 
@@ -30,12 +30,30 @@ impl CommitColor {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
-    // The viewport is always 3 rows: top bar + 1 textarea row + bottom
-    // bar. When a turn is in flight, the spinner + "Working… esc to
-    // interrupt" label is rendered as a `Block` title *inside* the top
-    // border (codex-style), so we don't need a separate status row.
-    draw_composer_block(frame, frame.area(), app);
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    // Viewport layout: stacked modals on top (height = sum of their
+    // requested heights), composer block pinned to the bottom
+    // `COMPOSER_HEIGHT` rows. When no modals are active the viewport is
+    // exactly `COMPOSER_HEIGHT` and the modal slot is empty.
+    let area = frame.area();
+    let composer_height = COMPOSER_HEIGHT.min(area.height);
+    let modal_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: area.height.saturating_sub(composer_height),
+    };
+    let composer_area = Rect {
+        x: area.x,
+        y: modal_area.bottom(),
+        width: area.width,
+        height: composer_height,
+    };
+
+    if modal_area.height > 0 {
+        app.modals.render(modal_area, frame);
+    }
+    draw_composer_block(frame, composer_area, app);
 }
 
 fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {

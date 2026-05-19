@@ -179,8 +179,28 @@ impl Composer {
         Ok(())
     }
 
-    fn set_text(&mut self, text: String) {
-        self.textarea = new_textarea(text.lines().map(String::from).collect(), self.focused);
+    pub fn set_text(&mut self, text: String) {
+        let lines: Vec<String> = if text.is_empty() {
+            Vec::new()
+        } else {
+            text.lines().map(String::from).collect()
+        };
+        self.textarea = new_textarea(lines, self.focused);
+    }
+
+    /// Replace the textarea contents and place the textarea cursor at the
+    /// very end of the inserted text. Intended for external "complete-into"
+    /// flows (e.g. slash-command autocomplete). Resets history navigation
+    /// since the user clearly didn't pick that history entry.
+    pub fn replace_text(&mut self, text: String) {
+        self.set_text(text);
+        for _ in 0..self.textarea.lines().len().saturating_sub(1) {
+            self.textarea
+                .input(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        self.textarea
+            .input(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        self.reset_history_navigation();
     }
 
     fn reset_history_navigation(&mut self) {
