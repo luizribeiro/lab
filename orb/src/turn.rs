@@ -2,7 +2,7 @@ use std::io;
 
 use pilot::{Event as PilotEvent, TurnItem, TurnStream};
 
-use crate::transcript::Entry as TranscriptEntry;
+use crate::transcript::TranscriptEntry;
 use crate::ui::{self, markdown::MarkdownSkin, terminal::Term};
 
 /// A turn that is currently streaming. Owns the stream plus enough state
@@ -48,7 +48,7 @@ pub async fn poll(active: &mut Option<ActiveTurn>) -> Option<Result<TurnItem, pi
 
 /// Apply one pilot::Event to the active turn's state. Tool results are
 /// committed to scrollback (append-only); pending tool lines live inside
-/// the inline viewport and get drawn each frame from `active.pending_tools`.
+/// the live viewport and get drawn each frame from `active.pending_tools`.
 pub fn process_event(
     active: &mut ActiveTurn,
     ev: PilotEvent,
@@ -72,7 +72,7 @@ pub fn process_event(
                 .position(|t| t.call_id == call_id)
             {
                 let tool = active.pending_tools.remove(pos);
-                ui::commit_tool_result(terminal, &tool.name, ok)?;
+                ui::append_tool_result(terminal, &tool.name, ok)?;
                 active.transcript_entries.push(TranscriptEntry::Tool {
                     name: tool.name,
                     ok,
@@ -82,7 +82,7 @@ pub fn process_event(
         }
         PilotEvent::TurnComplete { ok: false } => {
             flush_pending_text(active, terminal, skin)?;
-            ui::commit_status_line(terminal, "(turn reported failure)", ui::CommitColor::Err)?;
+            ui::append_status_line(terminal, "(turn reported failure)", ui::StatusColor::Err)?;
         }
         _ => {}
     }
@@ -97,9 +97,9 @@ pub fn flush_pending_text(
     let text = active.pending_text.trim();
     if !text.is_empty() {
         if active.last_rendered_tool_result {
-            ui::commit_blank_line(terminal)?;
+            ui::append_blank_line(terminal)?;
         }
-        ui::commit_markdown(terminal, skin, text)?;
+        ui::append_markdown(terminal, skin, text)?;
         active.transcript_entries.push(TranscriptEntry::Assistant {
             content: text.to_string(),
         });

@@ -1,5 +1,5 @@
 //! Orb is a terminal workspace for agentic coding sessions, built on
-//! pilot and ratatui's inline viewport.
+//! pilot and ratatui's inline-backed live viewport.
 //!
 //! Run with:
 //!     cargo run -- --agent claude

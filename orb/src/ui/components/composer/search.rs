@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 
-pub struct Search {
+pub struct ReversePromptSearch {
     pub query: String,
     pub match_idx: Option<usize>,
 }
 
-/// Find the most recent (highest-index) history entry strictly before
+/// Find the most recent (highest-index) prompt history entry strictly before
 /// `before` that contains `query`. Empty query matches the most recent entry.
 pub(super) fn find_match(entries: &VecDeque<String>, query: &str, before: usize) -> Option<usize> {
     let upper = before.min(entries.len());

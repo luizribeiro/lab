@@ -8,9 +8,9 @@ pub fn orb_data_dir() -> PathBuf {
         .join(".orb")
 }
 
-pub fn history_path() -> PathBuf {
+pub fn prompt_history_path() -> PathBuf {
     // When `$HOME` is unset, fall back to a cwd-local file rather than a
-    // shared `/tmp` location: readline-style history is private and we'd
+    // shared `/tmp` location: prompt history is private and we'd
     // rather not blend it with another user's.
     dirs::home_dir()
         .map(|_| orb_data_dir().join("history"))

@@ -70,7 +70,10 @@ impl Modal for HelpModal {
             .title_bottom(hint);
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        frame.render_widget(Paragraph::new(self.lines()).wrap(Wrap { trim: false }), inner);
+        frame.render_widget(
+            Paragraph::new(self.lines()).wrap(Wrap { trim: false }),
+            inner,
+        );
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> ModalResult {
@@ -93,13 +96,19 @@ mod tests {
     #[test]
     fn esc_dismisses() {
         let mut modal = HelpModal::new();
-        assert!(matches!(modal.handle_key(key(KeyCode::Esc)), ModalResult::Dismiss));
+        assert!(matches!(
+            modal.handle_key(key(KeyCode::Esc)),
+            ModalResult::Dismiss
+        ));
     }
 
     #[test]
     fn enter_dismisses() {
         let mut modal = HelpModal::new();
-        assert!(matches!(modal.handle_key(key(KeyCode::Enter)), ModalResult::Dismiss));
+        assert!(matches!(
+            modal.handle_key(key(KeyCode::Enter)),
+            ModalResult::Dismiss
+        ));
     }
 
     #[test]
@@ -107,7 +116,10 @@ mod tests {
         let mut modal = HelpModal::new();
         // 'x' is not a dismiss key, but it should still be eaten so it
         // doesn't end up typed into the composer behind the modal.
-        assert!(matches!(modal.handle_key(key(KeyCode::Char('x'))), ModalResult::Consumed));
+        assert!(matches!(
+            modal.handle_key(key(KeyCode::Char('x'))),
+            ModalResult::Consumed
+        ));
     }
 
     #[test]

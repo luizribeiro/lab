@@ -7,26 +7,26 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
-use crate::transcript::Entry as TranscriptEntry;
+use crate::transcript::TranscriptEntry;
 use crate::ui::markdown::MarkdownSkin;
 use crate::ui::terminal::Term;
 use crate::utils::{abbreviate_home, git_branch};
 
-pub enum CommitColor {
+pub enum StatusColor {
     Warn,
     Err,
 }
 
-impl CommitColor {
+impl StatusColor {
     fn into_color(self) -> Color {
         match self {
-            CommitColor::Warn => Color::Yellow,
-            CommitColor::Err => Color::Red,
+            StatusColor::Warn => Color::Yellow,
+            StatusColor::Err => Color::Red,
         }
     }
 }
 
-pub fn commit_header(
+pub fn append_header(
     terminal: &mut Term,
     agent: AgentKind,
     model: Option<&str>,
@@ -55,7 +55,7 @@ pub fn commit_header(
     let session_line = Line::from(session_spans);
 
     let hint = Line::from(Span::styled(
-        "↑/↓ history · ctrl+r search · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
+        "↑/↓ prompt history · ctrl+r search · ctrl+g $EDITOR · enter submit · shift+enter newline · esc cancel · ctrl+d quit",
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
@@ -96,7 +96,7 @@ fn format_cwd(cwd: &Path) -> String {
     }
 }
 
-pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
+pub fn append_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
     let mut lines: Vec<Line> = prompt
         .lines()
         .enumerate()
@@ -120,7 +120,7 @@ pub fn commit_user_prompt(terminal: &mut Term, prompt: &str) -> io::Result<()> {
     insert_lines(terminal, lines)
 }
 
-pub fn commit_markdown(terminal: &mut Term, skin: &MarkdownSkin, text: &str) -> io::Result<()> {
+pub fn append_markdown(terminal: &mut Term, skin: &MarkdownSkin, text: &str) -> io::Result<()> {
     let (width, _) = crossterm::terminal::size().unwrap_or((80, 24));
     let mut lines = skin.render(text, width);
     // ratskin tends to append a blank line of its own; collapse any
@@ -136,7 +136,7 @@ pub fn commit_markdown(terminal: &mut Term, skin: &MarkdownSkin, text: &str) -> 
     insert_lines(terminal, lines)
 }
 
-pub fn commit_tool_result(terminal: &mut Term, name: &str, ok: bool) -> io::Result<()> {
+pub fn append_tool_result(terminal: &mut Term, name: &str, ok: bool) -> io::Result<()> {
     let (icon, color) = if ok {
         ("✓", Color::Green)
     } else {
@@ -154,7 +154,7 @@ pub fn commit_tool_result(terminal: &mut Term, name: &str, ok: bool) -> io::Resu
     insert_lines(terminal, vec![line])
 }
 
-pub fn commit_status_line(terminal: &mut Term, msg: &str, color: CommitColor) -> io::Result<()> {
+pub fn append_status_line(terminal: &mut Term, msg: &str, color: StatusColor) -> io::Result<()> {
     let line = Line::from(Span::styled(
         msg.to_string(),
         Style::default().fg(color.into_color()),
@@ -162,11 +162,11 @@ pub fn commit_status_line(terminal: &mut Term, msg: &str, color: CommitColor) ->
     insert_lines(terminal, vec![line])
 }
 
-pub fn commit_blank_line(terminal: &mut Term) -> io::Result<()> {
+pub fn append_blank_line(terminal: &mut Term) -> io::Result<()> {
     insert_lines(terminal, vec![Line::raw("")])
 }
 
-pub fn commit_dim_line(terminal: &mut Term, msg: &str) -> io::Result<()> {
+pub fn append_dim_line(terminal: &mut Term, msg: &str) -> io::Result<()> {
     let line = Line::from(Span::styled(
         msg.to_string(),
         Style::default()
@@ -189,31 +189,31 @@ pub fn replay_transcript(
         .filter(|e| matches!(e, TranscriptEntry::User { .. }))
         .count();
     let label = if turns == 1 { "turn" } else { "turns" };
-    commit_dim_line(
+    append_dim_line(
         terminal,
-        &format!("── conversation so far ({turns} {label}) ──"),
+        &format!("── transcript so far ({turns} {label}) ──"),
     )?;
     let mut last_tool = false;
     for entry in entries {
         match entry {
             TranscriptEntry::User { content } => {
-                commit_user_prompt(terminal, content)?;
+                append_user_prompt(terminal, content)?;
                 last_tool = false;
             }
             TranscriptEntry::Assistant { content } => {
                 if last_tool {
-                    commit_blank_line(terminal)?;
+                    append_blank_line(terminal)?;
                 }
-                commit_markdown(terminal, skin, content)?;
+                append_markdown(terminal, skin, content)?;
                 last_tool = false;
             }
             TranscriptEntry::Tool { name, ok } => {
-                commit_tool_result(terminal, name, *ok)?;
+                append_tool_result(terminal, name, *ok)?;
                 last_tool = true;
             }
         }
     }
-    commit_dim_line(terminal, "── end of history ──")?;
+    append_dim_line(terminal, "── end of transcript ──")?;
     Ok(())
 }
 

@@ -32,11 +32,11 @@ pub struct App {
     pub skin: MarkdownSkin,
     pub modals: ModalStack,
     pub resumed: bool,
-    /// Current inline-viewport height (rows). Tracked here so the run loop
+    /// Current live viewport height (rows). Tracked here so the run loop
     /// can spot when modal pushes/pops change the desired height and resync
-    /// the terminal — see `sync_viewport_height`.
-    viewport_height: u16,
-    /// Set by `/redraw`. The next run-loop tick re-runs the viewport resync
+    /// the terminal — see `sync_live_viewport_height`.
+    live_viewport_height: u16,
+    /// Set by `/redraw`. The next run-loop tick re-runs the live viewport resync
     /// dance unconditionally, which rebuilds the terminal and EventStream
     /// from scratch and gets the user out of any wedged-rendering state.
     force_resync: bool,
@@ -60,7 +60,7 @@ impl App {
         let model = model_override.or_else(|| agent.default_model().map(String::from));
         let session = agent::make_session(agent, workdir, resume, model.clone());
         let transcript = Transcript::for_session(agent, session.id());
-        let composer = Composer::new(utils::history_path());
+        let composer = Composer::new(utils::prompt_history_path());
         Self {
             agent,
             model,
@@ -72,18 +72,18 @@ impl App {
             skin: MarkdownSkin::new(),
             modals: ModalStack::default(),
             resumed: resume.is_some(),
-            viewport_height: LIVE_VIEWPORT_HEIGHT,
+            live_viewport_height: LIVE_VIEWPORT_HEIGHT,
             force_resync: false,
             quit: false,
         }
     }
 
-    /// Print the welcome header and replay transcript history (if resuming)
-    /// to the terminal's native scrollback, BEFORE the inline viewport is
-    /// first painted. This way the user can scroll up to see their old
-    /// conversation.
+    /// Print the welcome header and replay the transcript (if resuming)
+    /// to the terminal's native scrollback, BEFORE the live viewport is
+    /// first painted. This way the user can scroll up to see the prior
+    /// session turns.
     pub fn boot(&mut self, terminal: &mut Term) -> io::Result<()> {
-        ui::commit_header(
+        ui::append_header(
             terminal,
             self.agent,
             self.model.as_deref(),
@@ -110,7 +110,7 @@ impl App {
                 self.start_turn(next, terminal).await?;
             }
 
-            self.sync_viewport_height(terminal)?;
+            self.sync_live_viewport_height(terminal)?;
             terminal.draw(|f| ui::draw(f, self))?;
 
             let tick_active = self.active.is_some();
@@ -139,8 +139,8 @@ impl App {
         Ok(())
     }
 
-    /// Resize the inline viewport whenever the modal stack's desired height
-    /// differs from the current viewport height.
+    /// Resize the live viewport whenever the modal stack's desired height
+    /// differs from the current live viewport height.
     ///
     /// We intentionally leave the EventStream alive during the resize. ratatui's
     /// inline-viewport recompute sends an `ESC[6n` cursor query and reads the
@@ -151,20 +151,20 @@ impl App {
     /// can eat the cursor reply on its way out, which is what causes the
     /// "cursor position could not be read" timeout. Keeping the stream alive
     /// avoids that window entirely.
-    fn sync_viewport_height(&mut self, terminal: &mut Term) -> io::Result<()> {
-        let desired = self.desired_viewport_height();
-        if desired == self.viewport_height && !self.force_resync {
+    fn sync_live_viewport_height(&mut self, terminal: &mut Term) -> io::Result<()> {
+        let desired = self.desired_live_viewport_height();
+        if desired == self.live_viewport_height && !self.force_resync {
             return Ok(());
         }
         self.force_resync = false;
         // Clear the old viewport so cells freed by a shrink don't linger.
         let _ = terminal.clear();
         *terminal = make_terminal(desired)?;
-        self.viewport_height = desired;
+        self.live_viewport_height = desired;
         Ok(())
     }
 
-    pub fn desired_viewport_height(&self) -> u16 {
+    pub fn desired_live_viewport_height(&self) -> u16 {
         // The frame width isn't known to App, but modal heights are typically
         // computed from row count rather than width. Pass a permissive width;
         // height() implementations clamp themselves later in the renderer.
@@ -250,11 +250,11 @@ impl App {
                 self.submit(terminal).await?;
             }
             (KeyCode::Up, KeyModifiers::NONE) => {
-                self.composer.history_previous();
+                self.composer.prompt_history_previous();
                 self.broadcast_composer_change();
             }
             (KeyCode::Down, KeyModifiers::NONE) => {
-                self.composer.history_next();
+                self.composer.prompt_history_next();
                 self.broadcast_composer_change();
             }
             _ => {
@@ -307,12 +307,12 @@ impl App {
             } else {
                 format!("(cancelled · dropped {dropped} queued)")
             };
-            ui::commit_status_line(terminal, &msg, ui::CommitColor::Warn)?;
+            ui::append_status_line(terminal, &msg, ui::StatusColor::Warn)?;
         } else if dropped > 0 {
-            ui::commit_status_line(
+            ui::append_status_line(
                 terminal,
                 &format!("(dropped {dropped} queued)"),
-                ui::CommitColor::Warn,
+                ui::StatusColor::Warn,
             )?;
         }
         Ok(())
@@ -323,7 +323,7 @@ impl App {
         if text.is_empty() {
             return Ok(());
         }
-        self.composer.history.push(text.clone());
+        self.composer.prompt_history.push(text.clone());
 
         // Slash commands intercept the line before it reaches the agent.
         if let Some(cmd) = commands::parse(&text) {
@@ -332,10 +332,10 @@ impl App {
         }
         // Surface a friendly error if the user typed a slash that didn't match.
         if text.starts_with('/') {
-            ui::commit_status_line(
+            ui::append_status_line(
                 terminal,
                 &format!("unknown command: {text}"),
-                ui::CommitColor::Err,
+                ui::StatusColor::Err,
             )?;
             return Ok(());
         }
@@ -380,10 +380,10 @@ impl App {
         self.resumed = false;
         self.transcript = Transcript::for_session(self.agent, self.session.id());
 
-        ui::commit_status_line(
+        ui::append_status_line(
             terminal,
             &format!("(new session {} — replaced {old_id})", self.session.id()),
-            ui::CommitColor::Warn,
+            ui::StatusColor::Warn,
         )?;
         Ok(())
     }
@@ -392,7 +392,7 @@ impl App {
     /// If the driver rejects the send, we commit an error line and leave
     /// `self.active = None` so the main loop picks up the next queued prompt.
     async fn start_turn(&mut self, prompt: String, terminal: &mut Term) -> io::Result<()> {
-        ui::commit_user_prompt(terminal, &prompt)?;
+        ui::append_user_prompt(terminal, &prompt)?;
         match self
             .session
             .send(prompt.clone(), TurnOptions::default())
@@ -402,10 +402,10 @@ impl App {
                 self.active = Some(ActiveTurn::new(stream, prompt));
             }
             Err(e) => {
-                ui::commit_status_line(
+                ui::append_status_line(
                     terminal,
                     &format!("send failed: {e}"),
-                    ui::CommitColor::Err,
+                    ui::StatusColor::Err,
                 )?;
             }
         }
@@ -436,10 +436,10 @@ impl App {
             Ok(_) => {}
             Err(e) => {
                 self.active = None;
-                ui::commit_status_line(
+                ui::append_status_line(
                     terminal,
                     &format!("turn error: {e}"),
-                    ui::CommitColor::Err,
+                    ui::StatusColor::Err,
                 )?;
             }
         }

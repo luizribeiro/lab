@@ -3,13 +3,13 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
-pub struct History {
+pub struct PromptHistory {
     pub entries: VecDeque<String>,
     pub path: PathBuf,
     pub max: usize,
 }
 
-impl History {
+impl PromptHistory {
     pub fn load(path: PathBuf) -> Self {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);

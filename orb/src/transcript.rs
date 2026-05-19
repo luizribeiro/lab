@@ -13,7 +13,7 @@ pub struct Transcript {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
-pub enum Entry {
+pub enum TranscriptEntry {
     User { content: String },
     Assistant { content: String },
     Tool { name: String, ok: bool },
@@ -28,7 +28,7 @@ impl Transcript {
         }
     }
 
-    pub fn append_turn(&self, user: &str, entries: &[Entry]) -> io::Result<()> {
+    pub fn append_turn(&self, user: &str, entries: &[TranscriptEntry]) -> io::Result<()> {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -36,7 +36,7 @@ impl Transcript {
         writeln!(
             f,
             "{}",
-            serde_json::to_string(&Entry::User {
+            serde_json::to_string(&TranscriptEntry::User {
                 content: user.to_string()
             })
             .map_err(io::Error::other)?
@@ -51,7 +51,7 @@ impl Transcript {
         Ok(())
     }
 
-    pub fn load(&self) -> Vec<Entry> {
+    pub fn load(&self) -> Vec<TranscriptEntry> {
         let Ok(content) = std::fs::read_to_string(&self.path) else {
             return Vec::new();
         };
@@ -60,7 +60,6 @@ impl Transcript {
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
     }
-
 }
 
 #[cfg(test)]
@@ -74,14 +73,14 @@ mod tests {
             path: dir.path().join("session.jsonl"),
         };
         let entries = vec![
-            Entry::Assistant {
+            TranscriptEntry::Assistant {
                 content: "checking".to_string(),
             },
-            Entry::Tool {
+            TranscriptEntry::Tool {
                 name: "command_execution".to_string(),
                 ok: true,
             },
-            Entry::Assistant {
+            TranscriptEntry::Assistant {
                 content: "done".to_string(),
             },
         ];
@@ -91,17 +90,17 @@ mod tests {
         assert_eq!(
             transcript.load(),
             vec![
-                Entry::User {
+                TranscriptEntry::User {
                     content: "inspect".to_string(),
                 },
-                Entry::Assistant {
+                TranscriptEntry::Assistant {
                     content: "checking".to_string(),
                 },
-                Entry::Tool {
+                TranscriptEntry::Tool {
                     name: "command_execution".to_string(),
                     ok: true,
                 },
-                Entry::Assistant {
+                TranscriptEntry::Assistant {
                     content: "done".to_string(),
                 },
             ]

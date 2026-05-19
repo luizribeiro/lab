@@ -54,11 +54,7 @@ impl SlashAutocompleteModal {
 
     fn clamped_selected(&self) -> usize {
         let n = self.matches().len();
-        if n == 0 {
-            0
-        } else {
-            self.selected.min(n - 1)
-        }
+        if n == 0 { 0 } else { self.selected.min(n - 1) }
     }
 
     fn lines(&self) -> Vec<Line<'static>> {
@@ -210,16 +206,25 @@ mod tests {
     #[test]
     fn enter_emits_replacement_for_selected_command() {
         let mut modal = SlashAutocompleteModal::new("/exi");
-        assert!(matches!(modal.handle_key(key(KeyCode::Enter)), ModalResult::Dismiss));
-        assert_eq!(modal.take_effect().and_then(|e| match e {
-            ModalEffect::ReplaceComposer(s) => Some(s),
-        }), Some("/exit".to_string()));
+        assert!(matches!(
+            modal.handle_key(key(KeyCode::Enter)),
+            ModalResult::Dismiss
+        ));
+        assert_eq!(
+            modal.take_effect().and_then(|e| match e {
+                ModalEffect::ReplaceComposer(s) => Some(s),
+            }),
+            Some("/exit".to_string())
+        );
     }
 
     #[test]
     fn esc_dismisses_without_effect() {
         let mut modal = SlashAutocompleteModal::new("/exi");
-        assert!(matches!(modal.handle_key(key(KeyCode::Esc)), ModalResult::Dismiss));
+        assert!(matches!(
+            modal.handle_key(key(KeyCode::Esc)),
+            ModalResult::Dismiss
+        ));
         assert!(modal.take_effect().is_none());
     }
 

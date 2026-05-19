@@ -1,10 +1,10 @@
 //! Modal stack used to render dialogs above the composer.
 //!
-//! A modal is a small widget rendered inside the inline viewport. The viewport
+//! A modal is a small widget rendered inside the live viewport. The viewport
 //! grows by the sum of stacked modal heights so modals occupy rows above the
-//! composer without scrolling history away. When a modal dismisses, the viewport
+//! composer without scrolling scrollback away. When a modal dismisses, the viewport
 //! shrinks back and the rows the modal occupied are simply repainted (they were
-//! viewport rows, not scrollback, so nothing leaks into history).
+//! viewport rows, not scrollback, so nothing leaks into terminal output).
 //!
 //! Concrete modals implement [`Modal`] and are pushed onto a [`ModalStack`]
 //! held by the app.

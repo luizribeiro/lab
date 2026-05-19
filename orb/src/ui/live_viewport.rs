@@ -76,7 +76,7 @@ fn draw_composer_block(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if let Some(search) = &app.composer.search {
+    if let Some(search) = &app.composer.reverse_prompt_search {
         draw_search_overlay(frame, inner, app, search);
     } else {
         draw_composer(frame, inner, app);
@@ -92,11 +92,11 @@ fn draw_search_overlay(
     frame: &mut Frame,
     area: Rect,
     app: &App,
-    search: &crate::ui::components::composer::Search,
+    search: &crate::ui::components::composer::ReversePromptSearch,
 ) {
     let matched = search
         .match_idx
-        .and_then(|i| app.composer.history.entries.get(i))
+        .and_then(|i| app.composer.prompt_history.entries.get(i))
         .map(String::as_str)
         .unwrap_or("");
     let line = Line::from(vec![

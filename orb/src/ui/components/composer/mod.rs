@@ -12,34 +12,34 @@ mod history;
 mod search;
 
 use editor::run_editor;
-pub use history::History;
-pub use search::Search;
+pub use history::PromptHistory;
+pub use search::ReversePromptSearch;
 use search::find_match;
 
 pub struct Composer {
     pub textarea: TextArea<'static>,
-    pub history: History,
-    pub search: Option<Search>,
-    history_cursor: Option<usize>,
-    history_draft: Option<Vec<String>>,
+    pub prompt_history: PromptHistory,
+    pub reverse_prompt_search: Option<ReversePromptSearch>,
+    prompt_history_cursor: Option<usize>,
+    draft_before_history_navigation: Option<Vec<String>>,
     focused: bool,
 }
 
 impl Composer {
-    pub fn new(history_path: PathBuf) -> Self {
-        let history = History::load(history_path);
+    pub fn new(prompt_history_path: PathBuf) -> Self {
+        let prompt_history = PromptHistory::load(prompt_history_path);
         Self {
             textarea: new_textarea(Vec::new(), true),
-            history,
-            search: None,
-            history_cursor: None,
-            history_draft: None,
+            prompt_history,
+            reverse_prompt_search: None,
+            prompt_history_cursor: None,
+            draft_before_history_navigation: None,
             focused: true,
         }
     }
 
     pub fn input(&mut self, key: KeyEvent) {
-        self.reset_history_navigation();
+        self.reset_prompt_history_navigation();
         self.textarea.input(key);
     }
 
@@ -47,7 +47,7 @@ impl Composer {
         let lines = self.textarea.lines();
         let text = lines.join("\n").trim().to_string();
         self.textarea = new_textarea(Vec::new(), self.focused);
-        self.reset_history_navigation();
+        self.reset_prompt_history_navigation();
         text
     }
 
@@ -59,75 +59,83 @@ impl Composer {
         self.textarea.set_cursor_style(cursor_style(focused));
     }
 
-    pub fn history_previous(&mut self) {
-        if self.history.entries.is_empty() {
+    pub fn prompt_history_previous(&mut self) {
+        if self.prompt_history.entries.is_empty() {
             return;
         }
 
-        let idx = match self.history_cursor {
+        let idx = match self.prompt_history_cursor {
             Some(idx) => idx.saturating_sub(1),
             None => {
-                self.history_draft = Some(self.textarea.lines().to_vec());
-                self.history.entries.len() - 1
+                self.draft_before_history_navigation = Some(self.textarea.lines().to_vec());
+                self.prompt_history.entries.len() - 1
             }
         };
-        self.history_cursor = Some(idx);
-        self.set_text(self.history.entries[idx].clone());
+        self.prompt_history_cursor = Some(idx);
+        self.set_text(self.prompt_history.entries[idx].clone());
     }
 
-    pub fn history_next(&mut self) {
-        let Some(cursor) = self.history_cursor else {
+    pub fn prompt_history_next(&mut self) {
+        let Some(cursor) = self.prompt_history_cursor else {
             return;
         };
 
-        if cursor + 1 < self.history.entries.len() {
+        if cursor + 1 < self.prompt_history.entries.len() {
             let idx = cursor + 1;
-            self.history_cursor = Some(idx);
-            self.set_text(self.history.entries[idx].clone());
+            self.prompt_history_cursor = Some(idx);
+            self.set_text(self.prompt_history.entries[idx].clone());
         } else {
-            let draft = self.history_draft.take().unwrap_or_default();
-            self.history_cursor = None;
+            let draft = self
+                .draft_before_history_navigation
+                .take()
+                .unwrap_or_default();
+            self.prompt_history_cursor = None;
             self.textarea = new_textarea(draft, self.focused);
         }
     }
 
     pub fn start_search(&mut self) {
-        let initial = find_match(&self.history.entries, "", self.history.entries.len());
-        self.search = Some(Search {
+        let initial = find_match(
+            &self.prompt_history.entries,
+            "",
+            self.prompt_history.entries.len(),
+        );
+        self.reverse_prompt_search = Some(ReversePromptSearch {
             query: String::new(),
             match_idx: initial,
         });
     }
 
     pub fn is_searching(&self) -> bool {
-        self.search.is_some()
+        self.reverse_prompt_search.is_some()
     }
 
     pub fn handle_search_key(&mut self, key: KeyEvent) {
-        let Some(search) = self.search.as_mut() else {
+        let Some(search) = self.reverse_prompt_search.as_mut() else {
             return;
         };
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) => {
-                self.search = None;
+                self.reverse_prompt_search = None;
             }
             (KeyCode::Char('c' | 'g'), m) if m.contains(KeyModifiers::CONTROL) => {
-                self.search = None;
+                self.reverse_prompt_search = None;
             }
             (KeyCode::Enter, _) => {
                 if let Some(idx) = search.match_idx {
-                    let entry = self.history.entries[idx].clone();
+                    let entry = self.prompt_history.entries[idx].clone();
                     self.set_text(entry);
                 }
-                self.search = None;
-                self.reset_history_navigation();
+                self.reverse_prompt_search = None;
+                self.reset_prompt_history_navigation();
             }
             (KeyCode::Char('r'), m) if m.contains(KeyModifiers::CONTROL) => {
                 let before = search
                     .match_idx
-                    .unwrap_or(self.history.entries.len())
+                    .unwrap_or(self.prompt_history.entries.len())
                     .saturating_sub(1);
-                if let Some(new_idx) = find_match(&self.history.entries, &search.query, before + 1)
+                if let Some(new_idx) =
+                    find_match(&self.prompt_history.entries, &search.query, before + 1)
                 {
                     search.match_idx = Some(new_idx);
                 }
@@ -135,17 +143,17 @@ impl Composer {
             (KeyCode::Backspace, _) => {
                 search.query.pop();
                 search.match_idx = find_match(
-                    &self.history.entries,
+                    &self.prompt_history.entries,
                     &search.query,
-                    self.history.entries.len(),
+                    self.prompt_history.entries.len(),
                 );
             }
             (KeyCode::Char(c), _) => {
                 search.query.push(c);
                 search.match_idx = find_match(
-                    &self.history.entries,
+                    &self.prompt_history.entries,
                     &search.query,
-                    self.history.entries.len(),
+                    self.prompt_history.entries.len(),
                 );
             }
             _ => {}
@@ -161,7 +169,7 @@ impl Composer {
         let result = run_editor(&initial);
 
         crossterm::terminal::enable_raw_mode()?;
-        // Re-anchor the inline viewport at the current cursor position.
+        // Re-anchor the live viewport at the current cursor position.
         // Dropping and recreating the Terminal is the simplest way; the
         // exact viewport height doesn't matter here because the main loop
         // will resize it on the next iteration to match the actual
@@ -170,7 +178,7 @@ impl Composer {
 
         if let Ok(new) = result {
             self.set_text(new);
-            self.reset_history_navigation();
+            self.reset_prompt_history_navigation();
         }
         Ok(())
     }
@@ -186,7 +194,7 @@ impl Composer {
 
     /// Replace the textarea contents and place the textarea cursor at the
     /// very end of the inserted text. Intended for external "complete-into"
-    /// flows (e.g. slash-command autocomplete). Resets history navigation
+    /// flows (e.g. slash-command autocomplete). Resets prompt history navigation
     /// since the user clearly didn't pick that history entry.
     pub fn replace_text(&mut self, text: String) {
         self.set_text(text);
@@ -196,12 +204,12 @@ impl Composer {
         }
         self.textarea
             .input(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        self.reset_history_navigation();
+        self.reset_prompt_history_navigation();
     }
 
-    fn reset_history_navigation(&mut self) {
-        self.history_cursor = None;
-        self.history_draft = None;
+    fn reset_prompt_history_navigation(&mut self) {
+        self.prompt_history_cursor = None;
+        self.draft_before_history_navigation = None;
     }
 }
 
@@ -231,9 +239,9 @@ fn cursor_style(focused: bool) -> Style {
 mod tests {
     use super::*;
 
-    fn composer_with_history(entries: &[&str]) -> Composer {
+    fn composer_with_prompt_history(entries: &[&str]) -> Composer {
         let mut composer = Composer::new(PathBuf::from("/tmp/orb-test-history"));
-        composer.history.entries = entries.iter().map(|entry| entry.to_string()).collect();
+        composer.prompt_history.entries = entries.iter().map(|entry| entry.to_string()).collect();
         composer
     }
 
@@ -242,32 +250,32 @@ mod tests {
     }
 
     #[test]
-    fn up_and_down_walk_sent_message_history() {
-        let mut composer = composer_with_history(&["one", "two", "three"]);
+    fn up_and_down_walk_prompt_history() {
+        let mut composer = composer_with_prompt_history(&["one", "two", "three"]);
 
-        composer.history_previous();
+        composer.prompt_history_previous();
         assert_eq!(text(&composer), "three");
 
-        composer.history_previous();
+        composer.prompt_history_previous();
         assert_eq!(text(&composer), "two");
 
-        composer.history_next();
+        composer.prompt_history_next();
         assert_eq!(text(&composer), "three");
     }
 
     #[test]
     fn down_after_newest_restores_current_draft() {
-        let mut composer = composer_with_history(&["one", "two"]);
+        let mut composer = composer_with_prompt_history(&["one", "two"]);
         composer.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         composer.input(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         composer.input(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         composer.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
         composer.input(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
 
-        composer.history_previous();
+        composer.prompt_history_previous();
         assert_eq!(text(&composer), "two");
 
-        composer.history_next();
+        composer.prompt_history_next();
         assert_eq!(text(&composer), "draft");
     }
 }
