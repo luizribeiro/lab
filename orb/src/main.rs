@@ -8,7 +8,6 @@
 mod agent;
 mod app;
 mod commands;
-mod composer;
 mod transcript;
 mod turn;
 mod ui;

@@ -10,11 +10,11 @@ use uuid::Uuid;
 
 use crate::agent::{self, AgentKind};
 use crate::commands::{self, CommandResult};
-use crate::composer::Composer;
 use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
 use crate::ui::{
     self,
+    components::composer::Composer,
     components::modal::{ModalEffect, ModalResult, ModalStack},
     markdown::MarkdownSkin,
     terminal::{LIVE_VIEWPORT_HEIGHT, Term, make_terminal},

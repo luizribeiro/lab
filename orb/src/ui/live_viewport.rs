@@ -88,7 +88,12 @@ fn draw_composer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(&app.composer.textarea, area);
 }
 
-fn draw_search_overlay(frame: &mut Frame, area: Rect, app: &App, search: &crate::composer::Search) {
+fn draw_search_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    search: &crate::ui::components::composer::Search,
+) {
     let matched = search
         .match_idx
         .and_then(|i| app.composer.history.entries.get(i))
