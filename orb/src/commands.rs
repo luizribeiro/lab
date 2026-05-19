@@ -8,7 +8,7 @@
 //! the static [`registry`].
 
 use crate::app::App;
-use crate::help_modal::HelpModal;
+use crate::ui::components::help::HelpModal;
 
 /// Outcome of a slash-command handler. The run loop dispatches on this after
 /// the handler returns so command bodies stay short and side-effect-free.

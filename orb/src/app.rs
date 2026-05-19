@@ -284,7 +284,7 @@ impl App {
         if !self.modals.is_empty() {
             return;
         }
-        let modal = crate::autocomplete_modal::SlashAutocompleteModal::new(text);
+        let modal = crate::ui::components::slash_autocomplete::SlashAutocompleteModal::new(text);
         self.modals.push(Box::new(modal));
     }
 
