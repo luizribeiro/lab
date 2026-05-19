@@ -11,6 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use uuid::Uuid;
 
 use crate::agent::{self, AgentKind};
+use crate::commands::{self, CommandResult};
 use crate::composer::Composer;
 use crate::markdown::MarkdownSkin;
 use crate::modal::{ModalEffect, ModalResult, ModalStack};
@@ -58,6 +59,10 @@ pub struct App {
     /// can spot when modal pushes/pops change the desired height and resync
     /// the terminal — see `sync_viewport_height`.
     viewport_height: u16,
+    /// Set by `/redraw`. The next run-loop tick re-runs the viewport resync
+    /// dance unconditionally, which rebuilds the terminal and EventStream
+    /// from scratch and gets the user out of any wedged-rendering state.
+    force_resync: bool,
     quit: bool,
 }
 
@@ -91,6 +96,7 @@ impl App {
             modals: ModalStack::default(),
             resumed: resume.is_some(),
             viewport_height: VIEWPORT_HEIGHT,
+            force_resync: false,
             quit: false,
         }
     }
@@ -177,9 +183,10 @@ impl App {
         events: &mut Option<EventStream>,
     ) -> io::Result<()> {
         let desired = self.desired_viewport_height();
-        if desired == self.viewport_height {
+        if desired == self.viewport_height && !self.force_resync {
             return Ok(());
         }
+        self.force_resync = false;
         events.take();
         // Clear the old viewport so cells freed by a shrink don't linger.
         let _ = terminal.clear();
@@ -325,11 +332,67 @@ impl App {
             return Ok(());
         }
         self.composer.history.push(text.clone());
+
+        // Slash commands intercept the line before it reaches the agent.
+        if let Some(cmd) = commands::parse(&text) {
+            self.run_command(cmd, terminal).await?;
+            return Ok(());
+        }
+        // Surface a friendly error if the user typed a slash that didn't match.
+        if text.starts_with('/') {
+            ui::commit_status_line(
+                terminal,
+                &format!("unknown command: {text}"),
+                ui::CommitColor::Err,
+            )?;
+            return Ok(());
+        }
+
         if self.active.is_some() {
             self.queue.push_back(text);
         } else {
             self.start_turn(text, terminal).await?;
         }
+        Ok(())
+    }
+
+    async fn run_command(
+        &mut self,
+        cmd: &commands::Command,
+        terminal: &mut Term,
+    ) -> io::Result<()> {
+        match (cmd.handler)(self) {
+            CommandResult::Continue => {}
+            CommandResult::Quit => {
+                self.quit = true;
+            }
+            CommandResult::Redraw => {
+                self.force_resync = true;
+            }
+            CommandResult::StartNewSession => {
+                self.start_new_session(terminal).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn start_new_session(&mut self, terminal: &mut Term) -> io::Result<()> {
+        if let Some(active) = self.active.take() {
+            let _ = active.stream.cancel().await;
+        }
+        self.queue.clear();
+
+        let old_id = self.session.id();
+        let workdir = self.session.workdir().to_path_buf();
+        self.session = agent::make_session(self.agent, &workdir, None, self.model.clone());
+        self.resumed = false;
+        self.transcript = Transcript::for_session(self.agent, self.session.id());
+
+        ui::commit_status_line(
+            terminal,
+            &format!("(new session {} — replaced {old_id})", self.session.id()),
+            ui::CommitColor::Warn,
+        )?;
         Ok(())
     }
 
