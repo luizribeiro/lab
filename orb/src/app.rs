@@ -6,8 +6,6 @@ use std::time::Duration;
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use pilot::{Session, TurnItem, TurnOptions};
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use uuid::Uuid;
 
 use crate::agent::{self, AgentKind};
@@ -16,32 +14,12 @@ use crate::composer::Composer;
 use crate::modal::{ModalEffect, ModalResult, ModalStack};
 use crate::transcript::Transcript;
 use crate::turn::{self, ActiveTurn};
-use crate::ui::{self, markdown::MarkdownSkin};
+use crate::ui::{
+    self,
+    markdown::MarkdownSkin,
+    terminal::{LIVE_VIEWPORT_HEIGHT, Term, make_terminal},
+};
 use crate::utils;
-
-/// Height of the composer block: top bar + 1 textarea row + bottom bar.
-/// When a turn is in flight, the spinner label is embedded *inside* the
-/// top border (codex-style title), so the status doesn't need a row of
-/// its own.
-pub const COMPOSER_HEIGHT: u16 = 3;
-
-/// Default inline-viewport height when no modals are stacked. Equal to
-/// COMPOSER_HEIGHT; modals push the viewport taller on demand.
-pub const VIEWPORT_HEIGHT: u16 = COMPOSER_HEIGHT;
-
-pub type Term = Terminal<CrosstermBackend<io::Stdout>>;
-
-/// Build a fresh `Terminal` with an inline viewport of `height` rows,
-/// anchored at the current cursor position.
-pub fn make_terminal(height: u16) -> io::Result<Term> {
-    let backend = CrosstermBackend::new(io::stdout());
-    Terminal::with_options(
-        backend,
-        ratatui::TerminalOptions {
-            viewport: ratatui::Viewport::Inline(height),
-        },
-    )
-}
 
 pub struct App {
     pub agent: AgentKind,
@@ -94,7 +72,7 @@ impl App {
             skin: MarkdownSkin::new(),
             modals: ModalStack::default(),
             resumed: resume.is_some(),
-            viewport_height: VIEWPORT_HEIGHT,
+            viewport_height: LIVE_VIEWPORT_HEIGHT,
             force_resync: false,
             quit: false,
         }
@@ -190,7 +168,7 @@ impl App {
         // computed from row count rather than width. Pass a permissive width;
         // height() implementations clamp themselves later in the renderer.
         let modal_height = self.modals.total_height(u16::MAX);
-        COMPOSER_HEIGHT.saturating_add(modal_height)
+        crate::ui::terminal::COMPOSER_HEIGHT.saturating_add(modal_height)
     }
 
     fn apply_modal_effect(&mut self, effect: ModalEffect) {
@@ -483,4 +461,3 @@ async fn maybe_tick(enabled: bool) {
         std::future::pending::<()>().await;
     }
 }
-

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
-use crate::app::Term;
 use crate::ui::{self, markdown::MarkdownSkin};
+use crate::ui::terminal::Term;
 use crate::utils::transcripts_dir;
 
 pub struct Transcript {

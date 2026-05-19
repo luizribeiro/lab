@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Modifier, Style};
 use tui_textarea::TextArea;
 
-use crate::app::Term;
+use crate::ui::terminal::{Term, make_terminal};
 
 pub struct Composer {
     pub textarea: TextArea<'static>,
@@ -170,7 +170,7 @@ impl Composer {
         // exact viewport height doesn't matter here because the main loop
         // will resize it on the next iteration to match the actual
         // composer state.
-        *terminal = crate::app::make_terminal(3)?;
+        *terminal = make_terminal(3)?;
 
         if let Ok(new) = result {
             self.set_text(new);

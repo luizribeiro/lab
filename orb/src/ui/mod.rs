@@ -1,6 +1,7 @@
 pub mod live_viewport;
 pub mod markdown;
 pub mod scrollback;
+pub mod terminal;
 
 pub use live_viewport::draw;
 pub use scrollback::{

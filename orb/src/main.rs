@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::agent::AgentKind;
 use crate::app::App;
+use crate::ui::terminal::{LIVE_VIEWPORT_HEIGHT, make_terminal};
 
 #[derive(Parser)]
 #[command(name = "orb", about = "Terminal workspace for agentic coding sessions")]
@@ -84,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     enable_raw_mode()?;
     execute!(io::stdout(), EnableFocusChange)?;
-    let mut terminal = app::make_terminal(app::VIEWPORT_HEIGHT)?;
+    let mut terminal = make_terminal(LIVE_VIEWPORT_HEIGHT)?;
 
     let mut app = App::new(agent, &cwd, args.resume, args.model);
     app.boot(&mut terminal)?;

@@ -7,8 +7,8 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use uuid::Uuid;
 
 use crate::agent::AgentKind;
-use crate::app::Term;
 use crate::ui::markdown::MarkdownSkin;
+use crate::ui::terminal::Term;
 use crate::utils::{abbreviate_home, git_branch};
 
 pub enum CommitColor {

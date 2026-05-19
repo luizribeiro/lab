@@ -2,9 +2,8 @@ use std::io;
 
 use pilot::{Event as PilotEvent, TurnItem, TurnStream};
 
-use crate::app::Term;
 use crate::transcript::Entry as TranscriptEntry;
-use crate::ui::{self, markdown::MarkdownSkin};
+use crate::ui::{self, markdown::MarkdownSkin, terminal::Term};
 
 /// A turn that is currently streaming. Owns the stream plus enough state
 /// to render the in-flight UI (pending tool list, buffered assistant text).
