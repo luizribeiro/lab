@@ -232,8 +232,16 @@ impl App {
                 self.apply_modal_effect(effect);
             }
             match result {
-                ModalResult::Consumed | ModalResult::Dismiss => {
+                ModalResult::Consumed => {
                     self.broadcast_composer_change();
+                    return Ok(());
+                }
+                ModalResult::Dismiss => {
+                    // Skip auto-broadcast on dismiss: if the modal just
+                    // applied ReplaceComposer (autocomplete completing),
+                    // we'd otherwise immediately re-trigger autocomplete
+                    // on the freshly-written `/cmd` and pop the modal back
+                    // open. Other modals will see the next real keystroke.
                     return Ok(());
                 }
                 ModalResult::Forward => {}
@@ -280,11 +288,27 @@ impl App {
     }
 
     fn broadcast_composer_change(&mut self) {
-        if self.modals.is_empty() {
+        let text = self.composer.textarea.lines().join("\n");
+        if !self.modals.is_empty()
+            && let Some(effect) = self.modals.on_composer_change(&text)
+        {
+            self.apply_modal_effect(effect);
+        }
+        self.maybe_open_autocomplete(&text);
+    }
+
+    fn maybe_open_autocomplete(&mut self, text: &str) {
+        // Only open the autocomplete modal when the user just started a
+        // slash command and there's no modal already up. Subsequent typing
+        // updates the existing modal via `on_composer_change`.
+        if !text.starts_with('/') {
             return;
         }
-        let text = self.composer.textarea.lines().join("\n");
-        self.modals.on_composer_change(&text);
+        if !self.modals.is_empty() {
+            return;
+        }
+        let modal = crate::autocomplete_modal::SlashAutocompleteModal::new(text);
+        self.modals.push(Box::new(modal));
     }
 
     async fn handle_esc(&mut self, terminal: &mut Term) -> io::Result<()> {

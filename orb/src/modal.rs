@@ -46,9 +46,12 @@ pub trait Modal {
     /// Handle a key. The top-of-stack modal sees keys first.
     fn handle_key(&mut self, key: KeyEvent) -> ModalResult;
 
-    /// Called whenever the composer text changes. Default: ignore. Modals that
-    /// react to live input (autocomplete) override this.
-    fn on_composer_change(&mut self, _text: &str) {}
+    /// Called whenever the composer text changes. Returning `true` asks the
+    /// stack to pop this modal — used by autocomplete to disappear once the
+    /// user has backspaced past the `/` prefix. Default: never dismiss.
+    fn on_composer_change(&mut self, _text: &str) -> bool {
+        false
+    }
 
     /// Called once when the modal is being popped. Modals that produce a value
     /// (e.g. autocomplete returning the chosen command) override this.
@@ -73,6 +76,7 @@ impl ModalStack {
         self.modals.is_empty()
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.modals.len()
     }
@@ -119,11 +123,23 @@ impl ModalStack {
         (result, effect)
     }
 
-    /// Broadcast a composer-text change to every modal. The stack is small,
-    /// so iterating all of them is fine.
-    pub fn on_composer_change(&mut self, text: &str) {
-        for modal in self.modals.iter_mut() {
-            modal.on_composer_change(text);
+    /// Broadcast a composer-text change to every modal. If the top modal
+    /// signals it wants to dismiss as a result, pop it and return the effect
+    /// (if any) it produced.
+    pub fn on_composer_change(&mut self, text: &str) -> Option<ModalEffect> {
+        let last_idx = self.modals.len().checked_sub(1)?;
+        let mut top_wants_dismiss = false;
+        for (i, modal) in self.modals.iter_mut().enumerate() {
+            let wants = modal.on_composer_change(text);
+            if i == last_idx {
+                top_wants_dismiss = wants;
+            }
+        }
+        if top_wants_dismiss {
+            let mut popped = self.modals.pop().expect("nonempty since top_wants_dismiss");
+            popped.take_effect()
+        } else {
+            None
         }
     }
 }
@@ -150,6 +166,9 @@ mod tests {
             } else {
                 ModalResult::Consumed
             }
+        }
+        fn on_composer_change(&mut self, text: &str) -> bool {
+            text == "dismiss-me"
         }
         fn take_effect(&mut self) -> Option<ModalEffect> {
             self.effect.take().map(ModalEffect::ReplaceComposer)
@@ -194,5 +213,15 @@ mod tests {
         let (result, effect) = stack.handle_key(key('x'));
         assert!(matches!(result, ModalResult::Forward));
         assert!(effect.is_none());
+    }
+
+    #[test]
+    fn on_composer_change_pops_top_when_it_signals() {
+        let mut stack = ModalStack::default();
+        stack.push(dummy(3, false, None));
+        stack.push(dummy(3, false, Some("/x")));
+        let effect = stack.on_composer_change("dismiss-me");
+        assert!(matches!(effect, Some(ModalEffect::ReplaceComposer(s)) if s == "/x"));
+        assert_eq!(stack.len(), 1);
     }
 }

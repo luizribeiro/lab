@@ -7,6 +7,7 @@
 
 mod agent;
 mod app;
+mod autocomplete_modal;
 mod commands;
 mod composer;
 mod help_modal;
